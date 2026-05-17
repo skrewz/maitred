@@ -1,0 +1,190 @@
+// Package trigger provides the core types and configuration loading for
+// maitre-d's periodic trigger engine. Triggers are defined in YAML files
+// under a .d/ directory, parsed into TriggerDefinition structs, and
+// executed by the engine according to their schedule.
+package trigger
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"text/template"
+	"time"
+
+	"github.com/robfig/cron/v3"
+	"gopkg.in/yaml.v3"
+)
+
+// TriggerType represents the kind of trigger.
+type TriggerType string
+
+const (
+	TypePeriodic TriggerType = "periodic"
+)
+
+// ParseSchedule validates and returns a schedule string.
+// Supports Go durations (@every 1h) and cron expressions (0 */6 * * *).
+func ParseSchedule(s string) (string, error) {
+	// Check if it's a duration-based schedule
+	if len(s) >= 8 && s[:8] == "@every " {
+		dur, err := time.ParseDuration(s[7:])
+		if err != nil {
+			return "", fmt.Errorf("invalid duration in schedule %q: %w", s, err)
+		}
+		if dur <= 0 {
+			return "", fmt.Errorf("schedule duration must be positive: %s", s)
+		}
+		return s, nil
+	}
+
+	// Validate as cron expression
+	_, err := cron.ParseStandard(s)
+	if err != nil {
+		return "", fmt.Errorf("invalid cron expression %q: %w", s, err)
+	}
+	return s, nil
+}
+
+// triggerConfig is the raw YAML structure for a single trigger file.
+type triggerConfig struct {
+	Triggers []triggerFileEntry `yaml:"triggers"`
+}
+
+// triggerFileEntry is a single trigger definition in YAML.
+type triggerFileEntry struct {
+	ID       string            `yaml:"id"`
+	Type     TriggerType       `yaml:"type"`
+	Schedule string            `yaml:"schedule"`
+	Prompt   string            `yaml:"prompt"`
+	Repos    []string          `yaml:"repos,omitempty"`
+	Tags     []string          `yaml:"tags,omitempty"`
+	Timeout  int               `yaml:"timeout,omitempty"`
+}
+
+// TriggerDefinition is the parsed, validated form of a trigger.
+type TriggerDefinition struct {
+	ID       string        `yaml:"id"`
+	Type     TriggerType   `yaml:"type"`
+	Schedule string        `yaml:"schedule"`
+	Prompt   string        `yaml:"prompt"`
+	Repos    []string      `yaml:"repos,omitempty"`
+	Tags     []string      `yaml:"tags,omitempty"`
+	Timeout  int           `yaml:"timeout,omitempty"`
+}
+
+// EvalPromptTemplate evaluates the trigger's prompt template with the
+// given lastRun time. The template has access to .LastRun (RFC3339 format).
+func (d *TriggerDefinition) EvalPromptTemplate(lastRun time.Time) (string, error) {
+	funcs := template.FuncMap{
+		"TrimSuffix": func(s, suffix string) string {
+			if len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix {
+				return s[:len(s)-len(suffix)]
+			}
+			return s
+		},
+	}
+
+	tmpl, err := template.New("prompt").Funcs(funcs).Parse(d.Prompt)
+	if err != nil {
+		return "", fmt.Errorf("trigger %s: invalid prompt template: %w", d.ID, err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, map[string]interface{}{
+		"LastRun": lastRun.Format(time.RFC3339),
+	}); err != nil {
+		return "", fmt.Errorf("trigger %s: failed to execute prompt template: %w", d.ID, err)
+	}
+
+	return buf.String(), nil
+}
+
+// LoadTriggerDefinitions reads all .yaml and .yml files from the given
+// directory (and its immediate subdirectories) and returns all parsed
+// TriggerDefinitions. Files are processed in sorted order by name.
+//
+// The directory structure follows the .d/ convention: any YAML file in the
+// directory is loaded and merged. This allows splitting trigger configs
+// across multiple files (e.g., 01-base.yaml, 02-models.yaml).
+func LoadTriggerDefinitions(dir string) ([]TriggerDefinition, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read trigger directory %q: %w", dir, err)
+	}
+
+	allDefs := make([]TriggerDefinition, 0)
+
+	// Collect YAML files and sort them for deterministic ordering
+	var yamlFiles []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		lower := filepath.Ext(name)
+		if lower == ".yaml" || lower == ".yml" {
+			yamlFiles = append(yamlFiles, name)
+		}
+	}
+	sort.Strings(yamlFiles)
+
+	for _, name := range yamlFiles {
+		path := filepath.Join(dir, name)
+		defs, err := loadTriggerFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("load %s: %w", path, err)
+		}
+		allDefs = append(allDefs, defs...)
+	}
+
+	return allDefs, nil
+}
+
+// loadTriggerFile parses a single YAML trigger file.
+func loadTriggerFile(path string) ([]TriggerDefinition, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+
+	var cfg triggerConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parse YAML: %w", err)
+	}
+
+	var defs []TriggerDefinition
+	for _, entry := range cfg.Triggers {
+		def := TriggerDefinition{
+			ID:       entry.ID,
+			Type:     entry.Type,
+			Schedule: entry.Schedule,
+			Prompt:   entry.Prompt,
+			Repos:    entry.Repos,
+			Tags:     entry.Tags,
+			Timeout:  entry.Timeout,
+		}
+
+		// Validate
+		if def.ID == "" {
+			return nil, fmt.Errorf("trigger %s: id is required", path)
+		}
+		if def.Type != TypePeriodic {
+			return nil, fmt.Errorf("trigger %s: unsupported type %q", def.ID, def.Type)
+		}
+		if def.Schedule == "" {
+			return nil, fmt.Errorf("trigger %s: schedule is required", def.ID)
+		}
+		if def.Prompt == "" {
+			return nil, fmt.Errorf("trigger %s: prompt is required", def.ID)
+		}
+		if _, err := ParseSchedule(def.Schedule); err != nil {
+			return nil, fmt.Errorf("trigger %s: %w", def.ID, err)
+		}
+
+		defs = append(defs, def)
+	}
+
+	return defs, nil
+}

@@ -1,0 +1,259 @@
+package trigger_test
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"maitre-d/pkg/trigger"
+)
+
+func TestParseSchedule(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"@every 1h", "@every 1h"},
+		{"@every 30m", "@every 30m"},
+		{"@every 6h", "@every 6h"},
+		{"0 */6 * * *", "0 */6 * * *"},
+		{"0 0 * * *", "0 0 * * *"},
+		{"@daily", "@daily"},
+		{"@hourly", "@hourly"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			sched, err := trigger.ParseSchedule(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if sched != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, sched)
+			}
+		})
+	}
+}
+
+func TestParseSchedule_Invalid(t *testing.T) {
+	_, err := trigger.ParseSchedule("not-a-schedule")
+	if err == nil {
+		t.Error("expected error for invalid schedule, got nil")
+	}
+}
+
+func TestParseSchedule_InvalidDuration(t *testing.T) {
+	_, err := trigger.ParseSchedule("@every notaduration")
+	if err == nil {
+		t.Error("expected error for invalid duration, got nil")
+	}
+}
+
+func TestParseSchedule_InvalidCron(t *testing.T) {
+	_, err := trigger.ParseSchedule("*/invalid * * * *")
+	if err == nil {
+		t.Error("expected error for invalid cron, got nil")
+	}
+}
+
+func TestLoadTriggerDefinitions(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a trigger config file
+	configYAML := `
+triggers:
+  - id: "test-trigger"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "Research new models"
+    tags:
+      - "business-default"
+    timeout: 3600
+`
+	configPath := filepath.Join(dir, "triggers.yaml")
+	if err := os.WriteFile(configPath, []byte(configYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(defs) != 1 {
+		t.Fatalf("expected 1 trigger, got %d", len(defs))
+	}
+
+	def := defs[0]
+	if def.ID != "test-trigger" {
+		t.Errorf("expected ID 'test-trigger', got %q", def.ID)
+	}
+	if def.Type != trigger.TypePeriodic {
+		t.Errorf("expected type periodic, got %q", def.Type)
+	}
+	if def.Schedule != "@every 1h" {
+		t.Errorf("expected schedule '@every 1h', got %q", def.Schedule)
+	}
+	if def.Prompt != "Research new models" {
+		t.Errorf("expected prompt 'Research new models', got %q", def.Prompt)
+	}
+	if len(def.Tags) != 1 || def.Tags[0] != "business-default" {
+		t.Errorf("expected tags ['business-default'], got %v", def.Tags)
+	}
+	if def.Timeout != 3600 {
+		t.Errorf("expected timeout 3600, got %d", def.Timeout)
+	}
+}
+
+func TestLoadTriggerDefinitions_MultipleFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create two config files in the .d folder
+	config1YAML := `
+triggers:
+  - id: "trigger-1"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "First trigger"
+`
+	config2YAML := `
+triggers:
+  - id: "trigger-2"
+    type: periodic
+    schedule: "@every 2h"
+    prompt: "Second trigger"
+`
+	if err := os.WriteFile(filepath.Join(dir, "01-base.yaml"), []byte(config1YAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "02-extra.yaml"), []byte(config2YAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(defs) != 2 {
+		t.Fatalf("expected 2 triggers, got %d", len(defs))
+	}
+
+	if defs[0].ID != "trigger-1" || defs[1].ID != "trigger-2" {
+		t.Errorf("unexpected trigger order: %v", defs)
+	}
+}
+
+func TestLoadTriggerDefinitions_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if defs == nil {
+		t.Error("expected empty slice, got nil")
+	}
+	if len(defs) != 0 {
+		t.Errorf("expected 0 triggers, got %d", len(defs))
+	}
+}
+
+func TestLoadTriggerDefinitions_NonExistentDir(t *testing.T) {
+	_, err := trigger.LoadTriggerDefinitions("/nonexistent/dir/that/does/not/exist")
+	if err == nil {
+		t.Error("expected error for non-existent directory, got nil")
+	}
+}
+
+func TestLoadTriggerDefinitions_InvalidYAML(t *testing.T) {
+	dir := t.TempDir()
+
+	invalidYAML := `
+triggers:
+  - id: broken
+    [not valid yaml
+`
+	if err := os.WriteFile(filepath.Join(dir, "bad.yaml"), []byte(invalidYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := trigger.LoadTriggerDefinitions(dir)
+	if err == nil {
+		t.Error("expected error for invalid YAML, got nil")
+	}
+}
+
+func TestLoadTriggerDefinitions_SkipNonYAML(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a non-YAML file that should be skipped
+	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("not yaml"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	configYAML := `
+triggers:
+  - id: "only-one"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "test"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(defs) != 1 {
+		t.Fatalf("expected 1 trigger, got %d", len(defs))
+	}
+
+	if defs[0].ID != "only-one" {
+		t.Errorf("expected 'only-one', got %q", defs[0].ID)
+	}
+}
+
+func TestTriggerDefinition_EvalPromptTemplate(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@every 1h",
+		Prompt:   "Research since {{ .LastRun }}",
+	}
+
+	lastRun := time.Date(2025, 5, 17, 10, 0, 0, 0, time.UTC)
+	result, err := def.EvalPromptTemplate(lastRun)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := "Research since 2025-05-17T10:00:00Z"
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestTriggerDefinition_EvalPromptTemplate_NoVars(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@every 1h",
+		Prompt:   "Just a plain prompt",
+	}
+
+	lastRun := time.Date(2025, 5, 17, 10, 0, 0, 0, time.UTC)
+	result, err := def.EvalPromptTemplate(lastRun)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result != "Just a plain prompt" {
+		t.Errorf("expected 'Just a plain prompt', got %q", result)
+	}
+}
