@@ -15,9 +15,9 @@ import (
 
 // mockQueue wraps a TaskQueue to track Add calls.
 type mockQueue struct {
-	mu      sync.Mutex
-	tasks   []*queue.Task
-	added   atomic.Int32
+	mu    sync.Mutex
+	tasks []*queue.Task
+	added atomic.Int32
 }
 
 func (m *mockQueue) AddTask(task *queue.Task) error {
@@ -51,7 +51,7 @@ triggers:
     schedule: "@every 500ms"
     prompt: "test prompt"
 `
-	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -97,7 +97,7 @@ triggers:
       - "business-default"
     timeout: 3600
 `
-	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -149,7 +149,7 @@ triggers:
     schedule: "@every 500ms"
     prompt: "test"
 `
-	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -202,7 +202,7 @@ triggers:
     schedule: "@every 500ms"
     prompt: "second"
 `
-	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -260,7 +260,7 @@ triggers:
     schedule: "@every 500ms"
     prompt: "test"
 `
-	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -312,10 +312,10 @@ triggers:
     schedule: "@every 500ms"
     prompt: "from file 2"
 `
-	if err := os.WriteFile(filepath.Join(dir, "01-base.yaml"), []byte(config1), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "01-base.yaml"), []byte(config1), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "02-extra.yaml"), []byte(config2), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "02-extra.yaml"), []byte(config2), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -354,7 +354,7 @@ triggers:
     schedule: "@every 500ms"
     prompt: "test"
 `
-	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -418,7 +418,7 @@ triggers:
     schedule: "@every 1h"
     prompt: "test"
 `
-	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -442,7 +442,7 @@ triggers:
     schedule: "@every 500ms"
     prompt: "test"
 `
-	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

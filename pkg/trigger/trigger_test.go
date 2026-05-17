@@ -72,7 +72,7 @@ triggers:
     timeout: 3600
 `
 	configPath := filepath.Join(dir, "triggers.yaml")
-	if err := os.WriteFile(configPath, []byte(configYAML), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(configYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -124,10 +124,10 @@ triggers:
     schedule: "@every 2h"
     prompt: "Second trigger"
 `
-	if err := os.WriteFile(filepath.Join(dir, "01-base.yaml"), []byte(config1YAML), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "01-base.yaml"), []byte(config1YAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "02-extra.yaml"), []byte(config2YAML), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "02-extra.yaml"), []byte(config2YAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -176,7 +176,7 @@ triggers:
   - id: broken
     [not valid yaml
 `
-	if err := os.WriteFile(filepath.Join(dir, "bad.yaml"), []byte(invalidYAML), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "bad.yaml"), []byte(invalidYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -190,7 +190,7 @@ func TestLoadTriggerDefinitions_SkipNonYAML(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create a non-YAML file that should be skipped
-	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("not yaml"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("not yaml"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -201,7 +201,7 @@ triggers:
     schedule: "@every 1h"
     prompt: "test"
 `
-	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

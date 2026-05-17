@@ -1,0 +1,45 @@
+# maitre-d trigger configuration
+# Split across multiple files in this directory for modularity.
+# Files are loaded in sorted alphabetical order.
+#
+# Environment variables can be referenced in values using {{ env "VAR_NAME" }}
+# (processed by the CLI before YAML parsing).
+#
+# Available trigger types:
+#   - periodic: runs on a cron or @every duration schedule
+#
+# Schedule formats:
+#   - @every 1h       (Go duration)
+#   - @every 30m
+#   - 0 */6 * * *     (cron: every 6 hours at minute 0)
+#   - @daily          (cron shorthand)
+#
+# Prompt templates have access to:
+#   - .LastRun        (RFC3339 timestamp of last execution)
+
+triggers:
+  # Research new open-weights models every 6 hours
+  - id: "new-open-weights-model"
+    type: periodic
+    schedule: "0 */6 * * *"
+    prompt: |
+      Research whether any new notable open-weights LLM models have been
+      released since {{ .LastRun }}. Check Hugging Face trending, arXiv
+      for ML papers, and notable GitHub repositories. Summarize the most
+      promising models with their key specs (parameters, context window,
+      benchmark scores) and any significant architectural innovations.
+    tags:
+      - "business-default"
+    timeout: 3600
+
+  # Daily repo review
+  - id: "daily-repo-review"
+    type: periodic
+    schedule: "@daily"
+    prompt: |
+      Review the recent activity in the configured repositories. Identify
+      any outstanding issues, PRs, or technical debt that should be addressed.
+      Summarize findings and suggest priorities.
+    tags:
+      - "business-default"
+    timeout: 1800

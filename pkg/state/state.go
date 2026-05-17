@@ -15,7 +15,7 @@ import (
 
 // TriggerState holds the execution state for a single trigger.
 type TriggerState struct {
-	LastRun    time.Time            `json:"last_run"`
+	LastRun    time.Time              `json:"last_run"`
 	ExtraState map[string]interface{} `json:"extra_state,omitempty"`
 }
 
@@ -29,7 +29,7 @@ type Store struct {
 // NewStore creates a new state store in the given directory. The directory
 // is created if it does not exist.
 func NewStore(dir string) (*Store, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create state directory %q: %w", dir, err)
 	}
 
@@ -54,7 +54,7 @@ func (s *Store) Save(triggerID string, lastRun time.Time, extraState map[string]
 	}
 
 	path := filepath.Join(s.dir, triggerID+".json")
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return fmt.Errorf("write state for %s: %w", triggerID, err)
 	}
 

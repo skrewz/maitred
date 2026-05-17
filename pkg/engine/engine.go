@@ -39,14 +39,14 @@ type Config struct {
 // definitions from YAML files, schedules them, and dispatches tasks to
 // the configured queue on each execution.
 type Engine struct {
-	cfg      Config
-	defs  []trigger.TriggerDefinition
-	st    *state.Store
-	log   *log.Logger
-	ctx   context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	mu       sync.RWMutex
+	cfg    Config
+	defs   []trigger.TriggerDefinition
+	st     *state.Store
+	log    *log.Logger
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+	mu     sync.RWMutex
 }
 
 // New creates a new Engine with the given configuration. It loads trigger
@@ -63,7 +63,7 @@ func New(cfg Config) (*Engine, error) {
 	}
 
 	return &Engine{
-		cfg:      cfg,
+		cfg:  cfg,
 		defs: defs,
 		st:   st,
 		log:  log.Default(),
@@ -202,5 +202,3 @@ func parseDuration(sched string) time.Duration {
 	}
 	return 0
 }
-
-

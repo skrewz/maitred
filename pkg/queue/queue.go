@@ -11,11 +11,11 @@ import (
 // Task represents a unit of work to be executed by an agent on a queue system.
 // This is the minimal intersection of task schemas across queue systems.
 type Task struct {
-	ID     string   `json:"id"`
-	Prompt string   `json:"prompt"`
-	Repos  []string `json:"repos,omitempty"`
-	Tags   []string `json:"tags,omitempty"`
-	Timeout int     `json:"timeout,omitempty"` // seconds, 0 = unlimited
+	ID      string   `json:"id"`
+	Prompt  string   `json:"prompt"`
+	Repos   []string `json:"repos,omitempty"`
+	Tags    []string `json:"tags,omitempty"`
+	Timeout int      `json:"timeout,omitempty"` // seconds, 0 = unlimited
 }
 
 // String returns a human-readable representation of the task.
