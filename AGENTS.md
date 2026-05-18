@@ -15,14 +15,28 @@
 
 ## Mandatory test and lint targets
 
-**`make test`** (unifies `lint`, `test-coverage`, and `test-race`) is **mandatory** for all agents.
+**`make test`** (unifies `lint`, `test-coverage`, `test-race`, and `test-ui`) is **mandatory** for all agents.
 No changes may be committed without passing `make test`.
 
 - `make lint` — runs `go vet` and `gofumpt` formatting check
 - `make test-coverage` — runs all tests with coverage; generates `coverage.out` and `coverage.html`
 - `make test-race` — runs all tests with the race detector
+- `make test-ui` — runs Playwright headless browser tests against the web dashboard
 
 Aim to keep coverage above 80% for all new code paths.
+
+## Web UI changes
+
+When modifying the web UI (`pkg/web/static/index.html`), always update the
+Playwright tests in `pkg/web/ui_test.mjs` to cover any new or changed behaviour.
+The tests are run automatically as part of `make test`, so if a test is broken
+the build will fail.
+
+Key test areas to keep in mind:
+- Page structure (title, header, stats, cards, metadata labels)
+- Data rendering (trigger cards, schedules, badges, countdowns)
+- Interactive controls (Fire now, Pause/Resume toggle)
+- SPA fallback, API error handling, and HTTP method enforcement
 
 ## Go formatting
 

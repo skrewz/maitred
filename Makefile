@@ -10,7 +10,7 @@ all: build
 build: ## Build the maitred binary
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/maitred ./cmd/maitred
 
-test: lint test-coverage test-race ## Run all tests (after linting)
+test: lint test-coverage test-race test-ui ## Run all tests (after linting)
 	@echo "All test targets passed"
 
 test-coverage: ## Run tests with coverage report
