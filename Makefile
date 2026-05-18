@@ -1,4 +1,4 @@
-.PHONY: build test test-coverage test-race lint check-format clean image
+.PHONY: build test test-coverage test-race lint check-format clean image test-ui
 
 MODULE  := maitred
 GO      := go
@@ -55,3 +55,23 @@ image: ## Build the maitred container image
 clean: ## Remove build artifacts
 	rm -rf bin/ coverage.out coverage.html
 	podman rmi maitred:latest 2>/dev/null || true
+
+TEST_UI_PORT ?= 18090
+
+.PHONY: test-ui
+
+# Run UI tests against a running maitred instance
+# Usage: make test-ui
+# Or:     MAITRE_D_WEB_URL=http://other:9090 make test-ui
+test-ui: build
+	@echo "Starting maitred for UI tests on port $(TEST_UI_PORT)..."
+	@rm -rf /tmp/maitred-ui-test-data && mkdir -p /tmp/maitred-ui-test-data
+	@MAITRE_D_DATA_DIR=/tmp/maitred-ui-test-data MAITRE_D_WEB_PORT=$(TEST_UI_PORT) $(CURDIR)/bin/maitred -trigger-dir $(CURDIR)/config/triggers.d > /tmp/maitred-ui-test-server.log 2>&1 &
+	@echo $$! > /tmp/maitred-ui-test.pid
+	@sleep 2
+	@node pkg/web/ui_test.mjs --base-url http://localhost:$(TEST_UI_PORT)
+	@RET=$$? ; \
+	kill $$(cat /tmp/maitred-ui-test.pid) 2>/dev/null || true ; \
+	rm -f /tmp/maitred-ui-test.pid /tmp/maitred-ui-test-server.log ; \
+	rm -rf /tmp/maitred-ui-test-data ; \
+	exit $$RET
