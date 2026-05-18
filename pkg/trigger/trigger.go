@@ -1,5 +1,5 @@
 // Package trigger provides the core types and configuration loading for
-// maitre-d's periodic trigger engine. Triggers are defined in YAML files
+// maitred's periodic trigger engine. Triggers are defined in YAML files
 // under a .d/ directory, parsed into TriggerDefinition structs, and
 // executed by the engine according to their schedule.
 package trigger

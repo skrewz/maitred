@@ -1,4 +1,4 @@
-# maitre-d — Periodic Trigger Engine
+# maitred — Periodic Trigger Engine
 
 ## General gotcha's for agents
 
@@ -41,5 +41,5 @@ Aim to keep coverage above 80% for all new code paths.
 ## Agent working directory
 
 - When the agent starts, it creates a temporary directory for working files.
-- Use `os.MkdirTemp("", "maitre-d-*")` for per-session temp directories.
+- Use `os.MkdirTemp("", "maitred-*")` for per-session temp directories.
 - Clean up temp directories with `os.RemoveAll()` when done.

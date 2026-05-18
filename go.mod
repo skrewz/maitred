@@ -1,4 +1,4 @@
-module maitre-d
+module maitred
 
 go 1.26.0
 

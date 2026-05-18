@@ -1,6 +1,6 @@
 // Package queue provides an in-memory task queue and the TaskQueue interface
 // that any downstream queue system can implement to receive tasks from the
-// maitre-d trigger engine.
+// maitred trigger engine.
 package queue
 
 import (

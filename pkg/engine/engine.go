@@ -1,4 +1,4 @@
-// Package engine provides the periodic trigger engine for maitre-d.
+// Package engine provides the periodic trigger engine for maitred.
 // It loads trigger definitions from YAML files, schedules them according
 // to their cron/duration expressions, and dispatches tasks to a
 // TaskQueueProvider on each execution.
@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"maitre-d/pkg/queue"
-	"maitre-d/pkg/state"
-	"maitre-d/pkg/trigger"
+	"maitred/pkg/queue"
+	"maitred/pkg/state"
+	"maitred/pkg/trigger"
 )
 
 // TaskQueueProvider is the interface that any queue system must implement

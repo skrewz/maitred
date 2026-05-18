@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"maitre-d/pkg/trigger"
+	"maitred/pkg/trigger"
 )
 
 func TestParseSchedule(t *testing.T) {

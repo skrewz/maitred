@@ -3,7 +3,7 @@ package queue_test
 import (
 	"testing"
 
-	"maitre-d/pkg/queue"
+	"maitred/pkg/queue"
 )
 
 func TestTask_String(t *testing.T) {

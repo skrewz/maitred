@@ -1,14 +1,14 @@
 .PHONY: build test test-coverage test-race lint check-format clean
 
-MODULE  := maitre-d
+MODULE  := maitred
 GO      := go
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -s -w -X main.Version=$(VERSION)
 
 all: build
 
-build: ## Build the maitre-d binary
-	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/maitre-d ./cmd/maitre-d
+build: ## Build the maitred binary
+	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/maitred ./cmd/maitred
 
 test: lint test-coverage test-race ## Run all tests (after linting)
 	@echo "All test targets passed"
@@ -43,7 +43,7 @@ check-format: ## Check Go code formatting with gofumpt (fails if not formatted)
 	fi
 
 install: ## Install binary to $GOPATH/bin
-	$(GO) install -trimpath -ldflags "$(LDFLAGS)" ./cmd/maitre-d
+	$(GO) install -trimpath -ldflags "$(LDFLAGS)" ./cmd/maitred
 
 clean: ## Remove build artifacts
 	rm -rf bin/ coverage.out coverage.html

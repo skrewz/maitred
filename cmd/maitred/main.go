@@ -1,4 +1,4 @@
-// Command maitre-d is the CLI entry point for the periodic trigger engine.
+// Command maitred is the CLI entry point for the periodic trigger engine.
 // It loads trigger definitions from a config directory, starts the engine,
 // and runs until interrupted.
 package main
@@ -22,7 +22,7 @@ func main() {
 	dataDir := defaultEnv("MAITRE_D_DATA_DIR", "data")
 	queueAddr := defaultEnv("MAITRE_D_QUEUE_ADDR", "http://localhost:8080")
 
-	log.Printf("maitre-d %s starting", Version)
+	log.Printf("maitred %s starting", Version)
 	log.Printf("  trigger dir: %s", triggerDir)
 	log.Printf("  data dir:    %s", dataDir)
 	log.Printf("  queue addr:  %s", queueAddr)

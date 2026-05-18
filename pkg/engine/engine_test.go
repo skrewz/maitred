@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"maitre-d/pkg/engine"
-	"maitre-d/pkg/queue"
-	"maitre-d/pkg/state"
+	"maitred/pkg/engine"
+	"maitred/pkg/queue"
+	"maitred/pkg/state"
 )
 
 // mockQueue wraps a TaskQueue to track Add calls.

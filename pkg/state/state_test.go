@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"maitre-d/pkg/state"
+	"maitred/pkg/state"
 )
 
 func TestStore_SaveAndLoad(t *testing.T) {
