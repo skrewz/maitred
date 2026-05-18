@@ -41,14 +41,20 @@ Key test areas to keep in mind:
 ### UI screenshots
 
 The README includes a screenshot of the dashboard at `docs/screenshot.png`.
-When making UI changes, **consider** whether the screenshot should be updated:
-- **Update it** if the change is visually significant (new sections, layout
-  shifts, new controls, major colour/typography changes)
-- **Skip it** for minor tweaks (bug fixes, small label changes, edge-case
-  handling) that don't alter the overall look of the dashboard
+When making UI changes, **consider** whether the screenshot should be updated.
+Do this by comparing the old and new screenshots side by side:
 
-If you decide to update it, take a fresh screenshot with Playwright and
-replace `docs/screenshot.png`.
+1. Copy the existing screenshot to a temporary folder: `cp docs/screenshot.png /tmp/old-screenshot.png`
+2. Start a maitred instance, take a fresh screenshot with Playwright
+3. **Read both screenshots** and compare them visually
+4. Decide whether the change is significant enough to warrant an update:
+   - **Update it** if the change is visually significant (new sections, layout
+     shifts, new controls, major colour/typography changes)
+   - **Skip it** for minor tweaks (bug fixes, small label changes, edge-case
+     handling) that don't alter the overall look of the dashboard
+5. Clean up: remove the temp files
+
+If you decide to update it, replace `docs/screenshot.png`.
 
 ## Go formatting
 
