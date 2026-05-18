@@ -29,6 +29,7 @@ func main() {
 	queueAddr := flag.String("queue-addr", "", "target queue system address (for future HTTP adapter)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	showHealth := flag.Bool("health", false, "health check mode (exits 0 if config is valid)")
+	webPort := flag.Int("web-port", 0, "port for the web dashboard (default from MAITRE_D_WEB_PORT)")
 	flag.Parse()
 
 	if *showVersion {
@@ -62,17 +63,20 @@ func main() {
 		queueAddrStr = *queueAddr
 	}
 
-	// Parse web port from env
-	webPort := 9090
-	if p, err := parsePort(webPortStr); err == nil {
-		webPort = p
+	// Determine web port: CLI flag > env var > default
+	port := 9090
+	if *webPort > 0 {
+		port = *webPort
+	} else if p, err := parsePort(webPortStr); err == nil {
+		port = p
 	}
+	_ = port // used below
 
 	log.Printf("maitred %s starting", Version)
 	log.Printf("  trigger dir: %s", triggerDirStr)
 	log.Printf("  data dir:    %s", dataDirStr)
 	log.Printf("  queue addr:  %s", queueAddrStr)
-	log.Printf("  web port:    %d", webPort)
+	log.Printf("  web port:    %d", port)
 
 	// Resolve trigger dir relative to working directory if not absolute
 	if !filepath.IsAbs(triggerDirStr) {
@@ -114,7 +118,7 @@ func main() {
 	log.Printf("ready")
 
 	// Start the web dashboard
-	webSrv := web.New(webPort, eng, Version)
+	webSrv := web.New(port, eng, Version)
 	if err := webSrv.Start(); err != nil {
 		log.Printf("web server error: %v (continuing without dashboard)", err)
 	}

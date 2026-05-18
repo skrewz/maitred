@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/robfig/cron/v3"
+
 	"maitred/pkg/queue"
 	"maitred/pkg/state"
 	"maitred/pkg/trigger"
@@ -116,24 +118,31 @@ func (e *Engine) Stop() {
 // runTrigger executes a single trigger according to its schedule.
 // It loops until the engine is stopped, scheduling each execution
 // after the previous one completes (not overlapping).
+// Supports both @every durations and cron expressions.
 func (e *Engine) runTrigger(def trigger.TriggerDefinition) {
 	defer e.wg.Done()
 
-	sched, err := trigger.ParseSchedule(def.Schedule)
+	interval := parseDuration(def.Schedule)
+	if interval > 0 {
+		// @every schedule — use a ticker
+		e.log.Printf("[trigger:%s] scheduling: %s (interval: %v)", def.ID, def.Schedule, interval)
+		e.runWithTicker(def, interval)
+		return
+	}
+
+	// Cron schedule — use a cron runner
+	c, err := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow).Parse(def.Schedule)
 	if err != nil {
-		e.log.Printf("[trigger:%s] invalid schedule: %v", def.ID, err)
+		e.log.Printf("[trigger:%s] invalid cron schedule: %v", def.ID, err)
 		return
 	}
 
-	// Determine the interval for @every schedules
-	interval := parseDuration(sched)
-	if interval == 0 {
-		e.log.Printf("[trigger:%s] could not parse interval from schedule %q, skipping", def.ID, sched)
-		return
-	}
+	e.log.Printf("[trigger:%s] scheduling: %s", def.ID, def.Schedule)
+	e.runWithCron(def, c)
+}
 
-	e.log.Printf("[trigger:%s] scheduling: %s (interval: %v)", def.ID, sched, interval)
-
+// runWithTicker runs a trigger on a fixed interval using a ticker.
+func (e *Engine) runWithTicker(def trigger.TriggerDefinition, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -145,6 +154,33 @@ func (e *Engine) runTrigger(def trigger.TriggerDefinition) {
 		case <-e.ctx.Done():
 			return
 		case <-ticker.C:
+			e.mu.RLock()
+			_, isPaused := e.paused[def.ID]
+			e.mu.RUnlock()
+			if !isPaused {
+				e.executeTrigger(def)
+			}
+		}
+	}
+}
+
+// runWithCron runs a trigger on a cron schedule.
+func (e *Engine) runWithCron(def trigger.TriggerDefinition, spec cron.Schedule) {
+	// Run once immediately on startup
+	e.executeTrigger(def)
+
+	for {
+		// Wait until the next scheduled time
+		next := spec.Next(time.Now())
+		if next.IsZero() {
+			// Cron spec has no more future times (e.g., one-time schedule)
+			return
+		}
+
+		select {
+		case <-e.ctx.Done():
+			return
+		case <-time.After(time.Until(next)):
 			e.mu.RLock()
 			_, isPaused := e.paused[def.ID]
 			e.mu.RUnlock()
@@ -303,17 +339,27 @@ func (e *Engine) NextFireTime(id string) time.Time {
 	}
 
 	interval := parseDuration(def.Schedule)
-	if interval == 0 {
-		return time.Time{}
+	if interval > 0 {
+		// @every schedule
+		lastState, err := e.st.Load(id)
+		if err != nil {
+			return time.Time{}
+		}
+		return lastState.LastRun.Add(interval)
 	}
 
-	// Load last run time
-	lastState, err := e.st.Load(id)
+	// Cron schedule
+	c, err := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow).Parse(def.Schedule)
 	if err != nil {
 		return time.Time{}
 	}
 
-	return lastState.LastRun.Add(interval)
+	// Next fire time is the next cron occurrence after now
+	next := c.Next(time.Now())
+	if next.IsZero() {
+		return time.Time{}
+	}
+	return next
 }
 
 // parseDuration extracts a time.Duration from a schedule string.
