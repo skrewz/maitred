@@ -104,16 +104,17 @@
                     fetch('/api/version').catch(() => ({ ok: false })),
                 ]);
 
+                const defs = await defsRes.json();
+                const history = await historyRes.json();
+
                 // Load paused state for each trigger
-                const pausedPromises = (await defsRes.json()).map(d =>
+                const pausedPromises = defs.map(d =>
                     fetch('/api/triggers/' + encodeURIComponent(d.id)).then(r => r.json()).then(j => {
                         if (j.paused) pausedSet.add(j.id);
                         else pausedSet.delete(j.id);
                     }).catch(() => {})
                 );
                 await Promise.all(pausedPromises);
-                const defs = await defsRes.json();
-                const history = await historyRes.json();
                 const version = versionRes.ok ? await versionRes.text() : 'dev';
 
                 document.getElementById('version').textContent = version;
@@ -137,7 +138,6 @@
         }
 
         function renderTriggers(defs, history) {
-            pausedSet = new Set(); // reset, will be populated above
             const list = document.getElementById('trigger-list');
             if (defs.length === 0) {
                 list.innerHTML = '<div class="empty-state"><h2>No triggers configured</h2><p>Add YAML files to your trigger directory</p></div>';
@@ -169,7 +169,7 @@
                             </div>
                             <div class="trigger-actions">
                                 <button class="btn btn-primary" onclick="fireNow('${def.id}')">&#x25B6; Fire now</button>
-                                <button class="btn btn-warning" onclick="togglePause('${def.id}')">${pausedSet.has('${def.id}') ? '&#x25B6; Resume' : '&#x23F8; Pause'}</button>
+                                <button class="btn btn-warning" onclick="togglePause('${def.id}')">${pausedSet.has(def.id) ? '&#x25B6; Resume' : '&#x23F8; Pause'}</button>
                             </div>
                         </div>
                         <div class="trigger-meta">
@@ -308,7 +308,8 @@
 
         async function togglePause(id) {
             try {
-                const res = await fetch('/api/triggers/' + encodeURIComponent(id) + '/pause', { method: 'POST' });
+                const action = isPaused(id) ? 'resume' : 'pause';
+                const res = await fetch('/api/triggers/' + encodeURIComponent(id) + '/' + action, { method: 'POST' });
                 if (res.ok) {
                     refresh();
                 } else {
