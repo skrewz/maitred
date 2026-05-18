@@ -10,6 +10,10 @@ pushes resulting tasks to a configurable queue provider.
 Designed to run alongside [hotelier](https://github.com/skrewz/hotelier)
 but works with any system that implements the `TaskQueueProvider` interface.
 
+## Screenshots
+
+![Maître d' Web Dashboard](/docs/screenshot.png)
+
 ## Quick Start
 
 ```bash
