@@ -38,6 +38,18 @@ Key test areas to keep in mind:
 - Interactive controls (Fire now, Pause/Resume toggle)
 - SPA fallback, API error handling, and HTTP method enforcement
 
+### UI screenshots
+
+The README includes a screenshot of the dashboard at `docs/screenshot.png`.
+When making UI changes, **consider** whether the screenshot should be updated:
+- **Update it** if the change is visually significant (new sections, layout
+  shifts, new controls, major colour/typography changes)
+- **Skip it** for minor tweaks (bug fixes, small label changes, edge-case
+  handling) that don't alter the overall look of the dashboard
+
+If you decide to update it, take a fresh screenshot with Playwright and
+replace `docs/screenshot.png`.
+
 ## Go formatting
 
 - Run `make format` (gofumpt) before committing changes. gofumpt is stricter than `go fmt`.
