@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>maitred — Trigger Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; }
+        .header { background: #1e293b; padding: 1rem 2rem; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 1.5rem; color: #a78bfa; }
+        .header .version { font-size: 0.75rem; color: #64748b; }
+        .stats { display: flex; gap: 1.5rem; }
+        .stat { text-align: center; }
+        .stat-value { font-size: 1.25rem; font-weight: bold; color: #a78bfa; }
+        .stat-label { font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+        .trigger-card { background: #1e293b; border-radius: 0.5rem; padding: 1.25rem; margin-bottom: 1rem; border-left: 3px solid #334155; }
+        .trigger-card.ok { border-left-color: #22c55e; }
+        .trigger-card.failed { border-left-color: #ef4444; }
+        .trigger-card.paused { border-left-color: #f59e0b; }
+        .trigger-card.never-ran { border-left-color: #64748b; }
+        .trigger-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.75rem; }
+        .trigger-id { font-weight: 600; font-size: 1rem; }
+        .trigger-schedule { font-size: 0.8rem; color: #94a3b8; margin-top: 0.25rem; }
+        .trigger-actions { display: flex; gap: 0.5rem; }
+        .btn { padding: 0.35rem 0.75rem; border-radius: 0.375rem; border: none; cursor: pointer; font-size: 0.75rem; font-weight: 500; }
+        .btn-primary { background: #7c3aed; color: white; }
+        .btn-primary:hover { background: #6d28d9; }
+        .btn-warning { background: #92400e; color: #fde68a; }
+        .btn-warning:hover { background: #78350f; }
+        .btn-danger { background: #7f1d1d; color: #fca5a5; }
+        .btn-danger:hover { background: #991b1b; }
+        .btn-ghost { background: transparent; color: #94a3b8; border: 1px solid #334155; }
+        .btn-ghost:hover { background: #1e293b; color: #e2e8f0; }
+        .trigger-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-top: 0.75rem; }
+        .meta-item { display: flex; flex-direction: column; gap: 0.15rem; }
+        .meta-label { font-size: 0.65rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+        .meta-value { font-size: 0.85rem; color: #cbd5e1; }
+        .meta-value.countdown { color: #38bdf8; font-family: 'SF Mono', 'Fira Code', monospace; }
+        .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 0.25rem; font-size: 0.65rem; font-weight: 600; text-transform: uppercase; }
+        .badge-success { background: #052e16; color: #22c55e; }
+        .badge-error { background: #450a0a; color: #ef4444; }
+        .badge-paused { background: #422006; color: #f59e0b; }
+        .badge-none { background: #1e293b; color: #64748b; }
+        .history-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #334155; }
+        .history-title { font-size: 0.75rem; color: #64748b; text-transform: uppercase; margin-bottom: 0.5rem; }
+        .history-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.4rem 0; font-size: 0.8rem; border-bottom: 1px solid #1e293b; }
+        .history-item:last-child { border-bottom: none; }
+        .history-time { color: #64748b; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.7rem; min-width: 80px; }
+        .history-task { color: #94a3b8; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.7rem; flex: 1; }
+        .history-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .history-dot.success { background: #22c55e; }
+        .history-dot.error { background: #ef4444; }
+        .history-error { color: #fca5a5; font-size: 0.75rem; flex: 2; }
+        .empty-state { text-align: center; padding: 3rem; color: #475569; }
+        .empty-state h2 { margin-bottom: 0.5rem; }
+        .refresh-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+        .refresh-bar .status { font-size: 0.75rem; color: #64748b; }
+        .countdown { color: #38bdf8; font-family: 'SF Mono', 'Fira Code', monospace; }
+        .countdown.due { color: #f59e0b; }
+        .countdown.paused { color: #64748b; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>&#x2615; maitred</h1>
+            <span class="version" id="version">loading...</span>
+        </div>
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-value" id="trigger-count">0</div>
+                <div class="stat-label">Triggers</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="success-count">0</div>
+                <div class="stat-label">Last OK</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="failed-count">0</div>
+                <div class="stat-label">Last Failed</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="refresh-bar">
+            <span class="status" id="status-text">Connecting...</span>
+            <button class="btn btn-ghost" onclick="refresh()">Refresh now</button>
+        </div>
+        <div id="trigger-list"></div>
+    </div>
+
+    <script>
+        let refreshInterval;
+        let pausedSet = new Set(); // track paused trigger IDs
+
+        async function refresh() {
+            try {
+                const [defsRes, historyRes, versionRes] = await Promise.all([
+                    fetch('/api/definitions'),
+                    fetch('/api/history'),
+                    fetch('/api/version').catch(() => ({ ok: false })),
+                ]);
+
+                // Load paused state for each trigger
+                const pausedPromises = (await defsRes.json()).map(d =>
+                    fetch('/api/triggers/' + encodeURIComponent(d.id)).then(r => r.json()).then(j => {
+                        if (j.paused) pausedSet.add(j.id);
+                        else pausedSet.delete(j.id);
+                    }).catch(() => {})
+                );
+                await Promise.all(pausedPromises);
+                const defs = await defsRes.json();
+                const history = await historyRes.json();
+                const version = versionRes.ok ? await versionRes.text() : 'dev';
+
+                document.getElementById('version').textContent = version;
+                renderTriggers(defs, history);
+                updateStats(defs, history);
+                document.getElementById('status-text').textContent = 'Updated ' + new Date().toLocaleTimeString();
+            } catch (e) {
+                console.error('refresh failed:', e);
+                document.getElementById('status-text').textContent = 'Error loading data';
+            }
+        }
+
+        function updateStats(defs, history) {
+            document.getElementById('trigger-count').textContent = defs.length || 0;
+            const successCount = defs.filter(d => {
+                const rec = (history[d.id] || []).slice(-1)[0];
+                return rec && rec.success;
+            }).length;
+            document.getElementById('success-count').textContent = successCount;
+            document.getElementById('failed-count').textContent = (defs.length || 0) - successCount;
+        }
+
+        function renderTriggers(defs, history) {
+            pausedSet = new Set(); // reset, will be populated above
+            const list = document.getElementById('trigger-list');
+            if (defs.length === 0) {
+                list.innerHTML = '<div class="empty-state"><h2>No triggers configured</h2><p>Add YAML files to your trigger directory</p></div>';
+                return;
+            }
+
+            list.innerHTML = defs.map(def => {
+                const records = (history[def.id] || []).slice(-5).reverse();
+                const lastRecord = records[0];
+                const hasHistory = records.length > 0;
+                const lastSuccess = hasHistory && lastRecord.success;
+                const lastError = hasHistory && !lastRecord.success;
+                const cardClass = lastSuccess ? 'ok' : (lastError ? 'failed' : 'never-ran');
+
+                const lastRunText = hasHistory
+                    ? new Date(lastRecord.timestamp).toLocaleString()
+                    : 'Never';
+
+                const lastTaskText = lastRecord ? lastRecord.task_id.substring(0, 20) + '...' : '\u2014';
+
+                const errorText = lastError ? lastRecord.error : '';
+
+                return `
+                    <div class="trigger-card ${cardClass}">
+                        <div class="trigger-header">
+                            <div>
+                                <div class="trigger-id">${escapeHtml(def.id)}</div>
+                                <div class="trigger-schedule">${escapeHtml(def.schedule)}</div>
+                            </div>
+                            <div class="trigger-actions">
+                                <button class="btn btn-primary" onclick="fireNow('${def.id}')">&#x25B6; Fire now</button>
+                                <button class="btn btn-warning" onclick="togglePause('${def.id}')">${pausedSet.has('${def.id}') ? '&#x25B6; Resume' : '&#x23F8; Pause'}</button>
+                            </div>
+                        </div>
+                        <div class="trigger-meta">
+                            <div class="meta-item">
+                                <span class="meta-label">Last run</span>
+                                <span class="meta-value">${lastRunText}</span>
+                            </div>
+                            <div class="meta-item">
+                                <span class="meta-label">Last task</span>
+                                <span class="meta-value" style="font-family:monospace;font-size:0.75rem;">${escapeHtml(lastTaskText)}</span>
+                            </div>
+                            <div class="meta-item">
+                                <span class="meta-label">Last result</span>
+                                <span class="meta-value">
+                                    ${lastSuccess ? '<span class="badge badge-success">&#x2713; OK</span>' : (lastError ? '<span class="badge badge-error">&#x2717; Error</span>' : '<span class="badge badge-none">No data</span>'
+                            )}
+                                </span>
+                            </div>
+                            <div class="meta-item">
+                                <span class="meta-label">Next run</span>
+                                <span class="meta-value countdown" id="countdown-${def.id}">calculating...</span>
+                            </div>
+                            ${errorText ? `<div class="meta-item" style="grid-column: 1 / -1;"><span class="meta-label">Error</span><span class="meta-value" style="color:#fca5a5;font-size:0.8rem;">${escapeHtml(errorText)}</span></div>` : ''}
+                        </div>
+                        ${records.length > 0 ? `
+                        <div class="history-section">
+                            <div class="history-title">Recent executions</div>
+                            ${records.map(r => `
+                                <div class="history-item">
+                                    <span class="history-time">${new Date(r.timestamp).toLocaleTimeString()}</span>
+                                    <span class="history-dot ${r.success ? 'success' : 'error'}"></span>
+                                    <span class="history-task">${escapeHtml(r.task_id || '')}</span>
+                                    ${r.error ? `<span class="history-error">${escapeHtml(r.error.substring(0, 60))}</span>` : ''}
+                                </div>
+                            `).join('')}
+                        </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+
+            // Calculate countdowns
+            defs.forEach(def => {
+                updateCountdown(def, history);
+            });
+        }
+
+        function updateCountdown(def, history) {
+            const el = document.getElementById('countdown-' + def.id);
+            if (!el) return;
+
+            const records = (history[def.id] || []);
+            const lastRecord = records.slice(-1)[0];
+            if (!lastRecord) {
+                el.textContent = 'Pending first run';
+                el.className = 'meta-value countdown';
+                return;
+            }
+
+            const lastRun = new Date(lastRecord.timestamp);
+            const intervalMs = parseInterval(def.schedule);
+            if (intervalMs <= 0) {
+                el.textContent = def.schedule;
+                el.className = 'meta-value countdown';
+                return;
+            }
+
+            const nextRun = new Date(lastRun.getTime() + intervalMs);
+            const now = new Date();
+            const diff = nextRun - now;
+
+            if (isPaused(def.id)) {
+                el.textContent = 'Paused';
+                el.className = 'meta-value countdown paused';
+                return;
+            }
+
+            if (diff <= 0) {
+                el.textContent = 'Due now';
+                el.className = 'meta-value countdown due';
+            } else {
+                el.textContent = formatDuration(diff);
+                el.className = 'meta-value countdown';
+            }
+        }
+
+        function parseInterval(schedule) {
+            if (schedule.startsWith('@every ')) {
+                const dur = schedule.substring(7);
+                const match = dur.match(/^(\d+)(ms|s|m|h)$/);
+                if (match) {
+                    const val = parseInt(match[1]);
+                    const unit = match[2];
+                    const multipliers = { ms: 1, s: 1000, m: 60000, h: 3600000 };
+                    return val * (multipliers[unit] || 0);
+                }
+            }
+            return 0;
+        }
+
+        function formatDuration(ms) {
+            if (ms < 60000) return Math.floor(ms / 1000) + 's';
+            if (ms < 3600000) return Math.floor(ms / 60000) + 'm ' + Math.floor((ms % 60000) / 1000) + 's';
+            const h = Math.floor(ms / 3600000);
+            const m = Math.floor((ms % 3600000) / 60000);
+            return h + 'h ' + m + 'm';
+        }
+
+        function isPaused(id) {
+            return pausedSet.has(id);
+        }
+
+        async function fireNow(id) {
+            try {
+                const res = await fetch('/api/triggers/' + encodeURIComponent(id) + '/fire', { method: 'POST' });
+                if (res.ok) {
+                    refresh();
+                } else {
+                    const err = await res.text();
+                    alert('Failed to fire: ' + err);
+                }
+            } catch (e) {
+                alert('Failed to fire: ' + e.message);
+            }
+        }
+
+        async function togglePause(id) {
+            try {
+                const res = await fetch('/api/triggers/' + encodeURIComponent(id) + '/pause', { method: 'POST' });
+                if (res.ok) {
+                    refresh();
+                } else {
+                    alert('Failed to toggle pause');
+                }
+            } catch (e) {
+                alert('Failed to toggle pause: ' + e.message);
+            }
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        // Auto-refresh every 5 seconds
+        refresh();
+        refreshInterval = setInterval(refresh, 5000);
+    </script>
+</body>
+</html>

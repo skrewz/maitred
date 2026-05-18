@@ -39,14 +39,18 @@ type Config struct {
 // definitions from YAML files, schedules them, and dispatches tasks to
 // the configured queue on each execution.
 type Engine struct {
-	cfg    Config
-	defs   []trigger.TriggerDefinition
-	st     *state.Store
-	log    *log.Logger
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	mu     sync.RWMutex
+	cfg       Config
+	defs      []trigger.TriggerDefinition
+	st        *state.Store
+	history   *ExecutionHistory
+	log       *log.Logger
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	triggerWg sync.WaitGroup
+	mu        sync.RWMutex
+	// paused tracks which trigger IDs are temporarily disabled
+	paused map[string]struct{}
 }
 
 // New creates a new Engine with the given configuration. It loads trigger
@@ -63,10 +67,12 @@ func New(cfg Config) (*Engine, error) {
 	}
 
 	return &Engine{
-		cfg:  cfg,
-		defs: defs,
-		st:   st,
-		log:  log.Default(),
+		cfg:     cfg,
+		defs:    defs,
+		st:      st,
+		history: NewExecutionHistory(50),
+		log:     log.Default(),
+		paused:  make(map[string]struct{}),
 	}, nil
 }
 
@@ -139,19 +145,81 @@ func (e *Engine) runTrigger(def trigger.TriggerDefinition) {
 		case <-e.ctx.Done():
 			return
 		case <-ticker.C:
-			e.executeTrigger(def)
+			e.mu.RLock()
+			_, isPaused := e.paused[def.ID]
+			e.mu.RUnlock()
+			if !isPaused {
+				e.executeTrigger(def)
+			}
 		}
 	}
 }
 
+// PauseTrigger temporarily disables a trigger by ID. It will not fire
+// until ResumeTrigger is called or the engine is restarted.
+func (e *Engine) PauseTrigger(id string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.paused[id] = struct{}{}
+	e.log.Printf("[trigger:%s] paused", id)
+}
+
+// ResumeTrigger re-enables a previously paused trigger.
+func (e *Engine) ResumeTrigger(id string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.paused, id)
+	e.log.Printf("[trigger:%s] resumed", id)
+}
+
+// IsPaused returns whether a trigger is currently paused.
+func (e *Engine) IsPaused(id string) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	_, ok := e.paused[id]
+	return ok
+}
+
+// FireNow manually fires a trigger immediately, bypassing the schedule.
+func (e *Engine) FireNow(id string) error {
+	e.mu.RLock()
+	_, isPaused := e.paused[id]
+	var def *trigger.TriggerDefinition
+	for _, d := range e.defs {
+		if d.ID == id {
+			tmp := d
+			def = &tmp
+			break
+		}
+	}
+	e.mu.RUnlock()
+
+	if def == nil {
+		return fmt.Errorf("trigger %s not found", id)
+	}
+	if isPaused {
+		return fmt.Errorf("trigger %s is paused", id)
+	}
+
+	e.executeTrigger(*def)
+	return nil
+}
+
 // executeTrigger runs a single execution of a trigger: loads state,
 // evaluates the prompt template, creates a task, dispatches it, and
-// saves the updated state.
+// saves the updated state. Records the execution in the history.
 func (e *Engine) executeTrigger(def trigger.TriggerDefinition) {
+	now := time.Now()
+
 	// Load previous state (first run has no state)
 	lastState, err := e.st.Load(def.ID)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		e.log.Printf("[trigger:%s] failed to load state: %v", def.ID, err)
+		e.history.Append(def.ID, ExecutionRecord{
+			Timestamp: now,
+			Success:   false,
+			Error:     err.Error(),
+		})
 		return
 	}
 
@@ -164,6 +232,11 @@ func (e *Engine) executeTrigger(def trigger.TriggerDefinition) {
 	prompt, err := def.EvalPromptTemplate(lastRun)
 	if err != nil {
 		e.log.Printf("[trigger:%s] failed to evaluate prompt: %v", def.ID, err)
+		e.history.Append(def.ID, ExecutionRecord{
+			Timestamp: now,
+			Success:   false,
+			Error:     err.Error(),
+		})
 		return
 	}
 
@@ -179,15 +252,68 @@ func (e *Engine) executeTrigger(def trigger.TriggerDefinition) {
 	// Dispatch to queue
 	if err := e.cfg.Queue.AddTask(task); err != nil {
 		e.log.Printf("[trigger:%s] failed to dispatch task: %v", def.ID, err)
+		e.history.Append(def.ID, ExecutionRecord{
+			Timestamp: now,
+			TaskID:    task.ID,
+			Success:   false,
+			Error:     err.Error(),
+		})
 		return
 	}
 
 	e.log.Printf("[trigger:%s] dispatched task %s", def.ID, task.ID)
+	e.history.Append(def.ID, ExecutionRecord{
+		Timestamp: now,
+		TaskID:    task.ID,
+		Success:   true,
+	})
 
 	// Save updated state
-	if err := e.st.Save(def.ID, time.Now(), nil); err != nil {
+	if err := e.st.Save(def.ID, now, nil); err != nil {
 		e.log.Printf("[trigger:%s] failed to save state: %v", def.ID, err)
 	}
+}
+
+// History returns a reference to the execution history.
+// Callers should treat it as read-only.
+func (e *Engine) History() *ExecutionHistory {
+	return e.history
+}
+
+// NextFireTime calculates the next scheduled fire time for a trigger.
+// Returns the zero time if the trigger is paused or has an invalid schedule.
+func (e *Engine) NextFireTime(id string) time.Time {
+	e.mu.RLock()
+	if _, paused := e.paused[id]; paused {
+		e.mu.RUnlock()
+		return time.Time{}
+	}
+	var def *trigger.TriggerDefinition
+	for _, d := range e.defs {
+		if d.ID == id {
+			tmp := d
+			def = &tmp
+			break
+		}
+	}
+	e.mu.RUnlock()
+
+	if def == nil {
+		return time.Time{}
+	}
+
+	interval := parseDuration(def.Schedule)
+	if interval == 0 {
+		return time.Time{}
+	}
+
+	// Load last run time
+	lastState, err := e.st.Load(id)
+	if err != nil {
+		return time.Time{}
+	}
+
+	return lastState.LastRun.Add(interval)
 }
 
 // parseDuration extracts a time.Duration from a schedule string.

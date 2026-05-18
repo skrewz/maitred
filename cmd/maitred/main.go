@@ -14,6 +14,7 @@ import (
 
 	"maitred/pkg/engine"
 	"maitred/pkg/queue"
+	"maitred/pkg/web"
 )
 
 // Version is set at build time via ldflags.
@@ -48,6 +49,7 @@ func main() {
 	triggerDirStr := defaultEnv("MAITRE_D_TRIGGER_DIR", "config/triggers.d")
 	dataDirStr := defaultEnv("MAITRE_D_DATA_DIR", "data")
 	queueAddrStr := defaultEnv("MAITRE_D_QUEUE_ADDR", "http://localhost:8080")
+	webPortStr := defaultEnv("MAITRE_D_WEB_PORT", "9090")
 
 	// CLI flags take precedence over env vars
 	if *triggerDir != "" {
@@ -60,10 +62,17 @@ func main() {
 		queueAddrStr = *queueAddr
 	}
 
+	// Parse web port from env
+	webPort := 9090
+	if p, err := parsePort(webPortStr); err == nil {
+		webPort = p
+	}
+
 	log.Printf("maitred %s starting", Version)
 	log.Printf("  trigger dir: %s", triggerDirStr)
 	log.Printf("  data dir:    %s", dataDirStr)
 	log.Printf("  queue addr:  %s", queueAddrStr)
+	log.Printf("  web port:    %d", webPort)
 
 	// Resolve trigger dir relative to working directory if not absolute
 	if !filepath.IsAbs(triggerDirStr) {
@@ -104,6 +113,12 @@ func main() {
 
 	log.Printf("ready")
 
+	// Start the web dashboard
+	webSrv := web.New(webPort, eng, Version)
+	if err := webSrv.Start(); err != nil {
+		log.Printf("web server error: %v (continuing without dashboard)", err)
+	}
+
 	// Start the engine
 	if err := eng.Start(); err != nil {
 		log.Fatalf("start engine: %v", err)
@@ -116,6 +131,7 @@ func main() {
 
 	log.Printf("shutting down")
 	eng.Stop()
+	webSrv.Stop()
 	log.Printf("stopped")
 }
 
@@ -136,4 +152,13 @@ func defaultEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func parsePort(s string) (int, error) {
+	var port int
+	_, err := fmt.Sscanf(s, "%d", &port)
+	if err != nil || port <= 0 || port > 65535 {
+		return 0, fmt.Errorf("invalid port: %s", s)
+	}
+	return port, nil
 }

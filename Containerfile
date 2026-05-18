@@ -4,6 +4,7 @@
 #
 # Build:  podman build -t maitred .
 # Run:    podman run -d --name maitred \
+#           -p 9090:9090 \
 #           -v /path/to/config:/etc/maitred:Z,ro \
 #           -v /path/to/data:/var/lib/maitred:Z \
 #           maitred:latest
