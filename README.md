@@ -1,8 +1,8 @@
-# maitred
+# Maître d'
 
 > Periodic trigger engine for autonomous task queues.
 
-maitred schedules and dispatches tasks into any queue system based on
+Maître d' schedules and dispatches tasks into any queue system based on
 periodic cron or duration-based triggers. It reads trigger definitions
 from YAML files, evaluates prompt templates with execution state, and
 pushes resulting tasks to a configurable queue provider.
@@ -83,7 +83,7 @@ schedule: "@hourly"          # Top of every hour
 
 ```
 ┌─────────────────────────────────────────────────┐
-│                    maitred                       │
+│                    Maître d'                     │
 │                                                  │
 │  config/triggers.d/   pkg/engine/   pkg/state/   │
 │  ┌──────────────┐    ┌──────────┐   ┌────────┐  │

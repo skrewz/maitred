@@ -1,4 +1,4 @@
-# maitred — Periodic Trigger Engine
+# Maître d' — Periodic Trigger Engine
 
 ## General gotcha's for agents
 
