@@ -65,13 +65,13 @@ type triggerFileEntry struct {
 
 // TriggerDefinition is the parsed, validated form of a trigger.
 type TriggerDefinition struct {
-	ID       string      `yaml:"id"`
-	Type     TriggerType `yaml:"type"`
-	Schedule string      `yaml:"schedule"`
-	Prompt   string      `yaml:"prompt"`
-	Repos    []string    `yaml:"repos,omitempty"`
-	Tags     []string    `yaml:"tags,omitempty"`
-	Timeout  int         `yaml:"timeout,omitempty"`
+	ID       string      `yaml:"id" json:"id"`
+	Type     TriggerType `yaml:"type" json:"type"`
+	Schedule string      `yaml:"schedule" json:"schedule"`
+	Prompt   string      `yaml:"prompt" json:"prompt"`
+	Repos    []string    `yaml:"repos,omitempty" json:"repos,omitempty"`
+	Tags     []string    `yaml:"tags,omitempty" json:"tags,omitempty"`
+	Timeout  int         `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 }
 
 // EvalPromptTemplate evaluates the trigger's prompt template with the
