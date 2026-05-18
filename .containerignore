@@ -1,0 +1,13 @@
+# Build artifacts
+bin/
+*.out
+coverage.html
+coverage.out
+
+# Git
+.git
+.gitignore
+
+# Docs not needed in runtime image
+*.md
+LICENSE

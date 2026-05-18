@@ -1,4 +1,4 @@
-.PHONY: build test test-coverage test-race lint check-format clean
+.PHONY: build test test-coverage test-race lint check-format clean image
 
 MODULE  := maitred
 GO      := go
@@ -45,5 +45,13 @@ check-format: ## Check Go code formatting with gofumpt (fails if not formatted)
 install: ## Install binary to $GOPATH/bin
 	$(GO) install -trimpath -ldflags "$(LDFLAGS)" ./cmd/maitred
 
+image: ## Build the maitred container image
+	podman build \
+		--format docker \
+		--build-arg LDFLAGS="$(LDFLAGS)" \
+		-t maitred:latest \
+		.
+
 clean: ## Remove build artifacts
 	rm -rf bin/ coverage.out coverage.html
+	podman rmi maitred:latest 2>/dev/null || true

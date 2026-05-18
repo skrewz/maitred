@@ -43,6 +43,12 @@ func NewTaskQueue() *TaskQueue {
 	}
 }
 
+// AddTask inserts a task into the queue. It is an alias for Add and
+// implements the engine.TaskQueueProvider interface.
+func (q *TaskQueue) AddTask(task *Task) error {
+	return q.Add(task)
+}
+
 // Add inserts a task into the queue. Returns an error if a task with the
 // same ID already exists.
 func (q *TaskQueue) Add(task *Task) error {
