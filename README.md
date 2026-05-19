@@ -10,6 +10,9 @@ pushes resulting tasks to a configurable queue provider.
 Designed to run alongside [hotelier](https://github.com/skrewz/hotelier)
 but works with any system that implements the `TaskQueueProvider` interface.
 
+**Warning**: This is alpha grade software. Mostly made to scratch an itch of
+mine. Use at your own risk—but let me know if you do.
+
 ## Screenshots
 
 ![Maître d' Web Dashboard](/docs/screenshot.png)
