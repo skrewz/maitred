@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"gopkg.in/yaml.v3"
+
 	"maitred/pkg/engine"
 	"maitred/pkg/queue"
 	"maitred/pkg/web"
@@ -27,7 +29,7 @@ func main() {
 	// CLI flags (override env vars)
 	triggerDir := flag.String("trigger-dir", "", "directory containing trigger YAML files")
 	dataDir := flag.String("data-dir", "", "directory for persistent trigger state")
-	queueAddr := flag.String("queue-addr", "", "target queue system address (for future HTTP adapter)")
+	queueConfig := flag.String("queue-config", "", "path to queue adapter YAML config (enables HTTP queue adapter)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	showHealth := flag.Bool("health", false, "health check mode (exits 0 if config is valid)")
 	webPort := flag.Int("web-port", 0, "port for the web dashboard (default from MAITRE_D_WEB_PORT)")
@@ -52,7 +54,7 @@ func main() {
 	// Defaults — can be overridden via environment variables
 	triggerDirStr := defaultEnv("MAITRE_D_TRIGGER_DIR", "config/triggers.d")
 	dataDirStr := defaultEnv("MAITRE_D_DATA_DIR", "data")
-	queueAddrStr := defaultEnv("MAITRE_D_QUEUE_ADDR", "http://localhost:8080")
+	queueConfigStr := defaultEnv("MAITRE_D_QUEUE_CONFIG", "")
 	webPortStr := defaultEnv("MAITRE_D_WEB_PORT", "9090")
 	apiPortStr := defaultEnv("MAITRE_D_API_PORT", "9091")
 	webhookDirStr := defaultEnv("MAITRE_D_WEBHOOK_DIR", "config/webhook-endpoints.d")
@@ -64,8 +66,8 @@ func main() {
 	if *dataDir != "" {
 		dataDirStr = *dataDir
 	}
-	if *queueAddr != "" {
-		queueAddrStr = *queueAddr
+	if *queueConfig != "" {
+		queueConfigStr = *queueConfig
 	}
 	if *webhookDirFlag != "" {
 		webhookDirStr = *webhookDirFlag
@@ -89,12 +91,12 @@ func main() {
 	_ = apiPortVal // used below
 
 	log.Printf("maitred %s starting", Version)
-	log.Printf("  trigger dir:  %s", triggerDirStr)
-	log.Printf("  data dir:     %s", dataDirStr)
-	log.Printf("  queue addr:   %s", queueAddrStr)
-	log.Printf("  web port:     %d", port)
-	log.Printf("  api port:     %d", apiPortVal)
-	log.Printf("  webhook dir:  %s", webhookDirStr)
+	log.Printf("  trigger dir:    %s", triggerDirStr)
+	log.Printf("  data dir:       %s", dataDirStr)
+	log.Printf("  queue config:   %s", queueConfigStr)
+	log.Printf("  web port:       %d", port)
+	log.Printf("  api port:       %d", apiPortVal)
+	log.Printf("  webhook dir:    %s", webhookDirStr)
 
 	// Resolve trigger dir relative to working directory if not absolute
 	if !filepath.IsAbs(triggerDirStr) {
@@ -128,11 +130,39 @@ func main() {
 	log.Printf("resolved webhook dir:  %s", webhookDirStr)
 
 	// Create the engine (loads and validates config)
-	mq := queue.NewTaskQueue()
+	var qe queue.TaskQueueProvider
+
+	if queueConfigStr != "" {
+		// Load queue adapter config
+		queueCfg, err := loadQueueConfig(queueConfigStr)
+		if err != nil {
+			log.Fatalf("load queue config: %v", err)
+		}
+		log.Printf("  queue endpoint: %s", queueCfg.Endpoint)
+		if queueCfg.MTLSCert != "" && queueCfg.MTLSKey != "" {
+			log.Printf("  queue mTLS:     enabled (cert: %s)", queueCfg.MTLSCert)
+		}
+		if queueCfg.TaskTemplate != "" {
+			log.Printf("  queue template: custom")
+		}
+
+		// Create the HTTP adapter
+		adapter, err := queue.NewHTTPAdapter(queueCfg, log.Default())
+		if err != nil {
+			log.Fatalf("create queue adapter: %v", err)
+		}
+		qe = adapter
+		log.Printf("  queue mode:     HTTP adapter")
+	} else {
+		mq := queue.NewTaskQueue()
+		qe = mq
+		log.Printf("  queue mode:     in-memory")
+	}
+
 	eng, err := engine.New(engine.Config{
 		TriggerDir: triggerDirStr,
 		DataDir:    dataDirStr,
-		Queue:      mq,
+		Queue:      qe,
 	})
 	if err != nil {
 		log.Fatalf("initialize engine: %v", err)
@@ -204,6 +234,21 @@ func healthCheck(triggerDir, dataDir string) error {
 		Queue:      mq,
 	})
 	return err
+}
+
+// loadQueueConfig reads and parses a queue adapter configuration file.
+func loadQueueConfig(path string) (queue.AdapterConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return queue.AdapterConfig{}, fmt.Errorf("read queue config: %w", err)
+	}
+
+	var cfg queue.AdapterConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return queue.AdapterConfig{}, fmt.Errorf("parse queue config: %w", err)
+	}
+
+	return cfg, nil
 }
 
 func defaultEnv(key, fallback string) string {

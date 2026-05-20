@@ -8,7 +8,8 @@ from YAML files, evaluates prompt templates with execution state, and
 pushes resulting tasks to a configurable queue provider.
 
 Designed to run alongside [hotelier](https://github.com/skrewz/hotelier)
-but works with any system that implements the `TaskQueueProvider` interface.
+but works with any HTTP queue system. See the [Queue Adapter](#queue-adapter)
+section for configuration details.
 
 **Warning**: This is alpha grade software. Mostly made to scratch an itch of
 mine. Use at your own risk—but let me know if you do.
@@ -41,9 +42,11 @@ order, enabling modular configuration.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `MAITRE_D_TRIGGER_DIR` | `config/triggers.d` | Directory containing trigger YAML files |
 | `MAITRE_D_DATA_DIR` | `data` | Directory for persistent trigger state |
-| `MAITRE_D_QUEUE_ADDR` | `http://localhost:8080` | Target queue system address (future) |
+| `MAITRE_D_QUEUE_CONFIG` | — | Path to queue adapter YAML config (enables HTTP queue adapter) |
 | `MAITRE_D_WEB_PORT` | `9090` | Port for the web dashboard |
 | `MAITRE_D_API_PORT` | `9091` | Port for the webhook API |
 | `MAITRE_D_WEBHOOK_DIR` | `config/webhook-endpoints.d` | Directory containing webhook endpoint YAML files |
@@ -88,6 +91,67 @@ schedule: "0 */6 * * *"     # Every 6 hours at minute 0
 schedule: "@daily"           # Midnight every day
 schedule: "@hourly"          # Top of every hour
 ```
+
+### Queue Adapter
+
+Maître d' dispatches tasks to a remote queue system via an HTTP adapter.
+Configure it with a YAML config file and point to it via `MAITRE_D_QUEUE_CONFIG`
+or the `--queue-config` flag.
+
+**Example** — `config/queue.yaml`:
+
+```yaml
+# Target queue system endpoint
+endpoint: "https://hotelier.example.com:8080"
+
+# Optional mTLS client authentication
+# Both fields must be set together — omit for no TLS auth
+mtls_cert: "/path/to/client.crt"
+mtls_key:  "/path/to/client.key"
+
+# Optional: custom task body template (Go text/template syntax)
+# Available fields: .ID, .Prompt, .Repos, .Tags, .Timeout
+# A built-in "json" function marshals values to JSON for safe embedding.
+# If omitted, the default template is used (see below).
+task_template: |
+  {
+    "prompt": {{ .Prompt | json }},
+    "repos": {{ .Repos | json }},
+    "tags": {{ .Tags | json }},
+    "timeout": {{ .Timeout }}
+  }
+
+# Optional: log the full response body from the remote system
+log_response: false
+```
+
+**Default task template** (used when `task_template` is omitted):
+
+```yaml
+task_template: |
+  {
+    "prompt": {{ .Prompt | json }},
+    "repos": {{ .Repos | json }},
+    "tags": {{ .Tags | json }},
+    "timeout": {{ .Timeout }}
+  }
+```
+
+The default template omits the `id` field — the remote system is expected
+to generate its own. The adapter injects an internal tracking ID into the
+end of the prompt (`\n(internal maître d' tracking ID: <id>)`), enabling
+reverse-tracing of tasks across systems.
+
+**mTLS authentication** is optional. When both `mtls_cert` and `mtls_key`
+are set, the adapter uses TLS client certificate authentication during the
+handshake. Only the client certificate is required — system CAs are trusted
+for server verification (no separate CA cert needed). When neither is set,
+plain HTTP or server-only TLS (if the endpoint uses `https://`) is used.
+
+> **Note**: The queue adapter is a core feature of maître d'. Without a queue
+> config, the engine falls back to an in-memory queue that stores tasks in RAM
+> only — tasks are never dispatched externally. For production use, always
+> configure a queue adapter.
 
 ### Webhook Endpoints
 
@@ -198,6 +262,7 @@ handled by a reverse proxy in front of the API port.
 |------|-------------|
 | `--trigger-dir` | Directory containing trigger YAML files (overrides `MAITRE_D_TRIGGER_DIR`) |
 | `--data-dir` | Directory for persistent trigger state (overrides `MAITRE_D_DATA_DIR`) |
+| `--queue-config` | Path to queue adapter YAML config (overrides `MAITRE_D_QUEUE_CONFIG`) |
 | `--web-port` | Port for the web dashboard (overrides `MAITRE_D_WEB_PORT`) |
 | `--api-port` | Port for the webhook API (overrides `MAITRE_D_API_PORT`) |
 | `--webhook-dir` | Directory containing webhook endpoint YAML files (overrides `MAITRE_D_WEBHOOK_DIR`) |

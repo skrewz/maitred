@@ -1,12 +1,19 @@
-// Package queue provides an in-memory task queue and the TaskQueue interface
-// that any downstream queue system can implement to receive tasks from the
-// maitred trigger engine.
+// Package queue provides an in-memory task queue and the TaskQueueProvider
+// interface that any downstream queue system can implement to receive tasks
+// from the maitred trigger engine.
 package queue
 
 import (
 	"fmt"
 	"sync"
 )
+
+// TaskQueueProvider is the interface that any queue system must implement
+// to receive tasks from the trigger engine. This decouples the engine from
+// any specific queue implementation (HTTP adapter, in-memory, etc.).
+type TaskQueueProvider interface {
+	AddTask(task *Task) error
+}
 
 // Task represents a unit of work to be executed by an agent on a queue system.
 // This is the minimal intersection of task schemas across queue systems.
@@ -28,7 +35,7 @@ func (t *Task) String() string {
 
 // TaskQueue is an in-memory FIFO queue for tasks. It implements the
 // TaskQueueProvider interface so it can be used directly as a destination
-// for the trigger engine, or adapted to forward tasks to an external system.
+// for the trigger engine.
 type TaskQueue struct {
 	tasks   map[string]*Task
 	ordered []*Task // maintains insertion order

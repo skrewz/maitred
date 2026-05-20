@@ -20,13 +20,6 @@ import (
 	"maitred/pkg/trigger"
 )
 
-// TaskQueueProvider is the interface that any queue system must implement
-// to receive tasks from the trigger engine. This decouples the engine from
-// any specific queue implementation (hotelier, custom HTTP, etc.).
-type TaskQueueProvider interface {
-	AddTask(task *queue.Task) error
-}
-
 // Config holds the configuration for the trigger engine.
 type Config struct {
 	// TriggerDir is the directory containing trigger YAML files (.d/ convention).
@@ -34,7 +27,7 @@ type Config struct {
 	// DataDir is the directory for persistent trigger state.
 	DataDir string
 	// Queue is the destination for generated tasks.
-	Queue TaskQueueProvider
+	Queue queue.TaskQueueProvider
 }
 
 // Engine manages the lifecycle of periodic triggers. It loads trigger
@@ -317,7 +310,7 @@ func (e *Engine) History() *ExecutionHistory {
 }
 
 // Queue returns the configured TaskQueueProvider.
-func (e *Engine) Queue() TaskQueueProvider {
+func (e *Engine) Queue() queue.TaskQueueProvider {
 	return e.cfg.Queue
 }
 
