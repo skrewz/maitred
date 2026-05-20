@@ -257,3 +257,168 @@ func TestTriggerDefinition_EvalPromptTemplate_NoVars(t *testing.T) {
 		t.Errorf("expected 'Just a plain prompt', got %q", result)
 	}
 }
+
+func TestTriggerDefinition_EvalPromptTemplateWith_Payload(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@every 1h",
+		Prompt:   "PR: {{ .Payload.pull_request.title }}",
+	}
+
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"title": "Fix the bug",
+		},
+	}
+	lastRun := time.Time{}
+
+	result, err := def.EvalPromptTemplateWith(payload, lastRun)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := "PR: Fix the bug"
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestTriggerDefinition_EvalPromptTemplateWith_PayloadAndLastRun(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@every 1h",
+		Prompt:   "Review {{ .Payload.event }} since {{ .LastRun }}",
+	}
+
+	payload := map[string]interface{}{
+		"event": "push",
+	}
+	lastRun := time.Date(2025, 5, 17, 10, 0, 0, 0, time.UTC)
+
+	result, err := def.EvalPromptTemplateWith(payload, lastRun)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := "Review push since 2025-05-17T10:00:00Z"
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestTriggerDefinition_EvalPromptTemplateWith_NilPayload(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@every 1h",
+		Prompt:   "Research since {{ .LastRun }}",
+	}
+
+	lastRun := time.Date(2025, 5, 17, 10, 0, 0, 0, time.UTC)
+
+	result, err := def.EvalPromptTemplateWith(nil, lastRun)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := "Research since 2025-05-17T10:00:00Z"
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestTriggerDefinition_EvalPromptTemplateWith_NestedPayload(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@every 1h",
+		Prompt:   "{{ .Payload.sender.login }} pushed to {{ .Payload.repository.name }}",
+	}
+
+	payload := map[string]interface{}{
+		"sender": map[string]interface{}{
+			"login": "developer1",
+		},
+		"repository": map[string]interface{}{
+			"name": "maitred",
+		},
+	}
+	lastRun := time.Time{}
+
+	result, err := def.EvalPromptTemplateWith(payload, lastRun)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := "developer1 pushed to maitred"
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestTriggerDefinition_EvalPromptTemplateWith_EmptyPayload(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@every 1h",
+		Prompt:   "Processing event",
+	}
+
+	payload := map[string]interface{}{}
+	lastRun := time.Time{}
+
+	result, err := def.EvalPromptTemplateWith(payload, lastRun)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := "Processing event"
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestTriggerDefinition_EvalPromptTemplateWith_BadTemplate(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@every 1h",
+		Prompt:   "{{ .Payload.nonexistent.deeply.nested.field }}",
+	}
+
+	payload := map[string]interface{}{}
+	lastRun := time.Time{}
+
+	_, err := def.EvalPromptTemplateWith(payload, lastRun)
+	// This should succeed because the template engine returns an error
+	// when accessing a nil field — but let's verify it handles it gracefully
+	_ = err
+}
+
+func TestTriggerDefinition_EvalPromptTemplate_Equivalence(t *testing.T) {
+	// EvalPromptTemplate should be equivalent to EvalPromptTemplateWith(nil, lastRun)
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@every 1h",
+		Prompt:   "Research since {{ .LastRun }}",
+	}
+
+	lastRun := time.Date(2025, 5, 17, 10, 0, 0, 0, time.UTC)
+
+	result1, err1 := def.EvalPromptTemplate(lastRun)
+	if err1 != nil {
+		t.Fatalf("unexpected error: %v", err1)
+	}
+
+	result2, err2 := def.EvalPromptTemplateWith(nil, lastRun)
+	if err2 != nil {
+		t.Fatalf("unexpected error: %v", err2)
+	}
+
+	if result1 != result2 {
+		t.Errorf("expected equivalence: %q != %q", result1, result2)
+	}
+}

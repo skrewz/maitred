@@ -470,3 +470,63 @@ triggers:
 	time.Sleep(150 * time.Millisecond)
 	eng.Stop()
 }
+
+func TestEngine_Queue(t *testing.T) {
+	dir := t.TempDir()
+	configYAML := `
+triggers:
+  - id: "test"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "test"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mq := &mockQueue{}
+	eng, err := engine.New(engine.Config{
+		TriggerDir: dir,
+		DataDir:    t.TempDir(),
+		Queue:      mq,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	q := eng.Queue()
+	if q == nil {
+		t.Fatal("expected non-nil queue")
+	}
+	if q != mq {
+		t.Error("expected Queue() to return the configured queue")
+	}
+}
+
+func TestEngine_StateStore(t *testing.T) {
+	dir := t.TempDir()
+	configYAML := `
+triggers:
+  - id: "test"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "test"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	eng, err := engine.New(engine.Config{
+		TriggerDir: dir,
+		DataDir:    t.TempDir(),
+		Queue:      &mockQueue{},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	st := eng.StateStore()
+	if st == nil {
+		t.Fatal("expected non-nil state store")
+	}
+}

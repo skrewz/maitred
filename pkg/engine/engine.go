@@ -316,6 +316,16 @@ func (e *Engine) History() *ExecutionHistory {
 	return e.history
 }
 
+// Queue returns the configured TaskQueueProvider.
+func (e *Engine) Queue() TaskQueueProvider {
+	return e.cfg.Queue
+}
+
+// StateStore returns the engine's state store.
+func (e *Engine) StateStore() *state.Store {
+	return e.st
+}
+
 // NextFireTime calculates the next scheduled fire time for a trigger.
 // Returns the zero time if the trigger is paused or has an invalid schedule.
 func (e *Engine) NextFireTime(id string) time.Time {

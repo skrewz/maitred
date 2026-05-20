@@ -77,12 +77,55 @@ type TriggerDefinition struct {
 // EvalPromptTemplate evaluates the trigger's prompt template with the
 // given lastRun time. The template has access to .LastRun (RFC3339 format).
 func (d *TriggerDefinition) EvalPromptTemplate(lastRun time.Time) (string, error) {
+	return d.EvalPromptTemplateWith(nil, lastRun)
+}
+
+// templatePayload recursively converts map[string]interface{} values
+// into a form that Go templates can traverse with dot notation.
+func templatePayload(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		result := make(map[string]interface{}, len(val))
+		for k, v := range val {
+			result[k] = templatePayload(v)
+		}
+		return result
+	case map[interface{}]interface{}:
+		result := make(map[string]interface{}, len(val))
+		for k, v := range val {
+			if ks, ok := k.(string); ok {
+				result[ks] = templatePayload(v)
+			}
+		}
+		return result
+	case []interface{}:
+		result := make([]interface{}, len(val))
+		for i, v := range val {
+			result[i] = templatePayload(v)
+		}
+		return result
+	default:
+		return v
+	}
+}
+
+// EvalPromptTemplateWith evaluates the trigger's prompt template with
+// the given payload and lastRun time. The template has access to:
+//   - .LastRun (RFC3339 format of lastRun)
+//   - .Payload (the payload map, if non-nil)
+func (d *TriggerDefinition) EvalPromptTemplateWith(payload map[string]interface{}, lastRun time.Time) (string, error) {
 	funcs := template.FuncMap{
 		"TrimSuffix": func(s, suffix string) string {
 			if len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix {
 				return s[:len(s)-len(suffix)]
 			}
 			return s
+		},
+		"index": func(m map[string]interface{}, key string) interface{} {
+			if m == nil {
+				return nil
+			}
+			return m[key]
 		},
 	}
 
@@ -91,10 +134,15 @@ func (d *TriggerDefinition) EvalPromptTemplate(lastRun time.Time) (string, error
 		return "", fmt.Errorf("trigger %s: invalid prompt template: %w", d.ID, err)
 	}
 
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
+	ctx := map[string]interface{}{
 		"LastRun": lastRun.Format(time.RFC3339),
-	}); err != nil {
+	}
+	if payload != nil {
+		ctx["Payload"] = templatePayload(payload)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, ctx); err != nil {
 		return "", fmt.Errorf("trigger %s: failed to execute prompt template: %w", d.ID, err)
 	}
 
