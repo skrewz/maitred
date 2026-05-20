@@ -44,6 +44,9 @@ order, enabling modular configuration.
 | `MAITRE_D_TRIGGER_DIR` | `config/triggers.d` | Directory containing trigger YAML files |
 | `MAITRE_D_DATA_DIR` | `data` | Directory for persistent trigger state |
 | `MAITRE_D_QUEUE_ADDR` | `http://localhost:8080` | Target queue system address (future) |
+| `MAITRE_D_WEB_PORT` | `9090` | Port for the web dashboard |
+| `MAITRE_D_API_PORT` | `9091` | Port for the webhook API |
+| `MAITRE_D_WEBHOOK_DIR` | `config/webhook-endpoints.d` | Directory containing webhook endpoint YAML files |
 
 ### Trigger Definition Format
 
@@ -65,7 +68,7 @@ triggers:
 | `id` | ✅ | Unique trigger identifier |
 | `type` | ✅ | Currently only `periodic` is supported |
 | `schedule` | ✅ | Cron expression or `@every <duration>` |
-| `prompt` | ✅ | Go template with `.LastRun` variable |
+| `prompt` | ✅ | Go template with `.LastRun` and `.Payload` variables |
 | `repos` | | Repository paths for the task |
 | `tags` | | Agent capability tags for routing |
 | `timeout` | | Task timeout in seconds (0 = unlimited) |
@@ -85,6 +88,42 @@ schedule: "0 */6 * * *"     # Every 6 hours at minute 0
 schedule: "@daily"           # Midnight every day
 schedule: "@hourly"          # Top of every hour
 ```
+
+### Webhook Endpoints
+
+Webhook events from external systems (e.g. Forgejo) can trigger existing
+triggers by placing YAML files in `config/webhook-endpoints.d/`. Each file
+becomes a named provider (filename without extension), and the webhook API
+serves them at `/v1/{provider}/{endpoint}`.
+
+**Example** — `config/webhook-endpoints.d/forgejo.yaml`:
+
+```yaml
+endpoints:
+  - name: "pull_request"
+    trigger_id: "pr-review"
+    response: '{"status": "submitted"}'
+```
+
+This exposes the endpoint `POST /v1/forgejo/pull_request`. When Forgejo
+sends a webhook, the raw JSON payload is available in the trigger's prompt
+template as `.Payload`:
+
+```yaml
+triggers:
+  - id: "pr-review"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "Review PR {{ .Payload.pull_request.title }} since {{ .LastRun }}"
+```
+
+Provider names must consist only of `[a-z0-9-]` characters. The `.Payload`
+template variable works with nested JSON — you can access deeply nested fields
+via dot notation (e.g. `{{ .Payload.sender.login }}`).
+
+The webhook API runs on a separate port from the web dashboard (default `9091`,
+configurable via `MAITRE_D_API_PORT`). TLS termination is expected to be
+handled by a reverse proxy in front of the API port.
 
 ## Architecture
 
@@ -112,7 +151,58 @@ schedule: "@hourly"          # Top of every hour
                   │  Queue System    │
                   │ (hotelier, etc.) │
                   └──────────────────┘
+
+  ┌─────────────────────────────────────────────────┐
+  │              Webhook API (port 9091)            │
+  │                                                 │
+  │  config/webhook-endpoints.d/  pkg/webhook/      │
+  │  ┌──────────────┐    ┌────────────┐             │
+  │  │ YAML files   │───►│ Handler    │──► Engine   │
+  │  │ (parsed at   │    │ /v1/{      │   (reuses   │
+  │  │  startup)    │    │  provider} │   prompt    │
+  │  └──────────────┘    │  /         │   engine)   │
+  │                      │  endpoint  │             │
+  │                      └────────────┘             │
+  └─────────────────────────────────────────────────┘
 ```
+
+```
+┌─────────────────────────────────────────────────┐
+│                    Maître d'                    │
+│                                                 │
+│  config/triggers.d/   pkg/engine/   pkg/state/  │
+│  ┌──────────────┐    ┌──────────┐   ┌────────┐  │
+│  │ YAML files   │───►│ Engine   │──►│ JSON   │  │
+│  │ (parsed at   │    │ (cron    │   │ files  │  │
+│  │  startup)    │    │  ticker  │   │ per    │  │
+│  └──────────────┘    │  goroutine│  │ trigger│  │
+│                      └────┬─────┘   └────────┘  │
+│                           │                     │
+│                           ▼                     │
+│                    ┌──────────────┐             │
+│                    │ TaskQueue    │             │
+│                    │ Provider     │             │
+│                    └──────┬───────┘             │
+└───────────────────────────┬─────────────────────┘
+                            │
+                            ▼
+                  ┌──────────────────┐
+                  │  Queue System    │
+                  │ (hotelier, etc.) │
+                  └──────────────────┘
+```
+
+## CLI Flags
+
+| Flag | Description |
+|------|-------------|
+| `--trigger-dir` | Directory containing trigger YAML files (overrides `MAITRE_D_TRIGGER_DIR`) |
+| `--data-dir` | Directory for persistent trigger state (overrides `MAITRE_D_DATA_DIR`) |
+| `--web-port` | Port for the web dashboard (overrides `MAITRE_D_WEB_PORT`) |
+| `--api-port` | Port for the webhook API (overrides `MAITRE_D_API_PORT`) |
+| `--webhook-dir` | Directory containing webhook endpoint YAML files (overrides `MAITRE_D_WEBHOOK_DIR`) |
+| `--version` | Print version and exit |
+| `--health` | Health check mode (exits 0 if config is valid) |
 
 ## Development
 
