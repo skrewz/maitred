@@ -41,7 +41,7 @@ func New(port int, eng *engine.Engine, st *state.Store, version string, provider
 	return s
 }
 
-// Start begins serving HTTP. Returns immediately.
+// Start begins serving HTTP in a goroutine. Returns immediately.
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.port)
 	s.log.Printf("webhook API listening on %s", addr)
@@ -51,7 +51,11 @@ func (s *Server) Start() error {
 		Handler: s.mux,
 	}
 
-	return s.httpServer.ListenAndServe()
+	go func() {
+		_ = s.httpServer.ListenAndServe()
+	}()
+
+	return nil
 }
 
 // Stop gracefully shuts down the HTTP server.
