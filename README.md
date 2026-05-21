@@ -27,6 +27,7 @@ make build
 # Configure triggers
 mkdir -p config/triggers.d data
 # Edit config/triggers.d/*.yaml with your trigger definitions
+# (or organize into subdirectories like config/triggers.d/periodic/, config/triggers.d/webhook/)
 
 # Run
 ./bin/maitred
@@ -35,8 +36,9 @@ mkdir -p config/triggers.d data
 ## Configuration
 
 Triggers are defined as YAML files in `config/triggers.d/` (or any directory
-set via `MAITRE_D_TRIGGER_DIR`). Files are loaded in sorted alphabetical
-order, enabling modular configuration.
+set via `MAITRE_D_TRIGGER_DIR`). Files are loaded recursively from the
+trigger directory and all subdirectories, processed in sorted order by full
+path, enabling modular and organized configuration.
 
 ### Environment Variables
 
@@ -44,7 +46,7 @@ order, enabling modular configuration.
 |----------|---------|-------------|
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MAITRE_D_TRIGGER_DIR` | `config/triggers.d` | Directory containing trigger YAML files |
+| `MAITRE_D_TRIGGER_DIR` | `config/triggers.d` | Directory containing trigger YAML files (loaded recursively) |
 | `MAITRE_D_DATA_DIR` | `data` | Directory for persistent trigger state |
 | `MAITRE_D_QUEUE_CONFIG` | — | Path to queue adapter YAML config (enables HTTP queue adapter) |
 | `MAITRE_D_WEB_PORT` | `9090` | Port for the web dashboard |

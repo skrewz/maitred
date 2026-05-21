@@ -397,6 +397,156 @@ func TestTriggerDefinition_EvalPromptTemplateWith_BadTemplate(t *testing.T) {
 	_ = err
 }
 
+func TestLoadTriggerDefinitions_Subdirectories(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a subdirectory
+	subDir := filepath.Join(dir, "periodic")
+	if err := os.Mkdir(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a trigger in the root
+	rootYAML := `
+triggers:
+  - id: "root-trigger"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "Root trigger prompt"
+`
+	if err := os.WriteFile(filepath.Join(dir, "01-root.yaml"), []byte(rootYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a trigger in the subdirectory
+	subYAML := `
+triggers:
+  - id: "sub-trigger"
+    type: periodic
+    schedule: "@every 30m"
+    prompt: "Subdirectory trigger prompt"
+`
+	if err := os.WriteFile(filepath.Join(subDir, "01-sub.yaml"), []byte(subYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(defs) != 2 {
+		t.Fatalf("expected 2 triggers, got %d", len(defs))
+	}
+
+	// Verify ordering: root comes before sub by path
+	if defs[0].ID != "root-trigger" {
+		t.Errorf("expected first trigger 'root-trigger', got %q", defs[0].ID)
+	}
+	if defs[1].ID != "sub-trigger" {
+		t.Errorf("expected second trigger 'sub-trigger', got %q", defs[1].ID)
+	}
+}
+
+func TestLoadTriggerDefinitions_NestedSubdirectories(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create nested subdirectories
+	subDir1 := filepath.Join(dir, "a")
+	subDir2 := filepath.Join(subDir1, "b")
+	if err := os.MkdirAll(subDir2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create triggers at each level
+	rootYAML := `
+triggers:
+  - id: "root"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "root"
+`
+	aYAML := `
+triggers:
+  - id: "a"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "a"
+`
+	bYAML := `
+triggers:
+  - id: "b"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "b"
+`
+	if err := os.WriteFile(filepath.Join(dir, "00-root.yaml"), []byte(rootYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir1, "01-a.yaml"), []byte(aYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir2, "02-b.yaml"), []byte(bYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(defs) != 3 {
+		t.Fatalf("expected 3 triggers, got %d", len(defs))
+	}
+
+	// Verify ordering by full path
+	expectedIDs := []string{"root", "a", "b"}
+	for i, id := range expectedIDs {
+		if defs[i].ID != id {
+			t.Errorf("expected trigger[%d] ID %q, got %q", i, id, defs[i].ID)
+		}
+	}
+}
+
+func TestLoadTriggerDefinitions_SkipNonYAMLInSubdirs(t *testing.T) {
+	dir := t.TempDir()
+
+	subDir := filepath.Join(dir, "webhook")
+	if err := os.Mkdir(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a non-YAML file in the subdirectory
+	if err := os.WriteFile(filepath.Join(subDir, "readme.txt"), []byte("not yaml"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a valid YAML file in the subdirectory
+	subYAML := `
+triggers:
+  - id: "webhook-trigger"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "webhook"
+`
+	if err := os.WriteFile(filepath.Join(subDir, "01-webhook.yaml"), []byte(subYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(defs) != 1 {
+		t.Fatalf("expected 1 trigger, got %d", len(defs))
+	}
+
+	if defs[0].ID != "webhook-trigger" {
+		t.Errorf("expected 'webhook-trigger', got %q", defs[0].ID)
+	}
+}
+
 func TestTriggerDefinition_EvalPromptTemplate_Equivalence(t *testing.T) {
 	// EvalPromptTemplate should be equivalent to EvalPromptTemplateWith(nil, lastRun)
 	def := trigger.TriggerDefinition{

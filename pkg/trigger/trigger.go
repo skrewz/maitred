@@ -7,6 +7,7 @@ package trigger
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -150,41 +151,60 @@ func (d *TriggerDefinition) EvalPromptTemplateWith(payload map[string]interface{
 }
 
 // LoadTriggerDefinitions reads all .yaml and .yml files from the given
-// directory (and its immediate subdirectories) and returns all parsed
-// TriggerDefinitions. Files are processed in sorted order by name.
+// directory and all its subdirectories, returning all parsed
+// TriggerDefinitions. Files are processed in sorted order by full path,
+// enabling deterministic loading across nested configurations.
 //
 // The directory structure follows the .d/ convention: any YAML file in the
-// directory is loaded and merged. This allows splitting trigger configs
-// across multiple files (e.g., 01-base.yaml, 02-models.yaml).
+// directory tree is loaded and merged. This allows splitting trigger configs
+// across multiple files (e.g., 01-base.yaml, 02-models.yaml) and organizing
+// them into subdirectories (e.g., triggers.d/periodic/, triggers.d/webhook/).
 func LoadTriggerDefinitions(dir string) ([]TriggerDefinition, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("read trigger directory %q: %w", dir, err)
+	type fileEntry struct {
+		path string
+		defs []TriggerDefinition
 	}
 
-	allDefs := make([]TriggerDefinition, 0)
+	var files []fileEntry
 
-	// Collect YAML files and sort them for deterministic ordering
-	var yamlFiles []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		name := entry.Name()
+
+		if path == dir {
+			return nil
+		}
+
+		if d.IsDir() {
+			return nil
+		}
+
+		name := d.Name()
 		lower := filepath.Ext(name)
-		if lower == ".yaml" || lower == ".yml" {
-			yamlFiles = append(yamlFiles, name)
+		if lower != ".yaml" && lower != ".yml" {
+			return nil
 		}
-	}
-	sort.Strings(yamlFiles)
 
-	for _, name := range yamlFiles {
-		path := filepath.Join(dir, name)
 		defs, err := loadTriggerFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("load %s: %w", path, err)
+			return fmt.Errorf("load %s: %w", path, err)
 		}
-		allDefs = append(allDefs, defs...)
+		files = append(files, fileEntry{path: path, defs: defs})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walk trigger directory %q: %w", dir, err)
+	}
+
+	// Sort files by path for deterministic ordering
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].path < files[j].path
+	})
+
+	allDefs := make([]TriggerDefinition, 0)
+	for _, f := range files {
+		allDefs = append(allDefs, f.defs...)
 	}
 
 	return allDefs, nil
