@@ -23,9 +23,10 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "${LDFLAGS}" -o /usr/local/bin/mai
 # ---------------------------------------------------------------------------
 # runtime — minimal Debian image
 # ---------------------------------------------------------------------------
-FROM debian:12-slim
+FROM debian:13-slim
 
-RUN groupadd -r maitred && useradd -r -g maitred -d /var/lib/maitred -s /sbin/nologin maitred
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/* && \
+    groupadd -r maitred && useradd -r -g maitred -d /var/lib/maitred -s /sbin/nologin maitred
 
 COPY --from=builder /usr/local/bin/maitred /usr/local/bin/maitred
 
