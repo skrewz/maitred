@@ -26,8 +26,16 @@ const (
 )
 
 // ParseSchedule validates and returns a schedule string.
-// Supports Go durations (@every 1h) and cron expressions (0 */6 * * *).
+// Supports Go durations (@every 1h), cron expressions (0 */6 * * *),
+// and the special @webhook sentinel for triggers that are only dispatched
+// via the webhook API (not scheduled by the engine).
 func ParseSchedule(s string) (string, error) {
+	// Webhook sentinel — triggers with this schedule are only fired
+	// via the webhook API, never by the periodic engine.
+	if s == "@webhook" {
+		return s, nil
+	}
+
 	// Check if it's a duration-based schedule
 	if len(s) >= 8 && s[:8] == "@every " {
 		dur, err := time.ParseDuration(s[7:])

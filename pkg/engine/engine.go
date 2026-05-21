@@ -112,8 +112,17 @@ func (e *Engine) Stop() {
 // It loops until the engine is stopped, scheduling each execution
 // after the previous one completes (not overlapping).
 // Supports both @every durations and cron expressions.
+// Triggers with schedule "@webhook" are skipped — they are only
+// dispatched via the webhook API.
 func (e *Engine) runTrigger(def trigger.TriggerDefinition) {
 	defer e.wg.Done()
+
+	// Webhook-only triggers are dispatched via the webhook API, not
+	// the periodic engine. Skip scheduling them.
+	if def.Schedule == "@webhook" {
+		e.log.Printf("[trigger:%s] webhook-only trigger, skipping schedule", def.ID)
+		return
+	}
 
 	interval := parseDuration(def.Schedule)
 	if interval > 0 {
@@ -338,6 +347,11 @@ func (e *Engine) NextFireTime(id string) time.Time {
 	e.mu.RUnlock()
 
 	if def == nil {
+		return time.Time{}
+	}
+
+	// Webhook-only triggers have no scheduled fire time
+	if def.Schedule == "@webhook" {
 		return time.Time{}
 	}
 

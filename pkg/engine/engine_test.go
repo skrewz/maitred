@@ -530,3 +530,98 @@ triggers:
 		t.Fatal("expected non-nil state store")
 	}
 }
+
+func TestEngine_WebhookTriggerDoesNotFire(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "webhook-only"
+    type: periodic
+    schedule: "@webhook"
+    prompt: "webhook event"
+  - id: "periodic-trigger"
+    type: periodic
+    schedule: "@every 2s"
+    prompt: "periodic"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dataDir := t.TempDir()
+	mq := &mockQueue{}
+
+	eng, err := engine.New(engine.Config{
+		TriggerDir: dir,
+		DataDir:    dataDir,
+		Queue:      mq,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating engine: %v", err)
+	}
+
+	if err := eng.Start(); err != nil {
+		t.Fatalf("unexpected error starting engine: %v", err)
+	}
+
+	// Wait for periodic trigger to fire once on startup
+	time.Sleep(500 * time.Millisecond)
+	eng.Stop()
+
+	// Only the periodic trigger should have produced a task (startup fire)
+	tasks := mq.Tasks()
+	if len(tasks) != 1 {
+		t.Fatalf("expected exactly 1 task from periodic trigger, got %d", len(tasks))
+	}
+	if tasks[0].Prompt != "periodic" {
+		t.Errorf("expected prompt 'periodic', got %q", tasks[0].Prompt)
+	}
+
+	// Verify only the periodic trigger's state was persisted
+	st, err := state.NewStore(dataDir)
+	if err != nil {
+		t.Fatalf("unexpected error creating state store: %v", err)
+	}
+
+	// Periodic trigger should have state
+	_, err = st.Load("periodic-trigger")
+	if err != nil {
+		t.Error("expected state for periodic-trigger")
+	}
+
+	// Webhook-only trigger should NOT have state (never executed)
+	_, err = st.Load("webhook-only")
+	if err == nil {
+		t.Error("expected no state for webhook-only trigger")
+	}
+}
+
+func TestEngine_NextFireTime_Webhook(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "webhook-trigger"
+    type: periodic
+    schedule: "@webhook"
+    prompt: "test"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	eng, err := engine.New(engine.Config{
+		TriggerDir: dir,
+		DataDir:    t.TempDir(),
+		Queue:      &mockQueue{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	next := eng.NextFireTime("webhook-trigger")
+	if !next.IsZero() {
+		t.Errorf("expected zero next fire time for @webhook trigger, got %v", next)
+	}
+}

@@ -21,6 +21,7 @@ func TestParseSchedule(t *testing.T) {
 		{"0 0 * * *", "0 0 * * *"},
 		{"@daily", "@daily"},
 		{"@hourly", "@hourly"},
+		{"@webhook", "@webhook"},
 	}
 
 	for _, tt := range tests {
@@ -54,6 +55,16 @@ func TestParseSchedule_InvalidCron(t *testing.T) {
 	_, err := trigger.ParseSchedule("*/invalid * * * *")
 	if err == nil {
 		t.Error("expected error for invalid cron, got nil")
+	}
+}
+
+func TestParseSchedule_Webhook(t *testing.T) {
+	sched, err := trigger.ParseSchedule("@webhook")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sched != "@webhook" {
+		t.Errorf("expected '@webhook', got %q", sched)
 	}
 }
 
@@ -142,6 +153,38 @@ triggers:
 
 	if defs[0].ID != "trigger-1" || defs[1].ID != "trigger-2" {
 		t.Errorf("unexpected trigger order: %v", defs)
+	}
+}
+
+func TestLoadTriggerDefinitions_WebhookSchedule(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "webhook-trigger"
+    type: periodic
+    schedule: "@webhook"
+    prompt: "Handle webhook event"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(defs) != 1 {
+		t.Fatalf("expected 1 trigger, got %d", len(defs))
+	}
+
+	def := defs[0]
+	if def.ID != "webhook-trigger" {
+		t.Errorf("expected ID 'webhook-trigger', got %q", def.ID)
+	}
+	if def.Schedule != "@webhook" {
+		t.Errorf("expected schedule '@webhook', got %q", def.Schedule)
 	}
 }
 
