@@ -32,8 +32,8 @@ func main() {
 	queueConfig := flag.String("queue-config", "", "path to queue adapter YAML config (enables HTTP queue adapter)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	showHealth := flag.Bool("health", false, "health check mode (exits 0 if config is valid)")
-	webPort := flag.Int("web-port", 0, "port for the web dashboard (default from MAITRE_D_WEB_PORT)")
-	apiPort := flag.Int("api-port", 0, "port for the webhook API (default from MAITRE_D_API_PORT)")
+	webPort := flag.Int("web-port", 0, "port for the web dashboard (default from MAITRED_WEB_PORT)")
+	apiPort := flag.Int("api-port", 0, "port for the webhook API (default from MAITRED_API_PORT)")
 	webhookDirFlag := flag.String("webhook-dir", "", "directory containing webhook endpoint YAML files")
 	flag.Parse()
 
@@ -52,12 +52,12 @@ func main() {
 	}
 
 	// Defaults — can be overridden via environment variables
-	triggerDirStr := defaultEnv("MAITRE_D_TRIGGER_DIR", "config/triggers.d")
-	dataDirStr := defaultEnv("MAITRE_D_DATA_DIR", "data")
-	queueConfigStr := defaultEnv("MAITRE_D_QUEUE_CONFIG", "")
-	webPortStr := defaultEnv("MAITRE_D_WEB_PORT", "9090")
-	apiPortStr := defaultEnv("MAITRE_D_API_PORT", "9091")
-	webhookDirStr := defaultEnv("MAITRE_D_WEBHOOK_DIR", "config/webhook-endpoints.d")
+	triggerDirStr := defaultEnv("MAITRED_TRIGGER_DIR", "config/triggers.d")
+	dataDirStr := defaultEnv("MAITRED_DATA_DIR", "data")
+	queueConfigStr := defaultEnv("MAITRED_QUEUE_CONFIG", "")
+	webPortStr := defaultEnv("MAITRED_WEB_PORT", "9090")
+	apiPortStr := defaultEnv("MAITRED_API_PORT", "9091")
+	webhookDirStr := defaultEnv("MAITRED_WEBHOOK_DIR", "config/webhook-endpoints.d")
 
 	// CLI flags take precedence over env vars
 	if *triggerDir != "" {

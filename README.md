@@ -36,7 +36,7 @@ mkdir -p config/triggers.d data
 ## Configuration
 
 Triggers are defined as YAML files in `config/triggers.d/` (or any directory
-set via `MAITRE_D_TRIGGER_DIR`). Files are loaded recursively from the
+set via `MAITRED_TRIGGER_DIR`). Files are loaded recursively from the
 trigger directory and all subdirectories, processed in sorted order by full
 path, enabling modular and organized configuration.
 
@@ -46,12 +46,12 @@ path, enabling modular and organized configuration.
 |----------|---------|-------------|
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MAITRE_D_TRIGGER_DIR` | `config/triggers.d` | Directory containing trigger YAML files (loaded recursively) |
-| `MAITRE_D_DATA_DIR` | `data` | Directory for persistent trigger state |
-| `MAITRE_D_QUEUE_CONFIG` | — | Path to queue adapter YAML config (enables HTTP queue adapter) |
-| `MAITRE_D_WEB_PORT` | `9090` | Port for the web dashboard |
-| `MAITRE_D_API_PORT` | `9091` | Port for the webhook API |
-| `MAITRE_D_WEBHOOK_DIR` | `config/webhook-endpoints.d` | Directory containing webhook endpoint YAML files |
+| `MAITRED_TRIGGER_DIR` | `config/triggers.d` | Directory containing trigger YAML files (loaded recursively) |
+| `MAITRED_DATA_DIR` | `data` | Directory for persistent trigger state |
+| `MAITRED_QUEUE_CONFIG` | — | Path to queue adapter YAML config (enables HTTP queue adapter) |
+| `MAITRED_WEB_PORT` | `9090` | Port for the web dashboard |
+| `MAITRED_API_PORT` | `9091` | Port for the webhook API |
+| `MAITRED_WEBHOOK_DIR` | `config/webhook-endpoints.d` | Directory containing webhook endpoint YAML files |
 
 ### Trigger Definition Format
 
@@ -97,7 +97,7 @@ schedule: "@hourly"          # Top of every hour
 ### Queue Adapter
 
 Maître d' dispatches tasks to a remote queue system via an HTTP adapter.
-Configure it with a YAML config file and point to it via `MAITRE_D_QUEUE_CONFIG`
+Configure it with a YAML config file and point to it via `MAITRED_QUEUE_CONFIG`
 or the `--queue-config` flag.
 
 **Example** — `config/queue.yaml`:
@@ -188,7 +188,7 @@ template variable works with nested JSON — you can access deeply nested fields
 via dot notation (e.g. `{{ .Payload.sender.login }}`).
 
 The webhook API runs on a separate port from the web dashboard (default `9091`,
-configurable via `MAITRE_D_API_PORT`). TLS termination is expected to be
+configurable via `MAITRED_API_PORT`). TLS termination is expected to be
 handled by a reverse proxy in front of the API port.
 
 ## Architecture
@@ -262,12 +262,12 @@ handled by a reverse proxy in front of the API port.
 
 | Flag | Description |
 |------|-------------|
-| `--trigger-dir` | Directory containing trigger YAML files (overrides `MAITRE_D_TRIGGER_DIR`) |
-| `--data-dir` | Directory for persistent trigger state (overrides `MAITRE_D_DATA_DIR`) |
-| `--queue-config` | Path to queue adapter YAML config (overrides `MAITRE_D_QUEUE_CONFIG`) |
-| `--web-port` | Port for the web dashboard (overrides `MAITRE_D_WEB_PORT`) |
-| `--api-port` | Port for the webhook API (overrides `MAITRE_D_API_PORT`) |
-| `--webhook-dir` | Directory containing webhook endpoint YAML files (overrides `MAITRE_D_WEBHOOK_DIR`) |
+| `--trigger-dir` | Directory containing trigger YAML files (overrides `MAITRED_TRIGGER_DIR`) |
+| `--data-dir` | Directory for persistent trigger state (overrides `MAITRED_DATA_DIR`) |
+| `--queue-config` | Path to queue adapter YAML config (overrides `MAITRED_QUEUE_CONFIG`) |
+| `--web-port` | Port for the web dashboard (overrides `MAITRED_WEB_PORT`) |
+| `--api-port` | Port for the webhook API (overrides `MAITRED_API_PORT`) |
+| `--webhook-dir` | Directory containing webhook endpoint YAML files (overrides `MAITRED_WEBHOOK_DIR`) |
 | `--version` | Print version and exit |
 | `--health` | Health check mode (exits 0 if config is valid) |
 

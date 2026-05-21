@@ -13,7 +13,7 @@ import { chromium } from 'playwright';
 
 const args = process.argv.slice(2);
 const baseUrl = args.find(a => a.startsWith('--base-url='))?.split('=')[1]
-    ?? process.env.MAITRE_D_WEB_URL
+    ?? process.env.MAITRED_WEB_URL
     ?? 'http://localhost:18090';
 
 // ─── Helpers ─────────────────────────────────────────────────────────
