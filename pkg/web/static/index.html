@@ -60,6 +60,12 @@
         .countdown { color: #38bdf8; font-family: 'SF Mono', 'Fira Code', monospace; }
         .countdown.due { color: #f59e0b; }
         .countdown.paused { color: #64748b; }
+        .webhook-section { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #334155; }
+        .webhook-title { font-size: 0.75rem; color: #64748b; text-transform: uppercase; margin-bottom: 0.5rem; }
+        .webhook-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0; font-size: 0.8rem; }
+        .webhook-url { color: #94a3b8; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.7rem; flex: 1; }
+        .webhook-trigger { color: #64748b; font-size: 0.7rem; }
+        .webhook-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 0.25rem; font-size: 0.65rem; font-weight: 600; text-transform: uppercase; background: #1e1b4b; color: #818cf8; }
     </style>
 </head>
 <body>
@@ -106,6 +112,8 @@
 
                 const defs = await defsRes.json();
                 const history = await historyRes.json();
+                const webhooksRes = await fetch('/api/webhooks').catch(() => ({ ok: false }));
+                const webhooks = webhooksRes.ok ? await webhooksRes.json() : [];
 
                 // Load paused state for each trigger
                 const pausedPromises = defs.map(d =>
@@ -118,7 +126,7 @@
                 const version = versionRes.ok ? await versionRes.text() : 'dev';
 
                 document.getElementById('version').textContent = version;
-                renderTriggers(defs, history);
+                renderTriggers(defs, history, webhooks);
                 updateStats(defs, history);
                 document.getElementById('status-text').textContent = 'Updated ' + new Date().toLocaleTimeString();
             } catch (e) {
@@ -137,7 +145,7 @@
             document.getElementById('failed-count').textContent = (defs.length || 0) - successCount;
         }
 
-        function renderTriggers(defs, history) {
+        function renderTriggers(defs, history, webhooks) {
             const list = document.getElementById('trigger-list');
             if (defs.length === 0) {
                 list.innerHTML = '<div class="empty-state"><h2>No triggers configured</h2><p>Add YAML files to your trigger directory</p></div>';
@@ -159,6 +167,29 @@
                 const lastTaskText = lastRecord ? lastRecord.task_id.substring(0, 20) + '...' : '\u2014';
 
                 const errorText = lastError ? lastRecord.error : '';
+
+                // Build webhook endpoint info for this trigger
+                const triggerWebhooks = [];
+                for (const wh of webhooks) {
+                    for (const ep of wh.endpoints) {
+                        if (ep.trigger_id === def.id) {
+                            triggerWebhooks.push({ provider: wh.provider, endpoint: ep });
+                        }
+                    }
+                }
+
+                const webhookHtml = triggerWebhooks.length > 0 ? `
+                    <div class="webhook-section">
+                        <div class="webhook-title">Webhook endpoints</div>
+                        ${triggerWebhooks.map(wh => `
+                            <div class="webhook-row">
+                                <span class="webhook-badge">${escapeHtml(wh.provider)}</span>
+                                <span class="webhook-url">/v1/${escapeHtml(wh.provider)}/${escapeHtml(wh.endpoint.name)}</span>
+                                <span class="webhook-trigger">→ ${escapeHtml(wh.endpoint.trigger_id)}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                ` : '';
 
                 return `
                     <div class="trigger-card ${cardClass}">
@@ -207,6 +238,7 @@
                             `).join('')}
                         </div>
                         ` : ''}
+                        ${webhookHtml}
                     </div>
                 `;
             }).join('');

@@ -298,6 +298,61 @@ async function testVersionEndpoint(page, results) {
   ));
 }
 
+async function testWebhookEndpoints(page, results) {
+  console.log('  Webhook endpoints');
+
+  // Check the /api/webhooks endpoint
+  const whResp = await page.evaluate(async () => {
+    const r = await fetch('/api/webhooks');
+    return { status: r.status, json: await r.json() };
+  });
+  results.push(assert(whResp.status === 200, 'Webhooks endpoint returns 200'));
+  results.push(assert(Array.isArray(whResp.json), 'Webhooks returns an array'));
+  results.push(assert(whResp.json.length > 0, 'Webhooks has at least one provider'));
+
+  // Check that webhook endpoint info is rendered on trigger cards
+  const cardTexts = await page.locator('.trigger-card').allTextContents();
+  const combinedText = cardTexts.join(' ');
+  results.push(assert(
+    combinedText.includes('/v1/forgejo/pull-request'),
+    'Webhook URL /v1/forgejo/pull-request displayed on trigger card'
+  ));
+  results.push(assert(
+    combinedText.includes('/v1/forgejo/push'),
+    'Webhook URL /v1/forgejo/push displayed on trigger card'
+  ));
+  results.push(assert(
+    combinedText.includes('Webhook endpoints'),
+    'Webhook endpoints section header present'
+  ));
+  results.push(assert(
+    combinedText.includes('forgejo'),
+    'Provider name "forgejo" displayed on trigger card'
+  ));
+
+  // Check the webhook badge element
+  const badges = await page.locator('.webhook-badge').count();
+  results.push(assert(badges > 0, `Webhook badges rendered (got: ${badges})`));
+
+  // Check the webhook URL element
+  const webhookUrls = await page.locator('.webhook-url').allTextContents();
+  results.push(assert(
+    webhookUrls.some(u => u.includes('/v1/forgejo/pull-request')),
+    'Webhook URL element contains pull-request path'
+  ));
+}
+
+async function testWebhookEndpointApiError(page, results) {
+  console.log('  Webhook endpoint API error handling');
+
+  // Test method enforcement on webhook endpoint
+  const wrongMethodResp = await page.evaluate(async () => {
+    const r = await fetch('/api/webhooks', { method: 'POST' });
+    return r.status;
+  });
+  results.push(assert(wrongMethodResp === 405, 'POST on webhooks endpoint returns 405'));
+}
+
 // ─── Main ────────────────────────────────────────────────────────────
 
 async function main() {
@@ -333,6 +388,8 @@ async function main() {
   await testHttpMethodEnforcement(page, results);
   await testHistoryEndpoint(page, results);
   await testVersionEndpoint(page, results);
+  await testWebhookEndpoints(page, results);
+  await testWebhookEndpointApiError(page, results);
 
   await browser.close();
 

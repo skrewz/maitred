@@ -1,0 +1,7 @@
+endpoints:
+  - name: pull-request
+    trigger_id: new-open-weights-model
+    response: '{"status": "queued", "message": "PR event received"}'
+  - name: push
+    trigger_id: daily-repo-review
+    response: '{"status": "queued", "message": "Push event received"}'
