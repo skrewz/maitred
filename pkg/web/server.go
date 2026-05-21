@@ -16,6 +16,7 @@ import (
 
 	"maitred/pkg/engine"
 	"maitred/pkg/trigger"
+	"maitred/pkg/webhook"
 )
 
 //go:embed static
@@ -23,31 +24,40 @@ var staticFS embed.FS
 
 // Server is the HTTP server for the maitred dashboard.
 type Server struct {
-	port    int
-	log     *log.Logger
-	engine  *engine.Engine
-	version string
-	mux     *http.ServeMux
+	port         int
+	log          *log.Logger
+	engine       *engine.Engine
+	version      string
+	webhookProvs []webhook.ProviderConfig
+	mux          *http.ServeMux
 }
 
 // New creates a new web server.
-func New(port int, eng *engine.Engine, version string) *Server {
+func New(port int, eng *engine.Engine, version string, webhookProvs ...[]webhook.ProviderConfig) *Server {
+	var providers []webhook.ProviderConfig
+	if len(webhookProvs) > 0 {
+		providers = webhookProvs[0]
+	}
 	s := &Server{
-		port:    port,
-		log:     log.Default(),
-		engine:  eng,
-		version: version,
-		mux:     http.NewServeMux(),
+		port:         port,
+		log:          log.Default(),
+		engine:       eng,
+		version:      version,
+		webhookProvs: providers,
+		mux:          http.NewServeMux(),
 	}
 	s.registerRoutes()
 	return s
 }
 
-// Start begins serving HTTP. Returns immediately.
+// Start begins serving HTTP in a goroutine. Returns immediately.
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.port)
 	s.log.Printf("web dashboard listening on %s", addr)
-	return http.ListenAndServe(addr, s.mux)
+	go func() {
+		_ = http.ListenAndServe(addr, s.mux)
+	}()
+	return nil
 }
 
 // Stop gracefully shuts down the HTTP server.
@@ -121,6 +131,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleHistory(w, r)
 	case path == "version":
 		s.handleVersion(w, r)
+	case path == "webhooks":
+		s.handleWebhooks(w, r)
 	case strings.HasPrefix(path, "triggers/"):
 		s.handleTriggerAPI(w, r, path)
 	default:
@@ -147,6 +159,41 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(s.version))
+}
+
+func (s *Server) handleWebhooks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	type endpointInfo struct {
+		Name      string `json:"name"`
+		TriggerID string `json:"trigger_id"`
+	}
+
+	type webhookInfo struct {
+		Provider  string         `json:"provider"`
+		Endpoints []endpointInfo `json:"endpoints"`
+	}
+
+	result := make([]webhookInfo, len(s.webhookProvs))
+	for i, p := range s.webhookProvs {
+		eps := make([]endpointInfo, len(p.Endpoints))
+		for j, ep := range p.Endpoints {
+			eps[j] = endpointInfo{
+				Name:      ep.Name,
+				TriggerID: ep.TriggerID,
+			}
+		}
+		result[i] = webhookInfo{
+			Provider:  p.Provider,
+			Endpoints: eps,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }
 
 func (s *Server) handleTriggerAPI(w http.ResponseWriter, r *http.Request, path string) {

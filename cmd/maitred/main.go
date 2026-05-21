@@ -175,14 +175,9 @@ func main() {
 
 	log.Printf("ready")
 
-	// Start the web dashboard
-	webSrv := web.New(port, eng, Version)
-	if err := webSrv.Start(); err != nil {
-		log.Printf("web server error: %v (continuing without dashboard)", err)
-	}
-
 	// Load webhook endpoint configs
-	webhookProviders, err := webhook.LoadProviderConfigs(webhookDirStr)
+	var webhookProviders []webhook.ProviderConfig
+	webhookProviders, err = webhook.LoadProviderConfigs(webhookDirStr)
 	if err != nil {
 		log.Printf("webhook config error: %v (continuing without webhook API)", err)
 		webhookProviders = nil
@@ -193,6 +188,12 @@ func main() {
 				log.Printf("  /v1/%s/%s → trigger %s", p.Provider, ep.Name, ep.TriggerID)
 			}
 		}
+	}
+
+	// Start the web dashboard
+	webSrv := web.New(port, eng, Version, webhookProviders)
+	if err := webSrv.Start(); err != nil {
+		log.Printf("web server error: %v (continuing without dashboard)", err)
 	}
 
 	// Start the webhook API server if port is configured
