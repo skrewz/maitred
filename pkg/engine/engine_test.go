@@ -73,7 +73,7 @@ triggers:
 	}
 
 	// Let it run briefly
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 
 	// Stop the engine
 	eng.Stop()
@@ -565,11 +565,11 @@ triggers:
 		t.Fatalf("unexpected error starting engine: %v", err)
 	}
 
-	// Wait for periodic trigger to fire once on startup
-	time.Sleep(500 * time.Millisecond)
+	// Wait for periodic trigger to fire once on schedule
+	time.Sleep(2500 * time.Millisecond)
 	eng.Stop()
 
-	// Only the periodic trigger should have produced a task (startup fire)
+	// Only the periodic trigger should have produced a task
 	tasks := mq.Tasks()
 	if len(tasks) != 1 {
 		t.Fatalf("expected exactly 1 task from periodic trigger, got %d", len(tasks))
@@ -594,6 +594,53 @@ triggers:
 	_, err = st.Load("webhook-only")
 	if err == nil {
 		t.Error("expected no state for webhook-only trigger")
+	}
+}
+
+func TestEngine_DefaultNoImmediateFire(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "no-startup-test"
+    type: periodic
+    schedule: "@every 500ms"
+    prompt: "test prompt"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dataDir := t.TempDir()
+	mq := &mockQueue{}
+
+	eng, err := engine.New(engine.Config{
+		TriggerDir: dir,
+		DataDir:    dataDir,
+		Queue:      mq,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating engine: %v", err)
+	}
+
+	if err := eng.Start(); err != nil {
+		t.Fatalf("unexpected error starting engine: %v", err)
+	}
+
+	// Wait briefly — no tasks should have been dispatched yet
+	time.Sleep(150 * time.Millisecond)
+
+	if mq.Count() > 0 {
+		t.Errorf("expected 0 tasks, got %d", mq.Count())
+	}
+
+	// Wait for the first scheduled interval to pass
+	time.Sleep(600 * time.Millisecond)
+	eng.Stop()
+
+	// Now the trigger should have fired at least once on schedule
+	if mq.Count() < 1 {
+		t.Errorf("expected at least 1 task after first interval, got %d", mq.Count())
 	}
 }
 

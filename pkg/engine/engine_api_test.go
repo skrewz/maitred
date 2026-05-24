@@ -194,8 +194,10 @@ triggers:
 		t.Fatal(err)
 	}
 
-	// Wait for first execution
-	time.Sleep(1 * time.Second)
+	// Fire the trigger once to establish state
+	if err := eng.FireNow("firetime-test"); err != nil {
+		t.Fatalf("failed to fire trigger: %v", err)
+	}
 
 	next := eng.NextFireTime("firetime-test")
 	if next.IsZero() {

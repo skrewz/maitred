@@ -91,12 +91,12 @@ func main() {
 	_ = apiPortVal // used below
 
 	log.Printf("maitred %s starting", Version)
-	log.Printf("  trigger dir:    %s", triggerDirStr)
-	log.Printf("  data dir:       %s", dataDirStr)
-	log.Printf("  queue config:   %s", queueConfigStr)
-	log.Printf("  web port:       %d", port)
-	log.Printf("  api port:       %d", apiPortVal)
-	log.Printf("  webhook dir:    %s", webhookDirStr)
+	log.Printf("  trigger dir:      %s", triggerDirStr)
+	log.Printf("  data dir:         %s", dataDirStr)
+	log.Printf("  queue config:     %s", queueConfigStr)
+	log.Printf("  web port:         %d", port)
+	log.Printf("  api port:         %d", apiPortVal)
+	log.Printf("  webhook dir:      %s", webhookDirStr)
 
 	// Resolve trigger dir relative to working directory if not absolute
 	if !filepath.IsAbs(triggerDirStr) {

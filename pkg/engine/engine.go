@@ -148,9 +148,6 @@ func (e *Engine) runWithTicker(def trigger.TriggerDefinition, interval time.Dura
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	// Run once immediately on startup
-	e.executeTrigger(def)
-
 	for {
 		select {
 		case <-e.ctx.Done():
@@ -168,9 +165,6 @@ func (e *Engine) runWithTicker(def trigger.TriggerDefinition, interval time.Dura
 
 // runWithCron runs a trigger on a cron schedule.
 func (e *Engine) runWithCron(def trigger.TriggerDefinition, spec cron.Schedule) {
-	// Run once immediately on startup
-	e.executeTrigger(def)
-
 	for {
 		// Wait until the next scheduled time
 		next := spec.Next(time.Now())

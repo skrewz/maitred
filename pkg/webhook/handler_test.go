@@ -187,7 +187,7 @@ endpoints:
 	st := eng.StateStore()
 	handler := webhook.NewHandler(eng, st, "test", providers)
 
-	// First call to establish state (engine already fired once on startup)
+	// First call to establish state
 	payload := map[string]interface{}{"pull_request": map[string]interface{}{"title": "First PR"}}
 	payloadBytes, _ := json.Marshal(payload)
 
@@ -210,15 +210,15 @@ endpoints:
 		t.Fatalf("second call failed: %d", w2.Code)
 	}
 
-	// Engine fires once on startup + 2 webhook calls = 3 tasks
-	if mq.Count() != 3 {
-		t.Fatalf("expected 3 tasks (1 startup + 2 webhooks), got %d", mq.Count())
+	// 2 webhook calls = 2 tasks
+	if mq.Count() != 2 {
+		t.Fatalf("expected 2 tasks (2 webhooks), got %d", mq.Count())
 	}
 
 	// Check that the second webhook task (index 1) has both payload and lastRun
 	task := mq.Tasks()[1]
-	if !strings.Contains(task.Prompt, "First PR") {
-		t.Errorf("expected prompt to contain 'First PR', got %q", task.Prompt)
+	if !strings.Contains(task.Prompt, "Second PR") {
+		t.Errorf("expected prompt to contain 'Second PR', got %q", task.Prompt)
 	}
 	if !strings.Contains(task.Prompt, "since") {
 		t.Errorf("expected prompt to contain 'since', got %q", task.Prompt)
@@ -227,13 +227,10 @@ endpoints:
 		t.Errorf("expected prompt to contain timestamp (RFC3339), got %q", task.Prompt)
 	}
 
-	// Check the third task has the updated LastRun
-	task3 := mq.Tasks()[2]
-	if !strings.Contains(task3.Prompt, "Second PR") {
-		t.Errorf("expected prompt to contain 'Second PR', got %q", task3.Prompt)
-	}
-	if !strings.Contains(task3.Prompt, "since") {
-		t.Errorf("expected prompt to contain 'since', got %q", task3.Prompt)
+	// Check the first task was dispatched
+	task1 := mq.Tasks()[0]
+	if !strings.Contains(task1.Prompt, "First PR") {
+		t.Errorf("expected prompt to contain 'First PR', got %q", task1.Prompt)
 	}
 }
 
