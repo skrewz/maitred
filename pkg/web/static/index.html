@@ -66,6 +66,12 @@
         .webhook-url { color: #94a3b8; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.7rem; flex: 1; }
         .webhook-trigger { color: #64748b; font-size: 0.7rem; }
         .webhook-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 0.25rem; font-size: 0.65rem; font-weight: 600; text-transform: uppercase; background: #1e1b4b; color: #818cf8; }
+        .prompt-section { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #334155; }
+        .prompt-section summary { font-size: 0.75rem; color: #64748b; text-transform: uppercase; cursor: pointer; user-select: none; list-style: none; display: flex; align-items: center; gap: 0.35rem; }
+        .prompt-section summary::-webkit-details-marker { display: none; }
+        .prompt-section summary::before { content: '\25B6'; font-size: 0.6rem; transition: transform 0.15s; }
+        .prompt-section[open] summary::before { content: '\25BC'; }
+        .prompt-content { margin-top: 0.5rem; padding: 0.75rem; background: #0f172a; border-radius: 0.375rem; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.75rem; line-height: 1.5; color: #94a3b8; white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto; }
     </style>
 </head>
 <body>
@@ -237,6 +243,12 @@
                                 </div>
                             `).join('')}
                         </div>
+                        ` : ''}
+                        ${def.prompt ? `
+                        <details class="prompt-section">
+                            <summary>Prompt template</summary>
+                            <div class="prompt-content">${escapeHtml(def.prompt)}</div>
+                        </details>
                         ` : ''}
                         ${webhookHtml}
                     </div>

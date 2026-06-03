@@ -353,6 +353,68 @@ async function testWebhookEndpointApiError(page, results) {
   results.push(assert(wrongMethodResp === 405, 'POST on webhooks endpoint returns 405'));
 }
 
+async function testPromptSection(page, results) {
+  console.log('  Prompt section');
+
+  // Ensure we are on the main page
+  await page.goto(baseUrl);
+  await page.waitForLoadState('networkidle').catch(() => {});
+  await page.waitForTimeout(3000);
+
+  // Check that prompt sections exist on trigger cards
+  const promptSections = await page.locator('.prompt-section').count();
+  results.push(assert(promptSections === 2, `Two prompt sections rendered (got: ${promptSections})`));
+
+  // Check that summary labels are present
+  const summaryTexts = await page.locator('.prompt-section summary').allTextContents();
+  results.push(assert(
+    summaryTexts.every(t => t.includes('Prompt template')),
+    'Prompt section summary labels say "Prompt template"'
+  ));
+
+  // Check that prompt content is collapsed by default (details element not open)
+  const openCount = await page.locator('.prompt-section[open]').count();
+  results.push(assert(openCount === 0, `Prompt sections collapsed by default (got: ${openCount} open)`));
+
+  // Click to expand first prompt section
+  const firstSummary = await page.locator('.prompt-section summary').first();
+  await firstSummary.click();
+  await page.waitForTimeout(500);
+
+  // Check that it is now open
+  const openAfterClick = await page.locator('.prompt-section[open]').count();
+  results.push(assert(openAfterClick >= 1, `Prompt section expanded after click (got: ${openAfterClick} open)`));
+
+  // Check that prompt content is visible and contains expected text
+  const promptContents = await page.locator('.prompt-content').allTextContents();
+  results.push(assert(
+    promptContents.some(c => c.includes('open-weights') || c.includes('LLM') || c.includes('models')),
+    'Expanded prompt contains expected content about models'
+  ));
+
+  // Click again to collapse
+  await firstSummary.click();
+  await page.waitForTimeout(500);
+
+  const openAfterCollapse = await page.locator('.prompt-section[open]').count();
+  results.push(assert(openAfterCollapse === 0, `Prompt section collapsed after second click (got: ${openAfterCollapse} open)`));
+
+  // Check second trigger's prompt content
+  const secondSummary = await page.locator('.prompt-section summary').nth(1);
+  await secondSummary.click();
+  await page.waitForTimeout(500);
+
+  const allPromptContents = await page.locator('.prompt-content').allTextContents();
+  results.push(assert(
+    allPromptContents.some(c => c.includes('repositories') || c.includes('Review') || c.includes('PRs')),
+    'Second prompt contains expected content about repo review'
+  ));
+
+  // Collapse again
+  await secondSummary.click();
+  await page.waitForTimeout(500);
+}
+
 // ─── Main ────────────────────────────────────────────────────────────
 
 async function main() {
@@ -390,6 +452,7 @@ async function main() {
   await testVersionEndpoint(page, results);
   await testWebhookEndpoints(page, results);
   await testWebhookEndpointApiError(page, results);
+  await testPromptSection(page, results);
 
   await browser.close();
 
