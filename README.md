@@ -78,6 +78,50 @@ triggers:
 | `tags` | | Agent capability tags for routing |
 | `timeout` | | Task timeout in seconds (0 = unlimited) |
 
+### Prompt Template Variables
+
+The `prompt` field uses Go `text/template` syntax. Two template variables are
+available:
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `.LastRun` | `string` | RFC 3339 timestamp of the trigger's last execution (empty string on first run) |
+| `.Payload` | `map` | The webhook payload as a nested map (only available for webhook-triggered runs; absent for periodic runs) |
+
+**Accessing nested payload fields** — use dot notation to traverse the JSON
+structure:
+
+```yaml
+prompt: "Review PR {{ .Payload.pull_request.title }} by {{ .Payload.sender.login }}"
+prompt: "{{ .Payload.repository.name }} received {{ .Payload.commits | len }} commits"
+```
+
+**Custom template functions** available in prompt templates:
+
+| Function | Description |
+|----------|-------------|
+| `TrimSuffix` | Remove a trailing suffix from a string, e.g. `{{ "hello.txt" | TrimSuffix ".txt" }}` → `hello` |
+| `index` | Access a map by key, e.g. `{{ index .Payload "some-key" }}` (useful for keys with hyphens or special characters) |
+
+**Examples:**
+
+```yaml
+# Periodic trigger — only .LastRun is available
+prompt: "Research changes since {{ .LastRun }}"
+
+# Webhook trigger — both .LastRun and .Payload are available
+prompt: "Review PR {{ .Payload.pull_request.title }} since {{ .LastRun }}"
+
+# Accessing deeply nested fields
+prompt: "{{ .Payload.sender.login }} pushed to {{ .Payload.repository.name }}"
+
+# Using TrimSuffix
+prompt: "Process {{ .Payload.repository.full_name | TrimSuffix ".git" }}"
+
+# Using index for keys with special characters
+prompt: "Event {{ index .Payload "x-custom-header" }}"
+```
+
 ### Schedule Formats
 
 **Duration-based** (simple, relative):
@@ -143,6 +187,19 @@ The default template omits the `id` field — the remote system is expected
 to generate its own. The adapter injects an internal tracking ID into the
 end of the prompt (`\n(internal maître d' tracking ID: <id>)`), enabling
 reverse-tracing of tasks across systems.
+
+**Task template variables** (available in `task_template`):
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `.ID` | `string` | Internal task ID (UUID) |
+| `.Prompt` | `string` | Evaluated prompt (with tracking ID appended) |
+| `.Repos` | `[]string` | Repository paths from the trigger definition |
+| `.Tags` | `[]string` | Capability tags from the trigger definition |
+| `.Timeout` | `int` | Task timeout in seconds (0 = unlimited) |
+
+The `json` template function marshals values to JSON for safe embedding
+(e.g. `{{ .Repos | json }}` produces `"["~/repos/foo"]"`).
 
 **mTLS authentication** is optional. When both `mtls_cert` and `mtls_key`
 are set, the adapter uses TLS client certificate authentication during the
