@@ -28,6 +28,10 @@ type Config struct {
 	DataDir string
 	// Queue is the destination for generated tasks.
 	Queue queue.TaskQueueProvider
+	// CronLocation is the timezone in which cron expressions are evaluated.
+	// If nil, the system local timezone is used. This is analogous to the
+	// CRON_TZ environment variable in traditional cron.
+	CronLocation *time.Location
 }
 
 // Engine manages the lifecycle of periodic triggers. It loads trigger
@@ -44,6 +48,7 @@ type Engine struct {
 	wg        sync.WaitGroup
 	triggerWg sync.WaitGroup
 	mu        sync.RWMutex
+	cronLoc   *time.Location
 	// paused tracks which trigger IDs are temporarily disabled
 	paused map[string]struct{}
 }
@@ -61,12 +66,18 @@ func New(cfg Config) (*Engine, error) {
 		return nil, fmt.Errorf("create state store: %w", err)
 	}
 
+	cronLoc := cfg.CronLocation
+	if cronLoc == nil {
+		cronLoc = time.Local
+	}
+
 	return &Engine{
 		cfg:     cfg,
 		defs:    defs,
 		st:      st,
 		history: NewExecutionHistory(50),
 		log:     log.Default(),
+		cronLoc: cronLoc,
 		paused:  make(map[string]struct{}),
 	}, nil
 }
@@ -166,8 +177,10 @@ func (e *Engine) runWithTicker(def trigger.TriggerDefinition, interval time.Dura
 // runWithCron runs a trigger on a cron schedule.
 func (e *Engine) runWithCron(def trigger.TriggerDefinition, spec cron.Schedule) {
 	for {
-		// Wait until the next scheduled time
-		next := spec.Next(time.Now())
+		// Wait until the next scheduled time. Use the configured cron
+		// location so the schedule is interpreted in the correct timezone.
+		now := time.Now().In(e.cronLoc)
+		next := spec.Next(now)
 		if next.IsZero() {
 			// Cron spec has no more future times (e.g., one-time schedule)
 			return
@@ -365,8 +378,10 @@ func (e *Engine) NextFireTime(id string) time.Time {
 		return time.Time{}
 	}
 
-	// Next fire time is the next cron occurrence after now
-	next := c.Next(time.Now())
+	// Next fire time is the next cron occurrence after now, interpreted
+	// in the configured cron timezone.
+	now := time.Now().In(e.cronLoc)
+	next := c.Next(now)
 	if next.IsZero() {
 		return time.Time{}
 	}

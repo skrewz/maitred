@@ -672,3 +672,153 @@ triggers:
 		t.Errorf("expected zero next fire time for @webhook trigger, got %v", next)
 	}
 }
+
+func TestEngine_NextFireTime_CronTZ(t *testing.T) {
+	dir := t.TempDir()
+
+	// Schedule that fires at 9:00 every day
+	configYAML := `
+triggers:
+  - id: "cron-tz-test"
+    type: periodic
+    schedule: "0 9 * * *"
+    prompt: "daily at 9"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Use UTC — the next fire should be at 09:00 UTC
+	utcLoc, err := time.LoadLocation("UTC")
+	if err != nil {
+		t.Fatalf("unexpected error loading UTC: %v", err)
+	}
+
+	eng, err := engine.New(engine.Config{
+		TriggerDir:   dir,
+		DataDir:      t.TempDir(),
+		Queue:        &mockQueue{},
+		CronLocation: utcLoc,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating engine: %v", err)
+	}
+
+	next := eng.NextFireTime("cron-tz-test")
+	if next.IsZero() {
+		t.Fatal("expected non-zero next fire time")
+	}
+
+	// The next fire should be at 09:00:00 in UTC
+	if next.Hour() != 9 || next.Minute() != 0 || next.Second() != 0 {
+		t.Errorf("expected next fire at 09:00:00 UTC, got %02d:%02d:%02d (loc: %s)", next.Hour(), next.Minute(), next.Second(), next.Location().String())
+	}
+
+	// It should be in the future (or very close to now if it's almost 9 AM UTC)
+	if next.Before(time.Now()) {
+		t.Errorf("expected next fire to be in the future, got %v", next)
+	}
+}
+
+func TestEngine_NextFireTime_CronTZ_CrossTimezone(t *testing.T) {
+	// Compare NextFireTime across two fixed-offset timezones to prove
+	// the schedule is actually evaluated in the configured timezone.
+	// If the engine ignored CronLocation and always used local time,
+	// both engines would return the same UTC instant.
+	//
+	// We use UTC and Asia/Tokyo (UTC+9, no DST) so the UTC-hours of
+	// the fire times are deterministic regardless of when the test runs.
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "cron-tz-test"
+    type: periodic
+    schedule: "0 9 * * *"
+    prompt: "daily at 9"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	utcLoc, err := time.LoadLocation("UTC")
+	if err != nil {
+		t.Fatalf("unexpected error loading UTC: %v", err)
+	}
+	tokyoLoc, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Fatalf("unexpected error loading Asia/Tokyo: %v", err)
+	}
+
+	engUTC, err := engine.New(engine.Config{
+		TriggerDir:   dir,
+		DataDir:      t.TempDir(),
+		Queue:        &mockQueue{},
+		CronLocation: utcLoc,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating UTC engine: %v", err)
+	}
+
+	engTokyo, err := engine.New(engine.Config{
+		TriggerDir:   dir,
+		DataDir:      t.TempDir(),
+		Queue:        &mockQueue{},
+		CronLocation: tokyoLoc,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating Tokyo engine: %v", err)
+	}
+
+	nextUTC := engUTC.NextFireTime("cron-tz-test")
+	nextTokyo := engTokyo.NextFireTime("cron-tz-test")
+
+	if nextUTC.IsZero() || nextTokyo.IsZero() {
+		t.Fatal("expected non-zero next fire times")
+	}
+
+	// 9 AM UTC → UTC hour is 9
+	if nextUTC.UTC().Hour() != 9 {
+		t.Errorf("UTC engine: expected UTC hour 9, got %d (%s)", nextUTC.UTC().Hour(), nextUTC.UTC().Format(time.RFC3339))
+	}
+
+	// 9 AM JST (UTC+9) → UTC hour is 0
+	if nextTokyo.UTC().Hour() != 0 {
+		t.Errorf("Tokyo engine: expected UTC hour 0 (9 AM JST = midnight UTC), got %d (%s)", nextTokyo.UTC().Hour(), nextTokyo.UTC().Format(time.RFC3339))
+	}
+}
+
+func TestEngine_NextFireTime_DefaultUsesLocal(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "default-local"
+    type: periodic
+    schedule: "0 12 * * *"
+    prompt: "noon"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// No CronLocation set — should use system local time
+	eng, err := engine.New(engine.Config{
+		TriggerDir: dir,
+		DataDir:    t.TempDir(),
+		Queue:      &mockQueue{},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating engine: %v", err)
+	}
+
+	next := eng.NextFireTime("default-local")
+	if next.IsZero() {
+		t.Fatal("expected non-zero next fire time")
+	}
+
+	// Should be at 12:00:00 in local time
+	if next.Hour() != 12 || next.Minute() != 0 || next.Second() != 0 {
+		t.Errorf("expected next fire at 12:00:00 local, got %02d:%02d:%02d (loc: %s)", next.Hour(), next.Minute(), next.Second(), next.Location().String())
+	}
+}

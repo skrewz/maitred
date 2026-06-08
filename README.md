@@ -44,14 +44,13 @@ path, enabling modular and organized configuration.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| Variable | Default | Description |
-|----------|---------|-------------|
 | `MAITRED_TRIGGER_DIR` | `config/triggers.d` | Directory containing trigger YAML files (loaded recursively) |
 | `MAITRED_DATA_DIR` | `data` | Directory for persistent trigger state |
 | `MAITRED_QUEUE_CONFIG` | — | Path to queue adapter YAML config (enables HTTP queue adapter) |
 | `MAITRED_WEB_PORT` | `9090` | Port for the web dashboard |
 | `MAITRED_API_PORT` | `9091` | Port for the webhook API |
 | `MAITRED_WEBHOOK_DIR` | `config/webhook-endpoints.d` | Directory containing webhook endpoint YAML files |
+| `MAITRED_CRON_TZ` | *(system local)* | Timezone for cron schedule evaluation (e.g. `Europe/London`, `UTC`, `America/New_York`) |
 
 ### Trigger Definition Format
 
@@ -137,6 +136,11 @@ schedule: "0 */6 * * *"     # Every 6 hours at minute 0
 schedule: "@daily"           # Midnight every day
 schedule: "@hourly"          # Top of every hour
 ```
+
+Cron schedules are evaluated in the system's local timezone by default. Set
+`MAITRED_CRON_TZ` to override this (e.g. `Europe/London`, `UTC`,
+`America/New_York`). This is analogous to the `CRON_TZ` variable in
+traditional cron.
 
 ### Queue Adapter
 

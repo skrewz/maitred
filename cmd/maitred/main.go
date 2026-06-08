@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -58,6 +59,7 @@ func main() {
 	webPortStr := defaultEnv("MAITRED_WEB_PORT", "9090")
 	apiPortStr := defaultEnv("MAITRED_API_PORT", "9091")
 	webhookDirStr := defaultEnv("MAITRED_WEBHOOK_DIR", "config/webhook-endpoints.d")
+	cronTZStr := defaultEnv("MAITRED_CRON_TZ", "")
 
 	// CLI flags take precedence over env vars
 	if *triggerDir != "" {
@@ -97,6 +99,9 @@ func main() {
 	log.Printf("  web port:         %d", port)
 	log.Printf("  api port:         %d", apiPortVal)
 	log.Printf("  webhook dir:      %s", webhookDirStr)
+	if cronTZStr != "" {
+		log.Printf("  cron timezone:    %s", cronTZStr)
+	}
 
 	// Resolve trigger dir relative to working directory if not absolute
 	if !filepath.IsAbs(triggerDirStr) {
@@ -159,10 +164,21 @@ func main() {
 		log.Printf("  queue mode:     in-memory")
 	}
 
+	// Parse CRON_TZ if set
+	var cronLoc *time.Location
+	if cronTZStr != "" {
+		loc, err := time.LoadLocation(cronTZStr)
+		if err != nil {
+			log.Fatalf("invalid CRON_TZ %q: %v", cronTZStr, err)
+		}
+		cronLoc = loc
+	}
+
 	eng, err := engine.New(engine.Config{
-		TriggerDir: triggerDirStr,
-		DataDir:    dataDirStr,
-		Queue:      qe,
+		TriggerDir:   triggerDirStr,
+		DataDir:      dataDirStr,
+		Queue:        qe,
+		CronLocation: cronLoc,
 	})
 	if err != nil {
 		log.Fatalf("initialize engine: %v", err)
