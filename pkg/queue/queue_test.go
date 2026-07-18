@@ -10,7 +10,6 @@ func TestTask_String(t *testing.T) {
 	task := &queue.Task{
 		ID:      "task-1",
 		Prompt:  "test prompt",
-		Repos:   []string{"~/repos/hotelier"},
 		Tags:    []string{"business-default"},
 		Timeout: 3600,
 	}

@@ -83,7 +83,6 @@ func TestHTTPAdapter_AddTask_Success(t *testing.T) {
 	task := &queue.Task{
 		ID:      "task-1",
 		Prompt:  "do something",
-		Repos:   []string{"~/repos/hotelier"},
 		Tags:    []string{"business-default"},
 		Timeout: 3600,
 	}
@@ -166,7 +165,6 @@ func TestHTTPAdapter_AddTask_DefaultTemplate(t *testing.T) {
 	task := &queue.Task{
 		ID:      "task-1",
 		Prompt:  "research models",
-		Repos:   []string{"~/repos/hotelier", "~/repos/maitred"},
 		Tags:    []string{"business-default", "frontend"},
 		Timeout: 1800,
 	}
@@ -178,9 +176,6 @@ func TestHTTPAdapter_AddTask_DefaultTemplate(t *testing.T) {
 	// Verify fields are present
 	if _, ok := received["prompt"]; !ok {
 		t.Error("expected 'prompt' in request body")
-	}
-	if _, ok := received["repos"]; !ok {
-		t.Error("expected 'repos' in request body")
 	}
 	if _, ok := received["tags"]; !ok {
 		t.Error("expected 'tags' in request body")
@@ -219,7 +214,6 @@ func TestHTTPAdapter_AddTask_CustomTemplate(t *testing.T) {
 	task := &queue.Task{
 		ID:      "task-1",
 		Prompt:  "test prompt",
-		Repos:   []string{"~/repos/test"},
 		Tags:    []string{"custom"},
 		Timeout: 600,
 	}
@@ -328,7 +322,7 @@ func TestHTTPAdapter_AddTask_DropInReplacement(t *testing.T) {
 	var _ interface{ AddTask(task *queue.Task) error } = (*queue.HTTPAdapter)(nil)
 }
 
-func TestHTTPAdapter_AddTask_NoReposOrTags(t *testing.T) {
+func TestHTTPAdapter_AddTask_NoTags(t *testing.T) {
 	var receivedBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		buf := make([]byte, 4096)
@@ -356,11 +350,8 @@ func TestHTTPAdapter_AddTask_NoReposOrTags(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Repos and tags should be present in the JSON (as null for nil slices)
+	// Tags should be present in the JSON (as null for nil slices)
 	// The default template renders nil slices as `null` via json.Marshal
-	if !strings.Contains(receivedBody, `"repos"`) {
-		t.Error("expected 'repos' key in request body")
-	}
 	if !strings.Contains(receivedBody, `"tags"`) {
 		t.Error("expected 'tags' key in request body")
 	}

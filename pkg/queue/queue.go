@@ -20,7 +20,6 @@ type TaskQueueProvider interface {
 type Task struct {
 	ID      string   `json:"id"`
 	Prompt  string   `json:"prompt"`
-	Repos   []string `json:"repos,omitempty"`
 	Tags    []string `json:"tags,omitempty"`
 	Timeout int      `json:"timeout,omitempty"` // seconds, 0 = unlimited
 }

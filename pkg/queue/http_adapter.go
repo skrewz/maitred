@@ -30,7 +30,6 @@ type AdapterConfig struct {
 	// sent to the remote queue system. Available fields:
 	//   .ID        — task ID (UUID)
 	//   .Prompt    — evaluated prompt string
-	//   .Repos     — repository path slice
 	//   .Tags      — capability tag slice
 	//   .Timeout   — task timeout in seconds
 	//
@@ -69,7 +68,6 @@ var TaskTemplateFuncs = template.FuncMap{
 // The remote system is expected to auto-generate the task ID.
 const defaultTaskTemplate = `{
 	"prompt": {{ .Prompt | json }},
-	"repos": {{ .Repos | json }},
 	"tags": {{ .Tags | json }},
 	"timeout": {{ .Timeout }}
 }`
@@ -163,13 +161,11 @@ func (a *HTTPAdapter) AddTask(task *Task) error {
 	data := struct {
 		ID      string
 		Prompt  string
-		Repos   []string
 		Tags    []string
 		Timeout int
 	}{
 		ID:      task.ID,
 		Prompt:  prompt,
-		Repos:   task.Repos,
 		Tags:    task.Tags,
 		Timeout: task.Timeout,
 	}

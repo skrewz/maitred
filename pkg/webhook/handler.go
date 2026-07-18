@@ -146,7 +146,6 @@ func (h *Handler) handleWebhook(providers []ProviderConfig) http.HandlerFunc {
 		task := &queue.Task{
 			ID:      fmt.Sprintf("task-%s-webhook-%d", ep.TriggerID, time.Now().UnixNano()),
 			Prompt:  prompt,
-			Repos:   def.Repos,
 			Tags:    def.Tags,
 			Timeout: def.Timeout,
 		}

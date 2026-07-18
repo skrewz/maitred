@@ -60,8 +60,6 @@ triggers:
     type: periodic
     schedule: "0 */6 * * *"
     prompt: "Research since {{ .LastRun }}"
-    repos:
-      - "~/repos/hotelier"
     tags:
       - "business-default"
     timeout: 3600
@@ -73,7 +71,6 @@ triggers:
 | `type` | ✅ | Currently only `periodic` is supported |
 | `schedule` | ✅ | Cron expression or `@every <duration>` |
 | `prompt` | ✅ | Go template with `.LastRun` and `.Payload` variables |
-| `repos` | | Repository paths for the task |
 | `tags` | | Agent capability tags for routing |
 | `timeout` | | Task timeout in seconds (0 = unlimited) |
 
