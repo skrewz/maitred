@@ -615,3 +615,228 @@ func TestTriggerDefinition_EvalPromptTemplate_Equivalence(t *testing.T) {
 		t.Errorf("expected equivalence: %q != %q", result1, result2)
 	}
 }
+
+func TestTriggerDefinition_ShouldHoldOff_NoCondition(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:               "test",
+		Type:             trigger.TypePeriodic,
+		Schedule:         "@every 1h",
+		HoldOffCondition: "",
+		Prompt:           "test prompt",
+	}
+
+	heldOff, err := def.ShouldHoldOff(nil, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if heldOff {
+		t.Error("expected false when no hold-off condition is set")
+	}
+}
+
+func TestTriggerDefinition_ShouldHoldOff_ConditionTrue(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:               "test",
+		Type:             trigger.TypePeriodic,
+		Schedule:         "@webhook",
+		HoldOffCondition: "{{ .Payload.pull_request.merged }}",
+		Prompt:           "test prompt",
+	}
+
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"merged": true,
+		},
+	}
+
+	heldOff, err := def.ShouldHoldOff(payload, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !heldOff {
+		t.Error("expected true when condition evaluates to true")
+	}
+}
+
+func TestTriggerDefinition_ShouldHoldOff_ConditionFalse(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:               "test",
+		Type:             trigger.TypePeriodic,
+		Schedule:         "@webhook",
+		HoldOffCondition: "{{ .Payload.pull_request.merged }}",
+		Prompt:           "test prompt",
+	}
+
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"merged": false,
+		},
+	}
+
+	heldOff, err := def.ShouldHoldOff(payload, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if heldOff {
+		t.Error("expected false when condition evaluates to false")
+	}
+}
+
+func TestTriggerDefinition_ShouldHoldOff_OrCondition(t *testing.T) {
+	// Mirrors the real-world pattern: hold off if merged OR closed
+	def := trigger.TriggerDefinition{
+		ID:               "test",
+		Type:             trigger.TypePeriodic,
+		Schedule:         "@webhook",
+		HoldOffCondition: `{{ or .Payload.pull_request.merged (eq .Payload.pull_request.state "closed") }}`,
+		Prompt:           "test prompt",
+	}
+
+	// Case 1: merged = true, should hold off
+	payload1 := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"merged": true,
+			"state":  "open",
+		},
+	}
+	heldOff, err := def.ShouldHoldOff(payload1, time.Time{})
+	if err != nil {
+		t.Fatalf("case 1 error: %v", err)
+	}
+	if !heldOff {
+		t.Error("case 1: expected true when merged=true")
+	}
+
+	// Case 2: state = closed, should hold off
+	payload2 := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"merged": false,
+			"state":  "closed",
+		},
+	}
+	heldOff, err = def.ShouldHoldOff(payload2, time.Time{})
+	if err != nil {
+		t.Fatalf("case 2 error: %v", err)
+	}
+	if !heldOff {
+		t.Error("case 2: expected true when state=closed")
+	}
+
+	// Case 3: open and not merged, should NOT hold off
+	payload3 := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"merged": false,
+			"state":  "open",
+		},
+	}
+	heldOff, err = def.ShouldHoldOff(payload3, time.Time{})
+	if err != nil {
+		t.Fatalf("case 3 error: %v", err)
+	}
+	if heldOff {
+		t.Error("case 3: expected false when open and not merged")
+	}
+}
+
+func TestTriggerDefinition_ShouldHoldOff_InvalidTemplate(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:               "test",
+		Type:             trigger.TypePeriodic,
+		Schedule:         "@webhook",
+		HoldOffCondition: "{{ invalid syntax }}",
+		Prompt:           "test prompt",
+	}
+
+	_, err := def.ShouldHoldOff(nil, time.Time{})
+	if err == nil {
+		t.Error("expected error for invalid template, got nil")
+	}
+}
+
+func TestTriggerDefinition_ShouldHoldOff_LastRunCondition(t *testing.T) {
+	// Hold off if LastRun is zero (never run before) — a silly but valid example
+	def := trigger.TriggerDefinition{
+		ID:               "test",
+		Type:             trigger.TypePeriodic,
+		Schedule:         "@every 1h",
+		HoldOffCondition: `{{ eq .LastRun "0001-01-01T00:00:00Z" }}`,
+		Prompt:           "test prompt",
+	}
+
+	// Never run before — should hold off
+	heldOff, err := def.ShouldHoldOff(nil, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !heldOff {
+		t.Error("expected true when LastRun is zero")
+	}
+
+	// Has run before — should NOT hold off
+	lastRun := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	heldOff, err = def.ShouldHoldOff(nil, lastRun)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if heldOff {
+		t.Error("expected false when LastRun is set")
+	}
+}
+
+func TestLoadTriggerDefinition_HoldOffCondition(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "holdoff-trigger"
+    type: periodic
+    schedule: "@webhook"
+    hold-off-condition: "{{ .Payload.pull_request.merged }}"
+    prompt: "Handle PR"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(defs) != 1 {
+		t.Fatalf("expected 1 trigger, got %d", len(defs))
+	}
+
+	expected := "{{ .Payload.pull_request.merged }}"
+	if defs[0].HoldOffCondition != expected {
+		t.Errorf("expected hold-off-condition %q, got %q", expected, defs[0].HoldOffCondition)
+	}
+}
+
+func TestLoadTriggerDefinition_HoldOffConditionOptional(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "normal-trigger"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "Handle PR"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(defs) != 1 {
+		t.Fatalf("expected 1 trigger, got %d", len(defs))
+	}
+
+	if defs[0].HoldOffCondition != "" {
+		t.Errorf("expected empty hold-off-condition, got %q", defs[0].HoldOffCondition)
+	}
+}

@@ -273,6 +273,22 @@ func (e *Engine) executeTrigger(def trigger.TriggerDefinition) {
 		lastRun = lastState.LastRun
 	}
 
+	// Check hold-off condition (no payload for periodic triggers)
+	heldOff, err := def.ShouldHoldOff(nil, lastRun)
+	if err != nil {
+		e.log.Printf("[trigger:%s] failed to evaluate hold-off condition: %v", def.ID, err)
+		e.history.Append(def.ID, ExecutionRecord{
+			Timestamp: now,
+			Success:   false,
+			Error:     err.Error(),
+		})
+		return
+	}
+	if heldOff {
+		e.log.Printf("[trigger:%s] held off by condition", def.ID)
+		return
+	}
+
 	// Evaluate prompt template
 	prompt, err := def.EvalPromptTemplate(lastRun)
 	if err != nil {

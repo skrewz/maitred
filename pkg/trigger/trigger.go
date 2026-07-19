@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"text/template"
 	"time"
 
@@ -63,28 +64,47 @@ type triggerConfig struct {
 
 // triggerFileEntry is a single trigger definition in YAML.
 type triggerFileEntry struct {
-	ID       string      `yaml:"id"`
-	Type     TriggerType `yaml:"type"`
-	Schedule string      `yaml:"schedule"`
-	Prompt   string      `yaml:"prompt"`
-	Tags     []string    `yaml:"tags,omitempty"`
-	Timeout  int         `yaml:"timeout,omitempty"`
+	ID               string      `yaml:"id"`
+	Type             TriggerType `yaml:"type"`
+	Schedule         string      `yaml:"schedule"`
+	HoldOffCondition string      `yaml:"hold-off-condition,omitempty"`
+	Prompt           string      `yaml:"prompt"`
+	Tags             []string    `yaml:"tags,omitempty"`
+	Timeout          int         `yaml:"timeout,omitempty"`
 }
 
 // TriggerDefinition is the parsed, validated form of a trigger.
 type TriggerDefinition struct {
-	ID       string      `yaml:"id" json:"id"`
-	Type     TriggerType `yaml:"type" json:"type"`
-	Schedule string      `yaml:"schedule" json:"schedule"`
-	Prompt   string      `yaml:"prompt" json:"prompt"`
-	Tags     []string    `yaml:"tags,omitempty" json:"tags,omitempty"`
-	Timeout  int         `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	ID               string      `yaml:"id" json:"id"`
+	Type             TriggerType `yaml:"type" json:"type"`
+	Schedule         string      `yaml:"schedule" json:"schedule"`
+	HoldOffCondition string      `yaml:"hold-off-condition,omitempty" json:"hold_off_condition,omitempty"`
+	Prompt           string      `yaml:"prompt" json:"prompt"`
+	Tags             []string    `yaml:"tags,omitempty" json:"tags,omitempty"`
+	Timeout          int         `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 }
 
 // EvalPromptTemplate evaluates the trigger's prompt template with the
 // given lastRun time. The template has access to .LastRun (RFC3339 format).
 func (d *TriggerDefinition) EvalPromptTemplate(lastRun time.Time) (string, error) {
 	return d.EvalPromptTemplateWith(nil, lastRun)
+}
+
+// ShouldHoldOff evaluates the hold-off condition template (if set) and
+// returns true if the trigger should be skipped. The template has access
+// to .Payload (the payload map, if non-nil) and .LastRun (RFC3339 format).
+// If no hold-off condition is configured, always returns false.
+func (d *TriggerDefinition) ShouldHoldOff(payload map[string]interface{}, lastRun time.Time) (bool, error) {
+	if d.HoldOffCondition == "" {
+		return false, nil
+	}
+
+	result, err := d.evalTemplate(d.HoldOffCondition, payload, lastRun)
+	if err != nil {
+		return false, fmt.Errorf("evaluate hold-off condition: %w", err)
+	}
+
+	return strings.EqualFold(strings.TrimSpace(result), "true"), nil
 }
 
 // templatePayload recursively converts map[string]interface{} values
@@ -121,6 +141,14 @@ func templatePayload(v interface{}) interface{} {
 //   - .LastRun (RFC3339 format of lastRun)
 //   - .Payload (the payload map, if non-nil)
 func (d *TriggerDefinition) EvalPromptTemplateWith(payload map[string]interface{}, lastRun time.Time) (string, error) {
+	return d.evalTemplate(d.Prompt, payload, lastRun)
+}
+
+// evalTemplate is the shared template evaluation logic used by both
+// EvalPromptTemplateWith and ShouldHoldOff. The template has access to:
+//   - .LastRun (RFC3339 format of lastRun)
+//   - .Payload (the payload map, if non-nil)
+func (d *TriggerDefinition) evalTemplate(tmplStr string, payload map[string]interface{}, lastRun time.Time) (string, error) {
 	funcs := template.FuncMap{
 		"TrimSuffix": func(s, suffix string) string {
 			if len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix {
@@ -136,9 +164,9 @@ func (d *TriggerDefinition) EvalPromptTemplateWith(payload map[string]interface{
 		},
 	}
 
-	tmpl, err := template.New("prompt").Funcs(funcs).Parse(d.Prompt)
+	tmpl, err := template.New("eval").Funcs(funcs).Parse(tmplStr)
 	if err != nil {
-		return "", fmt.Errorf("trigger %s: invalid prompt template: %w", d.ID, err)
+		return "", fmt.Errorf("trigger %s: invalid template: %w", d.ID, err)
 	}
 
 	ctx := map[string]interface{}{
@@ -150,7 +178,7 @@ func (d *TriggerDefinition) EvalPromptTemplateWith(payload map[string]interface{
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, ctx); err != nil {
-		return "", fmt.Errorf("trigger %s: failed to execute prompt template: %w", d.ID, err)
+		return "", fmt.Errorf("trigger %s: failed to execute template: %w", d.ID, err)
 	}
 
 	return buf.String(), nil
@@ -231,12 +259,13 @@ func loadTriggerFile(path string) ([]TriggerDefinition, error) {
 	var defs []TriggerDefinition
 	for _, entry := range cfg.Triggers {
 		def := TriggerDefinition{
-			ID:       entry.ID,
-			Type:     entry.Type,
-			Schedule: entry.Schedule,
-			Prompt:   entry.Prompt,
-			Tags:     entry.Tags,
-			Timeout:  entry.Timeout,
+			ID:               entry.ID,
+			Type:             entry.Type,
+			Schedule:         entry.Schedule,
+			HoldOffCondition: entry.HoldOffCondition,
+			Prompt:           entry.Prompt,
+			Tags:             entry.Tags,
+			Timeout:          entry.Timeout,
 		}
 
 		// Validate

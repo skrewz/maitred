@@ -923,3 +923,285 @@ endpoints:
 		t.Error("expected lastRun to be set")
 	}
 }
+
+func TestHandler_WebhookHoldOff_ConditionTrue(t *testing.T) {
+	triggerYAML := `
+triggers:
+  - id: "pr-review"
+    type: periodic
+    schedule: "@webhook"
+    hold-off-condition: "{{ .Payload.pull_request.merged }}"
+    prompt: "Review PR: {{ .Payload.pull_request.title }}"
+`
+	webhookYAML := `
+endpoints:
+  - name: "pull_request"
+    trigger_id: "pr-review"
+    response: '{"status": "submitted"}'
+`
+
+	eng, mq, providers := setupTestEnvNoStart(t, triggerYAML, webhookYAML)
+	defer eng.Stop()
+
+	st := eng.StateStore()
+	handler := webhook.NewHandler(eng, st, "test", providers)
+
+	// PR is merged — should be held off
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"title":  "Merged PR",
+			"merged": true,
+		},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/forgejo/pull_request", strings.NewReader(string(payloadBytes)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeMux().ServeHTTP(w, req)
+
+	// Should return 204 No Content
+	if w.Code != http.StatusNoContent {
+		t.Errorf("expected status 204, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// No task should have been dispatched
+	if mq.Count() != 0 {
+		t.Errorf("expected 0 tasks (held off), got %d", mq.Count())
+	}
+
+	// No history should be recorded
+	history := eng.History()
+	records := history.All()
+	if recs, ok := records["pr-review"]; ok && len(recs) > 0 {
+		t.Error("expected no history records when held off")
+	}
+}
+
+func TestHandler_WebhookHoldOff_ConditionFalse(t *testing.T) {
+	triggerYAML := `
+triggers:
+  - id: "pr-review"
+    type: periodic
+    schedule: "@webhook"
+    hold-off-condition: "{{ .Payload.pull_request.merged }}"
+    prompt: "Review PR: {{ .Payload.pull_request.title }}"
+`
+	webhookYAML := `
+endpoints:
+  - name: "pull_request"
+    trigger_id: "pr-review"
+    response: '{"status": "submitted"}'
+`
+
+	eng, mq, providers := setupTestEnvNoStart(t, triggerYAML, webhookYAML)
+	defer eng.Stop()
+
+	st := eng.StateStore()
+	handler := webhook.NewHandler(eng, st, "test", providers)
+
+	// PR is NOT merged — should fire normally
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"title":  "Open PR",
+			"merged": false,
+		},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/forgejo/pull_request", strings.NewReader(string(payloadBytes)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeMux().ServeHTTP(w, req)
+
+	// Should return 200 OK
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Task should have been dispatched
+	if mq.Count() != 1 {
+		t.Errorf("expected 1 task, got %d", mq.Count())
+	}
+
+	task := mq.Tasks()[0]
+	if task.Prompt != "Review PR: Open PR" {
+		t.Errorf("expected prompt 'Review PR: Open PR', got %q", task.Prompt)
+	}
+}
+
+func TestHandler_WebhookHoldOff_OrCondition(t *testing.T) {
+	// Real-world pattern: hold off if merged OR closed
+	triggerYAML := `
+triggers:
+  - id: "pr-review"
+    type: periodic
+    schedule: "@webhook"
+    hold-off-condition: "{{ or .Payload.pull_request.merged (eq .Payload.pull_request.state \"closed\") }}"
+    prompt: "Review PR: {{ .Payload.pull_request.title }}"
+`
+	webhookYAML := `
+endpoints:
+  - name: "pull_request"
+    trigger_id: "pr-review"
+    response: '{"status": "submitted"}'
+`
+
+	eng, mq, providers := setupTestEnvNoStart(t, triggerYAML, webhookYAML)
+	defer eng.Stop()
+
+	st := eng.StateStore()
+	handler := webhook.NewHandler(eng, st, "test", providers)
+
+	// Case 1: merged — held off
+	payload1 := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"title":  "Merged",
+			"merged": true,
+			"state":  "open",
+		},
+	}
+	payloadBytes1, _ := json.Marshal(payload1)
+	req1 := httptest.NewRequest(http.MethodPost, "/v1/forgejo/pull_request", strings.NewReader(string(payloadBytes1)))
+	req1.Header.Set("Content-Type", "application/json")
+	w1 := httptest.NewRecorder()
+	handler.ServeMux().ServeHTTP(w1, req1)
+
+	if w1.Code != http.StatusNoContent {
+		t.Errorf("case 1: expected 204, got %d", w1.Code)
+	}
+
+	// Case 2: closed — held off
+	payload2 := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"title":  "Closed",
+			"merged": false,
+			"state":  "closed",
+		},
+	}
+	payloadBytes2, _ := json.Marshal(payload2)
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/forgejo/pull_request", strings.NewReader(string(payloadBytes2)))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	handler.ServeMux().ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusNoContent {
+		t.Errorf("case 2: expected 204, got %d", w2.Code)
+	}
+
+	// Case 3: open and not merged — fires
+	payload3 := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"title":  "Open",
+			"merged": false,
+			"state":  "open",
+		},
+	}
+	payloadBytes3, _ := json.Marshal(payload3)
+	req3 := httptest.NewRequest(http.MethodPost, "/v1/forgejo/pull_request", strings.NewReader(string(payloadBytes3)))
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	handler.ServeMux().ServeHTTP(w3, req3)
+
+	if w3.Code != http.StatusOK {
+		t.Errorf("case 3: expected 200, got %d", w3.Code)
+	}
+
+	// Only 1 task should have been dispatched (case 3)
+	if mq.Count() != 1 {
+		t.Errorf("expected 1 task (only case 3), got %d", mq.Count())
+	}
+}
+
+func TestHandler_WebhookHoldOff_NoCondition(t *testing.T) {
+	// Trigger without hold-off-condition should always fire
+	triggerYAML := `
+triggers:
+  - id: "pr-review"
+    type: periodic
+    schedule: "@webhook"
+    prompt: "Review PR: {{ .Payload.pull_request.title }}"
+`
+	webhookYAML := `
+endpoints:
+  - name: "pull_request"
+    trigger_id: "pr-review"
+    response: '{"status": "submitted"}'
+`
+
+	eng, mq, providers := setupTestEnvNoStart(t, triggerYAML, webhookYAML)
+	defer eng.Stop()
+
+	st := eng.StateStore()
+	handler := webhook.NewHandler(eng, st, "test", providers)
+
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"title":  "Always fires",
+			"merged": true,
+		},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/forgejo/pull_request", strings.NewReader(string(payloadBytes)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeMux().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if mq.Count() != 1 {
+		t.Errorf("expected 1 task, got %d", mq.Count())
+	}
+}
+
+func TestHandler_WebhookHoldOff_StateNotUpdated(t *testing.T) {
+	// When held off, state should NOT be updated
+	triggerYAML := `
+triggers:
+  - id: "pr-review"
+    type: periodic
+    schedule: "@webhook"
+    hold-off-condition: "{{ .Payload.pull_request.merged }}"
+    prompt: "Review PR"
+`
+	webhookYAML := `
+endpoints:
+  - name: "pull_request"
+    trigger_id: "pr-review"
+    response: '{"status": "submitted"}'
+`
+
+	eng, _, providers := setupTestEnvNoStart(t, triggerYAML, webhookYAML)
+	defer eng.Stop()
+
+	st := eng.StateStore()
+	handler := webhook.NewHandler(eng, st, "test", providers)
+
+	// Fire with merged=true (held off)
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"merged": true,
+		},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/forgejo/pull_request", strings.NewReader(string(payloadBytes)))
+	w := httptest.NewRecorder()
+	handler.ServeMux().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", w.Code)
+	}
+
+	// State should not exist (was never saved)
+	_, err := st.Load("pr-review")
+	if err == nil {
+		t.Error("expected no state when held off (state not updated)")
+	}
+}

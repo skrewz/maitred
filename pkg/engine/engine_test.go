@@ -822,3 +822,99 @@ triggers:
 		t.Errorf("expected next fire at 12:00:00 local, got %02d:%02d:%02d (loc: %s)", next.Hour(), next.Minute(), next.Second(), next.Location().String())
 	}
 }
+
+func TestEngine_HoldOffCondition_PreventsDispatch(t *testing.T) {
+	dir := t.TempDir()
+
+	// Hold off if LastRun is zero (never run before). After the first
+	// non-hold-off fire, state is saved and subsequent fires should proceed.
+	// But since the condition always holds off on zero LastRun, the trigger
+	// will never fire at all — proving the hold-off works.
+	configYAML := `
+triggers:
+  - id: "always-holdoff"
+    type: periodic
+    schedule: "@every 500ms"
+    hold-off-condition: "{{ eq .LastRun \"0001-01-01T00:00:00Z\" }}"
+    prompt: "should never fire"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dataDir := t.TempDir()
+	mq := &mockQueue{}
+
+	eng, err := engine.New(engine.Config{
+		TriggerDir: dir,
+		DataDir:    dataDir,
+		Queue:      mq,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating engine: %v", err)
+	}
+
+	if err := eng.Start(); err != nil {
+		t.Fatalf("unexpected error starting engine: %v", err)
+	}
+
+	// Wait for several scheduled intervals
+	time.Sleep(2 * time.Second)
+	eng.Stop()
+
+	// Trigger should never have dispatched a task
+	if mq.Count() != 0 {
+		t.Errorf("expected 0 tasks (always held off), got %d", mq.Count())
+	}
+
+	// State should not have been persisted (hold-off skips state save)
+	st, err := state.NewStore(dataDir)
+	if err != nil {
+		t.Fatalf("unexpected error creating state store: %v", err)
+	}
+	_, err = st.Load("always-holdoff")
+	if err == nil {
+		t.Error("expected no state for always-held-off trigger")
+	}
+}
+
+func TestEngine_HoldOffCondition_FiresWhenFalse(t *testing.T) {
+	dir := t.TempDir()
+
+	// Hold off condition that is always false — trigger should fire normally
+	configYAML := `
+triggers:
+  - id: "never-holdoff"
+    type: periodic
+    schedule: "@every 500ms"
+    hold-off-condition: "false"
+    prompt: "always fires"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dataDir := t.TempDir()
+	mq := &mockQueue{}
+
+	eng, err := engine.New(engine.Config{
+		TriggerDir: dir,
+		DataDir:    dataDir,
+		Queue:      mq,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating engine: %v", err)
+	}
+
+	if err := eng.Start(); err != nil {
+		t.Fatalf("unexpected error starting engine: %v", err)
+	}
+
+	time.Sleep(1500 * time.Millisecond)
+	eng.Stop()
+
+	// Trigger should have fired at least once
+	if mq.Count() < 1 {
+		t.Errorf("expected at least 1 task, got %d", mq.Count())
+	}
+}
