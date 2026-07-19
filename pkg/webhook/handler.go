@@ -161,6 +161,7 @@ func (h *Handler) handleWebhook(providers []ProviderConfig) http.HandlerFunc {
 			Prompt:  prompt,
 			Tags:    def.Tags,
 			Timeout: def.Timeout,
+			Persona: def.Persona,
 		}
 
 		if err := h.engine.Queue().AddTask(task); err != nil {

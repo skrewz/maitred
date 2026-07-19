@@ -43,3 +43,4 @@ triggers:
     tags:
       - "business-default"
     timeout: 1800
+    persona: s-issue-reviewer

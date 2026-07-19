@@ -31,6 +31,29 @@ func TestTask_String_EmptyID(t *testing.T) {
 	}
 }
 
+func TestTask_Persona(t *testing.T) {
+	task := &queue.Task{
+		ID:      "task-1",
+		Prompt:  "test prompt",
+		Tags:    []string{"business-default"},
+		Timeout: 3600,
+		Persona: "s-issue-implementer",
+	}
+
+	if task.Persona != "s-issue-implementer" {
+		t.Errorf("expected persona 's-issue-implementer', got %q", task.Persona)
+	}
+
+	// Empty persona should be zero-value
+	taskNoPersona := &queue.Task{
+		ID:     "task-2",
+		Prompt: "no persona task",
+	}
+	if taskNoPersona.Persona != "" {
+		t.Errorf("expected empty persona, got %q", taskNoPersona.Persona)
+	}
+}
+
 func TestTaskQueue_Add(t *testing.T) {
 	q := queue.NewTaskQueue()
 	task := &queue.Task{

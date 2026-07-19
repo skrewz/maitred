@@ -918,3 +918,47 @@ triggers:
 		t.Errorf("expected at least 1 task, got %d", mq.Count())
 	}
 }
+
+func TestEngine_PersonaPassedThrough(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "persona-test"
+    type: periodic
+    schedule: "@every 500ms"
+    persona: s-issue-implementer
+    prompt: "implement a feature"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dataDir := t.TempDir()
+	mq := &mockQueue{}
+
+	eng, err := engine.New(engine.Config{
+		TriggerDir: dir,
+		DataDir:    dataDir,
+		Queue:      mq,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating engine: %v", err)
+	}
+
+	if err := eng.Start(); err != nil {
+		t.Fatalf("unexpected error starting engine: %v", err)
+	}
+
+	time.Sleep(1 * time.Second)
+	eng.Stop()
+
+	tasks := mq.Tasks()
+	if len(tasks) < 1 {
+		t.Fatalf("expected at least 1 task, got %d", len(tasks))
+	}
+
+	if tasks[0].Persona != "s-issue-implementer" {
+		t.Errorf("expected persona 's-issue-implementer', got %q", tasks[0].Persona)
+	}
+}

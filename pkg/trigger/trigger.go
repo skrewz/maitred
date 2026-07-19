@@ -71,6 +71,7 @@ type triggerFileEntry struct {
 	Prompt           string      `yaml:"prompt"`
 	Tags             []string    `yaml:"tags,omitempty"`
 	Timeout          int         `yaml:"timeout,omitempty"`
+	Persona          string      `yaml:"persona,omitempty"`
 }
 
 // TriggerDefinition is the parsed, validated form of a trigger.
@@ -82,6 +83,10 @@ type TriggerDefinition struct {
 	Prompt           string      `yaml:"prompt" json:"prompt"`
 	Tags             []string    `yaml:"tags,omitempty" json:"tags,omitempty"`
 	Timeout          int         `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	// Persona is the name of a persona to apply when the trigger fires.
+	// On hotelier, this resolves to a named set of environment variables
+	// and file copies that are applied to the task's working directory.
+	Persona string `yaml:"persona,omitempty" json:"persona,omitempty"`
 }
 
 // EvalPromptTemplate evaluates the trigger's prompt template with the
@@ -266,6 +271,7 @@ func loadTriggerFile(path string) ([]TriggerDefinition, error) {
 			Prompt:           entry.Prompt,
 			Tags:             entry.Tags,
 			Timeout:          entry.Timeout,
+			Persona:          entry.Persona,
 		}
 
 		// Validate

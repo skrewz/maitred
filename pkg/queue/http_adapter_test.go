@@ -189,6 +189,81 @@ func TestHTTPAdapter_AddTask_DefaultTemplate(t *testing.T) {
 	}
 }
 
+func TestHTTPAdapter_AddTask_Persona(t *testing.T) {
+	var received map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dec := json.NewDecoder(r.Body)
+		dec.Decode(&received)
+		w.WriteHeader(201)
+		w.Write([]byte(`{"id":"remote-1"}`))
+	}))
+	defer server.Close()
+
+	adapter, err := queue.NewHTTPAdapter(queue.AdapterConfig{
+		Endpoint: server.URL,
+	}, log.New(os.Stdout, "", log.LstdFlags))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	task := &queue.Task{
+		ID:      "task-1",
+		Prompt:  "implement a feature",
+		Tags:    []string{"business-default"},
+		Timeout: 3600,
+		Persona: "s-issue-implementer",
+	}
+
+	if err := adapter.AddTask(task); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify persona is present in the request body
+	if _, ok := received["persona"]; !ok {
+		t.Error("expected 'persona' in request body")
+	}
+	if received["persona"] != "s-issue-implementer" {
+		t.Errorf("expected persona 's-issue-implementer', got %v", received["persona"])
+	}
+}
+
+func TestHTTPAdapter_AddTask_NoPersona(t *testing.T) {
+	var received map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dec := json.NewDecoder(r.Body)
+		dec.Decode(&received)
+		w.WriteHeader(201)
+		w.Write([]byte(`{"id":"remote-1"}`))
+	}))
+	defer server.Close()
+
+	adapter, err := queue.NewHTTPAdapter(queue.AdapterConfig{
+		Endpoint: server.URL,
+	}, log.New(os.Stdout, "", log.LstdFlags))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	task := &queue.Task{
+		ID:      "task-1",
+		Prompt:  "no persona task",
+		Tags:    []string{"business-default"},
+		Timeout: 1800,
+	}
+
+	if err := adapter.AddTask(task); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Persona should be null (empty string marshals to "" in JSON)
+	if _, ok := received["persona"]; !ok {
+		t.Error("expected 'persona' key in request body")
+	}
+	if received["persona"] != "" {
+		t.Errorf("expected empty persona, got %v", received["persona"])
+	}
+}
+
 func TestHTTPAdapter_AddTask_CustomTemplate(t *testing.T) {
 	var received map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

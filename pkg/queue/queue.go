@@ -22,6 +22,10 @@ type Task struct {
 	Prompt  string   `json:"prompt"`
 	Tags    []string `json:"tags,omitempty"`
 	Timeout int      `json:"timeout,omitempty"` // seconds, 0 = unlimited
+	// Persona is the name of a persona to apply when the task is executed.
+	// On hotelier, this resolves to a named set of environment variables
+	// and file copies that are applied to the task's working directory.
+	Persona string `json:"persona,omitempty"`
 }
 
 // String returns a human-readable representation of the task.

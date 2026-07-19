@@ -32,6 +32,7 @@ type AdapterConfig struct {
 	//   .Prompt    — evaluated prompt string
 	//   .Tags      — capability tag slice
 	//   .Timeout   — task timeout in seconds
+	//   .Persona   — persona name (optional, for hotelier persona support)
 	//
 	// A built-in "json" function marshals values to JSON for safe embedding
 	// inside the template. If empty, a default template is used that omits
@@ -69,7 +70,8 @@ var TaskTemplateFuncs = template.FuncMap{
 const defaultTaskTemplate = `{
 	"prompt": {{ .Prompt | json }},
 	"tags": {{ .Tags | json }},
-	"timeout": {{ .Timeout }}
+	"timeout": {{ .Timeout }},
+	"persona": {{ .Persona | json }}
 }`
 
 // HTTPAdapter is a TaskQueueProvider that sends tasks to a remote
@@ -163,11 +165,13 @@ func (a *HTTPAdapter) AddTask(task *Task) error {
 		Prompt  string
 		Tags    []string
 		Timeout int
+		Persona string
 	}{
 		ID:      task.ID,
 		Prompt:  prompt,
 		Tags:    task.Tags,
 		Timeout: task.Timeout,
+		Persona: task.Persona,
 	}
 
 	if err := a.tmpl.Execute(&buf, data); err != nil {

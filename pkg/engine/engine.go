@@ -307,6 +307,7 @@ func (e *Engine) executeTrigger(def trigger.TriggerDefinition) {
 		Prompt:  prompt,
 		Tags:    def.Tags,
 		Timeout: def.Timeout,
+		Persona: def.Persona,
 	}
 
 	// Dispatch to queue

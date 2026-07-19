@@ -353,6 +353,33 @@ async function testWebhookEndpointApiError(page, results) {
   results.push(assert(wrongMethodResp === 405, 'POST on webhooks endpoint returns 405'));
 }
 
+async function testPersonaDisplay(page, results) {
+  console.log('  Persona display');
+
+  // Ensure we are on the main page
+  await page.goto(baseUrl);
+  await page.waitForLoadState('networkidle').catch(() => {});
+  await page.waitForTimeout(3000);
+
+  // Check for persona meta labels (should appear on triggers that have persona set)
+  const metaLabels = await page.locator('.meta-label').allTextContents();
+  const hasPersonaLabel = metaLabels.includes('Persona');
+  results.push(assert(
+    hasPersonaLabel,
+    `Persona meta label present on trigger cards (found labels: ${metaLabels.join(', ')})`
+  ));
+
+  if (hasPersonaLabel) {
+    // Check that persona value is displayed
+    const metaValues = await page.locator('.meta-value').allTextContents();
+    const hasPersonaValue = metaValues.some(v => v.includes('issue-reviewer') || v.includes('implementer'));
+    results.push(assert(
+      hasPersonaValue,
+      `Persona value displayed (found values: ${metaValues.join(', ')})`
+    ));
+  }
+}
+
 async function testPromptSection(page, results) {
   console.log('  Prompt section');
 
@@ -452,6 +479,7 @@ async function main() {
   await testVersionEndpoint(page, results);
   await testWebhookEndpoints(page, results);
   await testWebhookEndpointApiError(page, results);
+  await testPersonaDisplay(page, results);
   await testPromptSection(page, results);
 
   await browser.close();

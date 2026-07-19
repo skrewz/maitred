@@ -840,3 +840,63 @@ triggers:
 		t.Errorf("expected empty hold-off-condition, got %q", defs[0].HoldOffCondition)
 	}
 }
+
+func TestLoadTriggerDefinition_Persona(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "persona-trigger"
+    type: periodic
+    schedule: "@every 1h"
+    persona: s-issue-implementer
+    prompt: "Implement a feature"
+    tags:
+      - "business-default"
+    timeout: 3600
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(defs) != 1 {
+		t.Fatalf("expected 1 trigger, got %d", len(defs))
+	}
+
+	if defs[0].Persona != "s-issue-implementer" {
+		t.Errorf("expected persona 's-issue-implementer', got %q", defs[0].Persona)
+	}
+}
+
+func TestLoadTriggerDefinition_PersonaOptional(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "no-persona-trigger"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "Just a regular trigger"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(defs) != 1 {
+		t.Fatalf("expected 1 trigger, got %d", len(defs))
+	}
+
+	if defs[0].Persona != "" {
+		t.Errorf("expected empty persona, got %q", defs[0].Persona)
+	}
+}

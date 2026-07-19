@@ -230,6 +230,7 @@
                                 <span class="meta-value countdown" id="countdown-${def.id}">calculating...</span>
                             </div>
                             ${errorText ? `<div class="meta-item" style="grid-column: 1 / -1;"><span class="meta-label">Error</span><span class="meta-value" style="color:#fca5a5;font-size:0.8rem;">${escapeHtml(errorText)}</span></div>` : ''}
+                            ${def.persona ? `<div class="meta-item"><span class="meta-label">Persona</span><span class="meta-value" style="font-family:monospace;font-size:0.8rem;color:#a78bfa;">${escapeHtml(def.persona)}</span></div>` : ''}
                         </div>
                         ${records.length > 0 ? `
                         <div class="history-section">

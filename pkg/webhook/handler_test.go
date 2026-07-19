@@ -1205,3 +1205,57 @@ endpoints:
 		t.Error("expected no state when held off (state not updated)")
 	}
 }
+
+func TestHandler_WebhookDispatchesPersona(t *testing.T) {
+	triggerYAML := `
+triggers:
+  - id: "pr-review"
+    type: periodic
+    schedule: "@webhook"
+    persona: s-issue-reviewer
+    prompt: "Review PR: {{ .Payload.pull_request.title }}"
+    tags:
+      - "code-review"
+    timeout: 1800
+`
+	webhookYAML := `
+endpoints:
+  - name: "pull_request"
+    trigger_id: "pr-review"
+    response: '{"status": "submitted"}'
+`
+
+	eng, mq, providers := setupTestEnvNoStart(t, triggerYAML, webhookYAML)
+	defer eng.Stop()
+
+	st := eng.StateStore()
+	handler := webhook.NewHandler(eng, st, "test", providers)
+
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"title": "Add persona support",
+		},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/forgejo/pull_request", strings.NewReader(string(payloadBytes)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeMux().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+
+	if mq.Count() != 1 {
+		t.Fatalf("expected exactly 1 task, got %d", mq.Count())
+	}
+
+	task := mq.Tasks()[0]
+	if task.Persona != "s-issue-reviewer" {
+		t.Errorf("expected persona 's-issue-reviewer', got %q", task.Persona)
+	}
+	if task.Prompt != "Review PR: Add persona support" {
+		t.Errorf("expected correct prompt, got %q", task.Prompt)
+	}
+}
