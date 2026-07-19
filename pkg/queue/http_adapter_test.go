@@ -211,7 +211,7 @@ func TestHTTPAdapter_AddTask_Persona(t *testing.T) {
 		Prompt:  "implement a feature",
 		Tags:    []string{"business-default"},
 		Timeout: 3600,
-		Persona: "s-issue-implementer",
+		Persona: "s-autonomics-implementer",
 	}
 
 	if err := adapter.AddTask(task); err != nil {
@@ -222,8 +222,8 @@ func TestHTTPAdapter_AddTask_Persona(t *testing.T) {
 	if _, ok := received["persona"]; !ok {
 		t.Error("expected 'persona' in request body")
 	}
-	if received["persona"] != "s-issue-implementer" {
-		t.Errorf("expected persona 's-issue-implementer', got %v", received["persona"])
+	if received["persona"] != "s-autonomics-implementer" {
+		t.Errorf("expected persona 's-autonomics-implementer', got %v", received["persona"])
 	}
 }
 

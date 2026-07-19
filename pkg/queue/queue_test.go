@@ -37,11 +37,11 @@ func TestTask_Persona(t *testing.T) {
 		Prompt:  "test prompt",
 		Tags:    []string{"business-default"},
 		Timeout: 3600,
-		Persona: "s-issue-implementer",
+		Persona: "s-autonomics-implementer",
 	}
 
-	if task.Persona != "s-issue-implementer" {
-		t.Errorf("expected persona 's-issue-implementer', got %q", task.Persona)
+	if task.Persona != "s-autonomics-implementer" {
+		t.Errorf("expected persona 's-autonomics-implementer', got %q", task.Persona)
 	}
 
 	// Empty persona should be zero-value

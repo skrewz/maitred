@@ -927,7 +927,7 @@ triggers:
   - id: "persona-test"
     type: periodic
     schedule: "@every 500ms"
-    persona: s-issue-implementer
+    persona: s-autonomics-implementer
     prompt: "implement a feature"
 `
 	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
@@ -958,7 +958,7 @@ triggers:
 		t.Fatalf("expected at least 1 task, got %d", len(tasks))
 	}
 
-	if tasks[0].Persona != "s-issue-implementer" {
-		t.Errorf("expected persona 's-issue-implementer', got %q", tasks[0].Persona)
+	if tasks[0].Persona != "s-autonomics-implementer" {
+		t.Errorf("expected persona 's-autonomics-implementer', got %q", tasks[0].Persona)
 	}
 }

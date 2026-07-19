@@ -849,7 +849,7 @@ triggers:
   - id: "persona-trigger"
     type: periodic
     schedule: "@every 1h"
-    persona: s-issue-implementer
+    persona: s-autonomics-implementer
     prompt: "Implement a feature"
     tags:
       - "business-default"
@@ -868,8 +868,8 @@ triggers:
 		t.Fatalf("expected 1 trigger, got %d", len(defs))
 	}
 
-	if defs[0].Persona != "s-issue-implementer" {
-		t.Errorf("expected persona 's-issue-implementer', got %q", defs[0].Persona)
+	if defs[0].Persona != "s-autonomics-implementer" {
+		t.Errorf("expected persona 's-autonomics-implementer', got %q", defs[0].Persona)
 	}
 }
 
