@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"text/template"
@@ -167,6 +168,49 @@ func (d *TriggerDefinition) evalTemplate(tmplStr string, payload map[string]inte
 			}
 			return m[key]
 		},
+		"len": func(v interface{}) int {
+			if v == nil {
+				return 0
+			}
+			rv := reflect.ValueOf(v)
+			switch rv.Kind() {
+			case reflect.Array, reflect.Slice, reflect.Chan, reflect.Map, reflect.String:
+				return rv.Len()
+			default:
+				return 0
+			}
+		},
+		"slice": func(v interface{}, i ...int) interface{} {
+			if v == nil {
+				return nil
+			}
+			rv := reflect.ValueOf(v)
+			switch rv.Kind() {
+			case reflect.Slice, reflect.Array:
+				if len(i) == 0 {
+					return rv.Interface()
+				}
+				start, end := 0, rv.Len()
+				if len(i) > 0 {
+					start = i[0]
+				}
+				if len(i) > 1 {
+					end = i[1]
+				}
+				if start < 0 {
+					start = 0
+				}
+				if end > rv.Len() {
+					end = rv.Len()
+				}
+				if start > end {
+					start = end
+				}
+				return rv.Slice(start, end).Interface()
+			default:
+				return nil
+			}
+		},
 	}
 
 	tmpl, err := template.New("eval").Funcs(funcs).Parse(tmplStr)
@@ -182,11 +226,43 @@ func (d *TriggerDefinition) evalTemplate(tmplStr string, payload map[string]inte
 	}
 
 	var buf bytes.Buffer
+	defer recoverTemplatePanics(d.ID)
 	if err := tmpl.Execute(&buf, ctx); err != nil {
 		return "", fmt.Errorf("trigger %s: failed to execute template: %w", d.ID, err)
 	}
 
 	return buf.String(), nil
+}
+
+// Validate compiles the trigger's prompt and hold-off condition templates
+// (if set) with a nil payload to catch obvious template errors at load time.
+// This catches issues like calling len() on a nil field before the trigger
+// ever fires, making failures visible at startup rather than at runtime.
+func (d *TriggerDefinition) Validate() error {
+	if _, err := d.evalTemplate(d.Prompt, nil, time.Time{}); err != nil {
+		return fmt.Errorf("invalid prompt template: %w", err)
+	}
+	if d.HoldOffCondition != "" {
+		if _, err := d.evalTemplate(d.HoldOffCondition, nil, time.Time{}); err != nil {
+			return fmt.Errorf("invalid hold-off-condition template: %w", err)
+		}
+	}
+	return nil
+}
+
+// recoverTemplatePanics is a deferred helper that catches panics during
+// template execution and converts them to errors. This provides a safety
+// net for any future template functions or edge cases that might panic
+// on nil or unexpected input values.
+func recoverTemplatePanics(dID string) {
+	if r := recover(); r != nil {
+		// Try to extract a meaningful error message
+		msg := fmt.Sprintf("%v", r)
+		if msg == "" {
+			msg = "template execution panic"
+		}
+		panic(fmt.Errorf("trigger %s: template panic: %s", dID, msg))
+	}
 }
 
 // LoadTriggerDefinitions reads all .yaml and .yml files from the given

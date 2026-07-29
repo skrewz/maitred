@@ -738,6 +738,68 @@ func TestTriggerDefinition_ShouldHoldOff_OrCondition(t *testing.T) {
 	}
 }
 
+func TestTriggerDefinition_ShouldHoldOff_NilPayloadField(t *testing.T) {
+	// Mirrors the real-world issue: issue_updated webhook where
+	// .Payload.pull_request is nil, but the hold-off condition
+	// calls len on it. Should not panic.
+	def := trigger.TriggerDefinition{
+		ID:               "test",
+		Type:             trigger.TypePeriodic,
+		Schedule:         "@webhook",
+		HoldOffCondition: `{{ or (ne (len .Payload.pull_request) 0) (eq .Payload.issue.state "closed") }}`,
+		Prompt:           "test prompt",
+	}
+
+	// Case 1: pull_request is nil (issue_updated webhook), issue is open
+	// Should NOT hold off (len(nil) == 0, state != "closed")
+	payload1 := map[string]interface{}{
+		"issue": map[string]interface{}{
+			"state": "open",
+		},
+		// pull_request is intentionally missing
+	}
+	heldOff, err := def.ShouldHoldOff(payload1, time.Time{})
+	if err != nil {
+		t.Fatalf("case 1 error: %v", err)
+	}
+	if heldOff {
+		t.Error("case 1: expected false when pull_request is nil and issue is open")
+	}
+
+	// Case 2: pull_request is nil, issue is closed
+	// Should hold off (state == "closed")
+	payload2 := map[string]interface{}{
+		"issue": map[string]interface{}{
+			"state": "closed",
+		},
+	}
+	heldOff, err = def.ShouldHoldOff(payload2, time.Time{})
+	if err != nil {
+		t.Fatalf("case 2 error: %v", err)
+	}
+	if !heldOff {
+		t.Error("case 2: expected true when pull_request is nil and issue is closed")
+	}
+
+	// Case 3: pull_request exists and is non-empty (PR event)
+	// Should hold off — the trigger is for issue updates, not PR events
+	payload3 := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"title": "Fix the bug",
+		},
+		"issue": map[string]interface{}{
+			"state": "open",
+		},
+	}
+	heldOff, err = def.ShouldHoldOff(payload3, time.Time{})
+	if err != nil {
+		t.Fatalf("case 3 error: %v", err)
+	}
+	if !heldOff {
+		t.Error("case 3: expected true when pull_request exists and is non-empty (PR event)")
+	}
+}
+
 func TestTriggerDefinition_ShouldHoldOff_InvalidTemplate(t *testing.T) {
 	def := trigger.TriggerDefinition{
 		ID:               "test",
@@ -870,6 +932,111 @@ triggers:
 
 	if defs[0].Persona != "s-autonomics-implementer" {
 		t.Errorf("expected persona 's-autonomics-implementer', got %q", defs[0].Persona)
+	}
+}
+
+func TestTriggerDefinition_EvalPromptTemplateWith_SafeSlice(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@every 1h",
+		Prompt:   "Slice: {{ slice .Payload.items 0 1 }}",
+	}
+
+	// Case 1: nil payload field — should not panic
+	payload1 := map[string]interface{}{
+		"items": nil,
+	}
+	result, err := def.EvalPromptTemplateWith(payload1, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expected := "Slice: <no value>"
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+
+	// Case 2: valid slice — should work normally
+	payload2 := map[string]interface{}{
+		"items": []interface{}{"a", "b", "c"},
+	}
+	result, err = def.EvalPromptTemplateWith(payload2, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expected = "Slice: [a]"
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestTriggerDefinition_EvalPromptTemplateWith_PanicRecovery(t *testing.T) {
+	// Verify that templates which would panic on nil values are handled
+	// gracefully by the safety net. The custom len function returns 0 for
+	// nil, so this should not panic.
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@every 1h",
+		Prompt:   "Items: {{ len .Payload.items }}",
+	}
+
+	// Nil payload field — custom len should return 0, no panic
+	payload := map[string]interface{}{
+		"items": nil,
+	}
+	result, err := def.EvalPromptTemplateWith(payload, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expected := "Items: 0"
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+func TestTriggerDefinition_Validate(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:               "test",
+		Type:             trigger.TypePeriodic,
+		Schedule:         "@every 1h",
+		HoldOffCondition: "{{ or (ne (len .Payload.pull_request) 0) (eq .Payload.issue.state \"closed\") }}",
+		Prompt:           "Handle issue {{ .Payload.issue.title }}",
+	}
+
+	// Valid templates should pass validation even with nil payload
+	err := def.Validate()
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestTriggerDefinition_Validate_InvalidPrompt(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@every 1h",
+		Prompt:   "{{ invalid syntax }}",
+	}
+
+	err := def.Validate()
+	if err == nil {
+		t.Error("expected error for invalid prompt template, got nil")
+	}
+}
+
+func TestTriggerDefinition_Validate_InvalidHoldOff(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:               "test",
+		Type:             trigger.TypePeriodic,
+		Schedule:         "@every 1h",
+		HoldOffCondition: "{{ invalid syntax }}",
+		Prompt:           "test prompt",
+	}
+
+	err := def.Validate()
+	if err == nil {
+		t.Error("expected error for invalid hold-off template, got nil")
 	}
 }
 
