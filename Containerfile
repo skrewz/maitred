@@ -36,7 +36,7 @@ WORKDIR /var/lib/maitred
 
 USER maitred
 
-EXPOSE 8080
+EXPOSE 9090 9091
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD /usr/local/bin/maitred --health || exit 1
