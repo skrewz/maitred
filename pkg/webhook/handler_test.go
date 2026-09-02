@@ -1206,6 +1206,140 @@ endpoints:
 	}
 }
 
+func TestHandler_WebhookHoldOff_ConditionsArray(t *testing.T) {
+	// hold-off-conditions array: held off if merged OR closed — the
+	// array form of the real-world OrCondition pattern.
+	triggerYAML := `
+triggers:
+  - id: "pr-review"
+    type: periodic
+    schedule: "@webhook"
+    hold-off-conditions:
+      - "{{ .Payload.pull_request.merged }}"
+      - "{{ eq .Payload.pull_request.state \"closed\" }}"
+    prompt: "Review PR: {{ .Payload.pull_request.title }}"
+`
+	webhookYAML := `
+endpoints:
+  - name: "pull_request"
+    trigger_id: "pr-review"
+    response: '{"status": "submitted"}'
+`
+
+	eng, mq, providers := setupTestEnvNoStart(t, triggerYAML, webhookYAML)
+	defer eng.Stop()
+
+	st := eng.StateStore()
+	handler := webhook.NewHandler(eng, st, "test", providers)
+
+	// Case 1: merged — held off (first condition true)
+	payload1 := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"title":  "Merged",
+			"merged": true,
+			"state":  "open",
+		},
+	}
+	payloadBytes1, _ := json.Marshal(payload1)
+	req1 := httptest.NewRequest(http.MethodPost, "/v1/forgejo/pull_request", strings.NewReader(string(payloadBytes1)))
+	req1.Header.Set("Content-Type", "application/json")
+	w1 := httptest.NewRecorder()
+	handler.ServeMux().ServeHTTP(w1, req1)
+
+	if w1.Code != http.StatusNoContent {
+		t.Errorf("case 1: expected 204, got %d", w1.Code)
+	}
+
+	// Case 2: closed — held off (second condition true)
+	payload2 := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"title":  "Closed",
+			"merged": false,
+			"state":  "closed",
+		},
+	}
+	payloadBytes2, _ := json.Marshal(payload2)
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/forgejo/pull_request", strings.NewReader(string(payloadBytes2)))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	handler.ServeMux().ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusNoContent {
+		t.Errorf("case 2: expected 204, got %d", w2.Code)
+	}
+
+	// Case 3: open and not merged — fires
+	payload3 := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"title":  "Open",
+			"merged": false,
+			"state":  "open",
+		},
+	}
+	payloadBytes3, _ := json.Marshal(payload3)
+	req3 := httptest.NewRequest(http.MethodPost, "/v1/forgejo/pull_request", strings.NewReader(string(payloadBytes3)))
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	handler.ServeMux().ServeHTTP(w3, req3)
+
+	if w3.Code != http.StatusOK {
+		t.Errorf("case 3: expected 200, got %d", w3.Code)
+	}
+
+	// Only 1 task should have been dispatched (case 3)
+	if mq.Count() != 1 {
+		t.Errorf("expected 1 task (only case 3), got %d", mq.Count())
+	}
+}
+
+func TestHandler_WebhookHoldOff_ConditionsArrayAllFalse(t *testing.T) {
+	// All hold-off-conditions false — trigger fires normally.
+	triggerYAML := `
+triggers:
+  - id: "pr-review"
+    type: periodic
+    schedule: "@webhook"
+    hold-off-conditions:
+      - "false"
+      - "{{ eq .Payload.pull_request.state \"closed\" }}"
+    prompt: "Review PR: {{ .Payload.pull_request.title }}"
+`
+	webhookYAML := `
+endpoints:
+  - name: "pull_request"
+    trigger_id: "pr-review"
+    response: '{"status": "submitted"}'
+`
+
+	eng, mq, providers := setupTestEnvNoStart(t, triggerYAML, webhookYAML)
+	defer eng.Stop()
+
+	st := eng.StateStore()
+	handler := webhook.NewHandler(eng, st, "test", providers)
+
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"title": "Open",
+			"state": "open",
+		},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/forgejo/pull_request", strings.NewReader(string(payloadBytes)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeMux().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if mq.Count() != 1 {
+		t.Errorf("expected 1 task, got %d", mq.Count())
+	}
+}
+
 func TestHandler_WebhookDispatchesPersona(t *testing.T) {
 	triggerYAML := `
 triggers:

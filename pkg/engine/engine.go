@@ -273,8 +273,8 @@ func (e *Engine) executeTrigger(def trigger.TriggerDefinition) {
 		lastRun = lastState.LastRun
 	}
 
-	// Check hold-off condition (no payload for periodic triggers)
-	heldOff, err := def.ShouldHoldOff(nil, lastRun)
+	// Check hold-off conditions (no payload for periodic triggers)
+	causes, err := def.HoldOffCauses(nil, lastRun)
 	if err != nil {
 		e.log.Printf("[trigger:%s] failed to evaluate hold-off condition: %v", def.ID, err)
 		e.history.Append(def.ID, ExecutionRecord{
@@ -284,8 +284,10 @@ func (e *Engine) executeTrigger(def trigger.TriggerDefinition) {
 		})
 		return
 	}
-	if heldOff {
-		e.log.Printf("[trigger:%s] held off by condition", def.ID)
+	if len(causes) > 0 {
+		for _, cause := range causes {
+			e.log.Printf("[trigger:%s] held off by condition: %s", def.ID, cause)
+		}
 		return
 	}
 

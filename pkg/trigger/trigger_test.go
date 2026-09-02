@@ -1067,3 +1067,318 @@ triggers:
 		t.Errorf("expected empty persona, got %q", defs[0].Persona)
 	}
 }
+
+func TestLoadTriggerDefinition_HoldOffConditions(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "holdoff-array-trigger"
+    type: periodic
+    schedule: "@webhook"
+    hold-off-conditions:
+      - "{{ .Payload.pull_request.merged }}"
+      - "{{ eq .Payload.pull_request.state \"closed\" }}"
+    prompt: "Handle PR"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(defs) != 1 {
+		t.Fatalf("expected 1 trigger, got %d", len(defs))
+	}
+
+	expected := []string{
+		"{{ .Payload.pull_request.merged }}",
+		`{{ eq .Payload.pull_request.state "closed" }}`,
+	}
+	if len(defs[0].HoldOffConditions) != len(expected) {
+		t.Fatalf("expected %d hold-off-conditions, got %d: %v", len(expected), len(defs[0].HoldOffConditions), defs[0].HoldOffConditions)
+	}
+	for i, want := range expected {
+		if defs[0].HoldOffConditions[i] != want {
+			t.Errorf("hold-off-conditions[%d]: expected %q, got %q", i, want, defs[0].HoldOffConditions[i])
+		}
+	}
+}
+
+func TestLoadTriggerDefinition_HoldOffConditionsOptional(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "normal-trigger"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "Handle PR"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(defs) != 1 {
+		t.Fatalf("expected 1 trigger, got %d", len(defs))
+	}
+
+	if defs[0].HoldOffConditions != nil {
+		t.Errorf("expected nil hold-off-conditions, got %v", defs[0].HoldOffConditions)
+	}
+}
+
+func TestTriggerDefinition_HoldOffCauses_None(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@webhook",
+		Prompt:   "test prompt",
+	}
+
+	causes, err := def.HoldOffCauses(nil, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(causes) != 0 {
+		t.Errorf("expected no causes, got %v", causes)
+	}
+}
+
+func TestTriggerDefinition_HoldOffCauses_SingularOnly(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:               "test",
+		Type:             trigger.TypePeriodic,
+		Schedule:         "@webhook",
+		HoldOffCondition: "{{ .Payload.pull_request.merged }}",
+		Prompt:           "test prompt",
+	}
+
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"merged": true,
+		},
+	}
+
+	causes, err := def.HoldOffCauses(payload, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(causes) != 1 || causes[0] != "{{ .Payload.pull_request.merged }}" {
+		t.Errorf("expected the singular condition as cause, got %v", causes)
+	}
+}
+
+func TestTriggerDefinition_HoldOffCauses_ArrayOnly(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@webhook",
+		HoldOffConditions: []string{
+			"{{ .Payload.pull_request.merged }}",
+			`{{ eq .Payload.pull_request.state "closed" }}`,
+		},
+		Prompt: "test prompt",
+	}
+
+	// Only the second condition is true
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"merged": false,
+			"state":  "closed",
+		},
+	}
+
+	causes, err := def.HoldOffCauses(payload, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(causes) != 1 || causes[0] != `{{ eq .Payload.pull_request.state "closed" }}` {
+		t.Errorf("expected only the second condition as cause, got %v", causes)
+	}
+}
+
+func TestTriggerDefinition_HoldOffCauses_MultipleTrue(t *testing.T) {
+	// Singular condition plus two array entries, all true — every one of
+	// them must be reported, in order (singular first).
+	def := trigger.TriggerDefinition{
+		ID:               "test",
+		Type:             trigger.TypePeriodic,
+		Schedule:         "@webhook",
+		HoldOffCondition: "true",
+		HoldOffConditions: []string{
+			"{{ .Payload.pull_request.merged }}",
+			`{{ eq .Payload.pull_request.state "closed" }}`,
+		},
+		Prompt: "test prompt",
+	}
+
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"merged": true,
+			"state":  "closed",
+		},
+	}
+
+	causes, err := def.HoldOffCauses(payload, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expected := []string{
+		"true",
+		"{{ .Payload.pull_request.merged }}",
+		`{{ eq .Payload.pull_request.state "closed" }}`,
+	}
+	if len(causes) != len(expected) {
+		t.Fatalf("expected %d causes, got %d: %v", len(expected), len(causes), causes)
+	}
+	for i, want := range expected {
+		if causes[i] != want {
+			t.Errorf("causes[%d]: expected %q, got %q", i, want, causes[i])
+		}
+	}
+}
+
+func TestTriggerDefinition_HoldOffCauses_EvaluationError(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@webhook",
+		HoldOffConditions: []string{
+			"false",
+			"{{ invalid syntax }}",
+		},
+		Prompt: "test prompt",
+	}
+
+	_, err := def.HoldOffCauses(nil, time.Time{})
+	if err == nil {
+		t.Error("expected error for invalid template in hold-off-conditions, got nil")
+	}
+}
+
+func TestTriggerDefinition_ShouldHoldOff_ConditionsArrayTrue(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@webhook",
+		HoldOffConditions: []string{
+			"false",
+			"{{ .Payload.pull_request.merged }}",
+		},
+		Prompt: "test prompt",
+	}
+
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"merged": true,
+		},
+	}
+
+	heldOff, err := def.ShouldHoldOff(payload, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !heldOff {
+		t.Error("expected true when any hold-off condition is true")
+	}
+}
+
+func TestTriggerDefinition_ShouldHoldOff_ConditionsArrayAllFalse(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@webhook",
+		HoldOffConditions: []string{
+			"false",
+			"{{ .Payload.pull_request.merged }}",
+		},
+		Prompt: "test prompt",
+	}
+
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"merged": false,
+		},
+	}
+
+	heldOff, err := def.ShouldHoldOff(payload, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if heldOff {
+		t.Error("expected false when all hold-off conditions are false")
+	}
+}
+
+func TestTriggerDefinition_ShouldHoldOff_SingularAndArrayCombined(t *testing.T) {
+	// Singular is false, one array entry is true — held off.
+	def := trigger.TriggerDefinition{
+		ID:               "test",
+		Type:             trigger.TypePeriodic,
+		Schedule:         "@webhook",
+		HoldOffCondition: "false",
+		HoldOffConditions: []string{
+			"{{ .Payload.pull_request.merged }}",
+		},
+		Prompt: "test prompt",
+	}
+
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"merged": true,
+		},
+	}
+
+	heldOff, err := def.ShouldHoldOff(payload, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !heldOff {
+		t.Error("expected true when an array condition is true despite singular being false")
+	}
+}
+
+func TestTriggerDefinition_Validate_InvalidHoldOffConditionInArray(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@every 1h",
+		HoldOffConditions: []string{
+			"true",
+			"{{ invalid syntax }}",
+		},
+		Prompt: "test prompt",
+	}
+
+	err := def.Validate()
+	if err == nil {
+		t.Error("expected error for invalid hold-off-conditions template, got nil")
+	}
+}
+
+func TestTriggerDefinition_Validate_HoldOffConditionsValid(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@every 1h",
+		HoldOffConditions: []string{
+			"{{ .Payload.pull_request.merged }}",
+			`{{ eq .Payload.issue.state "closed" }}`,
+		},
+		Prompt: "test prompt",
+	}
+
+	err := def.Validate()
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+}
