@@ -134,15 +134,17 @@ func (h *Handler) handleWebhook(providers []ProviderConfig) http.HandlerFunc {
 			lastRun = lastState.LastRun
 		}
 
-		// Check hold-off condition before evaluating prompt
-		heldOff, err := def.ShouldHoldOff(payload, lastRun)
+		// Check hold-off conditions before evaluating prompt
+		causes, err := def.HoldOffCauses(payload, lastRun)
 		if err != nil {
 			h.log.Printf("[webhook:%s] failed to evaluate hold-off condition: %v", ep.Name, err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		if heldOff {
-			h.log.Printf("[webhook:%s] held off by condition for trigger %s", ep.Name, ep.TriggerID)
+		if len(causes) > 0 {
+			for _, cause := range causes {
+				h.log.Printf("[webhook:%s] trigger %s held off by condition: %s", ep.Name, ep.TriggerID, cause)
+			}
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}

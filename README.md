@@ -71,6 +71,7 @@ triggers:
 | `type` | ✅ | Currently only `periodic` is supported |
 | `schedule` | ✅ | Cron expression or `@every <duration>` |
 | `prompt` | ✅ | Go template with `.LastRun` and `.Payload` variables |
+| `hold-off-conditions` | | List of Go template conditions, each evaluated one at a time; if any evaluates to `true` the trigger is held off and the matching conditions are logged |
 | `tags` | | Agent capability tags for routing |
 | `timeout` | | Task timeout in seconds (0 = unlimited) |
 

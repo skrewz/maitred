@@ -65,14 +65,15 @@ type triggerConfig struct {
 
 // triggerFileEntry is a single trigger definition in YAML.
 type triggerFileEntry struct {
-	ID               string      `yaml:"id"`
-	Type             TriggerType `yaml:"type"`
-	Schedule         string      `yaml:"schedule"`
-	HoldOffCondition string      `yaml:"hold-off-condition,omitempty"`
-	Prompt           string      `yaml:"prompt"`
-	Tags             []string    `yaml:"tags,omitempty"`
-	Timeout          int         `yaml:"timeout,omitempty"`
-	Persona          string      `yaml:"persona,omitempty"`
+	ID                string      `yaml:"id"`
+	Type              TriggerType `yaml:"type"`
+	Schedule          string      `yaml:"schedule"`
+	HoldOffCondition  string      `yaml:"hold-off-condition,omitempty"`
+	HoldOffConditions []string    `yaml:"hold-off-conditions,omitempty"`
+	Prompt            string      `yaml:"prompt"`
+	Tags              []string    `yaml:"tags,omitempty"`
+	Timeout           int         `yaml:"timeout,omitempty"`
+	Persona           string      `yaml:"persona,omitempty"`
 }
 
 // TriggerDefinition is the parsed, validated form of a trigger.
@@ -81,9 +82,14 @@ type TriggerDefinition struct {
 	Type             TriggerType `yaml:"type" json:"type"`
 	Schedule         string      `yaml:"schedule" json:"schedule"`
 	HoldOffCondition string      `yaml:"hold-off-condition,omitempty" json:"hold_off_condition,omitempty"`
-	Prompt           string      `yaml:"prompt" json:"prompt"`
-	Tags             []string    `yaml:"tags,omitempty" json:"tags,omitempty"`
-	Timeout          int         `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	// HoldOffConditions is a list of additional hold-off condition
+	// templates. Each is evaluated one at a time at trigger evaluation
+	// time; if any of them (or HoldOffCondition) evaluates to true, the
+	// trigger is held off.
+	HoldOffConditions []string `yaml:"hold-off-conditions,omitempty" json:"hold_off_conditions,omitempty"`
+	Prompt            string   `yaml:"prompt" json:"prompt"`
+	Tags              []string `yaml:"tags,omitempty" json:"tags,omitempty"`
+	Timeout           int      `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	// Persona is the name of a persona to apply when the trigger fires.
 	// On hotelier, this resolves to a named set of environment variables
 	// and file copies that are applied to the task's working directory.
@@ -96,21 +102,43 @@ func (d *TriggerDefinition) EvalPromptTemplate(lastRun time.Time) (string, error
 	return d.EvalPromptTemplateWith(nil, lastRun)
 }
 
+// HoldOffCauses evaluates the hold-off condition (if set) followed by
+// each entry in HoldOffConditions, one at a time. It returns the list of
+// condition strings (by their YAML content) that evaluated to true. If
+// any condition fails to evaluate, the error is returned immediately.
+//
+// The conditions have access to .Payload (the payload map, if non-nil)
+// and .LastRun (RFC3339 format).
+func (d *TriggerDefinition) HoldOffCauses(payload map[string]interface{}, lastRun time.Time) ([]string, error) {
+	conditions := make([]string, 0, len(d.HoldOffConditions)+1)
+	if d.HoldOffCondition != "" {
+		conditions = append(conditions, d.HoldOffCondition)
+	}
+	conditions = append(conditions, d.HoldOffConditions...)
+
+	var causes []string
+	for _, cond := range conditions {
+		result, err := d.evalTemplate(cond, payload, lastRun)
+		if err != nil {
+			return nil, fmt.Errorf("evaluate hold-off condition: %w", err)
+		}
+		if strings.EqualFold(strings.TrimSpace(result), "true") {
+			causes = append(causes, cond)
+		}
+	}
+	return causes, nil
+}
+
 // ShouldHoldOff evaluates the hold-off condition template (if set) and
 // returns true if the trigger should be skipped. The template has access
 // to .Payload (the payload map, if non-nil) and .LastRun (RFC3339 format).
 // If no hold-off condition is configured, always returns false.
 func (d *TriggerDefinition) ShouldHoldOff(payload map[string]interface{}, lastRun time.Time) (bool, error) {
-	if d.HoldOffCondition == "" {
-		return false, nil
-	}
-
-	result, err := d.evalTemplate(d.HoldOffCondition, payload, lastRun)
+	causes, err := d.HoldOffCauses(payload, lastRun)
 	if err != nil {
-		return false, fmt.Errorf("evaluate hold-off condition: %w", err)
+		return false, err
 	}
-
-	return strings.EqualFold(strings.TrimSpace(result), "true"), nil
+	return len(causes) > 0, nil
 }
 
 // templatePayload recursively converts map[string]interface{} values
@@ -247,6 +275,11 @@ func (d *TriggerDefinition) Validate() error {
 			return fmt.Errorf("invalid hold-off-condition template: %w", err)
 		}
 	}
+	for _, cond := range d.HoldOffConditions {
+		if _, err := d.evalTemplate(cond, nil, time.Time{}); err != nil {
+			return fmt.Errorf("invalid hold-off-conditions template: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -340,14 +373,15 @@ func loadTriggerFile(path string) ([]TriggerDefinition, error) {
 	var defs []TriggerDefinition
 	for _, entry := range cfg.Triggers {
 		def := TriggerDefinition{
-			ID:               entry.ID,
-			Type:             entry.Type,
-			Schedule:         entry.Schedule,
-			HoldOffCondition: entry.HoldOffCondition,
-			Prompt:           entry.Prompt,
-			Tags:             entry.Tags,
-			Timeout:          entry.Timeout,
-			Persona:          entry.Persona,
+			ID:                entry.ID,
+			Type:              entry.Type,
+			Schedule:          entry.Schedule,
+			HoldOffCondition:  entry.HoldOffCondition,
+			HoldOffConditions: entry.HoldOffConditions,
+			Prompt:            entry.Prompt,
+			Tags:              entry.Tags,
+			Timeout:           entry.Timeout,
+			Persona:           entry.Persona,
 		}
 
 		// Validate
