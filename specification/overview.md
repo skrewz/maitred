@@ -22,7 +22,7 @@ HTTP queue system.
 - **Prompt templating.** A trigger's `prompt` is a Go `text/template` with
   `.LastRun` (RFC 3339 timestamp of the trigger's last execution) and
   `.Payload` (the webhook payload, when present), plus custom template
-  functions (`TrimSuffix`, `index`).
+  functions (`TrimSuffix`, `index`, `len`).
 - **Hold-off conditions.** A trigger may declare a singular `hold-off-condition`
   and/or a `hold-off-conditions` list of Go template conditions. If any
   evaluates to `true` at evaluation time, the trigger is held off (no dispatch)
@@ -42,12 +42,12 @@ HTTP queue system.
 - **Web dashboard.** A web UI on the web port shows trigger cards (schedule,
   state, countdown), stats, and interactive controls (fire now, pause/resume).
 - **Health check.** `maitred --health` exits 0 if the configuration is valid.
-- **Forgejo engine (new domain).** A stateful webhook component that tracks
-  issue/PR state across the organisation's `maitred-enabled` repositories and
-  dispatches canned hotelier tasks when a tracked transition warrants it,
-  reconciling periodically so missed webhooks are recovered. The per-change
-  specifications for this domain land in `specification/forgejo/` as the
-  Forgejo engine chain (issues #48–#54, end-state #46) is implemented.
+- **Forgejo engine (new domain).** In scope but not yet implemented: a
+  stateful webhook component that will track issue/PR state across the
+  organisation's `maitred-enabled` repositories and dispatch canned hotelier
+  tasks when a tracked transition warrants it, reconciling periodically so
+  missed webhooks are recovered. To be specified in `specification/forgejo/`
+  as the Forgejo engine chain (issues #48–#54, end-state #46) is implemented.
 
 ## Non-goals
 
@@ -57,9 +57,9 @@ HTTP queue system.
 - **Not a general workflow engine.** There are no dependency graphs, DAGs, or
   multi-step task orchestration; a trigger produces at most one task per
   firing.
-- **No Forgejo mutation.** The Forgejo engine talks to Forgejo through a
-  read-only client; its side effects are dispatched tasks, never direct writes
-  to Forgejo.
+- **No Forgejo mutation.** The Forgejo engine will talk to Forgejo through a
+  read-only client; its side effects will be dispatched tasks, never direct
+  writes to Forgejo.
 - **No built-in secrets management.** Tokens and certificates come from the
   environment or the filesystem (e.g. via s-puppet), not from maitred.
 
