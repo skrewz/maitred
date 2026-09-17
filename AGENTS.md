@@ -1,5 +1,17 @@
 # Maître d' — Periodic Trigger Engine
 
+## Mandatory: working with the specification
+
+All development work in this repository **must** follow the
+[`working-with-specification` skill](.agents/skills/working-with-specification/SKILL.md).
+The specification lives in [`specification/`](specification/) and is the
+**source of truth**: the implementation follows it, never the reverse. The
+skill defines how to reference the specification with the `§` convention, the
+spec-first, red-then-green TDD workflow, and how proposed (not yet implemented)
+specification changes are carried — as chained issues (preferred) or in a
+separate folder — so that the specification is never ahead of or behind the
+implementation. Do not work around it.
+
 ## General gotcha's for agents
 
 - You will likely be working with a git worktree. Please orient yourself.
