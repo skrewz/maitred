@@ -25,6 +25,27 @@ implementation. Do not work around it.
 - Do not use complete paths in the read tool if a relative path would do.
 - Always load any web search skills available to you. They will almost always be relevant to your work.
 
+## Public mirror — what must not leak
+
+This repository is mirrored to GitHub, so **everything committed becomes
+public**. Keep internal Forgejo and infrastructure details out of commit
+messages, PR titles/bodies, and — secondarily — code, config and docs:
+
+- **No internal hosts.** Never reference `forgejo.skrewz.net` (or any other
+  internal host) in commit messages, PR titles/bodies, or code/docs. Link
+  issues and PRs by number only (e.g. `Fixes #22`), not by full URL.
+- **No internal identities.** Do not put internal identities (`@skrewz.net`
+  email addresses, personal names) in commit metadata or messages.
+- **No personal asides.** Keep commit and PR bodies free of personal asides.
+- **Neutral naming.** Prefer neutral, generic names in code, config and
+  examples over internal project or persona names. Where a specific
+  integration provider is involved, do not make its naming (provider names,
+  API paths) the canonical example where a generic one will do.
+- **Known limitation: merge trailers.** Forgejo auto-merge trailers
+  (`Reviewed-on: …`, `Reviewed-by: …`) are added automatically by the forge
+  and carry the internal host. This cannot be avoided from the client side;
+  a follow-up should strip or rewrite them before mirroring.
+
 ## Mandatory test and lint targets
 
 **`make test`** (unifies `lint`, `test-coverage`, `test-race`, and `test-ui`) is **mandatory** for all agents.
