@@ -52,8 +52,12 @@ On each `POST`:
    unblock cascade (§forgejo/decisions/unblock-cascade) has its own
    watermark applied before its dispatch, so an already-dispatched
    `(action, revision)` is not re-dispatched.
-7. **Acknowledge.** The response is `204` — quickly; the engine does not
-   block on the dispatched agent.
+7. **Acknowledge.** The response is `204` once the pipeline has run; the
+   engine does not block on the dispatched agent — dispatch only enqueues.
+   A slow pipeline (several re-fetch calls) can exceed Forgejo's delivery
+   timeout, in which case Forgejo records the delivery as failed without
+   retrying; the event is still processed to completion, and the
+   reconciliation sweep re-derives anything genuinely missed.
 
 A re-fetch failure is a hold-off: it is logged and acknowledged, and the
 reconciliation sweep re-derives from the source of truth.
