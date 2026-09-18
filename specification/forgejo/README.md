@@ -8,4 +8,9 @@ warrants it.
 This folder is created by the spec-driven scaffolding change (issue #47).
 Per-change specifications land here — in the same change that implements them —
 as the Forgejo engine chain (issues #48–#54, end-state #46) is implemented.
-Until then, this folder holds no behavioural specification.
+
+Specifications that have landed:
+
+| File | Reference |
+|---|---|
+| `client.md` | the read-only Forgejo API client — §forgejo/client/operations |
