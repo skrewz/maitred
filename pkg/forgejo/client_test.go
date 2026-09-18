@@ -230,7 +230,15 @@ func TestGetIssue(t *testing.T) {
 func TestGetIssue_IsPull(t *testing.T) {
 	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		issue := issueJSON(48, "acme/maitred")
-		issue["is_pull"] = true
+		// The issue API reports a pull request via the non-null
+		// "pull_request" object (PullRequestMeta); there is no is_pull
+		// field in the issue API response.
+		issue["pull_request"] = map[string]any{
+			"url":    "https://forge.example.com/acme/maitred/pulls/48",
+			"merged": false,
+			"head":   map[string]any{"sha": "abc123"},
+			"base":   map[string]any{"sha": "def456"},
+		}
 		_ = json.NewEncoder(w).Encode(issue)
 	})
 
@@ -240,7 +248,7 @@ func TestGetIssue_IsPull(t *testing.T) {
 		t.Fatalf("GetIssue: %v", err)
 	}
 	if !issue.IsPull {
-		t.Errorf("IsPull = false, want true (is_pull in the payload)")
+		t.Errorf("IsPull = false, want true (non-null pull_request in the payload)")
 	}
 }
 
@@ -255,7 +263,7 @@ func TestGetIssue_NotPull(t *testing.T) {
 		t.Fatalf("GetIssue: %v", err)
 	}
 	if issue.IsPull {
-		t.Errorf("IsPull = true, want false (no is_pull in the payload)")
+		t.Errorf("IsPull = true, want false (no pull_request in the payload)")
 	}
 }
 
@@ -308,8 +316,13 @@ func TestGetPullRequest(t *testing.T) {
 
 func TestIssueBlocks_CrossRepo(t *testing.T) {
 	srv, rec := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		pr := issueJSON(49, "acme/maitred")
+		pr["pull_request"] = map[string]any{
+			"url":    "https://forge.example.com/acme/maitred/pulls/49",
+			"merged": true,
+		}
 		_ = json.NewEncoder(w).Encode([]map[string]any{
-			issueJSON(49, "acme/maitred"),
+			pr,
 			issueJSON(7, "acme/other-repo"),
 		})
 	})
@@ -325,6 +338,12 @@ func TestIssueBlocks_CrossRepo(t *testing.T) {
 	if len(blocked) != 2 {
 		t.Fatalf("got %d blocked issues, want 2", len(blocked))
 	}
+	if !blocked[0].IsPull {
+		t.Errorf("blocked[0].IsPull = false, want true (non-null pull_request)")
+	}
+	if blocked[1].IsPull {
+		t.Errorf("blocked[1].IsPull = true, want false (no pull_request)")
+	}
 	if blocked[1].Repository != "acme/other-repo" {
 		t.Errorf("blocked[1].Repository = %q, want acme/other-repo (cross-repo)", blocked[1].Repository)
 	}
@@ -332,8 +351,14 @@ func TestIssueBlocks_CrossRepo(t *testing.T) {
 
 func TestIssueDependencies(t *testing.T) {
 	srv, rec := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		pr := issueJSON(46, "acme/maitred")
+		pr["pull_request"] = map[string]any{
+			"url":    "https://forge.example.com/acme/maitred/pulls/46",
+			"merged": false,
+		}
 		_ = json.NewEncoder(w).Encode([]map[string]any{
 			issueJSON(47, "acme/maitred"),
+			pr,
 		})
 	})
 
@@ -345,8 +370,14 @@ func TestIssueDependencies(t *testing.T) {
 	if rec.path != "/api/v1/repos/acme/maitred/issues/48/dependencies" {
 		t.Errorf("path = %q, want /api/v1/repos/acme/maitred/issues/48/dependencies", rec.path)
 	}
-	if len(deps) != 1 || deps[0].Number != 47 {
-		t.Errorf("deps = %+v, want one issue #47", deps)
+	if len(deps) != 2 || deps[0].Number != 47 {
+		t.Fatalf("deps = %+v, want issues #47 and #46", deps)
+	}
+	if deps[0].IsPull {
+		t.Errorf("deps[0].IsPull = true, want false (no pull_request)")
+	}
+	if !deps[1].IsPull {
+		t.Errorf("deps[1].IsPull = false, want true (non-null pull_request)")
 	}
 }
 
