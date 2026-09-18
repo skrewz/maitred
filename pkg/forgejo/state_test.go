@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestKey_String(t *testing.T) {
@@ -375,5 +376,77 @@ func TestStore_Save_WritesExpectedJSON(t *testing.T) {
 	}
 	if fields["action"] != "review" || fields["revision"] != wm.Revision {
 		t.Errorf("on-disk JSON = %v, want action=review revision=%s", fields, wm.Revision)
+	}
+}
+
+func TestStore_WithKeyLock_SerialisesSameKey(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	k := Key{Repo: "acme/maitred", Kind: KindIssue, Number: 1}
+
+	var mu sync.Mutex
+	cur, maxConc := 0, 0
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.WithKeyLock(k, func() {
+				mu.Lock()
+				cur++
+				if cur > maxConc {
+					maxConc = cur
+				}
+				mu.Unlock()
+				time.Sleep(time.Millisecond)
+				mu.Lock()
+				cur--
+				mu.Unlock()
+			})
+		}()
+	}
+	wg.Wait()
+	if maxConc != 1 {
+		t.Errorf("max concurrency = %d, want 1 (same key serialised)", maxConc)
+	}
+}
+
+func TestStore_WithKeyLock_ParallelDifferentKeys(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	k1 := Key{Repo: "acme/maitred", Kind: KindIssue, Number: 1}
+	k2 := Key{Repo: "acme/maitred", Kind: KindIssue, Number: 2}
+
+	var mu sync.Mutex
+	cur, maxConc := 0, 0
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, k := range []Key{k1, k2} {
+		wg.Add(1)
+		go func(k Key) {
+			defer wg.Done()
+			<-start
+			s.WithKeyLock(k, func() {
+				mu.Lock()
+				cur++
+				if cur > maxConc {
+					maxConc = cur
+				}
+				mu.Unlock()
+				time.Sleep(20 * time.Millisecond)
+				mu.Lock()
+				cur--
+				mu.Unlock()
+			})
+		}(k)
+	}
+	close(start)
+	wg.Wait()
+	if maxConc != 2 {
+		t.Errorf("max concurrency = %d, want 2 (different keys in parallel)", maxConc)
 	}
 }

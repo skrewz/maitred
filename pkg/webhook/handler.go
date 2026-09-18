@@ -53,6 +53,14 @@ func (h *Handler) ServeMux() *http.ServeMux {
 	return h.mux
 }
 
+// MountOverride registers handler for an exact path, taking precedence
+// over the trigger-based /v1/{provider}/{endpoint} route. The Forgejo
+// engine's all-events handler is mounted this way
+// (§forgejo/webhook/the-route).
+func (h *Handler) MountOverride(path string, handler http.Handler) {
+	h.mux.Handle(path, handler)
+}
+
 func (h *Handler) handleWebhook(providers []ProviderConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

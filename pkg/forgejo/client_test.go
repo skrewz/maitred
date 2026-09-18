@@ -227,6 +227,38 @@ func TestGetIssue(t *testing.T) {
 	}
 }
 
+func TestGetIssue_IsPull(t *testing.T) {
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		issue := issueJSON(48, "acme/maitred")
+		issue["is_pull"] = true
+		_ = json.NewEncoder(w).Encode(issue)
+	})
+
+	c := New(srv.URL, "test-token", nil)
+	issue, err := c.GetIssue("acme", "maitred", 48)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if !issue.IsPull {
+		t.Errorf("IsPull = false, want true (is_pull in the payload)")
+	}
+}
+
+func TestGetIssue_NotPull(t *testing.T) {
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(issueJSON(48, "acme/maitred"))
+	})
+
+	c := New(srv.URL, "test-token", nil)
+	issue, err := c.GetIssue("acme", "maitred", 48)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.IsPull {
+		t.Errorf("IsPull = true, want false (no is_pull in the payload)")
+	}
+}
+
 func TestGetIssue_NotFound(t *testing.T) {
 	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

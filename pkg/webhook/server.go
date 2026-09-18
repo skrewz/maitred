@@ -41,6 +41,13 @@ func New(port int, eng *engine.Engine, st *state.Store, version string, provider
 	return s
 }
 
+// MountOverride registers handler for an exact path on the webhook
+// router, taking precedence over the trigger-based routes
+// (§forgejo/webhook/the-route). Call it before Start.
+func (s *Server) MountOverride(path string, handler http.Handler) {
+	s.handler.MountOverride(path, handler)
+}
+
 // Start begins serving HTTP in a goroutine. Returns immediately.
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.port)

@@ -78,6 +78,16 @@ func NewStore(dir string) (*Store, error) {
 	}, nil
 }
 
+// WithKeyLock runs fn while holding the per-key lock for key, so a
+// read-decide-update sequence for one key cannot interleave with another
+// caller's for the same key (§forgejo/state/concurrency).
+func (s *Store) WithKeyLock(k Key, fn func()) {
+	l := s.lockFor(k)
+	l.Lock()
+	defer l.Unlock()
+	fn()
+}
+
 // lockFor returns the per-key mutex for key, so concurrent updates for the
 // same key are serialised while different keys proceed in parallel
 // (§forgejo/state/concurrency).
@@ -99,7 +109,12 @@ func (s *Store) Load(k Key) (*Watermark, error) {
 	l := s.lockFor(k)
 	l.Lock()
 	defer l.Unlock()
+	return s.loadLocked(k)
+}
 
+// loadLocked is Load without taking the per-key lock; the caller must
+// hold it (e.g. via WithKeyLock).
+func (s *Store) loadLocked(k Key) (*Watermark, error) {
 	data, err := os.ReadFile(filepath.Join(s.dir, k.fileName()))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -122,7 +137,12 @@ func (s *Store) Save(k Key, w Watermark) error {
 	l := s.lockFor(k)
 	l.Lock()
 	defer l.Unlock()
+	return s.saveLocked(k, w)
+}
 
+// saveLocked is Save without taking the per-key lock; the caller must
+// hold it (e.g. via WithKeyLock).
+func (s *Store) saveLocked(k Key, w Watermark) error {
 	data, err := json.Marshal(w)
 	if err != nil {
 		return fmt.Errorf("marshal watermark %s: %w", k, err)

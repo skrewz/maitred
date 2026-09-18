@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"maitred/pkg/engine"
+	"maitred/pkg/forgejo"
 	"maitred/pkg/queue"
 	"maitred/pkg/web"
 	"maitred/pkg/webhook"
@@ -212,10 +214,23 @@ func main() {
 		log.Printf("web server error: %v (continuing without dashboard)", err)
 	}
 
+	// Forgejo engine: enabled when the engine config loads and the
+	// Forgejo credentials are present (§forgejo/webhook/the-route).
+	var forgejoHandler http.Handler
+	if fh, err := newForgejoHandler(dataDirStr, qe); err != nil {
+		log.Printf("forgejo engine disabled: %v", err)
+	} else if fh != nil {
+		forgejoHandler = fh
+		log.Printf("  forgejo engine:   enabled (route %s)", forgejo.WebhookPath)
+	}
+
 	// Start the webhook API server if port is configured
 	var webhookSrv *webhook.Server
-	if apiPortVal > 0 && webhookProviders != nil {
+	if apiPortVal > 0 && (webhookProviders != nil || forgejoHandler != nil) {
 		webhookSrv = webhook.New(apiPortVal, eng, eng.StateStore(), Version, webhookProviders)
+		if forgejoHandler != nil {
+			webhookSrv.MountOverride(forgejo.WebhookPath, forgejoHandler)
+		}
 		if err := webhookSrv.Start(); err != nil {
 			log.Printf("webhook server error: %v (continuing without webhook API)", err)
 			webhookSrv = nil
@@ -239,6 +254,29 @@ func main() {
 	webSrv.Stop()
 	eng.Stop()
 	log.Printf("stopped")
+}
+
+// newForgejoHandler constructs the Forgejo engine's webhook handler from
+// the environment and the engine config, or (nil, nil) when the engine
+// is not configured (§forgejo/webhook/the-route).
+func newForgejoHandler(dataDir string, qe queue.TaskQueueProvider) (http.Handler, error) {
+	cfgPath := defaultEnv(forgejo.ConfigEnvVar, forgejo.DefaultConfigPath)
+	cfg, err := forgejo.LoadConfig(cfgPath)
+	if err != nil {
+		return nil, err
+	}
+	baseURL := os.Getenv("MAITRED_FORGEJO_URL")
+	token := os.Getenv("MAITRED_FORGEJO_TOKEN")
+	secret := os.Getenv("MAITRED_FORGEJOENG_SECRET")
+	if baseURL == "" || token == "" || secret == "" {
+		return nil, fmt.Errorf("MAITRED_FORGEJO_URL, MAITRED_FORGEJO_TOKEN and MAITRED_FORGEJOENG_SECRET must be set")
+	}
+	store, err := forgejo.NewStore(filepath.Join(dataDir, "forgejoeng"))
+	if err != nil {
+		return nil, err
+	}
+	fjEngine := forgejo.NewEngine(forgejo.New(baseURL, token, nil), store, cfg, qe, log.Default())
+	return forgejo.NewHandler(fjEngine, secret, log.Default()), nil
 }
 
 // healthCheck validates that trigger and data directories are accessible
