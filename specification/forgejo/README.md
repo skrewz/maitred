@@ -14,3 +14,4 @@ Specifications that have landed:
 | File | Reference |
 |---|---|
 | `client.md` | the read-only Forgejo API client — §forgejo/client/operations |
+| `state.md` | the per-issue/PR watermark store — §forgejo/state/watermark |
