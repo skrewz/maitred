@@ -44,7 +44,7 @@ messages, PR titles/bodies, and — secondarily — code, config and docs:
 - **Known limitation: merge trailers.** Forgejo auto-merge trailers
   (`Reviewed-on: …`, `Reviewed-by: …`) are added automatically by the forge
   and carry the internal host. This cannot be avoided from the client side;
-  a follow-up should strip or rewrite them before mirroring.
+  a follow-up (see #57) should strip or rewrite them before mirroring.
 
 ## Mandatory test and lint targets
 
