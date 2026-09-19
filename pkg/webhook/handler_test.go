@@ -1393,3 +1393,45 @@ endpoints:
 		t.Errorf("expected correct prompt, got %q", task.Prompt)
 	}
 }
+
+func TestHandler_MountOverride_TakesPrecedence(t *testing.T) {
+	triggerYAML := `
+triggers:
+  - id: "all-events"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "all events"
+`
+	webhookYAML := `
+endpoints:
+  - name: "all_events"
+    trigger_id: "all-events"
+    response: '{"status": "submitted"}'
+`
+
+	eng, mq, providers := setupTestEnvNoStart(t, triggerYAML, webhookYAML)
+
+	handler := webhook.NewHandler(eng, eng.StateStore(), "test", providers)
+
+	var overridden bool
+	handler.MountOverride("/v1/forgejo/all_events", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		overridden = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	payload := map[string]interface{}{"issue": map[string]interface{}{"number": 1}}
+	payloadBytes, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/v1/forgejo/all_events", strings.NewReader(string(payloadBytes)))
+	w := httptest.NewRecorder()
+	handler.ServeMux().ServeHTTP(w, req)
+
+	if !overridden {
+		t.Error("override handler was not called")
+	}
+	if w.Code != http.StatusNoContent {
+		t.Errorf("expected status 204 from the override, got %d", w.Code)
+	}
+	if mq.Count() != 0 {
+		t.Errorf("trigger handler ran despite the override: %d tasks", mq.Count())
+	}
+}

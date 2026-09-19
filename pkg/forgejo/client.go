@@ -53,6 +53,14 @@ type Issue struct {
 	// by every operation so that cross-repo blockers can be followed by
 	// the unblock cascade.
 	Repository string
+	// IsPull reports whether the issue is a pull request. Forgejo
+	// represents pull requests as issues and marks them in the API
+	// response with a non-null "pull_request" object (there is no
+	// is_pull field in the issue API; that field exists only in the
+	// webhook payloads); the engine uses this to tell connected PRs
+	// apart from connected issues among blockers and blocks
+	// (§forgejo/client/operations).
+	IsPull bool
 }
 
 // PullRequest is a Forgejo pull request, slimmed to the fields the engine
@@ -348,6 +356,10 @@ type wireIssue struct {
 	Labels    []wireLabel `json:"labels"`
 	UpdatedAt time.Time   `json:"updated_at"`
 	HTMLURL   string      `json:"html_url"`
+	// PullRequest is non-nil only when the issue is a pull request —
+	// the issue API's indicator (the API's PullRequestMeta object,
+	// slimmed to its presence); the issue API has no is_pull field.
+	PullRequest *struct{} `json:"pull_request"`
 	// Repository is nil on some endpoints; the issue's home repo is then
 	// known to the caller.
 	Repository *struct {
@@ -395,6 +407,7 @@ func toIssue(w wireIssue) Issue {
 		Labels:    labelNames(w.Labels),
 		UpdatedAt: w.UpdatedAt,
 		HTMLURL:   w.HTMLURL,
+		IsPull:    w.PullRequest != nil,
 	}
 	if w.Repository != nil {
 		issue.Repository = w.Repository.FullName

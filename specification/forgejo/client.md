@@ -21,6 +21,12 @@ authenticated with a bearer token:
 | list the issues that block an issue (`issue-dependencies`) | the unblock cascade, including cross-repo blockers |
 | list a pull request's reviews (event + author + commit) | the review transitions |
 
+Issue responses also report **whether the issue is a pull request** —
+Forgejo represents pull requests as issues, and the API marks them with a
+non-null `pull_request` object. The re-fetch uses this to tell connected PRs
+apart from connected issues among blockers and blocks
+(§forgejo/webhook/re-fetch).
+
 The operations are exposed behind an **interface** so the decision function,
 webhook handler, and reconciliation sweep can be tested against a fake.
 
