@@ -26,7 +26,7 @@ import (
 // testConfig returns a config with a canned prompt for every action,
 // rendering the placeholders so tests can assert on the rendered prompt.
 func testConfig() *Config {
-	cfg := &Config{Org: "o"}
+	cfg := &Config{Org: "o", ReconcileInterval: 15 * time.Minute}
 	cfg.Actions = make(map[string]PromptConfig, len(AllActions))
 	for _, a := range AllActions {
 		cfg.Actions[string(a)] = PromptConfig{
@@ -78,15 +78,33 @@ type fakeAPI struct {
 	deps    map[int][]Issue
 	err     error
 	calls   []string
+
+	// Reconciliation fixtures, keyed by repository name
+	// (§forgejo/reconciliation/the-sweep).
+	repos         []Repository
+	openIssues    map[string][]Issue
+	openPulls     map[string][]PullRequest
+	listIssuesErr map[string]error
+	listPullsErr  map[string]error
+
+	// GetIssue blocking hooks for the concurrency tests: GetIssue
+	// closes getIssueEntered (once) on entry, then waits on
+	// blockGetIssue when it is set.
+	blockGetIssue   chan struct{}
+	getIssueEntered chan struct{}
 }
 
 func newFakeAPI() *fakeAPI {
 	return &fakeAPI{
-		issues:  map[int]*Issue{},
-		pulls:   map[int]*PullRequest{},
-		reviews: map[int][]Review{},
-		blocks:  map[int][]Issue{},
-		deps:    map[int][]Issue{},
+		issues:        map[int]*Issue{},
+		pulls:         map[int]*PullRequest{},
+		reviews:       map[int][]Review{},
+		blocks:        map[int][]Issue{},
+		deps:          map[int][]Issue{},
+		openIssues:    map[string][]Issue{},
+		openPulls:     map[string][]PullRequest{},
+		listIssuesErr: map[string]error{},
+		listPullsErr:  map[string]error{},
 	}
 }
 
@@ -110,6 +128,16 @@ func (f *fakeAPI) callCount(prefix string) int {
 
 func (f *fakeAPI) GetIssue(owner, repo string, number int) (*Issue, error) {
 	f.record("GetIssue:" + repo + "/" + strconv.Itoa(number))
+	if f.getIssueEntered != nil {
+		select {
+		case <-f.getIssueEntered:
+		default:
+			close(f.getIssueEntered)
+		}
+	}
+	if f.blockGetIssue != nil {
+		<-f.blockGetIssue
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -137,7 +165,7 @@ func (f *fakeAPI) ListOrgRepositories(org string) ([]Repository, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	return nil, nil
+	return f.repos, nil
 }
 
 func (f *fakeAPI) ListOpenIssues(owner, repo string) ([]Issue, error) {
@@ -145,7 +173,10 @@ func (f *fakeAPI) ListOpenIssues(owner, repo string) ([]Issue, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	return nil, nil
+	if err, ok := f.listIssuesErr[repo]; ok {
+		return nil, err
+	}
+	return f.openIssues[repo], nil
 }
 
 func (f *fakeAPI) ListOpenPullRequests(owner, repo string) ([]PullRequest, error) {
@@ -153,7 +184,10 @@ func (f *fakeAPI) ListOpenPullRequests(owner, repo string) ([]PullRequest, error
 	if f.err != nil {
 		return nil, f.err
 	}
-	return nil, nil
+	if err, ok := f.listPullsErr[repo]; ok {
+		return nil, err
+	}
+	return f.openPulls[repo], nil
 }
 
 func (f *fakeAPI) ListPullRequestReviews(owner, repo string, number int) ([]Review, error) {

@@ -51,6 +51,9 @@ type Config struct {
 	// Org is the organisation whose maitred-enabled repositories the
 	// engine tracks.
 	Org string `yaml:"org"`
+	// ReconcileInterval is how often the reconciliation sweep runs
+	// (§forgejo/reconciliation/scheduling).
+	ReconcileInterval time.Duration `yaml:"reconcile_interval"`
 	// Actions maps each action the decision function references to its
 	// canned prompt.
 	Actions map[string]PromptConfig `yaml:"actions"`
@@ -107,6 +110,9 @@ func (c *Config) PromptFor(a Action) (*PromptConfig, error) {
 func (c *Config) Validate() error {
 	if c.Org == "" {
 		return fmt.Errorf("org is required")
+	}
+	if c.ReconcileInterval <= 0 {
+		return fmt.Errorf("reconcile_interval must be positive")
 	}
 	for _, a := range AllActions {
 		pc, ok := c.Actions[string(a)]
@@ -218,6 +224,12 @@ func loadConfigDir(dir string) (*Config, error) {
 		}
 		if cfg.Org != "" {
 			merged.Org = cfg.Org
+		}
+		if cfg.ReconcileInterval > 0 && merged.ReconcileInterval > 0 && cfg.ReconcileInterval != merged.ReconcileInterval {
+			return nil, fmt.Errorf("config %q: reconcile_interval %s conflicts with %s", name, cfg.ReconcileInterval, merged.ReconcileInterval)
+		}
+		if cfg.ReconcileInterval > 0 {
+			merged.ReconcileInterval = cfg.ReconcileInterval
 		}
 		if merged.Actions == nil {
 			merged.Actions = make(map[string]PromptConfig)
