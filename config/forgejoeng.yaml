@@ -1,0 +1,37 @@
+# Sample Forgejo engine config (canned prompts).
+#
+# Used by the UI tests (make test-ui), which point MAITRED_FORGEJOENG_DIR at
+# a copy of this file. In production the config is deployed by s-puppet
+# (§forgejo/config/loading).
+org: o
+reconcile_interval: 1h
+
+actions:
+  implement:
+    prompt: "implement {{.Repo}} {{.Kind}} {{.Number}}"
+    persona: ui-test
+    timeout: 1h
+  reassess:
+    prompt: "reassess {{.Repo}} {{.Kind}} {{.Number}}"
+    persona: ui-test
+    timeout: 1h
+  review:
+    prompt: "review {{.Repo}} {{.Kind}} {{.Number}}"
+    persona: ui-test
+    timeout: 1h
+  re-review:
+    prompt: "re-review {{.Repo}} {{.Kind}} {{.Number}}"
+    persona: ui-test
+    timeout: 1h
+  fix-feedback:
+    prompt: "fix-feedback {{.Repo}} {{.Kind}} {{.Number}}"
+    persona: ui-test
+    timeout: 1h
+  merge-or-wait:
+    prompt: "merge-or-wait {{.Repo}} {{.Kind}} {{.Number}}"
+    persona: ui-test
+    timeout: 1h
+  rebase:
+    prompt: "rebase {{.Repo}} {{.Kind}} {{.Number}}"
+    persona: ui-test
+    timeout: 1h

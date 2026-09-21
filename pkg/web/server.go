@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"maitred/pkg/engine"
+	"maitred/pkg/forgejo"
 	"maitred/pkg/trigger"
 	"maitred/pkg/webhook"
 )
@@ -28,12 +29,15 @@ type Server struct {
 	log          *log.Logger
 	engine       *engine.Engine
 	version      string
+	forgejoEng   *forgejo.Engine
 	webhookProvs []webhook.ProviderConfig
 	mux          *http.ServeMux
 }
 
-// New creates a new web server.
-func New(port int, eng *engine.Engine, version string, webhookProvs ...[]webhook.ProviderConfig) *Server {
+// New creates a new web server. The Forgejo engine, when non-nil, is
+// shown in the dashboard's tracked view
+// (§forgejo/observability/the-dashboard-view).
+func New(port int, eng *engine.Engine, version string, fjEng *forgejo.Engine, webhookProvs ...[]webhook.ProviderConfig) *Server {
 	var providers []webhook.ProviderConfig
 	if len(webhookProvs) > 0 {
 		providers = webhookProvs[0]
@@ -43,11 +47,17 @@ func New(port int, eng *engine.Engine, version string, webhookProvs ...[]webhook
 		log:          log.Default(),
 		engine:       eng,
 		version:      version,
+		forgejoEng:   fjEng,
 		webhookProvs: providers,
 		mux:          http.NewServeMux(),
 	}
 	s.registerRoutes()
 	return s
+}
+
+// Handler returns the server's HTTP handler (for tests).
+func (s *Server) Handler() http.Handler {
+	return s.mux
 }
 
 // Start begins serving HTTP in a goroutine. Returns immediately.
@@ -133,6 +143,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleVersion(w, r)
 	case path == "webhooks":
 		s.handleWebhooks(w, r)
+	case path == "forgejo":
+		s.handleForgejo(w, r)
 	case strings.HasPrefix(path, "triggers/"):
 		s.handleTriggerAPI(w, r, path)
 	default:
@@ -194,6 +206,26 @@ func (s *Server) handleWebhooks(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
+}
+
+// handleForgejo serves the dashboard view of the issues and pull
+// requests the Forgejo engine tracks: each with its current state,
+// watermark, and last decision
+// (§forgejo/observability/the-dashboard-view). Without the engine (or
+// with no decisions yet) the view is an empty list.
+func (s *Server) handleForgejo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var tracked []forgejo.Tracked
+	if s.forgejoEng != nil {
+		tracked = s.forgejoEng.Tracked()
+	}
+	if tracked == nil {
+		tracked = []forgejo.Tracked{}
+	}
+	json.NewEncoder(w).Encode(tracked)
 }
 
 func (s *Server) handleTriggerAPI(w http.ResponseWriter, r *http.Request, path string) {

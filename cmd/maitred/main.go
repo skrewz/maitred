@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -208,14 +209,10 @@ func main() {
 		}
 	}
 
-	// Start the web dashboard
-	webSrv := web.New(port, eng, Version, webhookProviders)
-	if err := webSrv.Start(); err != nil {
-		log.Printf("web server error: %v (continuing without dashboard)", err)
-	}
-
 	// Forgejo engine: enabled when the engine config loads and the
-	// Forgejo credentials are present (§forgejo/webhook/the-route).
+	// Forgejo credentials are present (§forgejo/webhook/the-route). It
+	// is created before the web dashboard, which shows its tracked view
+	// (§forgejo/observability/the-dashboard-view).
 	var fjEngine *forgejo.Engine
 	var forgejoHandler http.Handler
 	if engine, fh, err := newForgejoEngine(dataDirStr, qe); err != nil {
@@ -225,6 +222,12 @@ func main() {
 		forgejoHandler = fh
 		log.Printf("  forgejo engine:   enabled (route %s)", forgejo.WebhookPath)
 		engine.Start()
+	}
+
+	// Start the web dashboard
+	webSrv := web.New(port, eng, Version, fjEngine, webhookProviders)
+	if err := webSrv.Start(); err != nil {
+		log.Printf("web server error: %v (continuing without dashboard)", err)
 	}
 
 	// Start the webhook API server if port is configured
@@ -281,8 +284,9 @@ func newForgejoEngine(dataDir string, qe queue.TaskQueueProvider) (*forgejo.Engi
 	if err != nil {
 		return nil, nil, err
 	}
-	fjEngine := forgejo.NewEngine(forgejo.New(baseURL, token, nil), store, cfg, qe, log.Default())
-	return fjEngine, forgejo.NewHandler(fjEngine, secret, log.Default()), nil
+	fjLog := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	fjEngine := forgejo.NewEngine(forgejo.New(baseURL, token, nil), store, cfg, qe, fjLog)
+	return fjEngine, forgejo.NewHandler(fjEngine, secret, fjLog), nil
 }
 
 // healthCheck validates that trigger and data directories are accessible

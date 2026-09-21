@@ -18,14 +18,14 @@ const maitredEnabledTopic = "maitred-enabled"
 // (§forgejo/reconciliation/scheduling).
 func (e *Engine) Reconcile() {
 	if !e.sweeping.CompareAndSwap(false, true) {
-		e.log.Printf("forgejo: reconciliation already in flight; skipping")
+		e.log.Info("reconciliation already in flight; skipping")
 		return
 	}
 	defer e.sweeping.Store(false)
 
 	repos, err := e.api.ListOrgRepositories(e.cfg.Org)
 	if err != nil {
-		e.log.Printf("forgejo: reconciliation: list repositories of org %q: %v", e.cfg.Org, err)
+		e.log.Error("reconciliation: list repositories", "org", e.cfg.Org, "error", err)
 		return
 	}
 	for i := range repos {
@@ -35,7 +35,7 @@ func (e *Engine) Reconcile() {
 		}
 		issues, err := e.api.ListOpenIssues(repo.Owner, repo.Name)
 		if err != nil {
-			e.log.Printf("forgejo: reconciliation: list open issues of %s: %v", repo.FullName, err)
+			e.log.Error("reconciliation: list open issues", "repo", repo.FullName, "error", err)
 		} else {
 			for j := range issues {
 				if issues[j].IsPull {
@@ -46,7 +46,7 @@ func (e *Engine) Reconcile() {
 		}
 		pulls, err := e.api.ListOpenPullRequests(repo.Owner, repo.Name)
 		if err != nil {
-			e.log.Printf("forgejo: reconciliation: list open pull requests of %s: %v", repo.FullName, err)
+			e.log.Error("reconciliation: list open pull requests", "repo", repo.FullName, "error", err)
 		} else {
 			for j := range pulls {
 				e.HandleEvent(Event{Type: EventReconcile, Repo: repo.FullName, Kind: KindPR, Number: pulls[j].Number})
