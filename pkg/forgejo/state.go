@@ -24,11 +24,11 @@ const (
 // store's key: repo + kind + number (§forgejo/state/storage).
 type Key struct {
 	// Repo is the repository's "owner/repo" full name.
-	Repo string
+	Repo string `json:"repo"`
 	// Kind is KindIssue or KindPR.
-	Kind Kind
+	Kind Kind `json:"kind"`
 	// Number is the issue or pull request number.
-	Number int
+	Number int `json:"number"`
 }
 
 // String renders the key as "owner/repo/kind/number" for logging and

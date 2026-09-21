@@ -19,3 +19,4 @@ Specifications that have landed:
 | `config.md` | the canned-prompt config — §forgejo/config/canned-prompts |
 | `webhook.md` | the webhook handler (event path) — §forgejo/webhook/the-pipeline |
 | `reconciliation.md` | the reconciliation sweep — §forgejo/reconciliation/the-sweep |
+| `observability.md` | the decision log and the dashboard view — §forgejo/observability/the-decision-log |

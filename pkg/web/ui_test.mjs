@@ -8,6 +8,8 @@
 // designed to be run as part of CI alongside the Go test suite.
 
 import { chromium } from 'playwright';
+import { createServer } from 'node:http';
+import { createHmac } from 'node:crypto';
 
 // ─── Argument parsing ────────────────────────────────────────────────
 
@@ -15,6 +17,67 @@ const args = process.argv.slice(2);
 const baseUrl = args.find(a => a.startsWith('--base-url='))?.split('=')[1]
     ?? process.env.MAITRED_WEB_URL
     ?? 'http://localhost:18090';
+const apiUrl = args.find(a => a.startsWith('--api-url='))?.split('=')[1]
+    ?? 'http://localhost:18091';
+const forgejoPort = parseInt(args.find(a => a.startsWith('--forgejo-port='))?.split('=')[1] ?? '18092', 10);
+const forgejoSecret = args.find(a => a.startsWith('--forgejo-secret='))?.split('=')[1]
+    ?? 'ui-test-secret';
+
+// ─── Mock Forgejo API ────────────────────────────────────────────────
+
+// A minimal Forgejo REST API v1 serving one maitred-enabled repo (o/r)
+// with one open issue (#7). The maitred instance under test points
+// MAITRED_FORGEJO_URL at it, so the Forgejo engine is enabled and its
+// re-fetches hit this mock (see the Makefile test-ui target).
+const mockIssue = {
+  number: 7,
+  title: 'Test issue',
+  state: 'open',
+  labels: [],
+  updated_at: '2026-09-16T13:25:18Z',
+  html_url: 'https://forge.example.com/o/r/issues/7',
+  pull_request: null,
+  repository: { full_name: 'o/r' },
+};
+
+function startMockForgejo(port) {
+  const server = createServer((req, res) => {
+    const send = (code, obj) => {
+      res.writeHead(code, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(obj));
+    };
+    const p = new URL(req.url, `http://localhost:${port}`).pathname;
+    switch (p) {
+      case '/api/v1/orgs/o/repos':
+        return send(200, [{
+          id: 1, name: 'r', full_name: 'o/r',
+          owner: { login: 'o' },
+          html_url: 'https://forge.example.com/o/r',
+          topics: ['maitred-enabled'],
+        }]);
+      case '/api/v1/repos/o/r/issues':
+        return send(200, [mockIssue]);
+      case '/api/v1/repos/o/r/pulls':
+        return send(200, []);
+      case '/api/v1/repos/o/r/issues/7':
+        return send(200, mockIssue);
+      case '/api/v1/repos/o/r/issues/7/dependencies':
+        return send(200, []);
+      case '/api/v1/repos/o/r/issues/7/blocks':
+        return send(200, []);
+      default:
+        return send(404, { message: `not found: ${p}` });
+    }
+  });
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, () => resolve(server));
+  });
+}
+
+function forgejoSignature(body) {
+  return createHmac('sha256', forgejoSecret).update(body).digest('hex');
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 
@@ -380,6 +443,70 @@ async function testPersonaDisplay(page, results) {
   }
 }
 
+async function testForgejoTracking(page, results) {
+  console.log('  Forgejo tracking view');
+
+  // Deliver a signed "issue opened" webhook to the engine
+  // (§forgejo/webhook/the-pipeline).
+  const body = JSON.stringify({
+    action: 'opened',
+    repository: { full_name: 'o/r' },
+    issue: { number: 7 },
+    sender: { login: 'alice' },
+  });
+  const delivery = await fetch(`${apiUrl}/v1/forgejo/all_events`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Forgejo-Event-Type': 'issues',
+      'X-Forgejo-Signature': forgejoSignature(body),
+    },
+    body,
+  });
+  results.push(assert(delivery.status === 204, `Webhook delivery acknowledged (got: ${delivery.status})`));
+
+  // Poll the dashboard endpoint until the tracked entry appears.
+  let tracked = [];
+  for (let i = 0; i < 40; i++) {
+    const r = await fetch(`${baseUrl}/api/forgejo`).catch(() => ({ ok: false }));
+    if (r.ok) tracked = await r.json();
+    if (tracked.length > 0) break;
+    await new Promise(res => setTimeout(res, 500));
+  }
+  results.push(assert(tracked.length === 1, `One tracked entry in /api/forgejo (got: ${tracked.length})`));
+
+  const entry = tracked[0] ?? {};
+  results.push(assert(
+    entry.repo === 'o/r' && entry.kind === 'issue' && entry.number === 7,
+    `Tracked entry is o/r issue #7 (got: ${entry.repo}/${entry.kind}/${entry.number})`
+  ));
+  results.push(assert(entry.state === 'open', `Tracked entry state is open (got: "${entry.state}")`));
+  results.push(assert(
+    entry.watermark?.action === 'implement',
+    `Watermark action is implement (got: "${entry.watermark?.action}")`
+  ));
+  results.push(assert(
+    typeof entry.decision?.reason === 'string' && entry.decision.reason.length > 0,
+    `Last decision carries a reason (got: "${entry.decision?.reason}")`
+  ));
+
+  // The dashboard section renders the tracked issue
+  // (§forgejo/observability/the-dashboard-view).
+  await page.goto(baseUrl);
+  await page.waitForSelector('#forgejo-section', { state: 'visible', timeout: 20000 });
+  const sectionText = await page.locator('#forgejo-section').textContent();
+  results.push(assert(sectionText.includes('o/r'), 'Forgejo section shows the repository'));
+  results.push(assert(sectionText.includes('issue #7'), 'Forgejo section shows issue #7'));
+  results.push(assert(sectionText.includes('implement'), 'Forgejo section shows the implement watermark'));
+
+  const stateBadges = await page.locator('#forgejo-section .badge').allTextContents();
+  results.push(assert(stateBadges.some(b => b.toLowerCase() === 'open'), `Forgejo section shows an open state badge (got: ${stateBadges.join(', ')})`));
+
+  // Navigate back and let the page settle for the remaining suites.
+  await page.waitForLoadState('networkidle').catch(() => {});
+  await page.waitForTimeout(1000);
+}
+
 async function testPromptSection(page, results) {
   console.log('  Prompt section');
 
@@ -445,6 +572,10 @@ async function testPromptSection(page, results) {
 // ─── Main ────────────────────────────────────────────────────────────
 
 async function main() {
+  // Start the mock Forgejo API before the page tests: the maitred
+  // instance under test has its Forgejo engine pointed at it.
+  const mockForgejo = await startMockForgejo(forgejoPort);
+
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -481,8 +612,10 @@ async function main() {
   await testWebhookEndpointApiError(page, results);
   await testPersonaDisplay(page, results);
   await testPromptSection(page, results);
+  await testForgejoTracking(page, results);
 
   await browser.close();
+  mockForgejo.close();
 
   // Print results
   const passed = results.filter(r => r.pass).length;

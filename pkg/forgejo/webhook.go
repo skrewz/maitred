@@ -9,9 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -46,7 +47,12 @@ type Engine struct {
 	store *Store
 	cfg   *Config
 	queue queue.TaskQueueProvider
-	log   *log.Logger
+	log   *slog.Logger
+
+	// The in-memory decision log: the last decision per key
+	// (§forgejo/observability/the-dashboard-view).
+	decMu     sync.Mutex
+	decisions map[Key]DecisionRecord
 
 	// Reconciliation sweep scheduling state
 	// (§forgejo/reconciliation/scheduling).
@@ -57,11 +63,18 @@ type Engine struct {
 
 // NewEngine creates the event path over the given Forgejo API, watermark
 // store, config, and queue provider.
-func NewEngine(api API, store *Store, cfg *Config, q queue.TaskQueueProvider, logger *log.Logger) *Engine {
+func NewEngine(api API, store *Store, cfg *Config, q queue.TaskQueueProvider, logger *slog.Logger) *Engine {
 	if logger == nil {
-		logger = log.Default()
+		logger = slog.Default()
 	}
-	return &Engine{api: api, store: store, cfg: cfg, queue: q, log: logger}
+	return &Engine{
+		api:       api,
+		store:     store,
+		cfg:       cfg,
+		queue:     q,
+		log:       logger,
+		decisions: make(map[Key]DecisionRecord),
+	}
 }
 
 // HandleEvent processes one event end to end — re-fetch, decide,
@@ -75,31 +88,29 @@ func (e *Engine) HandleEvent(ev Event) {
 	e.store.WithKeyLock(key, func() {
 		ev, st, err := e.refetch(ev)
 		if err != nil {
-			e.log.Printf("forgejo: %s: re-fetch failed, holding off: %v", key, err)
+			e.log.Error("re-fetch failed, holding off", "key", key.String(), "error", err)
 			return
 		}
 		w, err := e.store.loadLocked(key)
 		if err != nil {
-			e.log.Printf("forgejo: %s: load watermark: %v (continuing without)", key, err)
+			e.log.Warn("load watermark (continuing without)", "key", key.String(), "error", err)
 			w = nil
 		}
 		d := Decide(ev, st, w)
+		e.recordDecision(key, ev, st, d)
 		if d.Dispatched {
-			e.log.Printf("forgejo: %s: %s: %s", key, d.Action, d.Reason)
 			if err := e.dispatch(ev, st, d.Action); err != nil {
 				// No watermark: the reconciliation sweep retries.
-				e.log.Printf("forgejo: %s: dispatch %s failed: %v", key, d.Action, err)
+				e.log.Error("dispatch failed", "key", key.String(), "action", string(d.Action), "error", err)
 				return
 			}
 			if err := e.store.saveLocked(key, Watermark{Action: string(d.Action), Revision: revisionFor(ev, st)}); err != nil {
-				e.log.Printf("forgejo: %s: save watermark: %v", key, err)
+				e.log.Error("save watermark", "key", key.String(), "error", err)
 			}
-		} else {
-			e.log.Printf("forgejo: %s: hold off: %s", key, d.Reason)
 		}
 		for _, ck := range d.Cascade {
 			if err := e.dispatchCascade(ck, ev.Sender); err != nil {
-				e.log.Printf("forgejo: %s: cascade dispatch for %s failed: %v", key, ck, err)
+				e.log.Error("cascade dispatch failed", "key", key.String(), "cascade", ck.String(), "error", err)
 			}
 		}
 	})
@@ -252,7 +263,7 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	if err := e.queue.AddTask(task); err != nil {
 		return fmt.Errorf("enqueue %s for %s: %w", action, ev.KeyOf(), err)
 	}
-	e.log.Printf("forgejo: %s: dispatched %s", ev.KeyOf(), task.ID)
+	e.log.Info("dispatched", "key", ev.KeyOf().String(), "task", task.ID)
 	return nil
 }
 
@@ -271,7 +282,7 @@ func (e *Engine) dispatchCascade(k Key, sender string) error {
 	}
 	w, err := e.store.Load(k)
 	if err != nil {
-		e.log.Printf("forgejo: %s: load watermark: %v (continuing without)", k, err)
+		e.log.Warn("load watermark (continuing without)", "key", k.String(), "error", err)
 		w = nil
 	}
 	rev := issueRevision(issue)
@@ -337,14 +348,14 @@ func issueNodes(issues []Issue) []IssueNode {
 type Handler struct {
 	engine *Engine
 	secret []byte
-	log    *log.Logger
+	log    *slog.Logger
 }
 
 // NewHandler creates the webhook handler for the engine, verifying
 // deliveries against the shared secret.
-func NewHandler(engine *Engine, secret string, logger *log.Logger) *Handler {
+func NewHandler(engine *Engine, secret string, logger *slog.Logger) *Handler {
 	if logger == nil {
-		logger = log.Default()
+		logger = slog.Default()
 	}
 	return &Handler{engine: engine, secret: []byte(secret), log: logger}
 }
@@ -371,7 +382,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	if !verifySignature(h.secret, body, r.Header.Get(HeaderSignature)) {
-		h.log.Printf("forgejo: rejected delivery with invalid signature")
+		h.log.Error("rejected delivery with invalid signature")
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}
@@ -380,7 +391,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := json.Unmarshal(body, &p); err != nil {
 		// A signed but unparseable body is not an event we can act on;
 		// acknowledge and move on.
-		h.log.Printf("forgejo: unparseable payload: %v", err)
+		h.log.Warn("unparseable payload", "error", err)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

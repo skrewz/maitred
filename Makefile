@@ -64,16 +64,17 @@ TEST_UI_PORT ?= 18090
 # Usage: make test-ui
 # Or:     MAITRED_WEB_URL=http://other:9090 make test-ui
 TEST_UI_API_PORT ?= 18091
+TEST_UI_FORGEJO_PORT ?= 18092
 
 test-ui: build
 	@echo "Starting maitred for UI tests on port $(TEST_UI_PORT)..."
-	@rm -rf /tmp/maitred-ui-test-data && mkdir -p /tmp/maitred-ui-test-data
-	@MAITRED_DATA_DIR=/tmp/maitred-ui-test-data MAITRED_WEB_PORT=$(TEST_UI_PORT) MAITRED_API_PORT=$(TEST_UI_API_PORT) $(CURDIR)/bin/maitred -trigger-dir $(CURDIR)/config/triggers.d -webhook-dir $(CURDIR)/config/webhook-endpoints.d > /tmp/maitred-ui-test-server.log 2>&1 &
-	@echo $$! > /tmp/maitred-ui-test.pid
+	@rm -rf /tmp/maitred-ui-test-data /tmp/maitred-ui-test-forgejo && mkdir -p /tmp/maitred-ui-test-data /tmp/maitred-ui-test-forgejo
+	@cp $(CURDIR)/config/forgejoeng.yaml /tmp/maitred-ui-test-forgejo/
+	@MAITRED_DATA_DIR=/tmp/maitred-ui-test-data MAITRED_WEB_PORT=$(TEST_UI_PORT) MAITRED_API_PORT=$(TEST_UI_API_PORT) MAITRED_FORGEJOENG_DIR=/tmp/maitred-ui-test-forgejo MAITRED_FORGEJO_URL=http://localhost:$(TEST_UI_FORGEJO_PORT) MAITRED_FORGEJO_TOKEN=ui-test-token MAITRED_FORGEJOENG_SECRET=ui-test-secret $(CURDIR)/bin/maitred -trigger-dir $(CURDIR)/config/triggers.d -webhook-dir $(CURDIR)/config/webhook-endpoints.d > /tmp/maitred-ui-test-server.log 2>&1 & echo $$! > /tmp/maitred-ui-test.pid
 	@sleep 2
-	@node pkg/web/ui_test.mjs --base-url http://localhost:$(TEST_UI_PORT)
-	@RET=$$? ; \
+	@node pkg/web/ui_test.mjs --base-url http://localhost:$(TEST_UI_PORT) --api-url http://localhost:$(TEST_UI_API_PORT) --forgejo-port $(TEST_UI_FORGEJO_PORT) --forgejo-secret ui-test-secret ; \
+	RET=$$? ; \
 	kill $$(cat /tmp/maitred-ui-test.pid) 2>/dev/null || true ; \
 	rm -f /tmp/maitred-ui-test.pid /tmp/maitred-ui-test-server.log ; \
-	rm -rf /tmp/maitred-ui-test-data ; \
+	rm -rf /tmp/maitred-ui-test-data /tmp/maitred-ui-test-forgejo ; \
 	exit $$RET

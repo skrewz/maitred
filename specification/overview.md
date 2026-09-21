@@ -42,12 +42,11 @@ HTTP queue system.
 - **Web dashboard.** A web UI on the web port shows trigger cards (schedule,
   state, countdown), stats, and interactive controls (fire now, pause/resume).
 - **Health check.** `maitred --health` exits 0 if the configuration is valid.
-- **Forgejo engine (new domain).** In scope but not yet implemented: a
-  stateful webhook component that will track issue/PR state across the
-  organisation's `maitred-enabled` repositories and dispatch canned hotelier
-  tasks when a tracked transition warrants it, reconciling periodically so
-  missed webhooks are recovered. To be specified in `specification/forgejo/`
-  as the Forgejo engine chain (issues #48–#54, end-state #46) is implemented.
+- **Forgejo engine.** A stateful webhook component that tracks issue/PR
+  state across the organisation's `maitred-enabled` repositories and
+  dispatches canned hotelier tasks when a tracked transition warrants it,
+  reconciling periodically so missed webhooks are recovered. Specified in
+  `specification/forgejo/`.
 
 ## Non-goals
 

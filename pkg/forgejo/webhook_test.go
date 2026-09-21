@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -248,7 +248,7 @@ func newTestEngine(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	eng := NewEngine(api, store, testConfig(), q, log.New(io.Discard, "", 0))
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	return eng, api, q, store
 }
 
