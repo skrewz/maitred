@@ -16,6 +16,7 @@ import (
 // (§forgejo/config/validation).
 const validConfigYAML = `
 org: example-org
+reconcile_interval: 15m
 actions:
   implement:
     prompt: "/issue-implementer {{.IssueURL}}"
@@ -78,6 +79,9 @@ func TestLoadConfigFile(t *testing.T) {
 
 	if cfg.Org != "example-org" {
 		t.Errorf("org = %q, want %q", cfg.Org, "example-org")
+	}
+	if cfg.ReconcileInterval != 15*time.Minute {
+		t.Errorf("reconcile_interval = %s, want 15m", cfg.ReconcileInterval)
 	}
 	if len(cfg.Actions) != len(AllActions) {
 		t.Fatalf("loaded %d actions, want %d", len(cfg.Actions), len(AllActions))
@@ -209,6 +213,25 @@ func TestLoadConfigValidation(t *testing.T) {
 			mutate:  func(y string) string { return strings.Replace(y, "org: example-org\n", "", 1) },
 			wantSub: "org",
 		},
+		{
+			name:    "missing reconcile_interval",
+			mutate:  func(y string) string { return strings.Replace(y, "reconcile_interval: 15m\n", "", 1) },
+			wantSub: "reconcile_interval",
+		},
+		{
+			name: "zero reconcile_interval",
+			mutate: func(y string) string {
+				return strings.Replace(y, "reconcile_interval: 15m", "reconcile_interval: 0s", 1)
+			},
+			wantSub: "reconcile_interval",
+		},
+		{
+			name: "negative reconcile_interval",
+			mutate: func(y string) string {
+				return strings.Replace(y, "reconcile_interval: 15m", "reconcile_interval: -15m", 1)
+			},
+			wantSub: "reconcile_interval",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -241,6 +264,14 @@ func TestLoadConfigDirectoryConflicts(t *testing.T) {
 		writeConfig(t, dir, "02-b.yaml", "org: two\n")
 		if _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), "org") {
 			t.Fatalf("expected conflicting-org error, got %v", err)
+		}
+	})
+	t.Run("conflicting reconcile_interval", func(t *testing.T) {
+		dir := t.TempDir()
+		writeConfig(t, dir, "01-a.yaml", "org: example-org\nreconcile_interval: 10m\n")
+		writeConfig(t, dir, "02-b.yaml", "reconcile_interval: 20m\n")
+		if _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), "reconcile_interval") {
+			t.Fatalf("expected conflicting-reconcile_interval error, got %v", err)
 		}
 	})
 }

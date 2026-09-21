@@ -18,3 +18,4 @@ Specifications that have landed:
 | `decisions.md` | the decision function (state machine) — §forgejo/decisions/the-decision-function |
 | `config.md` | the canned-prompt config — §forgejo/config/canned-prompts |
 | `webhook.md` | the webhook handler (event path) — §forgejo/webhook/the-pipeline |
+| `reconciliation.md` | the reconciliation sweep — §forgejo/reconciliation/the-sweep |

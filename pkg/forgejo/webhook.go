@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"maitred/pkg/queue"
@@ -38,13 +39,20 @@ const maxWebhookBodySize = 10 << 20
 // Engine is the Forgejo engine's event path: it re-fetches the
 // authoritative state of an event's object, decides, dispatches canned
 // tasks, and records watermarks (§forgejo/webhook/the-pipeline). The
-// reconciliation sweep feeds the same path with synthetic events.
+// reconciliation sweep feeds the same path with synthetic events
+// (§forgejo/reconciliation/the-sweep).
 type Engine struct {
 	api   API
 	store *Store
 	cfg   *Config
 	queue queue.TaskQueueProvider
 	log   *log.Logger
+
+	// Reconciliation sweep scheduling state
+	// (§forgejo/reconciliation/scheduling).
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+	sweeping atomic.Bool
 }
 
 // NewEngine creates the event path over the given Forgejo API, watermark

@@ -18,7 +18,9 @@ The config maps each action — `implement`, `reassess`, `review`, `re-review`,
 - a **timeout** — how long the task may run.
 
 The config also names the **org** the engine tracks (the organisation whose
-`maitred-enabled` repositories it watches).
+`maitred-enabled` repositories it watches), and sets the
+**reconciliation interval** (`reconcile_interval`): how often the
+reconciliation sweep runs (§forgejo/reconciliation/scheduling).
 
 ## Placeholders
 
@@ -49,8 +51,10 @@ Loading **fails at load time** — mirroring the trigger `Validate()` — when:
 - an action the decision function references has no entry (a missing prompt
   is a load error, never a runtime surprise),
 - an entry's prompt, persona, or timeout is missing or not positive,
+- `reconcile_interval` is missing or not positive,
 - a prompt template does not parse, or references a placeholder that is not
   in the placeholder table above,
 - the config names an action the decision function does not dispatch,
-- the org is missing, or a directory's files disagree about it,
+- the org is missing, or a directory's files disagree about it or about
+  `reconcile_interval`,
 - a directory's files define the same action twice.
