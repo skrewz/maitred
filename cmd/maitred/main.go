@@ -280,12 +280,19 @@ func newForgejoEngine(dataDir string, qe queue.TaskQueueProvider) (*forgejo.Engi
 	if baseURL == "" || token == "" || secret == "" {
 		return nil, nil, fmt.Errorf("MAITRED_FORGEJO_URL, MAITRED_FORGEJO_TOKEN and MAITRED_FORGEJOENG_SECRET must be set")
 	}
+	httpClient, err := forgejo.NewClient(
+		os.Getenv(forgejo.ClientCertEnvVar),
+		os.Getenv(forgejo.ClientKeyEnvVar),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
 	store, err := forgejo.NewStore(filepath.Join(dataDir, "forgejoeng"))
 	if err != nil {
 		return nil, nil, err
 	}
 	fjLog := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	fjEngine := forgejo.NewEngine(forgejo.New(baseURL, token, nil), store, cfg, qe, fjLog)
+	fjEngine := forgejo.NewEngine(forgejo.New(baseURL, token, httpClient), store, cfg, qe, fjLog)
 	return fjEngine, forgejo.NewHandler(fjEngine, secret, fjLog), nil
 }
 

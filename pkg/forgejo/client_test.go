@@ -1,10 +1,21 @@
 package forgejo
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -572,5 +583,172 @@ func TestIssue_NoRepositoryField(t *testing.T) {
 	}
 	if !reflect.DeepEqual(issue.Labels, []string(nil)) {
 		t.Errorf("Labels = %v, want nil", issue.Labels)
+	}
+}
+
+// testCert is a generated certificate used by the mTLS tests. It keeps the
+// parsed certificate and private key so it can sign child certificates.
+type testCert struct {
+	certPEM []byte
+	keyPEM  []byte
+	cert    *x509.Certificate
+	key     *ecdsa.PrivateKey
+}
+
+// genTestCert generates a certificate with the given common name, signed by
+// parent (or self-signed when parent is nil), valid for 127.0.0.1/localhost
+// so it can serve as a test TLS server certificate.
+func genTestCert(t *testing.T, cn string, isCA bool, parent *testCert) *testCert {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  isCA,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:              []string{"localhost"},
+	}
+	var signer *x509.Certificate
+	var signingKey any
+	if parent == nil {
+		signer, signingKey = tmpl, key
+	} else {
+		signer, signingKey = parent.cert, parent.key
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, signer, key.Public(), signingKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &testCert{
+		certPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		keyPEM:  pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}),
+		cert:    parsed,
+		key:     key,
+	}
+}
+
+// writeCertFiles writes a certificate and key PEM to temp files, returning
+// their paths.
+func writeCertFiles(t *testing.T, c *testCert) (certPath, keyPath string) {
+	t.Helper()
+	dir := t.TempDir()
+	certPath = filepath.Join(dir, "client.crt")
+	keyPath = filepath.Join(dir, "client.key")
+	if err := os.WriteFile(certPath, c.certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, c.keyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return certPath, keyPath
+}
+
+func TestNewClient_Plain(t *testing.T) {
+	client, err := NewClient("", "")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if client.Transport != nil {
+		t.Errorf("Transport = non-nil, want nil for a plain client")
+	}
+	if client.Timeout != 30*time.Second {
+		t.Errorf("Timeout = %v, want 30s", client.Timeout)
+	}
+}
+
+func TestNewClient_MissingKey(t *testing.T) {
+	_, err := NewClient("/nonexistent/cert.pem", "")
+	if err == nil {
+		t.Error("expected error when only the certificate is set, got nil")
+	}
+}
+
+func TestNewClient_MissingCert(t *testing.T) {
+	_, err := NewClient("", "/nonexistent/key.pem")
+	if err == nil {
+		t.Error("expected error when only the key is set, got nil")
+	}
+}
+
+func TestNewClient_BadCertPath(t *testing.T) {
+	_, err := NewClient("/nonexistent/cert.pem", "/nonexistent/key.pem")
+	if err == nil {
+		t.Error("expected error for nonexistent cert/key paths, got nil")
+	}
+}
+
+func TestNewClient_MTLS_PresentsCertificate(t *testing.T) {
+	ca := genTestCert(t, "test-ca", true, nil)
+	server := genTestCert(t, "test-server", false, ca)
+	clientCert := genTestCert(t, "maitred-client", false, ca)
+
+	certPath, keyPath := writeCertFiles(t, clientCert)
+	client, err := NewClient(certPath, keyPath)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport = %T, want *http.Transport", client.Transport)
+	}
+	if got := len(transport.TLSClientConfig.Certificates); got != 1 {
+		t.Fatalf("client certificates = %d, want 1", got)
+	}
+
+	// Trust the test server so the handshake can complete (test-only: the
+	// real client trusts the Forgejo host via the system CAs).
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(server.certPEM)
+	transport.TLSClientConfig.RootCAs = pool
+
+	// A TLS server that requires and verifies a client certificate against
+	// the test CA.
+	serverCert, err := tls.X509KeyPair(server.certPEM, server.keyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPool := x509.NewCertPool()
+	caPool.AppendCertsFromPEM(ca.certPEM)
+	var presented *x509.Certificate
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(r.TLS.PeerCertificates) > 0 {
+			presented = r.TLS.PeerCertificates[0]
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.TLS = &tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+		ClientCAs:    caPool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+	}
+	srv.StartTLS()
+	defer srv.Close()
+
+	resp, err := client.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("GET %s: %v", srv.URL, err)
+	}
+	resp.Body.Close()
+	if presented == nil {
+		t.Fatal("no client certificate presented")
+	}
+	if presented.Subject.CommonName != "maitred-client" {
+		t.Errorf("presented CN = %q, want maitred-client", presented.Subject.CommonName)
 	}
 }

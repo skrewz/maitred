@@ -40,3 +40,11 @@ transient failure.
 
 Base URL, token, and org come from configuration/env. The client
 authenticates every request with the bearer token.
+
+The client may also present an **mTLS client certificate**. When the
+environment sets both the certificate and key paths
+(`MAITRED_FORGEJO_CLIENT_CERT` and `MAITRED_FORGEJO_CLIENT_KEY`), the client
+loads the pair and presents the certificate on every request — a Forgejo
+instance's ingress may require a client certificate. When neither is set the
+client is plain, so non-mTLS Forgejo instances keep working; setting exactly
+one of the two is a configuration error.
