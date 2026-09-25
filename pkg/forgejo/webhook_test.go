@@ -710,6 +710,95 @@ func TestHandler_TaskFields(t *testing.T) {
 	}
 }
 
+// TestHandler_TaskDedupKey: a dispatch carries the dedup key of its
+// dispatch identity — the key's repo, kind, and number, the action, and
+// the revision — so a queue system with de-duplication can squelch a
+// re-dispatch of the same (action, revision) while the first task is
+// still pending (§forgejo/webhook/the-pipeline).
+func TestHandler_TaskDedupKey(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.issues[7] = testIssue(7, "open")
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "opened", issuePayload("o/r", 7, "opened")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(tasks))
+	}
+	want := "forgejoeng-o-r-issue-7-implement-" + testUpdatedAt.UTC().Format(time.RFC3339)
+	if tasks[0].DedupKey != want {
+		t.Errorf("dedup key = %q, want %q", tasks[0].DedupKey, want)
+	}
+}
+
+// TestDispatch_DedupKeyStable: re-dispatching the same (action,
+// revision) yields the same dedup key, and a different revision yields
+// a different one (§forgejo/webhook/the-pipeline).
+func TestDispatch_DedupKeyStable(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	api.issues[7] = testIssue(7, "open")
+	ev := Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"}
+	_, st, err := eng.refetch(ev)
+	if err != nil {
+		t.Fatalf("refetch: %v", err)
+	}
+	if err := eng.dispatch(ev, st, ActionImplement); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if err := eng.dispatch(ev, st, ActionImplement); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	tasks := q.all()
+	if len(tasks) != 2 {
+		t.Fatalf("got %d tasks, want 2", len(tasks))
+	}
+	if tasks[0].DedupKey == "" || tasks[0].DedupKey != tasks[1].DedupKey {
+		t.Errorf("dedup keys = %q, %q; want equal and non-empty", tasks[0].DedupKey, tasks[1].DedupKey)
+	}
+
+	// A new revision (the issue was edited) is a different dispatch
+	// identity.
+	api.issues[7].UpdatedAt = testUpdatedAt.Add(time.Hour)
+	_, st2, err := eng.refetch(ev)
+	if err != nil {
+		t.Fatalf("refetch: %v", err)
+	}
+	if err := eng.dispatch(ev, st2, ActionImplement); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	tasks = q.all()
+	if tasks[2].DedupKey == tasks[0].DedupKey {
+		t.Errorf("dedup key = %q after a revision change, want a different key", tasks[2].DedupKey)
+	}
+}
+
+// TestDispatch_DedupKeyPR: a PR dispatch's dedup key carries the head
+// sha, so a synced PR (a new head) is a different dispatch identity
+// (§forgejo/webhook/the-pipeline).
+func TestDispatch_DedupKeyPR(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	api.pulls[9] = testPR(9, "open", true)
+	ev := Event{Type: EventPRSynced, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "alice"}
+	_, st, err := eng.refetch(ev)
+	if err != nil {
+		t.Fatalf("refetch: %v", err)
+	}
+	if err := eng.dispatch(ev, st, ActionReview); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(tasks))
+	}
+	want := "forgejoeng-o-r-pr-9-review-sha-9"
+	if tasks[0].DedupKey != want {
+		t.Errorf("dedup key = %q, want %q", tasks[0].DedupKey, want)
+	}
+}
+
 // TestHandler_IssueClosed_Cascade: a closed issue unblocks its open
 // blocks whose blockers are all closed, and the cascade dispatches
 // implement for them (§forgejo/decisions/unblock-cascade).

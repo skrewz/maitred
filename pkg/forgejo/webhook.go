@@ -230,7 +230,11 @@ func (e *Engine) fillNode(issue *Issue, visited map[Key]bool) (*IssueNode, error
 	return node, nil
 }
 
-// dispatch fills the action's canned prompt and enqueues the task
+// dispatch fills the action's canned prompt and enqueues the task, with
+// the dedup key of the dispatch identity — the key's repo, kind, and
+// number, the action, and the revision — so a queue system with
+// de-duplication (hotelier's dedup_key) squelches a re-dispatch of the
+// same (action, revision) while the first task is still pending
 // (§forgejo/webhook/the-pipeline).
 func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	pc, err := e.cfg.PromptFor(action)
@@ -254,11 +258,13 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	if err != nil {
 		return err
 	}
+	rev := revisionFor(ev, st)
 	task := &queue.Task{
-		ID:      fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%d", strings.ReplaceAll(ev.Repo, "/", "-"), ev.Kind, ev.Number, action, time.Now().UnixNano()),
-		Prompt:  prompt,
-		Persona: pc.Persona,
-		Timeout: int(pc.Timeout.Seconds()),
+		ID:       fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%d", strings.ReplaceAll(ev.Repo, "/", "-"), ev.Kind, ev.Number, action, time.Now().UnixNano()),
+		Prompt:   prompt,
+		Persona:  pc.Persona,
+		Timeout:  int(pc.Timeout.Seconds()),
+		DedupKey: fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%s", strings.ReplaceAll(ev.Repo, "/", "-"), ev.Kind, ev.Number, action, rev),
 	}
 	if err := e.queue.AddTask(task); err != nil {
 		return fmt.Errorf("enqueue %s for %s: %w", action, ev.KeyOf(), err)

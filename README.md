@@ -158,15 +158,16 @@ mtls_cert: "/path/to/client.crt"
 mtls_key:  "/path/to/client.key"
 
 # Optional: custom task body template (Go text/template syntax)
-# Available fields: .ID, .Prompt, .Repos, .Tags, .Timeout
+# Available fields: .ID, .Prompt, .Tags, .Timeout, .Persona, .DedupKey
 # A built-in "json" function marshals values to JSON for safe embedding.
 # If omitted, the default template is used (see below).
 task_template: |
   {
     "prompt": {{ .Prompt | json }},
-    "repos": {{ .Repos | json }},
     "tags": {{ .Tags | json }},
-    "timeout": {{ .Timeout }}
+    "timeout": {{ .Timeout }},
+    "persona": {{ .Persona | json }},
+    "dedup_key": {{ .DedupKey | json }}
   }
 
 # Optional: log the full response body from the remote system
@@ -179,9 +180,10 @@ log_response: false
 task_template: |
   {
     "prompt": {{ .Prompt | json }},
-    "repos": {{ .Repos | json }},
     "tags": {{ .Tags | json }},
-    "timeout": {{ .Timeout }}
+    "timeout": {{ .Timeout }},
+    "persona": {{ .Persona | json }},
+    "dedup_key": {{ .DedupKey | json }}
   }
 ```
 
@@ -196,12 +198,19 @@ reverse-tracing of tasks across systems.
 |----------|------|-------------|
 | `.ID` | `string` | Internal task ID (UUID) |
 | `.Prompt` | `string` | Evaluated prompt (with tracking ID appended) |
-| `.Repos` | `[]string` | Repository paths from the trigger definition |
 | `.Tags` | `[]string` | Capability tags from the trigger definition |
 | `.Timeout` | `int` | Task timeout in seconds (0 = unlimited) |
+| `.Persona` | `string` | Persona name (empty unless the dispatch sets one) |
+| `.DedupKey` | `string` | Dedup key (empty unless the dispatch sets one); a queue system with de-duplication (hotelier) squelches a submission whose key matches a still-pending task's key |
+
+The Forgejo engine sets a dedup key on every dispatch — the dispatch
+identity: the issue/PR, the action, and the revision — so a re-dispatch of
+the same `(action, revision)` (for example, after a failed watermark save) is
+squelched by hotelier while the first task is still pending. Trigger-based
+dispatches leave the key empty, which disables de-duplication.
 
 The `json` template function marshals values to JSON for safe embedding
-(e.g. `{{ .Repos | json }}` produces `"["~/repos/foo"]"`).
+(e.g. `{{ .Tags | json }}` produces `"["business-default"]"`).
 
 **mTLS authentication** is optional. When both `mtls_cert` and `mtls_key`
 are set, the adapter uses TLS client certificate authentication during the

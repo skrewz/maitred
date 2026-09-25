@@ -26,6 +26,11 @@ type Task struct {
 	// On hotelier, this resolves to a named set of environment variables
 	// and file copies that are applied to the task's working directory.
 	Persona string `json:"persona,omitempty"`
+	// DedupKey is an optional deduplication key. A queue system that
+	// supports it (hotelier) squelches a submission whose key matches a
+	// still-pending task's key, so a re-dispatch of the same logical task
+	// does not enqueue a duplicate. Empty disables de-duplication.
+	DedupKey string `json:"dedup_key,omitempty"`
 }
 
 // String returns a human-readable representation of the task.

@@ -434,3 +434,37 @@ func TestHTTPAdapter_AddTask_NoTags(t *testing.T) {
 		t.Error("expected 'prompt' key in request body")
 	}
 }
+
+// TestHTTPAdapter_AddTask_DedupKey: the default template sends the
+// task's dedup key to the remote queue system, so a queue system with
+// de-duplication (hotelier) can squelch a duplicate submission.
+func TestHTTPAdapter_AddTask_DedupKey(t *testing.T) {
+	var receivedBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, 4096)
+		n, _ := r.Body.Read(buf)
+		receivedBody = string(buf[:n])
+		w.WriteHeader(201)
+		w.Write([]byte(`{"id":"remote-1"}`))
+	}))
+	defer server.Close()
+
+	adapter, err := queue.NewHTTPAdapter(queue.AdapterConfig{
+		Endpoint: server.URL,
+	}, log.New(os.Stdout, "", log.LstdFlags))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	task := &queue.Task{
+		ID:       "task-1",
+		Prompt:   "p",
+		DedupKey: "forgejoeng-o-r-issue-7-implement-2026-09-16T13:25:18Z",
+	}
+	if err := adapter.AddTask(task); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(receivedBody, `"dedup_key": "forgejoeng-o-r-issue-7-implement-2026-09-16T13:25:18Z"`) {
+		t.Errorf("expected dedup_key in request body, got %s", receivedBody)
+	}
+}
