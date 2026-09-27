@@ -153,6 +153,74 @@ func TestReconcile_PullRequests(t *testing.T) {
 	}
 }
 
+// TestReconcile_PRStandingAtReview: a PR whose last activity is a
+// review — the latest review is a changes-requested or approved review
+// submitted against the PR's current head — is reconciled as if that
+// review had just been submitted: the implementer is triggered, not the
+// reviewer (§forgejo/decisions/transition-table).
+func TestReconcile_PRStandingAtReview(t *testing.T) {
+	cases := []struct {
+		name      string
+		review    Review
+		watermark *Watermark
+		want      string // empty: no dispatch
+	}{
+		{
+			name:   "changes-requested against the head dispatches fix-feedback",
+			review: Review{Event: ReviewChangesRequested, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt},
+			want:   "action=fix-feedback",
+		},
+		{
+			name:   "approved against the head dispatches merge-or-wait",
+			review: Review{Event: ReviewApproved, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt},
+			want:   "action=merge-or-wait",
+		},
+		{
+			name:      "fix-feedback already dispatched at the revision",
+			review:    Review{Event: ReviewChangesRequested, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt},
+			watermark: &Watermark{Action: string(ActionFixFeedback), Revision: "sha-1"},
+			want:      "",
+		},
+		{
+			name:      "merge-or-wait already dispatched at the revision",
+			review:    Review{Event: ReviewApproved, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt},
+			watermark: &Watermark{Action: string(ActionMergeOrWait), Revision: "sha-1"},
+			want:      "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, q, store := newTestEngine(t)
+			api.repos = []Repository{testRepo("o/r")}
+			pr := PullRequest{Number: 1, State: "open", Mergeable: true, HeadSHA: "sha-1"}
+			api.pulls[1] = &pr
+			api.openPulls["r"] = []PullRequest{pr}
+			api.reviews[1] = []Review{tc.review}
+			if tc.watermark != nil {
+				if err := store.Save(Key{Repo: "o/r", Kind: KindPR, Number: 1}, *tc.watermark); err != nil {
+					t.Fatalf("save watermark: %v", err)
+				}
+			}
+
+			eng.Reconcile()
+
+			tasks := q.all()
+			if tc.want == "" {
+				if len(tasks) != 0 {
+					t.Fatalf("expected no dispatch, got %d", len(tasks))
+				}
+				return
+			}
+			if len(tasks) != 1 {
+				t.Fatalf("expected 1 dispatched task, got %d", len(tasks))
+			}
+			if !strings.Contains(tasks[0].Prompt, tc.want) {
+				t.Errorf("prompt = %q, want %q", tasks[0].Prompt, tc.want)
+			}
+		})
+	}
+}
+
 // TestReconcile_SkipsDisabledRepositories enumerates only the
 // maitred-enabled repositories (§forgejo/reconciliation/the-sweep).
 func TestReconcile_SkipsDisabledRepositories(t *testing.T) {

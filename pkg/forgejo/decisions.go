@@ -49,7 +49,9 @@ const (
 	// EventReconcile is the synthetic current-state event the
 	// reconciliation sweep feeds through the same decision function
 	// (§forgejo/reconciliation): for an issue it decides like
-	// EventIssueOpened, for a pull request like EventPRSynced.
+	// EventIssueOpened, for a pull request like EventPRSynced — except
+	// when the last activity is a review, which decides like
+	// EventPRReviewed (§forgejo/decisions/transition-table).
 	EventReconcile EventType = "reconcile"
 )
 
@@ -140,9 +142,11 @@ func (d Decision) HoldOff() bool {
 // (§forgejo/decisions/the-decision-function).
 func Decide(e Event, s State, w *Watermark) Decision {
 	switch e.Type {
-	case EventIssueOpened, EventReconcile:
+	case EventIssueOpened:
+		return decideIssueOpened(e, s, w)
+	case EventReconcile:
 		if e.Kind == KindPR {
-			return decidePRSynced(e, s, w)
+			return decidePRReconcile(e, s, w)
 		}
 		return decideIssueOpened(e, s, w)
 	case EventIssueEdited, EventIssueLabelsChanged, EventIssueCommented:
@@ -272,6 +276,34 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 		return holdOff(fmt.Sprintf("PR %d commit pushed by the reviewing author %s; not re-reviewing the reviewer's own push", pr.Number, e.Sender))
 	}
 	return dispatch(action, fmt.Sprintf("PR %d synced (head %s)", pr.Number, pr.HeadSHA))
+}
+
+// decidePRReconcile handles the reconciliation sweep's synthetic
+// current-state event for a pull request: like PR synced, except when
+// the last activity is a review — the latest review is a changes-
+// requested or approved review submitted against the PR's current head
+// (no commit has been pushed since) — in which case the decision
+// follows the latest review as if it had just been submitted
+// (§forgejo/decisions/transition-table).
+func decidePRReconcile(e Event, s State, w *Watermark) Decision {
+	pr := s.PR
+	if pr != nil && prOpen(pr) && pr.Mergeable {
+		if latest := latestReview(s.Reviews); latest != nil && latest.CommitID == pr.HeadSHA {
+			switch latest.Event {
+			case ReviewChangesRequested:
+				if alreadyDispatched(w, ActionFixFeedback, pr.HeadSHA) {
+					return holdOff(fmt.Sprintf("fix-feedback already dispatched at revision %s", pr.HeadSHA))
+				}
+				return dispatch(ActionFixFeedback, fmt.Sprintf("PR %d stands at a changes-requested review by %s", pr.Number, latest.Author))
+			case ReviewApproved:
+				if alreadyDispatched(w, ActionMergeOrWait, pr.HeadSHA) {
+					return holdOff(fmt.Sprintf("merge-or-wait already dispatched at revision %s", pr.HeadSHA))
+				}
+				return dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d stands at an approved review by %s", pr.Number, latest.Author))
+			}
+		}
+	}
+	return decidePRSynced(e, s, w)
 }
 
 // decidePRReviewed handles a submitted review: the re-fetched latest

@@ -61,11 +61,21 @@ prompts:
 | review submitted (latest review is anything else) | hold off |
 | PR merged | unblock cascade (for the connected issue) |
 | PR closed without merging | hold off |
-| reconcile — the sweep's synthetic current-state event | as issue opened (issue) / PR synced (PR) |
+| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, as PR synced — except when the last activity is a review, which decides as a submitted review |
 
 The "latest review" is the PR's most recently submitted review. An
 issue that *became unblocked* is dispatched `implement` through the
 unblock cascade, under the same conditions as an opened issue.
+
+A PR's **last activity is a review** when its latest review is a
+changes-requested or approved review submitted against the PR's current
+head (the review's commit ID equals the head SHA) — no commit has been
+pushed since the review. A reconciled PR standing at such a review
+decides as if that review had just been submitted: changes-requested
+dispatches `fix-feedback`, approved dispatches `merge-or-wait` — the
+implementer is triggered, not the reviewer. A PR whose latest review is
+anything else, or whose latest review predates the current head, is
+reconciled as PR synced.
 
 ## Unblock cascade
 
