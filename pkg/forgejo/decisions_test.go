@@ -275,6 +275,30 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionReReview,
 		},
 		{
+			name:       "reconcile PR standing at a changes-requested review dispatches fix-feedback",
+			event:      prEvent(EventReconcile, "maitred"),
+			state:      State{PR: openPR("abc"), Reviews: []Review{review("CHANGES_REQUESTED", "carol", testTime)}},
+			wantAction: ActionFixFeedback,
+		},
+		{
+			name:       "reconcile PR standing at an approved review dispatches merge-or-wait",
+			event:      prEvent(EventReconcile, "maitred"),
+			state:      State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			wantAction: ActionMergeOrWait,
+		},
+		{
+			name:       "reconcile PR standing at a dismissed review dispatches re-review",
+			event:      prEvent(EventReconcile, "maitred"),
+			state:      State{PR: openPR("abc"), Reviews: []Review{review("DISMISSED", "carol", testTime)}},
+			wantAction: ActionReReview,
+		},
+		{
+			name:       "reconcile PR whose latest review predates the head dispatches re-review",
+			event:      prEvent(EventReconcile, "maitred"),
+			state:      State{PR: openPR("def"), Reviews: []Review{review("CHANGES_REQUESTED", "carol", testTime)}},
+			wantAction: ActionReReview,
+		},
+		{
 			name:      "implement already dispatched at the revision holds off",
 			event:     issueEvent(EventIssueOpened),
 			state:     State{Issue: openIssue()},
@@ -307,6 +331,18 @@ func TestDecide(t *testing.T) {
 		{
 			name:      "merge-or-wait already dispatched at the revision holds off",
 			event:     prEvent(EventPRReviewed, "carol"),
+			state:     State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
+		},
+		{
+			name:      "reconcile PR fix-feedback already dispatched at the revision holds off",
+			event:     prEvent(EventReconcile, "maitred"),
+			state:     State{PR: openPR("abc"), Reviews: []Review{review("CHANGES_REQUESTED", "carol", testTime)}},
+			watermark: &Watermark{Action: "fix-feedback", Revision: "abc"},
+		},
+		{
+			name:      "reconcile PR merge-or-wait already dispatched at the revision holds off",
+			event:     prEvent(EventReconcile, "maitred"),
 			state:     State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
 		},
