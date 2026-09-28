@@ -38,7 +38,7 @@ prompts:
 | `reassess` | an open issue was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement) |
 | `review` | a mergeable PR opened, or synced while it has no review |
 | `re-review` | a mergeable PR synced while it has a review |
-| `fix-feedback` | the PR's latest review requests changes |
+| `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review |
 | `merge-or-wait` | the PR's latest review approves (the merge policy is the prompt's) |
 | `rebase` | an open PR is not mergeable (conflicts) |
 
@@ -61,21 +61,23 @@ prompts:
 | review submitted (latest review is anything else) | hold off |
 | PR merged | unblock cascade (for the connected issue) |
 | PR closed without merging | hold off |
-| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, as PR synced — except when the last activity is a review, which decides as a submitted review |
+| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` |
 
 The "latest review" is the PR's most recently submitted review. An
 issue that *became unblocked* is dispatched `implement` through the
 unblock cascade, under the same conditions as an opened issue.
 
 A PR's **last activity is a review** when its latest review is a
-changes-requested or approved review submitted against the PR's current
-head (the review's commit ID equals the head SHA) — no commit has been
-pushed since the review. A reconciled PR standing at such a review
-decides as if that review had just been submitted: changes-requested
-dispatches `fix-feedback`, approved dispatches `merge-or-wait` — the
-implementer is triggered, not the reviewer. A PR whose latest review is
-anything else, or whose latest review predates the current head, is
-reconciled as PR synced.
+changes-requested, approved, or comment review submitted against the PR's
+current head (the review's commit ID equals the head SHA) — no commit has
+been pushed since the review. A reconciled PR standing at such a review
+decides as if that review had just been submitted — except that a comment
+review, which holds off on the event path, dispatches `fix-feedback`: the
+review is feedback for the implementer, and the sweep moves the PR along by
+triggering the implementer, not the reviewer. Changes-requested dispatches
+`fix-feedback`, approved dispatches `merge-or-wait`. A PR whose latest
+review is anything else (e.g. dismissed), or whose latest review predates
+the current head, is reconciled as PR synced.
 
 ## Unblock cascade
 
