@@ -271,8 +271,14 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "reconcile PR behaves like PR synced",
 			event:      prEvent(EventReconcile, "maitred"),
+			state:      State{PR: openPR("abc")},
+			wantAction: ActionReview,
+		},
+		{
+			name:       "reconcile PR standing at a comment review dispatches fix-feedback",
+			event:      prEvent(EventReconcile, "maitred"),
 			state:      State{PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
-			wantAction: ActionReReview,
+			wantAction: ActionFixFeedback,
 		},
 		{
 			name:       "reconcile PR standing at a changes-requested review dispatches fix-feedback",
@@ -345,6 +351,12 @@ func TestDecide(t *testing.T) {
 			event:     prEvent(EventReconcile, "maitred"),
 			state:     State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
+		},
+		{
+			name:      "reconcile PR standing at a comment review, fix-feedback already dispatched at the revision, holds off",
+			event:     prEvent(EventReconcile, "maitred"),
+			state:     State{PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
+			watermark: &Watermark{Action: "fix-feedback", Revision: "abc"},
 		},
 		{
 			name:      "rebase already dispatched at the revision holds off",
