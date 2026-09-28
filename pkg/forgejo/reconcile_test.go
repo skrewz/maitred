@@ -154,10 +154,10 @@ func TestReconcile_PullRequests(t *testing.T) {
 }
 
 // TestReconcile_PRStandingAtReview: a PR whose last activity is a
-// review — the latest review is a changes-requested or approved review
-// submitted against the PR's current head — is reconciled as if that
-// review had just been submitted: the implementer is triggered, not the
-// reviewer (§forgejo/decisions/transition-table).
+// review — the latest review is a changes-requested, approved, or
+// comment review submitted against the PR's current head — is
+// reconciled so that the implementer is triggered, not the reviewer
+// (§forgejo/decisions/transition-table).
 func TestReconcile_PRStandingAtReview(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -176,6 +176,11 @@ func TestReconcile_PRStandingAtReview(t *testing.T) {
 			want:   "action=merge-or-wait",
 		},
 		{
+			name:   "comment against the head dispatches fix-feedback",
+			review: Review{Event: ReviewComment, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt},
+			want:   "action=fix-feedback",
+		},
+		{
 			name:      "fix-feedback already dispatched at the revision",
 			review:    Review{Event: ReviewChangesRequested, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt},
 			watermark: &Watermark{Action: string(ActionFixFeedback), Revision: "sha-1"},
@@ -185,6 +190,12 @@ func TestReconcile_PRStandingAtReview(t *testing.T) {
 			name:      "merge-or-wait already dispatched at the revision",
 			review:    Review{Event: ReviewApproved, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt},
 			watermark: &Watermark{Action: string(ActionMergeOrWait), Revision: "sha-1"},
+			want:      "",
+		},
+		{
+			name:      "comment review, fix-feedback already dispatched at the revision",
+			review:    Review{Event: ReviewComment, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt},
+			watermark: &Watermark{Action: string(ActionFixFeedback), Revision: "sha-1"},
 			want:      "",
 		},
 	}

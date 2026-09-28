@@ -27,6 +27,7 @@ const (
 const (
 	ReviewApproved         = "APPROVED"
 	ReviewChangesRequested = "CHANGES_REQUESTED"
+	ReviewComment          = "COMMENT"
 )
 
 // EventType identifies a Forgejo notification the engine reacts to
@@ -50,8 +51,9 @@ const (
 	// reconciliation sweep feeds through the same decision function
 	// (§forgejo/reconciliation): for an issue it decides like
 	// EventIssueOpened, for a pull request like EventPRSynced — except
-	// when the last activity is a review, which decides like
-	// EventPRReviewed (§forgejo/decisions/transition-table).
+	// when the last activity is a review: changes-requested or comment
+	// dispatches fix-feedback, approved dispatches merge-or-wait
+	// (§forgejo/decisions/transition-table).
 	EventReconcile EventType = "reconcile"
 )
 
@@ -281,9 +283,12 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 // decidePRReconcile handles the reconciliation sweep's synthetic
 // current-state event for a pull request: like PR synced, except when
 // the last activity is a review — the latest review is a changes-
-// requested or approved review submitted against the PR's current head
-// (no commit has been pushed since) — in which case the decision
-// follows the latest review as if it had just been submitted
+// requested, approved, or comment review submitted against the PR's
+// current head (no commit has been pushed since) — in which case the
+// decision follows the latest review: changes-requested and comment
+// dispatch fix-feedback, approved dispatches merge-or-wait. A comment
+// review holds off on the event path, but the sweep moves the PR along
+// by triggering the implementer, not the reviewer
 // (§forgejo/decisions/transition-table).
 func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
@@ -295,6 +300,11 @@ func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 					return holdOff(fmt.Sprintf("fix-feedback already dispatched at revision %s", pr.HeadSHA))
 				}
 				return dispatch(ActionFixFeedback, fmt.Sprintf("PR %d stands at a changes-requested review by %s", pr.Number, latest.Author))
+			case ReviewComment:
+				if alreadyDispatched(w, ActionFixFeedback, pr.HeadSHA) {
+					return holdOff(fmt.Sprintf("fix-feedback already dispatched at revision %s", pr.HeadSHA))
+				}
+				return dispatch(ActionFixFeedback, fmt.Sprintf("PR %d stands at a comment review by %s", pr.Number, latest.Author))
 			case ReviewApproved:
 				if alreadyDispatched(w, ActionMergeOrWait, pr.HeadSHA) {
 					return holdOff(fmt.Sprintf("merge-or-wait already dispatched at revision %s", pr.HeadSHA))
