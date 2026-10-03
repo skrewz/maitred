@@ -459,12 +459,12 @@ func TestHTTPAdapter_AddTask_DedupKey(t *testing.T) {
 	task := &queue.Task{
 		ID:       "task-1",
 		Prompt:   "p",
-		DedupKey: "forgejoeng-o-r-issue-7-implement-2026-09-16T13:25:18Z",
+		DedupKey: "forgejoeng-o/r-issue-7-implement-2026-09-16T13:25:18Z",
 	}
 	if err := adapter.AddTask(task); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(receivedBody, `"dedup_key": "forgejoeng-o-r-issue-7-implement-2026-09-16T13:25:18Z"`) {
+	if !strings.Contains(receivedBody, `"dedup_key": "forgejoeng-o/r-issue-7-implement-2026-09-16T13:25:18Z"`) {
 		t.Errorf("expected dedup_key in request body, got %s", receivedBody)
 	}
 }

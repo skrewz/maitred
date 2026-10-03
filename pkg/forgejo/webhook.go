@@ -235,7 +235,10 @@ func (e *Engine) fillNode(issue *Issue, visited map[Key]bool) (*IssueNode, error
 // number, the action, and the revision — so a queue system with
 // de-duplication (hotelier's dedup_key) squelches a re-dispatch of the
 // same (action, revision) while the first task is still pending
-// (§forgejo/webhook/the-pipeline).
+// (§forgejo/webhook/the-pipeline). The key carries the repo verbatim
+// (slash retained — it is opaque to the queue system), so two distinct
+// repos never produce the same key. The task ID, by contrast, keeps its
+// "-"-replaced repo: there the ambiguity is only a traceability concern.
 func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	pc, err := e.cfg.PromptFor(action)
 	if err != nil {
@@ -264,7 +267,7 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 		Prompt:   prompt,
 		Persona:  pc.Persona,
 		Timeout:  int(pc.Timeout.Seconds()),
-		DedupKey: fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%s", strings.ReplaceAll(ev.Repo, "/", "-"), ev.Kind, ev.Number, action, rev),
+		DedupKey: fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%s", ev.Repo, ev.Kind, ev.Number, action, rev),
 	}
 	if err := e.queue.AddTask(task); err != nil {
 		return fmt.Errorf("enqueue %s for %s: %w", action, ev.KeyOf(), err)

@@ -728,7 +728,7 @@ func TestHandler_TaskDedupKey(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1", len(tasks))
 	}
-	want := "forgejoeng-o-r-issue-7-implement-" + testUpdatedAt.UTC().Format(time.RFC3339)
+	want := "forgejoeng-o/r-issue-7-implement-" + testUpdatedAt.UTC().Format(time.RFC3339)
 	if tasks[0].DedupKey != want {
 		t.Errorf("dedup key = %q, want %q", tasks[0].DedupKey, want)
 	}
@@ -793,9 +793,35 @@ func TestDispatch_DedupKeyPR(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1", len(tasks))
 	}
-	want := "forgejoeng-o-r-pr-9-review-sha-9"
+	want := "forgejoeng-o/r-pr-9-review-sha-9"
 	if tasks[0].DedupKey != want {
 		t.Errorf("dedup key = %q, want %q", tasks[0].DedupKey, want)
+	}
+}
+
+// TestDispatch_DedupKeyDistinctRepos: repos that would encode
+// identically under the task ID's "-" replacement (a-b/c and a/b-c)
+// still produce distinct dedup keys — the key carries the repo
+// verbatim (§forgejo/webhook/the-pipeline).
+func TestDispatch_DedupKeyDistinctRepos(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	api.issues[7] = testIssue(7, "open")
+	for _, repo := range []string{"a-b/c", "a/b-c"} {
+		ev := Event{Type: EventIssueOpened, Repo: repo, Kind: KindIssue, Number: 7, Sender: "alice"}
+		_, st, err := eng.refetch(ev)
+		if err != nil {
+			t.Fatalf("refetch: %v", err)
+		}
+		if err := eng.dispatch(ev, st, ActionImplement); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+	}
+	tasks := q.all()
+	if len(tasks) != 2 {
+		t.Fatalf("got %d tasks, want 2", len(tasks))
+	}
+	if tasks[0].DedupKey == tasks[1].DedupKey {
+		t.Errorf("dedup keys = %q for both a-b/c and a/b-c, want distinct", tasks[0].DedupKey)
 	}
 }
 
