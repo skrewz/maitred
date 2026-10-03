@@ -468,3 +468,45 @@ func TestHTTPAdapter_AddTask_DedupKey(t *testing.T) {
 		t.Errorf("expected dedup_key in request body, got %s", receivedBody)
 	}
 }
+
+// TestHTTPAdapter_AddTask_NoDedupKey: a task without a dedup key still
+// sends an (empty) dedup_key — the load-bearing contract for
+// trigger-based dispatches, which rely on the queue system treating an
+// empty key as "no de-duplication". A template change that drops or
+// re-renders the field would break that contract; this test pins it.
+func TestHTTPAdapter_AddTask_NoDedupKey(t *testing.T) {
+	var received map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dec := json.NewDecoder(r.Body)
+		dec.Decode(&received)
+		w.WriteHeader(201)
+		w.Write([]byte(`{"id":"remote-1"}`))
+	}))
+	defer server.Close()
+
+	adapter, err := queue.NewHTTPAdapter(queue.AdapterConfig{
+		Endpoint: server.URL,
+	}, log.New(os.Stdout, "", log.LstdFlags))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	task := &queue.Task{
+		ID:      "task-1",
+		Prompt:  "no dedup key task",
+		Tags:    []string{"business-default"},
+		Timeout: 1800,
+	}
+
+	if err := adapter.AddTask(task); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// dedup_key should be present and empty ("" marshals to "")
+	if _, ok := received["dedup_key"]; !ok {
+		t.Error("expected 'dedup_key' key in request body")
+	}
+	if received["dedup_key"] != "" {
+		t.Errorf("expected empty dedup_key, got %v", received["dedup_key"])
+	}
+}
