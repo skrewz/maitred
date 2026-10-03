@@ -1,6 +1,8 @@
 package queue_test
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"maitred/pkg/queue"
@@ -147,5 +149,25 @@ func TestTaskQueue_GetAllTasks_Empty(t *testing.T) {
 	}
 	if len(tasks) != 0 {
 		t.Errorf("expected 0 tasks, got %d", len(tasks))
+	}
+}
+
+func TestTask_DedupKey_JSON(t *testing.T) {
+	// Omitted when empty.
+	b, err := json.Marshal(&queue.Task{ID: "task-1", Prompt: "p"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(b), "dedup_key") {
+		t.Errorf("dedup_key should be omitted when empty, got %s", b)
+	}
+
+	// Present when set.
+	b, err = json.Marshal(&queue.Task{ID: "task-1", Prompt: "p", DedupKey: "k"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"dedup_key":"k"`) {
+		t.Errorf("expected dedup_key in JSON, got %s", b)
 	}
 }

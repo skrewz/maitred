@@ -45,7 +45,14 @@ On each `POST`:
 5. **Dispatch.** A dispatch fills the action's canned prompt
    (§forgejo/config/placeholders) and enqueues the task through the queue
    provider, with the persona and timeout from the config
-   (§forgejo/config/canned-prompts).
+   (§forgejo/config/canned-prompts). The task carries a **dedup key** — the
+   dispatch identity: the key's repo, kind, and number, the action, and the
+   revision — so a queue system with de-duplication (hotelier's
+   `dedup_key`) squelches a re-dispatch of the same `(action, revision)`
+   while the first task is still pending. A different revision (a new commit,
+   an edited issue) is a different key and dispatches freely. The key carries
+   the repo verbatim (slash retained — it is opaque to the queue system), so
+   two distinct repos never produce the same key.
 6. **Watermark.** A dispatch records its watermark — the action and the
    revision (the PR head sha, or the issue's `updated_at`) — in the store
    (§forgejo/state/watermark); a hold-off records nothing. Each key of the

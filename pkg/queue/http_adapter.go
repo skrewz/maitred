@@ -33,6 +33,9 @@ type AdapterConfig struct {
 	//   .Tags      — capability tag slice
 	//   .Timeout   — task timeout in seconds
 	//   .Persona   — persona name (optional, for hotelier persona support)
+	//   .DedupKey  — dedup key (optional; a queue system with
+	//                de-duplication squelches a submission matching a
+	//                still-pending task's key)
 	//
 	// A built-in "json" function marshals values to JSON for safe embedding
 	// inside the template. If empty, a default template is used that omits
@@ -71,7 +74,8 @@ const defaultTaskTemplate = `{
 	"prompt": {{ .Prompt | json }},
 	"tags": {{ .Tags | json }},
 	"timeout": {{ .Timeout }},
-	"persona": {{ .Persona | json }}
+	"persona": {{ .Persona | json }},
+	"dedup_key": {{ .DedupKey | json }}
 }`
 
 // HTTPAdapter is a TaskQueueProvider that sends tasks to a remote
@@ -161,17 +165,19 @@ func (a *HTTPAdapter) AddTask(task *Task) error {
 	// Render the task template
 	var buf bytes.Buffer
 	data := struct {
-		ID      string
-		Prompt  string
-		Tags    []string
-		Timeout int
-		Persona string
+		ID       string
+		Prompt   string
+		Tags     []string
+		Timeout  int
+		Persona  string
+		DedupKey string
 	}{
-		ID:      task.ID,
-		Prompt:  prompt,
-		Tags:    task.Tags,
-		Timeout: task.Timeout,
-		Persona: task.Persona,
+		ID:       task.ID,
+		Prompt:   prompt,
+		Tags:     task.Tags,
+		Timeout:  task.Timeout,
+		Persona:  task.Persona,
+		DedupKey: task.DedupKey,
 	}
 
 	if err := a.tmpl.Execute(&buf, data); err != nil {

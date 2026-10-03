@@ -35,7 +35,10 @@ HTTP queue system.
   interface: an HTTP queue adapter (optional mTLS, optional custom task
   template, internal tracking ID appended to the prompt) or, without a queue
   config, an in-memory queue. Tasks carry a prompt, capability tags, a timeout,
-  and an optional persona.
+  an optional persona, and an optional dedup key — a queue system with
+  de-duplication may squelch a submission whose key matches a still-pending
+  task's key (the Forgejo engine sets one per dispatch identity, per
+  §forgejo/webhook/the-pipeline).
 - **Persistent state.** Each trigger's last run time and extra state is
   persisted as a JSON file per trigger under the data directory and survives
   restarts. Per-trigger execution history is recorded.
