@@ -110,9 +110,17 @@ Different keys proceed in parallel.
 
 ## Configuration
 
-The shared secret, the Forgejo base URL and token, and the watermark
-directory come from the environment (`MAITRED_FORGEJOENG_SECRET`,
-`MAITRED_FORGEJO_URL`, `MAITRED_FORGEJO_TOKEN`; the watermark directory is
-the data directory's `forgejoeng` sub-directory, per
+The Forgejo base URL and token, and the watermark directory come from the
+environment (`MAITRED_FORGEJO_URL`, `MAITRED_FORGEJO_TOKEN`; the watermark
+directory is the data directory's `forgejoeng` sub-directory, per
 §forgejo/state/storage). The canned prompts come from the engine config
 (§forgejo/config/loading).
+
+The shared secret is read from a file whose path is given by
+`MAITRED_FORGEJOENG_SECRET_FILE`; the file's contents, with a single
+trailing newline stripped, are the secret. As a transitional measure the
+secret may instead be supplied directly in the environment
+(`MAITRED_FORGEJOENG_SECRET`); when both are set the file takes
+precedence. Carrying the secret in the environment is a smell — it is
+retained only so deployments can adopt the file incrementally — and is to
+be removed once every deployment reads the secret from a file.

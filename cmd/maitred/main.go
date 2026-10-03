@@ -276,9 +276,12 @@ func newForgejoEngine(dataDir string, qe queue.TaskQueueProvider) (*forgejo.Engi
 	}
 	baseURL := os.Getenv("MAITRED_FORGEJO_URL")
 	token := os.Getenv("MAITRED_FORGEJO_TOKEN")
-	secret := os.Getenv("MAITRED_FORGEJOENG_SECRET")
+	secret, err := forgejo.LoadSecret()
+	if err != nil {
+		return nil, nil, err
+	}
 	if baseURL == "" || token == "" || secret == "" {
-		return nil, nil, fmt.Errorf("MAITRED_FORGEJO_URL, MAITRED_FORGEJO_TOKEN and MAITRED_FORGEJOENG_SECRET must be set")
+		return nil, nil, fmt.Errorf("MAITRED_FORGEJO_URL, MAITRED_FORGEJO_TOKEN and the shared secret (%s or %s) must be set", forgejo.SecretFileEnvVar, forgejo.SecretEnvVar)
 	}
 	httpClient, err := forgejo.NewClient(
 		os.Getenv(forgejo.ClientCertEnvVar),
