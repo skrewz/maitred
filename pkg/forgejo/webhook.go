@@ -59,6 +59,13 @@ type Engine struct {
 	stopCh   chan struct{}
 	doneCh   chan struct{}
 	sweeping atomic.Bool
+
+	// The scope cache: which of the org's repositories carry the
+	// maitred-enabled topic, refreshed at most once per reconcile
+	// interval (§forgejo/webhook/the-scope-cache).
+	scopeMu sync.Mutex
+	scope   map[string]bool
+	scopeAt time.Time
 }
 
 // NewEngine creates the event path over the given Forgejo API, watermark
@@ -77,14 +84,24 @@ func NewEngine(api API, store *Store, cfg *Config, q queue.TaskQueueProvider, lo
 	}
 }
 
-// HandleEvent processes one event end to end — re-fetch, decide,
-// dispatch, watermark — under the key's lock, so concurrent events for
-// the same key cannot race the watermark
-// (§forgejo/webhook/serialisation). A re-fetch failure holds off: the
-// reconciliation sweep re-derives from the source of truth
-// (§forgejo/webhook/the-pipeline).
+// HandleEvent processes one event end to end — scope test, re-fetch,
+// decide, dispatch, watermark — under the key's lock, so concurrent
+// events for the same key cannot race the watermark
+// (§forgejo/webhook/serialisation). A repository that does not carry the
+// maitred-enabled topic is outside the engine's remit: it holds off
+// before the re-fetch (§forgejo/webhook/the-scope-cache). A re-fetch
+// failure holds off: the reconciliation sweep re-derives from the source
+// of truth (§forgejo/webhook/the-pipeline).
 func (e *Engine) HandleEvent(ev Event) {
 	key := ev.KeyOf()
+	if !e.repoEnabled(ev.Repo) {
+		// The repository is outside the engine's remit: hold off before
+		// re-fetching, so an inert repository costs nothing and
+		// dispatches nothing — cascade included
+		// (§forgejo/webhook/the-scope-cache).
+		e.recordDecision(key, ev, State{}, holdOffUnenabledRepo(ev.Repo))
+		return
+	}
 	e.store.WithKeyLock(key, func() {
 		ev, st, err := e.refetch(ev)
 		if err != nil {
@@ -279,8 +296,15 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 // dispatchCascade dispatches implement for one key of the unblock
 // cascade, applying the key's own watermark first, so an
 // already-dispatched (action, revision) is not re-dispatched
-// (§forgejo/decisions/unblock-cascade).
+// (§forgejo/decisions/unblock-cascade). A key in a repository that does
+// not carry the maitred-enabled topic is outside the engine's remit and
+// is not dispatched (§forgejo/webhook/the-scope-cache).
 func (e *Engine) dispatchCascade(k Key, sender string) error {
+	if !e.repoEnabled(k.Repo) {
+		held := holdOffUnenabledRepo(k.Repo)
+		e.log.Info("cascade held off", "key", k.String(), "reason", held.Reason)
+		return nil
+	}
 	owner, name := splitRepo(k.Repo)
 	issue, err := e.api.GetIssue(owner, name, k.Number)
 	if err != nil {

@@ -105,6 +105,10 @@ func newFakeAPI() *fakeAPI {
 		openPulls:     map[string][]PullRequest{},
 		listIssuesErr: map[string]error{},
 		listPullsErr:  map[string]error{},
+		// The org's repositories default to the one the fixtures live
+		// in, maitred-enabled, so the event path's scope test passes
+		// unless a test restates the listing (§forgejo/webhook/the-scope-cache).
+		repos: []Repository{testRepo("o/r")},
 	}
 }
 
@@ -937,7 +941,10 @@ func TestHandler_PRMerged_ConnectedIssueStillOpen(t *testing.T) {
 func TestHandler_CrossRepoCascade(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
 	h := NewHandler(eng, "s3cret", nil)
-	// Issue 7 in o/r (closed) blocks issue 10 in o/other (open).
+	// Issue 7 in o/r (closed) blocks issue 10 in o/other (open); both
+	// repositories are maitred-enabled, so the cascade may dispatch in
+	// either (§forgejo/webhook/the-scope-cache).
+	api.repos = append(api.repos, testRepo("o/other"))
 	api.issues[7] = testIssue(7, "closed")
 	cross := testIssue(10, "open")
 	cross.Repository = "o/other"

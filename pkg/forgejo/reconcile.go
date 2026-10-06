@@ -28,6 +28,9 @@ func (e *Engine) Reconcile() {
 		e.log.Error("reconciliation: list repositories", "org", e.cfg.Org, "error", err)
 		return
 	}
+	// The listing is the scope cache: the event path consults it instead
+	// of fetching per delivery (§forgejo/webhook/the-scope-cache).
+	e.refreshScopeCache(repos)
 	for i := range repos {
 		repo := &repos[i]
 		if !hasTopic(repo.Topics, maitredEnabledTopic) {

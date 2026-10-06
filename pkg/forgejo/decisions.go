@@ -454,3 +454,10 @@ func dispatch(action Action, reason string) Decision {
 func holdOff(reason string) Decision {
 	return Decision{Reason: reason}
 }
+
+// holdOffUnenabledRepo is the scope test's hold-off: the repository does
+// not carry the maitred-enabled topic, so it is outside the engine's
+// remit on either path (§forgejo/webhook/the-scope-cache).
+func holdOffUnenabledRepo(repo string) Decision {
+	return holdOff(fmt.Sprintf("repo %s is not maitred-enabled", repo))
+}
