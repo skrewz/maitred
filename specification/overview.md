@@ -46,9 +46,11 @@ HTTP queue system.
   state, countdown), stats, and interactive controls (fire now, pause/resume).
 - **Health check.** `maitred --health` exits 0 if the configuration is valid.
 - **Forgejo engine.** A stateful webhook component that tracks issue/PR
-  state across the organisation's `maitred-enabled` repositories and
-  dispatches canned hotelier tasks when a tracked transition warrants it,
-  reconciling periodically so missed webhooks are recovered. Specified in
+  state and dispatches canned hotelier tasks when a tracked transition
+  warrants it, reconciling periodically so missed webhooks are recovered.
+  The `maitred-enabled` repository topic scopes the engine's domain on
+  **both** paths — the reconciliation sweep and the webhook event path
+  (§forgejo/webhook/the-scope-cache). Specified in
   `specification/forgejo/`.
 
 ## Non-goals
