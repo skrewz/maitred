@@ -88,3 +88,10 @@ Loading **fails at load time** — mirroring the trigger `Validate()` — when:
 
 Optional keys are the exception: `decomposer_identity` unset is valid and
 never a load error (§forgejo/config/decomposer-identity).
+
+Loading fails **closed**, and that fixes the upgrade ordering: a binary
+that references a new action requires every deployment's config to
+carry that entry **first**. Extending the enum is therefore a
+config-before-binary change — a deployment whose config has not gained
+the entry does not start, which is the loud failure; a prompt that
+merely went missing at runtime would be the quiet one.

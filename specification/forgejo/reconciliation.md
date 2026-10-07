@@ -112,3 +112,19 @@ this revision" from "state calls for no action"
 What the exemption buys is bounded latency: an edge change is
 invisible until the next sweep, so a state-call for an exempt action
 is acted on in **at most one reconcile interval**.
+
+What it costs is steady-state noise, and the bound on that is stated
+plainly: an exempt action re-fires on **every sweep while the state
+holds** — an open `ideation` root, or an `outcome` tracker still
+waiting to be closed, enqueues a task on each sweep for as long as the
+label applies. Nothing in the engine bounds it further: the queue's
+deduplication squelches a re-dispatch only while the prior task is
+still in flight, and the agent's silence-on-noop carries the rest. That
+is the design — the state *is* the watermark, and the engine's job is
+only to stop suppressing these actions — so an operator weighing the
+cost should read the re-firing as the mechanism working, not as a fault.
+
+The two rows are not symmetric, and not by oversight: `wrap-up` waits
+for the tracker's blockers to close, because wrapping up means
+collecting finished work; `decompose` consults no blockers, because a
+root is a root whatever blocks it.
