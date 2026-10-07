@@ -833,6 +833,36 @@ func TestHandler_PROpened_FetchesConnectedIssueOneHop(t *testing.T) {
 	}
 }
 
+// TestHandler_PROpened_ConnectedIssueInAnotherRepo pins the cross-repo
+// half of the one hop: the connected issue's blockers are read from the
+// connected issue's own repository, not the event's. Cross-repo is the
+// normal shape of this data — the ideation blockers live in the outcomes
+// repository — so the split must not be lost silently
+// (§forgejo/webhook/re-fetch).
+func TestHandler_PROpened_ConnectedIssueInAnotherRepo(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	connected := testIssue(4, "open")
+	connected.Repository = "o/outcomes"
+	api.blocks[9] = []Issue{*connected}
+	ideation := testIssue(1, "open")
+	ideation.Repository = "o/outcomes"
+	ideation.Labels = []string{LabelIdeation}
+	api.deps[4] = []Issue{*ideation}
+
+	serve(t, h, signedRequest(t, "s3cret", "pull_request", "opened", prPayload("o/r", 9, "opened")))
+	if len(q.all()) != 1 || !strings.Contains(q.all()[0].Prompt, "action="+string(ActionRejectPR)) {
+		t.Fatalf("want one reject-pr dispatch, got %+v", q.all())
+	}
+	if n := api.callCount("IssueDependencies:outcomes/4"); n != 1 {
+		t.Errorf("IssueDependencies on the connected issue's own repo called %d time(s), want 1: the hop must read the connected issue's repository, not the event's", n)
+	}
+	if n := api.callCount("IssueDependencies:r/4"); n != 0 {
+		t.Errorf("IssueDependencies on the event's repo called %d time(s), want 0", n)
+	}
+}
+
 func TestHandler_PRSynced_DoesNotFetchConnectedIssue(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
 	h := NewHandler(eng, "s3cret", nil)
