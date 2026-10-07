@@ -55,6 +55,10 @@ actions:
     prompt: "/issue-wrapper {{.IssueURL}}"
     persona: s-autonomics-implementer
     timeout: 1h
+  reject-pr:
+    prompt: "/pr-rejector {{.PRURL}}"
+    persona: s-autonomics-reviewer
+    timeout: 30m
 `
 
 // writeConfig writes content to a file named name in dir and returns the
@@ -386,7 +390,7 @@ func TestAllActions(t *testing.T) {
 	want := []Action{
 		ActionImplement, ActionReassess, ActionReview, ActionReReview,
 		ActionFixFeedback, ActionMergeOrWait, ActionRebase,
-		ActionDecompose, ActionWrapUp,
+		ActionDecompose, ActionWrapUp, ActionRejectPR,
 	}
 	if len(AllActions) != len(want) {
 		t.Fatalf("AllActions has %d entries, want %d", len(AllActions), len(want))

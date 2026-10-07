@@ -57,6 +57,7 @@ prompts:
 | `rebase` | an open PR is not mergeable (conflicts) |
 | `decompose` | the reconciliation sweep finds an open issue carrying the `ideation` label — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
+| `reject-pr` | a PR opened against unreleased work: its connected issue is blocked by an **open** `ideation` issue — the prompt closes the PR, names the breach, and reports it |
 
 ## Transition table
 
@@ -69,6 +70,7 @@ prompts:
 | issue edited / labels changed / feedback comment (issue open, an open blocker) | hold off — the reason names the open blockers |
 | issue edited / labels changed / feedback comment (issue not open) | hold off |
 | issue closed | unblock cascade |
+| PR opened (connected issue blocked by an open `ideation` issue) | `reject-pr` |
 | PR opened (open, mergeable) | `review` |
 | PR opened (open, not mergeable) | `rebase` |
 | PR synced (open, not mergeable) | `rebase` |
@@ -83,6 +85,16 @@ prompts:
 | reconcile — open `outcome` issue, no open blockers | `wrap-up`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue with open blockers | hold off, naming the open blockers — state calls for no action |
 | reconcile — the sweep's synthetic current-state event | otherwise as issue opened (issue); for a PR, as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` |
+
+The **reject-pr test precedes the review and rebase rows**: reviewing work
+that must not exist wastes a reviewer and produces a diff nobody asked for.
+A PR's **connected issue** is the non-PR issue the PR blocks
+(§forgejo/webhook/re-fetch). When that issue is blocked by an **open** issue
+carrying the reserved `ideation` label — work whose release gate has not
+opened: an ideation issue closes only at wrap-up — the PR is work started
+before its release, and `reject-pr` is decided. A blocked *closed* ideation
+issue, an open blocker without the label, and the absence of a connected
+issue all decide as before.
 
 The "latest review" is the PR's most recently submitted review. An
 issue that *became unblocked* is dispatched `implement` through the
@@ -182,11 +194,11 @@ sweep.
 
 **State** — the re-fetched state of the affected object: the issue or
 PR itself; the issue's blockers (with their states) and its connected
-open PRs, for the `implement` and `reassess` conditions; the PR's
-reviews, for the review transitions; and, for close events, the
-blocker-graph root —
-the closed issue — with each node carrying the issues it blocks and
-the issues that block it.
+open PRs, for the `implement` and `reassess` conditions; the PR's reviews,
+for the review transitions; for PR opened, the connected issue and that
+issue's blockers, for the `reject-pr` test; and, for close events, the
+blocker-graph root — the closed issue — with each node carrying the issues
+it blocks and the issues that block it.
 
 **Watermark** — the last dispatch for the object's key
 (§forgejo/state/watermark), or none.

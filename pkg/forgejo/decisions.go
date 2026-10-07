@@ -26,13 +26,18 @@ const (
 	// (§forgejo/reconciliation/watermark-exemptions).
 	ActionDecompose Action = "decompose"
 	ActionWrapUp    Action = "wrap-up"
+	// ActionRejectPR closes a PR opened against unreleased work
+	// (§forgejo/decisions/actions).
+	ActionRejectPR Action = "reject-pr"
 )
 
-// The reserved label names the watermark-exempt sweep rows consult
-// (§forgejo/reconciliation/watermark-exemptions). They are vocabulary
+// The reserved label names the engine consults. They are vocabulary
 // fixed by the specification, not configuration.
 const (
-	// LabelIdeation marks an issue as a root to decompose.
+	// LabelIdeation marks an issue as a root to decompose; an **open**
+	// issue carrying it also marks work whose release gate has not
+	// opened — an ideation issue closes only at wrap-up
+	// (§forgejo/decisions/actions).
 	LabelIdeation = "ideation"
 	// LabelOutcome marks an issue as a tracker to wrap up once all
 	// its blockers are closed.
@@ -136,6 +141,14 @@ type State struct {
 	Blockers []Issue
 	// ConnectedPRs are the open pull requests connected to State.Issue.
 	ConnectedPRs []PullRequest
+	// ConnectedIssue is the non-PR issue a pull request blocks, for PR
+	// opened — the reject-pr test's input; nil when the PR blocks no
+	// issue (§forgejo/decisions/actions).
+	ConnectedIssue *Issue
+	// ConnectedIssueBlockers are the issues that block ConnectedIssue,
+	// for PR opened: one hop, no recursion
+	// (§forgejo/webhook/re-fetch).
+	ConnectedIssueBlockers []Issue
 	// CascadeRoot is the closed issue the unblock cascade walks from,
 	// for close events.
 	CascadeRoot *IssueNode
@@ -321,6 +334,12 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 	if !prOpen(pr) {
 		return holdOff(fmt.Sprintf("PR %d is not open", pr.Number))
 	}
+	// The reject-pr test precedes review and rebase: reviewing work
+	// that must not exist wastes a reviewer and produces a diff nobody
+	// asked for (§forgejo/decisions/transition-table).
+	if d, rejected := decideRejectPR(pr, s, w); rejected {
+		return d
+	}
 	if !pr.Mergeable {
 		if alreadyDispatched(w, ActionRebase, pr.HeadSHA) {
 			return holdOff(fmt.Sprintf("rebase already dispatched at revision %s", pr.HeadSHA))
@@ -331,6 +350,42 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 		return holdOff(fmt.Sprintf("review already dispatched at revision %s", pr.HeadSHA))
 	}
 	return dispatch(ActionReview, fmt.Sprintf("PR %d opened", pr.Number))
+}
+
+// decideRejectPR tests whether an opened PR is work started before its
+// release gate: its connected issue blocked by an **open** issue
+// carrying the reserved ideation label (§forgejo/decisions/actions).
+// A PR whose connected issue has no such blocker — or with no connected
+// issue at all — is not rejected: a *closed* ideation blocker means the
+// release gate has opened, and an unlabelled blocker is ordinary work,
+// both decided on as review or rebase. When the test does not apply,
+// ok is false and the PR-opened path decides on
+// (§forgejo/decisions/transition-table).
+func decideRejectPR(pr *PullRequest, s State, w *Watermark) (Decision, bool) {
+	if s.ConnectedIssue == nil {
+		return Decision{}, false
+	}
+	for i := range s.ConnectedIssueBlockers {
+		b := &s.ConnectedIssueBlockers[i]
+		if b.State != "open" {
+			continue
+		}
+		labeled := false
+		for _, l := range b.Labels {
+			if l == LabelIdeation {
+				labeled = true
+				break
+			}
+		}
+		if !labeled {
+			continue
+		}
+		if alreadyDispatched(w, ActionRejectPR, pr.HeadSHA) {
+			return holdOff(fmt.Sprintf("reject-pr already dispatched at revision %s", pr.HeadSHA)), true
+		}
+		return dispatch(ActionRejectPR, fmt.Sprintf("PR %d is connected to issue %d, blocked by open ideation issue %d: work started before its release gate", pr.Number, s.ConnectedIssue.Number, b.Number)), true
+	}
+	return Decision{}, false
 }
 
 // decidePRSynced handles new commits on a PR (or the reconciliation

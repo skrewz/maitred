@@ -97,6 +97,16 @@ type fakeAPI struct {
 	// (§forgejo/webhook/re-fetch).
 	depsErr error
 
+	// issueBlocksErr, when set, fails only IssueBlocks — so a test can
+	// break the connected-issue resolution without breaking the other
+	// re-fetches (§forgejo/webhook/re-fetch).
+	issueBlocksErr error
+
+	// issueDepsErr, when set, fails only IssueDependencies — so a test
+	// can break the blocker resolution of the connected issue alone
+	// (§forgejo/webhook/re-fetch).
+	issueDepsErr error
+
 	// GetIssue blocking hooks for the concurrency tests: GetIssue
 	// closes getIssueEntered (once) on entry, then waits on
 	// blockGetIssue when it is set.
@@ -232,6 +242,9 @@ func (f *fakeAPI) ListPullRequestReviews(owner, repo string, number int) ([]Revi
 
 func (f *fakeAPI) IssueBlocks(owner, repo string, number int) ([]Issue, error) {
 	f.record("IssueBlocks:" + repo + "/" + strconv.Itoa(number))
+	if f.issueBlocksErr != nil {
+		return nil, f.issueBlocksErr
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -240,6 +253,9 @@ func (f *fakeAPI) IssueBlocks(owner, repo string, number int) ([]Issue, error) {
 
 func (f *fakeAPI) IssueDependencies(owner, repo string, number int) ([]Issue, error) {
 	f.record("IssueDependencies:" + repo + "/" + strconv.Itoa(number))
+	if f.issueDepsErr != nil {
+		return nil, f.issueDepsErr
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -548,6 +564,45 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			want:    ActionRebase,
 		},
 		{
+			name:      "PR opened, connected issue blocked by an open ideation issue",
+			eventType: "pull_request", action: "opened",
+			payload: prPayload("o/r", 9, "opened"),
+			setup: func(api *fakeAPI) {
+				api.pulls[9] = testPR(9, "open", true)
+				api.blocks[9] = []Issue{*testIssue(4, "open")}
+				ideation := testIssue(1, "open")
+				ideation.Labels = []string{LabelIdeation}
+				api.deps[4] = []Issue{*ideation}
+			},
+			want: ActionRejectPR,
+		},
+		{
+			name:      "PR opened, not mergeable but blocked by an open ideation issue: reject-pr precedes rebase",
+			eventType: "pull_request", action: "opened",
+			payload: prPayload("o/r", 9, "opened"),
+			setup: func(api *fakeAPI) {
+				api.pulls[9] = testPR(9, "open", false)
+				api.blocks[9] = []Issue{*testIssue(4, "open")}
+				ideation := testIssue(1, "open")
+				ideation.Labels = []string{LabelIdeation}
+				api.deps[4] = []Issue{*ideation}
+			},
+			want: ActionRejectPR,
+		},
+		{
+			name:      "PR opened, connected issue blocked only by a closed ideation issue",
+			eventType: "pull_request", action: "opened",
+			payload: prPayload("o/r", 9, "opened"),
+			setup: func(api *fakeAPI) {
+				api.pulls[9] = testPR(9, "open", true)
+				api.blocks[9] = []Issue{*testIssue(4, "open")}
+				ideation := testIssue(1, "closed")
+				ideation.Labels = []string{LabelIdeation}
+				api.deps[4] = []Issue{*ideation}
+			},
+			want: ActionReview,
+		},
+		{
 			name:      "PR synced, no reviews",
 			eventType: "pull_request_sync", action: "synchronized",
 			payload: prPayload("o/r", 9, "synchronized"),
@@ -692,6 +747,128 @@ func TestHandler_IssueActivity_BlockersFetchFailureHoldsOff(t *testing.T) {
 	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 7})
 	if err != nil || w != nil {
 		t.Errorf("watermark recorded after the hold-off: %v, %v", w, err)
+	}
+}
+
+// TestHandler_RejectPR_ConnectedIssueFetchFailureHoldsOff pins that a
+// re-fetch which fails to resolve the connected issue holds off naming
+// the failure — never defaulting to review
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/actions).
+func TestHandler_RejectPR_ConnectedIssueFetchFailureHoldsOff(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	api.issueBlocksErr = errors.New("blocks unavailable")
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request", "opened", prPayload("o/r", 9, "opened")))
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want 204", rec.Code)
+	}
+	if n := api.callCount("IssueBlocks"); n != 1 {
+		t.Errorf("IssueBlocks called %d time(s), want 1: the delivery must reach the connected-issue resolution for this test to test it", n)
+	}
+	if len(q.all()) != 0 {
+		t.Errorf("task dispatched despite failed connected-issue re-fetch")
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark recorded after failed re-fetch: %+v", w)
+	}
+}
+
+// TestHandler_RejectPR_ConnectedIssueBlocksFetchFailureHoldsOff pins
+// the same hold-off when it is the connected issue's *blockers* whose
+// re-fetch fails (§forgejo/webhook/re-fetch).
+func TestHandler_RejectPR_ConnectedIssueBlocksFetchFailureHoldsOff(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	api.blocks[9] = []Issue{*testIssue(4, "open")}
+	api.issueDepsErr = errors.New("dependencies unavailable")
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request", "opened", prPayload("o/r", 9, "opened")))
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want 204", rec.Code)
+	}
+	if n := api.callCount("IssueDependencies"); n != 1 {
+		t.Errorf("IssueDependencies called %d time(s), want 1: the delivery must reach the blocker resolution for this test to test it", n)
+	}
+	if len(q.all()) != 0 {
+		t.Errorf("task dispatched despite failed blocker re-fetch")
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark recorded after failed re-fetch: %+v", w)
+	}
+}
+
+// TestHandler_PROpened_FetchesConnectedIssueOneHop pins the fetch
+// surface: PR opened fetches the connected issue's blockers exactly
+// once — one hop, no recursion — and PR synced fetches neither
+// (§forgejo/webhook/re-fetch).
+func TestHandler_PROpened_FetchesConnectedIssueOneHop(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	api.blocks[9] = []Issue{*testIssue(4, "open")}
+	ideation := testIssue(1, "open")
+	ideation.Labels = []string{LabelIdeation}
+	api.deps[4] = []Issue{*ideation}
+
+	serve(t, h, signedRequest(t, "s3cret", "pull_request", "opened", prPayload("o/r", 9, "opened")))
+	if len(q.all()) != 1 || !strings.Contains(q.all()[0].Prompt, "action="+string(ActionRejectPR)) {
+		t.Fatalf("want one reject-pr dispatch, got %+v", q.all())
+	}
+	if n := api.callCount("IssueBlocks"); n != 1 {
+		t.Errorf("IssueBlocks called %d time(s), want 1 (one hop, no recursion)", n)
+	}
+	if n := api.callCount("IssueDependencies:r/4"); n != 1 {
+		t.Errorf("IssueDependencies on the connected issue called %d time(s), want 1", n)
+	}
+}
+
+func TestHandler_PRSynced_DoesNotFetchConnectedIssue(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+
+	serve(t, h, signedRequest(t, "s3cret", "pull_request_sync", "synchronized", prPayload("o/r", 9, "synchronized")))
+	if len(q.all()) != 1 || !strings.Contains(q.all()[0].Prompt, "action="+string(ActionReview)) {
+		t.Fatalf("want one review dispatch, got %+v", q.all())
+	}
+	if n := api.callCount("IssueBlocks"); n != 0 {
+		t.Errorf("IssueBlocks called %d time(s) on PR sync, want 0: the new read is PR opened only", n)
+	}
+}
+
+// TestHandler_PRLabelDelivery_NeverRejects pins that a label delivery
+// stays cheaply ignored even amid the full reject-pr fixtures: it must
+// not reach the decision, no re-fetch, no dispatch
+// (§forgejo/webhook/event-mapping, §forgejo/decisions/actions).
+func TestHandler_PRLabelDelivery_NeverRejects(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	api.blocks[9] = []Issue{*testIssue(4, "open")}
+	ideation := testIssue(1, "open")
+	ideation.Labels = []string{LabelIdeation}
+	api.deps[4] = []Issue{*ideation}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_label", "labeled", prPayload("o/r", 9, "labeled")))
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want 204", rec.Code)
+	}
+	if len(api.calls) != 0 {
+		t.Errorf("client called for ignored label delivery: %v", api.calls)
+	}
+	if len(q.all()) != 0 {
+		t.Errorf("task dispatched for ignored label delivery")
 	}
 }
 

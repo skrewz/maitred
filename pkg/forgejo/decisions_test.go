@@ -58,6 +58,15 @@ func ideationIssue() *Issue {
 	return issue
 }
 
+// connectedIssue is the non-PR issue a PR under test blocks — the
+// connected issue of the reject-pr test (§forgejo/decisions/actions).
+func connectedIssue() *Issue {
+	issue := openIssue()
+	issue.Number = 4
+	issue.Title = "connected issue"
+	return issue
+}
+
 func openPR(sha string) *PullRequest {
 	return &PullRequest{
 		Number:    9,
@@ -94,6 +103,7 @@ func TestActionNames(t *testing.T) {
 		ActionRebase:      "rebase",
 		ActionDecompose:   "decompose",
 		ActionWrapUp:      "wrap-up",
+		ActionRejectPR:    "reject-pr",
 	}
 	for action, name := range want {
 		if string(action) != name {
@@ -247,6 +257,67 @@ func TestDecide(t *testing.T) {
 			event:      prEvent(EventPROpened, "alice"),
 			state:      State{PR: notMergeablePR("abc")},
 			wantAction: ActionRebase,
+		},
+		{
+			name:  "PR opened whose connected issue is blocked by an open ideation issue dispatches reject-pr",
+			event: prEvent(EventPROpened, "alice"),
+			state: State{
+				PR:                     openPR("abc"),
+				ConnectedIssue:         connectedIssue(),
+				ConnectedIssueBlockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+			},
+			wantAction: ActionRejectPR,
+		},
+		{
+			// Ordering: reject-pr is decided before review and rebase
+			// (§forgejo/decisions/transition-table).
+			name:  "PR opened not mergeable but blocked by an open ideation issue dispatches reject-pr",
+			event: prEvent(EventPROpened, "alice"),
+			state: State{
+				PR:                     notMergeablePR("abc"),
+				ConnectedIssue:         connectedIssue(),
+				ConnectedIssueBlockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+			},
+			wantAction: ActionRejectPR,
+		},
+		{
+			name:  "PR opened whose connected issue is blocked only by a closed ideation issue dispatches review",
+			event: prEvent(EventPROpened, "alice"),
+			state: State{
+				PR:                     openPR("abc"),
+				ConnectedIssue:         connectedIssue(),
+				ConnectedIssueBlockers: []Issue{{Number: 1, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}}},
+			},
+			wantAction: ActionReview,
+		},
+		{
+			name:  "PR opened whose connected issue has an open blocker without the ideation label dispatches review",
+			event: prEvent(EventPROpened, "alice"),
+			state: State{
+				PR:                     openPR("abc"),
+				ConnectedIssue:         connectedIssue(),
+				ConnectedIssueBlockers: []Issue{{Number: 1, State: "open", Repository: "o/r"}},
+			},
+			wantAction: ActionReview,
+		},
+		{
+			name:  "PR opened with no connected issue dispatches review",
+			event: prEvent(EventPROpened, "alice"),
+			state: State{
+				PR:                     openPR("abc"),
+				ConnectedIssueBlockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+			},
+			wantAction: ActionReview,
+		},
+		{
+			name:  "reject-pr already dispatched at the revision holds off",
+			event: prEvent(EventPROpened, "alice"),
+			state: State{
+				PR:                     openPR("abc"),
+				ConnectedIssue:         connectedIssue(),
+				ConnectedIssueBlockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+			},
+			watermark: &Watermark{Action: string(ActionRejectPR), Revision: "abc"},
 		},
 		{
 			name:  "PR opened but closed on re-fetch holds off",

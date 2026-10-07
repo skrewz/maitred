@@ -46,3 +46,7 @@ actions:
     prompt: "wrap-up {{.Repo}} {{.Kind}} {{.Number}}"
     persona: ui-test
     timeout: 1h
+  reject-pr:
+    prompt: "reject-pr {{.Repo}} {{.Kind}} {{.Number}}"
+    persona: ui-test
+    timeout: 1h
