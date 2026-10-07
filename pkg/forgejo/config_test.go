@@ -17,6 +17,7 @@ import (
 const validConfigYAML = `
 org: example-org
 reconcile_interval: 15m
+decomposer_identity: decomposer
 actions:
   implement:
     prompt: "/issue-implementer {{.IssueURL}}"
@@ -83,6 +84,9 @@ func TestLoadConfigFile(t *testing.T) {
 	if cfg.ReconcileInterval != 15*time.Minute {
 		t.Errorf("reconcile_interval = %s, want 15m", cfg.ReconcileInterval)
 	}
+	if cfg.DecomposerIdentity != "decomposer" {
+		t.Errorf("decomposer_identity = %q, want %q", cfg.DecomposerIdentity, "decomposer")
+	}
 	if len(cfg.Actions) != len(AllActions) {
 		t.Fatalf("loaded %d actions, want %d", len(cfg.Actions), len(AllActions))
 	}
@@ -106,7 +110,7 @@ func TestLoadConfigFile(t *testing.T) {
 // merged in sorted order (§forgejo/config/loading).
 func TestLoadConfigDirectory(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, "01-org.yaml", "org: example-org\n")
+	writeConfig(t, dir, "01-org.yaml", "org: example-org\ndecomposer_identity: decomposer\n")
 	writeConfig(t, dir, "02-implement.yaml", `
 actions:
   implement:
@@ -125,8 +129,28 @@ actions:
 	if cfg.Org != "example-org" {
 		t.Errorf("org = %q, want %q", cfg.Org, "example-org")
 	}
+	if cfg.DecomposerIdentity != "decomposer" {
+		t.Errorf("decomposer_identity = %q, want %q", cfg.DecomposerIdentity, "decomposer")
+	}
 	if len(cfg.Actions) != len(AllActions) {
 		t.Errorf("loaded %d actions, want %d", len(cfg.Actions), len(AllActions))
+	}
+}
+
+// TestLoadConfigDecomposerIdentityAbsent pins that the decomposer
+// identity is optional: with no key configured the config loads and the
+// authorship hold-off input is empty (§forgejo/config/decomposer-identity,
+// §forgejo/config/validation).
+func TestLoadConfigDecomposerIdentityAbsent(t *testing.T) {
+	dir := t.TempDir()
+	yaml := strings.Replace(validConfigYAML, "decomposer_identity: decomposer\n", "", 1)
+	path := writeConfig(t, dir, "forgejoeng.yaml", yaml)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig without decomposer_identity: %v", err)
+	}
+	if cfg.DecomposerIdentity != "" {
+		t.Errorf("decomposer_identity = %q, want empty", cfg.DecomposerIdentity)
 	}
 }
 
@@ -272,6 +296,14 @@ func TestLoadConfigDirectoryConflicts(t *testing.T) {
 		writeConfig(t, dir, "02-b.yaml", "reconcile_interval: 20m\n")
 		if _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), "reconcile_interval") {
 			t.Fatalf("expected conflicting-reconcile_interval error, got %v", err)
+		}
+	})
+	t.Run("conflicting decomposer_identity", func(t *testing.T) {
+		dir := t.TempDir()
+		writeConfig(t, dir, "01-a.yaml", "org: example-org\ndecomposer_identity: one\n")
+		writeConfig(t, dir, "02-b.yaml", "decomposer_identity: two\n")
+		if _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), "decomposer_identity") {
+			t.Fatalf("expected conflicting-decomposer_identity error, got %v", err)
 		}
 	})
 }
