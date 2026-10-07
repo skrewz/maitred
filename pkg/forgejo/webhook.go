@@ -202,11 +202,12 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		st := State{PR: pr}
 		switch ev.Type {
 		case EventPROpened:
-			// The reject-pr test's one hop: the connected issue — the
-			// non-PR issue the PR blocks, a relationship recorded on the
-			// blocker graph rather than inferred from the PR body — and
-			// that issue's blockers, read from the connected issue's own
-			// repository, no recursion. A failure to resolve the connected
+			// The reject-pr test's one hop: every non-PR issue the PR
+			// blocks — relationships recorded on the blocker graph rather
+			// than inferred from the PR body — and each issue's
+			// blockers, read from that issue's own repository, no
+			// recursion. Every non-PR entry is resolved: the test is not
+			// left to API ordering. A failure to resolve any connected
 			// issue is a re-fetch failure — a hold-off naming the failure,
 			// never the review default (§forgejo/webhook/re-fetch,
 			// §forgejo/decisions/actions).
@@ -218,15 +219,12 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 				if blocks[i].IsPull {
 					continue
 				}
-				connected := blocks[i]
-				st.ConnectedIssue = &connected
-				co, cn := splitRepo(connected.Repository)
-				deps, err := e.api.IssueDependencies(co, cn, connected.Number)
+				co, cn := splitRepo(blocks[i].Repository)
+				deps, err := e.api.IssueDependencies(co, cn, blocks[i].Number)
 				if err != nil {
 					return ev, State{}, err
 				}
-				st.ConnectedIssueBlockers = deps
-				break
+				st.ConnectedIssues = append(st.ConnectedIssues, ConnectedIssue{Issue: blocks[i], Blockers: deps})
 			}
 			fallthrough
 		case EventPRSynced, EventPRReviewed, EventReconcile:

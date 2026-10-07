@@ -262,11 +262,53 @@ func TestDecide(t *testing.T) {
 			name:  "PR opened whose connected issue is blocked by an open ideation issue dispatches reject-pr",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
-				PR:                     openPR("abc"),
-				ConnectedIssue:         connectedIssue(),
-				ConnectedIssueBlockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				PR: openPR("abc"),
+				ConnectedIssues: []ConnectedIssue{{
+					Issue:    *connectedIssue(),
+					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				}},
 			},
 			wantAction: ActionRejectPR,
+		},
+		{
+			// The test applies to every connected issue: a later
+			// connected issue blocked by an open ideation issue rejects
+			// whatever order the API returned the relationships in
+			// (§forgejo/decisions/transition-table).
+			name:  "PR opened whose second connected issue is blocked by an open ideation issue dispatches reject-pr",
+			event: prEvent(EventPROpened, "alice"),
+			state: State{
+				PR: openPR("abc"),
+				ConnectedIssues: []ConnectedIssue{
+					{
+						Issue:    *connectedIssue(),
+						Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r"}},
+					},
+					{
+						Issue:    Issue{Number: 5, Title: "second connected issue", State: "open", Repository: "o/r"},
+						Blockers: []Issue{{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+					},
+				},
+			},
+			wantAction: ActionRejectPR,
+		},
+		{
+			name:  "PR opened whose two connected issues have no open ideation blocker dispatches review",
+			event: prEvent(EventPROpened, "alice"),
+			state: State{
+				PR: openPR("abc"),
+				ConnectedIssues: []ConnectedIssue{
+					{
+						Issue:    *connectedIssue(),
+						Blockers: []Issue{{Number: 1, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}}},
+					},
+					{
+						Issue:    Issue{Number: 5, Title: "second connected issue", State: "open", Repository: "o/r"},
+						Blockers: []Issue{{Number: 2, State: "open", Repository: "o/r"}},
+					},
+				},
+			},
+			wantAction: ActionReview,
 		},
 		{
 			// Ordering: reject-pr is decided before review and rebase
@@ -274,9 +316,11 @@ func TestDecide(t *testing.T) {
 			name:  "PR opened not mergeable but blocked by an open ideation issue dispatches reject-pr",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
-				PR:                     notMergeablePR("abc"),
-				ConnectedIssue:         connectedIssue(),
-				ConnectedIssueBlockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				PR: notMergeablePR("abc"),
+				ConnectedIssues: []ConnectedIssue{{
+					Issue:    *connectedIssue(),
+					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				}},
 			},
 			wantAction: ActionRejectPR,
 		},
@@ -287,12 +331,14 @@ func TestDecide(t *testing.T) {
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
 				PR: openPR("abc"),
-				ConnectedIssue: func() *Issue {
-					issue := connectedIssue()
-					issue.State = "closed"
-					return issue
-				}(),
-				ConnectedIssueBlockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				ConnectedIssues: []ConnectedIssue{{
+					Issue: func() Issue {
+						issue := *connectedIssue()
+						issue.State = "closed"
+						return issue
+					}(),
+					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				}},
 			},
 			wantAction: ActionRejectPR,
 		},
@@ -302,9 +348,11 @@ func TestDecide(t *testing.T) {
 			name:  "PR opened whose connected issue is blocked by an open issue labelled Ideation dispatches review",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
-				PR:                     openPR("abc"),
-				ConnectedIssue:         connectedIssue(),
-				ConnectedIssueBlockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{"Ideation"}}},
+				PR: openPR("abc"),
+				ConnectedIssues: []ConnectedIssue{{
+					Issue:    *connectedIssue(),
+					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{"Ideation"}}},
+				}},
 			},
 			wantAction: ActionReview,
 		},
@@ -312,9 +360,11 @@ func TestDecide(t *testing.T) {
 			name:  "PR opened whose connected issue is blocked only by a closed ideation issue dispatches review",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
-				PR:                     openPR("abc"),
-				ConnectedIssue:         connectedIssue(),
-				ConnectedIssueBlockers: []Issue{{Number: 1, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				PR: openPR("abc"),
+				ConnectedIssues: []ConnectedIssue{{
+					Issue:    *connectedIssue(),
+					Blockers: []Issue{{Number: 1, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				}},
 			},
 			wantAction: ActionReview,
 		},
@@ -322,9 +372,11 @@ func TestDecide(t *testing.T) {
 			name:  "PR opened whose connected issue has an open blocker without the ideation label dispatches review",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
-				PR:                     openPR("abc"),
-				ConnectedIssue:         connectedIssue(),
-				ConnectedIssueBlockers: []Issue{{Number: 1, State: "open", Repository: "o/r"}},
+				PR: openPR("abc"),
+				ConnectedIssues: []ConnectedIssue{{
+					Issue:    *connectedIssue(),
+					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r"}},
+				}},
 			},
 			wantAction: ActionReview,
 		},
@@ -332,8 +384,7 @@ func TestDecide(t *testing.T) {
 			name:  "PR opened with no connected issue dispatches review",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
-				PR:                     openPR("abc"),
-				ConnectedIssueBlockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				PR: openPR("abc"),
 			},
 			wantAction: ActionReview,
 		},
@@ -341,9 +392,11 @@ func TestDecide(t *testing.T) {
 			name:  "reject-pr already dispatched at the revision holds off",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
-				PR:                     openPR("abc"),
-				ConnectedIssue:         connectedIssue(),
-				ConnectedIssueBlockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				PR: openPR("abc"),
+				ConnectedIssues: []ConnectedIssue{{
+					Issue:    *connectedIssue(),
+					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				}},
 			},
 			watermark: &Watermark{Action: string(ActionRejectPR), Revision: "abc"},
 		},
@@ -493,9 +546,11 @@ func TestDecide(t *testing.T) {
 			name:  "reconcile PR whose connected issue is blocked by an open ideation issue decides as PR synced",
 			event: prEvent(EventReconcile, "maitred"),
 			state: State{
-				PR:                     openPR("abc"),
-				ConnectedIssue:         connectedIssue(),
-				ConnectedIssueBlockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				PR: openPR("abc"),
+				ConnectedIssues: []ConnectedIssue{{
+					Issue:    *connectedIssue(),
+					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				}},
 			},
 			wantAction: ActionReview,
 		},

@@ -210,11 +210,13 @@ For each decision event, the re-fetch assembles the state
   "no blockers".
   For issue closed, the blocker graph rooted at the closed issue.
 - **PR events** — the PR itself, and its reviews, for the review
-  transitions. For PR opened, the connected issue — the non-PR issue the PR
-  blocks, read from the issue-blocks surface and carrying its own
-  repository, which may differ from the PR's — and that issue's blockers as
-  well: one hop, no recursion, the input to the `reject-pr` test
-  (§forgejo/decisions/actions). This is the only place the engine grows a
+  transitions. For PR opened, the connected issues — the non-PR issues
+  the PR blocks, read from the issue-blocks surface, each carrying its
+  own repository, which may differ from the PR's — and each issue's
+  blockers as well: one hop per connected issue, no recursion, the input
+  to the `reject-pr` test (§forgejo/decisions/actions). Every non-PR
+  entry is resolved: the gate's decision is not left to the order the
+  listing happens to return. This is the only place the engine grows a
   new read. For PR merged, the blocker graph rooted at the connected
   issue — the non-PR issue the PR blocks.
 

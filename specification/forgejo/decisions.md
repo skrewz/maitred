@@ -57,7 +57,7 @@ prompts:
 | `rebase` | an open PR is not mergeable (conflicts) |
 | `decompose` | the reconciliation sweep finds an open issue carrying the `ideation` label — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
-| `reject-pr` | a PR opened against unreleased work: its connected issue is blocked by an **open** `ideation` issue — the prompt closes the PR, names the breach, and reports it |
+| `reject-pr` | a PR opened against unreleased work: a **connected issue** — any non-PR issue the PR blocks, every one being tested — is blocked by an **open** `ideation` issue; the prompt closes the PR, names the breach, and reports it |
 
 ## Transition table
 
@@ -70,7 +70,7 @@ prompts:
 | issue edited / labels changed / feedback comment (issue open, an open blocker) | hold off — the reason names the open blockers |
 | issue edited / labels changed / feedback comment (issue not open) | hold off |
 | issue closed | unblock cascade |
-| PR opened (connected issue blocked by an open `ideation` issue) | `reject-pr` |
+| PR opened (a connected issue blocked by an open `ideation` issue) | `reject-pr` |
 | PR opened (open, mergeable) | `review` |
 | PR opened (open, not mergeable) | `rebase` |
 | PR synced (open, not mergeable) | `rebase` |
@@ -91,30 +91,33 @@ that must not exist wastes a reviewer and produces a diff nobody asked for.
 It is the PR-opened path's test alone. The reconciliation sweep does not
 apply it, so a PR the sweep feeds through `decide` decides as PR synced —
 review, re-review, fix-feedback or, at an approved mergeable review,
-merge-or-wait — even when its connected issue is blocked by an open
+merge-or-wait — even when a connected issue is blocked by an open
 `ideation` issue. Closing that gap needs the same hop in the sweep's
 re-fetch: a separate change, stated here so the gap is a known limitation
 and not a silent contradiction of the gate.
 
-A PR's **connected issue** is the non-PR issue the PR blocks
-(§forgejo/webhook/re-fetch) — a **recorded** blocker relationship, never
-an inferred one. Forgejo creates no PR→issue dependency from a `Fixes #NN`
+A PR's **connected issues** are the non-PR issues the PR blocks
+(§forgejo/webhook/re-fetch) — **recorded** blocker relationships, never
+inferred ones. Forgejo creates no PR→issue dependency from a `Fixes #NN`
 keyword in a PR body, and the engine's client is read-only
 (§forgejo/client/operations), so whoever opens the PR records the
 relationship and the engine only reads it; a PR whose opening recorded
-none has no connected issue and decides as before.
+no dependency has no connected issues and decides as before.
 
-When the connected issue *is* blocked by an **open** issue carrying the
-reserved `ideation` label — work whose release gate has not opened: an
-ideation issue closes only at wrap-up — the PR is work started before its
-release, and `reject-pr` is decided. Reserved names are matched exactly
+When **any** connected issue is blocked by an **open** issue carrying
+the reserved `ideation` label — work whose release gate has not opened:
+an ideation issue closes only at wrap-up — the PR is work started before
+its release, and `reject-pr` is decided. The test applies to **every**
+connected issue, not just the first: any blocked connected issue is work
+started before its gate, so the decision does not depend on the order
+the API returns the relationships in. Reserved names are matched exactly
 and case-sensitively, as elsewhere in the engine: renaming the label in
 the UI disables the test silently, a fragility accepted with the name.
-The connected issue's **own** state is not consulted — the gate is the
-blocker's — so a PR opened against a closed connected issue still blocked
-by an open ideation issue is rejected. A blocked *closed* ideation issue,
-an open blocker without the label, and the absence of a connected issue
-all decide as before.
+A connected issue's **own** state is not consulted — the gate is the
+blocker's — so a PR opened against a closed connected issue still
+blocked by an open ideation issue is rejected. A blocked *closed*
+ideation issue, an open blocker without the label, and the absence of
+any connected issue all decide as before.
 
 The "latest review" is the PR's most recently submitted review. An
 issue that *became unblocked* is dispatched `implement` through the
@@ -214,11 +217,11 @@ sweep.
 
 **State** — the re-fetched state of the affected object: the issue or
 PR itself; the issue's blockers (with their states) and its connected
-open PRs, for the `implement` and `reassess` conditions; the PR's reviews,
-for the review transitions; for PR opened, the connected issue and that
-issue's blockers, for the `reject-pr` test; and, for close events, the
-blocker-graph root — the closed issue — with each node carrying the issues
-it blocks and the issues that block it.
+open PRs, for the `implement` and `reassess` conditions; the PR's
+reviews, for the review transitions; for PR opened, the issues the PR
+blocks and each issue's blockers, for the `reject-pr` test; and, for close
+events, the blocker-graph root — the closed issue — with each node
+carrying the issues it blocks and the issues that block it.
 
 **Watermark** — the last dispatch for the object's key
 (§forgejo/state/watermark), or none.

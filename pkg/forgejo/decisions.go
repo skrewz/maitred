@@ -128,17 +128,26 @@ type State struct {
 	Blockers []Issue
 	// ConnectedPRs are the open pull requests connected to State.Issue.
 	ConnectedPRs []PullRequest
-	// ConnectedIssue is the non-PR issue a pull request blocks, for PR
-	// opened — the reject-pr test's input; nil when the PR blocks no
-	// issue (§forgejo/decisions/actions).
-	ConnectedIssue *Issue
-	// ConnectedIssueBlockers are the issues that block ConnectedIssue,
-	// for PR opened: one hop, no recursion
-	// (§forgejo/webhook/re-fetch).
-	ConnectedIssueBlockers []Issue
+	// ConnectedIssues are the non-PR issues a pull request blocks, each
+	// with its own blockers, for PR opened — the reject-pr test's
+	// input; empty when the PR's opening recorded no dependency
+	// (§forgejo/decisions/actions).
+	ConnectedIssues []ConnectedIssue
 	// CascadeRoot is the closed issue the unblock cascade walks from,
 	// for close events.
 	CascadeRoot *IssueNode
+}
+
+// ConnectedIssue is one non-PR issue a pull request blocks, with the
+// issues that block it: the reject-pr test's input. The relationship
+// is recorded on the blocker graph, never inferred from the PR body
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/actions).
+type ConnectedIssue struct {
+	// Issue is the connected issue; its Repository may differ from
+	// the PR's (cross-repo relationships).
+	Issue Issue
+	// Blockers are the issues that block Issue: one hop, no recursion.
+	Blockers []Issue
 }
 
 // IssueNode is one issue in the blocker graph, as re-fetched for the
@@ -340,40 +349,45 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 }
 
 // decideRejectPR tests whether an opened PR is work started before its
-// release gate: its connected issue blocked by an **open** issue
+// release gate: one of its connected issues — every non-PR issue the
+// PR blocks is tested, so the decision does not depend on the order
+// the relationships are returned in — blocked by an **open** issue
 // carrying the reserved ideation label (§forgejo/decisions/actions).
-// A PR whose connected issue has no such blocker — or with no connected
-// issue at all, because the PR's opening recorded no dependency — is not
-// rejected: a *closed* ideation blocker means the release gate has
-// opened, and an unlabelled blocker is ordinary work, both decided on as
-// review or rebase. The connected issue's own state is not consulted:
-// the gate is the blocker's, so a PR opened against a closed connected
-// issue still blocked by an open ideation issue is rejected. When the
-// test does not apply, ok is false and the PR-opened path decides on
-// (§forgejo/decisions/transition-table).
+// A PR whose connected issues have no such blocker — or with no
+// connected issue at all, because the PR's opening recorded no
+// dependency — is not rejected: a *closed* ideation blocker means the
+// release gate has opened, and an unlabelled blocker is ordinary work,
+// both decided on as review or rebase. A connected issue's **own**
+// state is not consulted: the gate is the blocker's, so a PR opened
+// against a closed connected issue still blocked by an open ideation
+// issue is rejected. When the test does not apply, ok is false and the
+// PR-opened path decides on (§forgejo/decisions/transition-table).
 func decideRejectPR(pr *PullRequest, s State, w *Watermark) (Decision, bool) {
-	if s.ConnectedIssue == nil {
+	if len(s.ConnectedIssues) == 0 {
 		return Decision{}, false
 	}
-	for i := range s.ConnectedIssueBlockers {
-		b := &s.ConnectedIssueBlockers[i]
-		if b.State != "open" {
-			continue
-		}
-		labeled := false
-		for _, l := range b.Labels {
-			if l == LabelIdeation {
-				labeled = true
-				break
+	for i := range s.ConnectedIssues {
+		c := &s.ConnectedIssues[i]
+		for j := range c.Blockers {
+			b := &c.Blockers[j]
+			if b.State != "open" {
+				continue
 			}
+			labeled := false
+			for _, l := range b.Labels {
+				if l == LabelIdeation {
+					labeled = true
+					break
+				}
+			}
+			if !labeled {
+				continue
+			}
+			if alreadyDispatched(w, ActionRejectPR, pr.HeadSHA) {
+				return holdOff(fmt.Sprintf("reject-pr already dispatched at revision %s", pr.HeadSHA)), true
+			}
+			return dispatch(ActionRejectPR, fmt.Sprintf("PR %d is connected to issue %d, blocked by open ideation issue %d: work started before its release gate", pr.Number, c.Issue.Number, b.Number)), true
 		}
-		if !labeled {
-			continue
-		}
-		if alreadyDispatched(w, ActionRejectPR, pr.HeadSHA) {
-			return holdOff(fmt.Sprintf("reject-pr already dispatched at revision %s", pr.HeadSHA)), true
-		}
-		return dispatch(ActionRejectPR, fmt.Sprintf("PR %d is connected to issue %d, blocked by open ideation issue %d: work started before its release gate", pr.Number, s.ConnectedIssue.Number, b.Number)), true
 	}
 	return Decision{}, false
 }

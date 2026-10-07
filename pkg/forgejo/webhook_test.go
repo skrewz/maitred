@@ -863,6 +863,43 @@ func TestHandler_PROpened_ConnectedIssueInAnotherRepo(t *testing.T) {
 	}
 }
 
+// TestHandler_PROpened_TestsEveryConnectedIssue pins the re-fetch
+// surface when a PR blocks several non-PR issues: every non-PR entry is
+// resolved with its blockers — one hop each, once per issue — so the
+// reject-pr decision cannot depend on the order the API returned the
+// relationships in (§forgejo/webhook/re-fetch).
+func TestHandler_PROpened_TestsEveryConnectedIssue(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	first := testIssue(4, "open")
+	second := testIssue(5, "open")
+	second.Repository = "o/outcomes"
+	api.blocks[9] = []Issue{*first, *second}
+	api.deps[4] = []Issue{*testIssue(1, "open")} // ordinary unlabelled blocker
+	ideation := testIssue(2, "open")
+	ideation.Repository = "o/outcomes"
+	ideation.Labels = []string{LabelIdeation}
+	api.deps[5] = []Issue{*ideation}
+
+	serve(t, h, signedRequest(t, "s3cret", "pull_request", "opened", prPayload("o/r", 9, "opened")))
+	if len(q.all()) != 1 || !strings.Contains(q.all()[0].Prompt, "action="+string(ActionRejectPR)) {
+		t.Fatalf("want one reject-pr dispatch, got %+v", q.all())
+	}
+	if n := api.callCount("IssueBlocks"); n != 1 {
+		t.Errorf("IssueBlocks called %d time(s), want 1", n)
+	}
+	if n := api.callCount("IssueDependencies:r/4"); n != 1 {
+		t.Errorf("IssueDependencies on the first connected issue called %d time(s), want 1", n)
+	}
+	if n := api.callCount("IssueDependencies:outcomes/5"); n != 1 {
+		t.Errorf("IssueDependencies on the second connected issue called %d time(s), want 1", n)
+	}
+	if n := api.callCount("IssueDependencies:outcomes/2"); n != 0 {
+		t.Errorf("IssueDependencies on a connected issue's blocker called %d time(s), want 0: one hop per connected issue, no recursion", n)
+	}
+}
+
 func TestHandler_PRSynced_DoesNotFetchConnectedIssue(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
 	h := NewHandler(eng, "s3cret", nil)
