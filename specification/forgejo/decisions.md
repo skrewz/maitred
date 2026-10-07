@@ -57,7 +57,7 @@ prompts:
 | `rebase` | an open PR is not mergeable (conflicts) |
 | `decompose` | the reconciliation sweep finds an open issue carrying the `ideation` label — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
-| `reject-pr` | a PR opened against unreleased work: a **connected issue** — any non-PR issue the PR blocks, every one being tested — is blocked by an **open** `ideation` issue; the prompt closes the PR, names the breach, and reports it |
+| `reject-pr` | a PR is connected to unreleased work: a **connected issue** — any non-PR issue the PR blocks, every one being tested — is blocked by an **open** `ideation` issue; tested when a PR opens, when a review is submitted, and by the reconciliation sweep, ahead of every review, rebase, fix and merge decision; the prompt closes the PR, names the breach, and reports it |
 
 ## Transition table
 
@@ -76,6 +76,7 @@ prompts:
 | PR synced (open, not mergeable) | `rebase` |
 | PR synced (open, mergeable, no review) | `review` |
 | PR synced (open, mergeable, has a review) | `re-review` |
+| review submitted (a connected issue blocked by an open `ideation` issue) | `reject-pr` |
 | review submitted (latest review requests changes) | `fix-feedback` |
 | review submitted (latest review approves) | `merge-or-wait` |
 | review submitted (latest review is anything else) | hold off |
@@ -84,17 +85,19 @@ prompts:
 | reconcile — open issue with the `ideation` label | `decompose`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue, no open blockers | `wrap-up`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue with open blockers | hold off, naming the open blockers — state calls for no action |
-| reconcile — the sweep's synthetic current-state event | otherwise as issue opened (issue); for a PR, as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` |
+| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, `reject-pr` when a connected issue is blocked by an open `ideation` issue and otherwise as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` |
 
-The **reject-pr test precedes the review and rebase rows**: reviewing work
-that must not exist wastes a reviewer and produces a diff nobody asked for.
-It is the PR-opened path's test alone. The reconciliation sweep does not
-apply it, so a PR the sweep feeds through `decide` decides as PR synced —
-review, re-review, fix-feedback or, at an approved mergeable review,
-merge-or-wait — even when a connected issue is blocked by an open
-`ideation` issue. Closing that gap needs the same hop in the sweep's
-re-fetch: a separate change, stated here so the gap is a known limitation
-and not a silent contradiction of the gate.
+The **reject-pr test precedes the review and rebase rows** on every path
+that can dispatch review, re-review, fix-feedback, or merge-or-wait: it
+applies when a PR opens, ahead of the review-following decisions of a
+submitted review — so a gate that closed after the PR opened cannot be
+walked through by the next approving review — and on the whole PR path of
+the reconciliation sweep, whose re-fetch performs the same one hop. The
+remaining boundary is the **PR synced event**: a push to an open PR
+decides review or re-review without the test — its re-fetch grows no hop,
+keeping the push path cheap — and the next review submission or sweep
+applies the test. Stated here so the boundary is a known limitation and
+not a silent contradiction of the gate.
 
 A PR's **connected issues** are the non-PR issues the PR blocks
 (§forgejo/webhook/re-fetch) — **recorded** blocker relationships, never
@@ -225,10 +228,11 @@ sweep.
 **State** — the re-fetched state of the affected object: the issue or
 PR itself; the issue's blockers (with their states) and its connected
 open PRs, for the `implement` and `reassess` conditions; the PR's
-reviews, for the review transitions; for PR opened, the issues the PR
-blocks and each issue's blockers, for the `reject-pr` test; and, for close
-events, the blocker-graph root — the closed issue — with each node
-carrying the issues it blocks and the issues that block it.
+reviews, for the review transitions; for PR opened, PR reviewed and the
+sweep's PR path, the issues the PR blocks and each issue's blockers, for
+the `reject-pr` test; and, for close events, the blocker-graph root — the
+closed issue — with each node carrying the issues it blocks and the issues
+that block it.
 
 **Watermark** — the last dispatch for the object's key
 (§forgejo/state/watermark), or none.

@@ -348,11 +348,15 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 	return dispatch(ActionReview, fmt.Sprintf("PR %d opened", pr.Number))
 }
 
-// decideRejectPR tests whether an opened PR is work started before its
-// release gate: one of its connected issues — every non-PR issue the
-// PR blocks is tested, so the decision does not depend on the order
-// the relationships are returned in — blocked by an **open** issue
-// carrying the reserved ideation label (§forgejo/decisions/actions).
+// decideRejectPR tests whether a PR is work started before its release
+// gate, ahead of the review, rebase, fix and merge decisions: one of
+// its connected issues — every non-PR issue the PR blocks is tested,
+// so the decision does not depend on the order the relationships are
+// returned in — blocked by an **open** issue carrying the reserved
+// ideation label (§forgejo/decisions/actions). It is consulted by the
+// PR-opened, PR-reviewed and reconcile paths, the paths that can
+// dispatch review, re-review, fix-feedback or merge-or-wait; the PR
+// synced event decides without it (§forgejo/decisions/transition-table).
 // A PR whose connected issues have no such blocker — or with no
 // connected issue at all, because the PR's opening recorded no
 // dependency — is not rejected: a *closed* ideation blocker means the
@@ -361,7 +365,7 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 // state is not consulted: the gate is the blocker's, so a PR opened
 // against a closed connected issue still blocked by an open ideation
 // issue is rejected. When the test does not apply, ok is false and the
-// PR-opened path decides on (§forgejo/decisions/transition-table).
+// calling path decides on (§forgejo/decisions/transition-table).
 func decideRejectPR(pr *PullRequest, s State, w *Watermark) (Decision, bool) {
 	if len(s.ConnectedIssues) == 0 {
 		return Decision{}, false
@@ -426,17 +430,27 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 }
 
 // decidePRReconcile handles the reconciliation sweep's synthetic
-// current-state event for a pull request: like PR synced, except when
-// the last activity is a review — the latest review is a changes-
-// requested, approved, or comment review submitted against the PR's
-// current head (no commit has been pushed since) — in which case the
-// decision follows the latest review: changes-requested and comment
-// dispatch fix-feedback, approved dispatches merge-or-wait. A comment
-// review holds off on the event path, but the sweep moves the PR along
-// by triggering the implementer, not the reviewer
-// (§forgejo/decisions/transition-table).
+// current-state event for a pull request: like PR synced, except that
+// the reject-pr test is applied first — the sweep's re-fetch performs
+// the same one hop, so a blocked PR is rejected rather than reviewed
+// or merge-or-waited by the sweep — and except when the last activity
+// is a review — the latest review is a changes-requested, approved, or
+// comment review submitted against the PR's current head (no commit
+// has been pushed since) — in which case the decision follows the
+// latest review: changes-requested and comment dispatch fix-feedback,
+// approved dispatches merge-or-wait. A comment review holds off on the
+// event path, but the sweep moves the PR along by triggering the
+// implementer, not the reviewer (§forgejo/decisions/transition-table).
 func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
+	if pr != nil && prOpen(pr) {
+		// The reject-pr test precedes the whole PR path, review-
+		// following and synced-like alike
+		// (§forgejo/decisions/transition-table).
+		if d, rejected := decideRejectPR(pr, s, w); rejected {
+			return d
+		}
+	}
 	if pr != nil && prOpen(pr) && pr.Mergeable {
 		if latest := latestReview(s.Reviews); latest != nil && latest.CommitID == pr.HeadSHA {
 			switch latest.Event {
@@ -461,14 +475,22 @@ func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 	return decidePRSynced(e, s, w)
 }
 
-// decidePRReviewed handles a submitted review: the re-fetched latest
-// review decides — changes-requested dispatches fix-feedback, approved
-// dispatches merge-or-wait, anything else holds off
-// (§forgejo/decisions/transition-table).
+// decidePRReviewed handles a submitted review: the reject-pr test is
+// applied first, so a gate that closed after the PR opened cannot be
+// walked through by the review-following decisions; then the
+// re-fetched latest review decides — changes-requested dispatches
+// fix-feedback, approved dispatches merge-or-wait, anything else holds
+// off (§forgejo/decisions/transition-table).
 func decidePRReviewed(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
 	if pr == nil || !prOpen(pr) {
 		return holdOff("PR is not open")
+	}
+	// The reject-pr test precedes the review-following decisions:
+	// merging work that must not exist is the outcome the gate exists
+	// to prevent (§forgejo/decisions/transition-table).
+	if d, rejected := decideRejectPR(pr, s, w); rejected {
+		return d
 	}
 	latest := latestReview(s.Reviews)
 	if latest == nil {

@@ -462,6 +462,62 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionMergeOrWait,
 		},
 		{
+			// The reject-pr test precedes the review-following
+			// decisions: a gate that closed after the PR opened must
+			// not be walked through by an approving review
+			// (§forgejo/decisions/transition-table).
+			name:  "PR review approved whose connected issue is blocked by an open ideation issue dispatches reject-pr",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:      openPR("abc"),
+				Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{{
+					Issue:    *connectedIssue(),
+					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				}},
+			},
+			wantAction: ActionRejectPR,
+		},
+		{
+			name:  "PR review changes-requested whose connected issue is blocked by an open ideation issue dispatches reject-pr",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:      openPR("abc"),
+				Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{{
+					Issue:    *connectedIssue(),
+					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				}},
+			},
+			wantAction: ActionRejectPR,
+		},
+		{
+			name:  "PR review approved whose connected issue is blocked only by a closed ideation issue dispatches merge-or-wait",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:      openPR("abc"),
+				Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{{
+					Issue:    *connectedIssue(),
+					Blockers: []Issue{{Number: 1, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				}},
+			},
+			wantAction: ActionMergeOrWait,
+		},
+		{
+			name:  "reject-pr already dispatched at the revision holds off on the review path",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:      openPR("abc"),
+				Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{{
+					Issue:    *connectedIssue(),
+					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				}},
+			},
+			watermark: &Watermark{Action: string(ActionRejectPR), Revision: "abc"},
+		},
+		{
 			name:  "PR review comment holds off",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
@@ -541,9 +597,11 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionReReview,
 		},
 		{
-			// The sweep does not apply the reject-pr test: the documented
-			// boundary of this change (§forgejo/decisions/transition-table).
-			name:  "reconcile PR whose connected issue is blocked by an open ideation issue decides as PR synced",
+			// The sweep applies the reject-pr test ahead of the whole
+			// PR path, not only its review-following branches — the
+			// gate is not left to whether the PR happens to stand at a
+			// review (§forgejo/decisions/transition-table).
+			name:  "reconcile PR whose connected issue is blocked by an open ideation issue dispatches reject-pr",
 			event: prEvent(EventReconcile, "maitred"),
 			state: State{
 				PR: openPR("abc"),
@@ -552,7 +610,20 @@ func TestDecide(t *testing.T) {
 					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
 				}},
 			},
-			wantAction: ActionReview,
+			wantAction: ActionRejectPR,
+		},
+		{
+			name:  "reconcile PR standing at an approved review whose connected issue is blocked by an open ideation issue dispatches reject-pr",
+			event: prEvent(EventReconcile, "maitred"),
+			state: State{
+				PR:      openPR("abc"),
+				Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{{
+					Issue:    *connectedIssue(),
+					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+				}},
+			},
+			wantAction: ActionRejectPR,
 		},
 		{
 			name:      "implement already dispatched at the revision holds off",
