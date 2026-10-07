@@ -59,9 +59,9 @@ aborts the engine.
 Because the sweep feeds the same decision function the same watermark,
 an already-dispatched `(action, revision)` is not re-dispatched
 (§forgejo/decisions/loop-prevention) — except for the watermark-exempt
-actions below, whose watermark is the state. The sweep is safe to run
-at any time, and re-running it is a no-op until Forgejo's state or the
-watermarks move.
+actions below, whose rows on the sweep decide without consulting the
+watermark. The sweep is safe to run at any time, and re-running it is a
+no-op until Forgejo's state or the watermarks move.
 
 ## Watermark exemptions
 
@@ -73,10 +73,13 @@ correct-and-silent when it needs to be correct-and-loud.
 
 For a set of **watermark-exempt** actions, the watermark is the
 **state**, not the revision: the sweep re-fires them whenever the
-state calls for the action, revision notwithstanding. The engine's job
-is only to stop suppressing them; the agent's own silence-on-noop is
-what keeps the re-firing quiet (and the queue's deduplication squelches
-a re-dispatch while the prior task is still pending).
+state calls for the action, revision notwithstanding. The exemption is
+a property of the **sweep's rows** for those actions, not of the
+idempotency guard, which stays revision-keyed on every path
+(§forgejo/decisions/loop-prevention). The engine's job is only to stop
+suppressing them; the agent's own silence-on-noop is what keeps the
+re-firing quiet (and the queue's deduplication squelches a re-dispatch
+while the prior task is still pending).
 
 | Exempt action | The state that calls for it (on reconcile) |
 |---|---|

@@ -645,20 +645,27 @@ func TestDecide_HoldOffReasons(t *testing.T) {
 	})
 }
 
-// TestAlreadyDispatched pins the idempotency guard: revision-keyed
-// actions are suppressed at a matching revision, watermark-exempt
-// actions never are (§forgejo/decisions/loop-prevention,
-// §forgejo/reconciliation/watermark-exemptions).
+// TestAlreadyDispatched pins the idempotency guard as a plain
+// revision-keyed comparison on every path
+// (§forgejo/decisions/loop-prevention). The watermark exemption is not
+// implemented here: it is the sweep's exempt rows, which decide without
+// consulting the watermark
+// (§forgejo/reconciliation/watermark-exemptions).
 func TestAlreadyDispatched(t *testing.T) {
-	w := &Watermark{Action: "wrap-up", Revision: testRev}
 	if alreadyDispatched(&Watermark{Action: "implement", Revision: testRev2}, ActionImplement, testRev) {
 		t.Error("a different revision must not suppress implement")
 	}
 	if !alreadyDispatched(&Watermark{Action: "implement", Revision: testRev}, ActionImplement, testRev) {
 		t.Error("implement at a matching revision must be suppressed")
 	}
-	if alreadyDispatched(w, ActionWrapUp, testRev) {
-		t.Error("a watermark-exempt action must never be suppressed by the watermark")
+	if alreadyDispatched(&Watermark{Action: "wrap-up", Revision: testRev2}, ActionWrapUp, testRev) {
+		t.Error("a different revision must not suppress wrap-up")
+	}
+	if !alreadyDispatched(&Watermark{Action: "wrap-up", Revision: testRev}, ActionWrapUp, testRev) {
+		t.Error("the guard is revision-keyed on every path; the sweep's exempt rows never reach it")
+	}
+	if alreadyDispatched(nil, ActionImplement, testRev) {
+		t.Error("a key with no watermark recorded must never be suppressed")
 	}
 }
 

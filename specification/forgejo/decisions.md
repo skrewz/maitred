@@ -156,8 +156,10 @@ Three mechanisms, in this order:
 2. **Idempotency + watermark.** The same `(event, state, revision)`
    does not re-dispatch the same action: when the watermark already
    records the action at the current revision (the PR head sha, or the
-   issue's `updated_at`), the decision holds off. The watermark-exempt
-   actions `decompose` and `wrap-up` are outside this guard: state is
+   issue's `updated_at`), the decision holds off. The guard is
+   revision-keyed on every path. The watermark-exempt actions
+   `decompose` and `wrap-up` are exempt only **on the sweep**, whose
+   rows for them decide without consulting the watermark: state is
    their watermark (§forgejo/reconciliation/watermark-exemptions), and
    the agent's silence-on-noop keeps the re-firing quiet.
 3. **Targeted per-transition sender guards**, only where an agent's

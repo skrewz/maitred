@@ -218,14 +218,17 @@ func Decide(e Event, s State, w *Watermark) Decision {
 
 // decideIssueReconcile handles the reconciliation sweep's synthetic
 // current-state event for an issue. The watermark-exempt rows come
-// first: an open ideation root dispatches decompose and an open,
-// fully unblocked outcome tracker dispatches wrap-up, revision
-// notwithstanding — state is the watermark
-// (§forgejo/reconciliation/watermark-exemptions). A blocked tracker
-// holds off naming its open blockers, so the decision log reads "state
-// calls for no action", never "already dispatched at this revision".
-// An issue carrying neither reserved label decides as issue opened
-// (§forgejo/decisions/transition-table).
+// first, and they are the exemption: unlike every other path, they
+// decide without consulting the watermark, so an open ideation root
+// dispatches decompose and an open, fully unblocked outcome tracker
+// dispatches wrap-up, revision notwithstanding — state is the watermark
+// (§forgejo/reconciliation/watermark-exemptions). These two rows are
+// the exempt set: the exemption is scoped to the sweep, and an exempt
+// action reached from an event keeps the revision-keyed guard like any
+// other action. A blocked tracker holds off naming its open blockers, so
+// the decision log reads "state calls for no action", never "already
+// dispatched at this revision". An issue carrying neither reserved label
+// decides as issue opened (§forgejo/decisions/transition-table).
 func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 	issue := s.Issue
 	if issue == nil || issue.State != "open" {
@@ -538,34 +541,16 @@ func issueRevision(issue *Issue) string {
 }
 
 // alreadyDispatched reports whether the watermark already records
-// action at revision — the idempotency guard: the same (event, state,
-// revision) does not re-dispatch the same action
-// (§forgejo/decisions/loop-prevention). Watermark-exempt actions are
-// outside the guard: their watermark is the state, not the revision, so
-// the sweep re-fires them whenever the state calls for the action
-// (§forgejo/reconciliation/watermark-exemptions).
+// action at revision — the idempotency guard, revision-keyed on every
+// path: the same (event, state, revision) does not re-dispatch the same
+// action (§forgejo/decisions/loop-prevention). The watermark exemption
+// is not implemented here: it is scoped to the sweep, whose exempt rows
+// in decideIssueReconcile simply never consult the watermark
+// (§forgejo/reconciliation/watermark-exemptions). Keying the bypass on
+// the action instead of the path would hand every future event row for
+// those actions a suppression-free path by accident.
 func alreadyDispatched(w *Watermark, action Action, revision string) bool {
-	if isStateWatermarkAction(action) {
-		return false
-	}
 	return w != nil && w.Action == string(action) && w.Revision == revision
-}
-
-// stateWatermarkActions is the configured set of watermark-exempt
-// actions: the sweep re-fires them whenever the state calls for them,
-// regardless of revision (§forgejo/reconciliation/watermark-exemptions).
-// Every other action keeps its revision-keyed watermark: re-dispatching
-// those would re-run real work.
-var stateWatermarkActions = map[Action]bool{
-	ActionDecompose: true,
-	ActionWrapUp:    true,
-}
-
-// isStateWatermarkAction reports whether the action's watermark is the
-// state rather than the revision
-// (§forgejo/reconciliation/watermark-exemptions).
-func isStateWatermarkAction(a Action) bool {
-	return stateWatermarkActions[a]
 }
 
 // hasLabel reports whether the issue carries the label.
