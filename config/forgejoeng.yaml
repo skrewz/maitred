@@ -38,3 +38,11 @@ actions:
     prompt: "rebase {{.Repo}} {{.Kind}} {{.Number}}"
     persona: ui-test
     timeout: 1h
+  decompose:
+    prompt: "decompose {{.Repo}} {{.Kind}} {{.Number}}"
+    persona: ui-test
+    timeout: 1h
+  wrap-up:
+    prompt: "wrap-up {{.Repo}} {{.Kind}} {{.Number}}"
+    persona: ui-test
+    timeout: 1h

@@ -329,6 +329,45 @@ func TestReconcile_ListOrgRepositoriesError(t *testing.T) {
 	}
 }
 
+// TestReconcile_WatermarkExemptRefiresAtUnchangedRevision: the sweep
+// re-fires the watermark-exempt actions whenever the state calls for
+// them, an unchanged updated_at notwithstanding — the dependency edge
+// that releases the work emits no delivery and moves no revision
+// (§forgejo/reconciliation/watermark-exemptions).
+func TestReconcile_WatermarkExemptRefiresAtUnchangedRevision(t *testing.T) {
+	cases := []struct {
+		name   string
+		labels []string
+		action Action
+	}{
+		{"fully unblocked outcome tracker re-fires wrap-up", []string{LabelOutcome}, ActionWrapUp},
+		{"open ideation issue re-fires decompose", []string{LabelIdeation}, ActionDecompose},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, q, store := newTestEngine(t)
+			api.repos = []Repository{testRepo("o/r")}
+			issue := &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r", Labels: tc.labels}
+			api.issues[7] = issue
+			api.openIssues["r"] = []Issue{*issue}
+			key := Key{Repo: "o/r", Kind: KindIssue, Number: 7}
+			if err := store.Save(key, Watermark{Action: string(tc.action), Revision: issueRevision(issue)}); err != nil {
+				t.Fatalf("save watermark: %v", err)
+			}
+
+			eng.Reconcile()
+
+			tasks := q.all()
+			if len(tasks) != 1 {
+				t.Fatalf("expected the exempt action re-fired at the unchanged revision, got %d tasks", len(tasks))
+			}
+			if !strings.Contains(tasks[0].Prompt, "action="+string(tc.action)) {
+				t.Errorf("prompt = %q, want the %s action", tasks[0].Prompt, tc.action)
+			}
+		})
+	}
+}
+
 // TestReconcile_ConcurrentEventNoDoubleDispatch: a concurrent event for
 // the same key is in flight (holding the per-key lock in its re-fetch)
 // when the sweep runs; exactly one dispatch happens

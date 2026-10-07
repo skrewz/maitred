@@ -58,6 +58,46 @@ aborts the engine.
 
 Because the sweep feeds the same decision function the same watermark,
 an already-dispatched `(action, revision)` is not re-dispatched
-(§forgejo/decisions/loop-prevention). The sweep is safe to run at any
-time, and re-running it is a no-op until Forgejo's state or the
+(§forgejo/decisions/loop-prevention) — except for the watermark-exempt
+actions below, whose watermark is the state. The sweep is safe to run
+at any time, and re-running it is a no-op until Forgejo's state or the
 watermarks move.
+
+## Watermark exemptions
+
+Dependency edges emit no webhook delivery: attaching or removing a
+blocker leaves the issue's `updated_at` untouched. For the actions
+whose trigger is such a state relation, a revision-keyed watermark can
+therefore suppress a dispatch the current state still calls for —
+correct-and-silent when it needs to be correct-and-loud.
+
+For a set of **watermark-exempt** actions, the watermark is the
+**state**, not the revision: the sweep re-fires them whenever the
+state calls for the action, revision notwithstanding. The engine's job
+is only to stop suppressing them; the agent's own silence-on-noop is
+what keeps the re-firing quiet (and the queue's deduplication squelches
+a re-dispatch while the prior task is still pending).
+
+| Exempt action | The state that calls for it (on reconcile) |
+|---|---|
+| `decompose` | the issue is open and carries the `ideation` label |
+| `wrap-up` | the issue is open, carries the `outcome` label, and has no open blockers |
+
+`ideation` and `outcome` are reserved label names, not configuration.
+When an issue carries both, `decompose` wins: a root is decomposed
+before it is wrapped up.
+
+All other actions — `implement`, `reassess`, `review`, `re-review`,
+`rebase`, `fix-feedback`, `merge-or-wait` — keep revision-keyed
+watermarks: re-dispatching those would re-run real work.
+
+A hold-off for a watermark-exempt action always names the state fact
+that calls for no action (e.g. `blocked by N open issue(s)`); the
+`already dispatched at revision` reason belongs to revision-keyed
+actions only, so the decision log distinguishes "already dispatched at
+this revision" from "state calls for no action"
+(§forgejo/observability/the-decision-log).
+
+What the exemption buys is bounded latency: an edge change is
+invisible until the next sweep, so a state-call for an exempt action
+is acted on in **at most one reconcile interval**.

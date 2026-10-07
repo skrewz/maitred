@@ -42,6 +42,22 @@ func labelledIssue(labels ...string) *Issue {
 	return issue
 }
 
+// trackerIssue returns an open issue carrying the reserved outcome
+// label (§forgejo/reconciliation/watermark-exemptions).
+func trackerIssue() *Issue {
+	issue := openIssue()
+	issue.Labels = append(issue.Labels, LabelOutcome)
+	return issue
+}
+
+// ideationIssue returns an open issue carrying the reserved ideation
+// label (§forgejo/reconciliation/watermark-exemptions).
+func ideationIssue() *Issue {
+	issue := openIssue()
+	issue.Labels = append(issue.Labels, LabelIdeation)
+	return issue
+}
+
 func openPR(sha string) *PullRequest {
 	return &PullRequest{
 		Number:    9,
@@ -76,6 +92,8 @@ func TestActionNames(t *testing.T) {
 		ActionFixFeedback: "fix-feedback",
 		ActionMergeOrWait: "merge-or-wait",
 		ActionRebase:      "rebase",
+		ActionDecompose:   "decompose",
+		ActionWrapUp:      "wrap-up",
 	}
 	for action, name := range want {
 		if string(action) != name {
@@ -460,6 +478,62 @@ func TestDecide(t *testing.T) {
 			name:  "an unknown event type holds off",
 			event: Event{Type: EventType("bogus"), Repo: "o/r", Kind: KindIssue, Number: 7},
 		},
+		// Watermark exemptions: state is the watermark for the exempt
+		// actions, revision notwithstanding
+		// (§forgejo/reconciliation/watermark-exemptions).
+		{
+			name:       "reconcile open fully unblocked outcome tracker dispatches wrap-up",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: trackerIssue()},
+			wantAction: ActionWrapUp,
+		},
+		{
+			name:       "reconcile re-fires wrap-up for a tracker already dispatched at an unchanged revision",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: trackerIssue()},
+			watermark:  &Watermark{Action: "wrap-up", Revision: testRev},
+			wantAction: ActionWrapUp,
+		},
+		{
+			name:  "reconcile outcome tracker with an open blocker holds off",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: trackerIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
+		},
+		{
+			name:  "reconcile outcome tracker closed on re-fetch holds off",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: func() *Issue { i := trackerIssue(); i.State = "closed"; return i }()},
+		},
+		{
+			name:       "reconcile open ideation issue dispatches decompose",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: ideationIssue()},
+			wantAction: ActionDecompose,
+		},
+		{
+			name:       "reconcile re-fires decompose for an ideation issue already dispatched at an unchanged revision",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: ideationIssue()},
+			watermark:  &Watermark{Action: "decompose", Revision: testRev},
+			wantAction: ActionDecompose,
+		},
+		{
+			name:  "reconcile ideation issue closed on re-fetch holds off",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: func() *Issue { i := ideationIssue(); i.State = "closed"; return i }()},
+		},
+		{
+			name:       "an ideation label takes precedence over an outcome label",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{LabelOutcome, LabelIdeation}}},
+			wantAction: ActionDecompose,
+		},
+		{
+			name:      "reconcile unlabelled issue implement already dispatched at the revision holds off",
+			event:     issueEvent(EventReconcile),
+			state:     State{Issue: openIssue()},
+			watermark: &Watermark{Action: "implement", Revision: testRev},
+		},
 	}
 
 	for _, tt := range tests {
@@ -511,6 +585,52 @@ func TestDecide_ActivityBlockerHoldOffNamesBlockers(t *testing.T) {
 		if strings.Contains(d.Reason, "o/r#5") {
 			t.Errorf("%s: reason %q names a closed blocker", typ, d.Reason)
 		}
+	}
+}
+
+// TestDecide_HoldOffReasons distinguishes the two hold-off families:
+// revision-keyed actions hold off with "already dispatched at
+// revision", watermark-exempt actions with the state fact that calls
+// for no action (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/observability/the-decision-log).
+func TestDecide_HoldOffReasons(t *testing.T) {
+	t.Run("a revision-keyed hold-off names the revision", func(t *testing.T) {
+		d := Decide(issueEvent(EventReconcile), State{Issue: openIssue()}, &Watermark{Action: "implement", Revision: testRev})
+		if !d.HoldOff() {
+			t.Fatalf("expected hold-off, got dispatch of %q", d.Action)
+		}
+		if !strings.Contains(d.Reason, "already dispatched at revision") {
+			t.Errorf("reason = %q, want it to name the already-dispatched revision", d.Reason)
+		}
+	})
+	t.Run("a watermark-exempt hold-off names the state, not the revision", func(t *testing.T) {
+		d := Decide(issueEvent(EventReconcile), State{Issue: trackerIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}}, &Watermark{Action: "wrap-up", Revision: testRev})
+		if !d.HoldOff() {
+			t.Fatalf("expected hold-off, got dispatch of %q", d.Action)
+		}
+		if !strings.Contains(d.Reason, "blocked by 1 open issue") {
+			t.Errorf("reason = %q, want it to name the open blockers", d.Reason)
+		}
+		if strings.Contains(d.Reason, "already dispatched") {
+			t.Errorf("reason = %q, must not read as an already-dispatched hold-off", d.Reason)
+		}
+	})
+}
+
+// TestAlreadyDispatched pins the idempotency guard: revision-keyed
+// actions are suppressed at a matching revision, watermark-exempt
+// actions never are (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/watermark-exemptions).
+func TestAlreadyDispatched(t *testing.T) {
+	w := &Watermark{Action: "wrap-up", Revision: testRev}
+	if alreadyDispatched(&Watermark{Action: "implement", Revision: testRev2}, ActionImplement, testRev) {
+		t.Error("a different revision must not suppress implement")
+	}
+	if !alreadyDispatched(&Watermark{Action: "implement", Revision: testRev}, ActionImplement, testRev) {
+		t.Error("implement at a matching revision must be suppressed")
+	}
+	if alreadyDispatched(w, ActionWrapUp, testRev) {
+		t.Error("a watermark-exempt action must never be suppressed by the watermark")
 	}
 }
 

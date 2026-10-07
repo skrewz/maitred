@@ -55,6 +55,8 @@ prompts:
 | `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review |
 | `merge-or-wait` | the PR's latest review approves (the merge policy is the prompt's) |
 | `rebase` | an open PR is not mergeable (conflicts) |
+| `decompose` | the reconciliation sweep finds an open issue carrying the `ideation` label — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
+| `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 
 ## Transition table
 
@@ -76,7 +78,10 @@ prompts:
 | review submitted (latest review is anything else) | hold off |
 | PR merged | unblock cascade (for the connected issue) |
 | PR closed without merging | hold off |
-| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` |
+| reconcile — open issue with the `ideation` label | `decompose`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
+| reconcile — open `outcome` issue, no open blockers | `wrap-up`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
+| reconcile — open `outcome` issue with open blockers | hold off, naming the open blockers — state calls for no action |
+| reconcile — the sweep's synthetic current-state event | otherwise as issue opened (issue); for a PR, as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` |
 
 The "latest review" is the PR's most recently submitted review. An
 issue that *became unblocked* is dispatched `implement` through the
@@ -150,7 +155,10 @@ Three mechanisms, in this order:
 2. **Idempotency + watermark.** The same `(event, state, revision)`
    does not re-dispatch the same action: when the watermark already
    records the action at the current revision (the PR head sha, or the
-   issue's `updated_at`), the decision holds off.
+   issue's `updated_at`), the decision holds off. The watermark-exempt
+   actions `decompose` and `wrap-up` are outside this guard: state is
+   their watermark (§forgejo/reconciliation/watermark-exemptions), and
+   the agent's silence-on-noop keeps the re-firing quiet.
 3. **Targeted per-transition sender guards**, only where an agent's
    *own* action would re-trigger the *same* action: a commit pushed by
    the PR's reviewing author (the author of its latest review) must

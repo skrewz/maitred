@@ -47,6 +47,14 @@ actions:
     prompt: "/pr-rebase {{.PRURL}}"
     persona: s-autonomics-implementer
     timeout: 30m
+  decompose:
+    prompt: "/issue-decomposer {{.IssueURL}}"
+    persona: s-autonomics-implementer
+    timeout: 1h
+  wrap-up:
+    prompt: "/issue-wrapper {{.IssueURL}}"
+    persona: s-autonomics-implementer
+    timeout: 1h
 `
 
 // writeConfig writes content to a file named name in dir and returns the
@@ -378,6 +386,7 @@ func TestAllActions(t *testing.T) {
 	want := []Action{
 		ActionImplement, ActionReassess, ActionReview, ActionReReview,
 		ActionFixFeedback, ActionMergeOrWait, ActionRebase,
+		ActionDecompose, ActionWrapUp,
 	}
 	if len(AllActions) != len(want) {
 		t.Fatalf("AllActions has %d entries, want %d", len(AllActions), len(want))
