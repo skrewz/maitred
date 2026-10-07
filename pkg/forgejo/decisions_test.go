@@ -157,11 +157,6 @@ func TestDecide(t *testing.T) {
 			state: State{Issue: labelledIssue("outcome")},
 		},
 		{
-			name:  "reconciled issue carrying ideation holds off",
-			event: issueEvent(EventReconcile),
-			state: State{Issue: labelledIssue("ideation")},
-		},
-		{
 			name:  "issue opened without re-fetched state holds off",
 			event: issueEvent(EventIssueOpened),
 		},
@@ -534,6 +529,30 @@ func TestDecide(t *testing.T) {
 			state:     State{Issue: openIssue()},
 			watermark: &Watermark{Action: "implement", Revision: testRev},
 		},
+		// The event path never dispatches an exempt action, and never
+		// implements or reassesses an issue carrying a reserved label:
+		// the sweep is where the exempt actions fire
+		// (§forgejo/reconciliation/watermark-exemptions).
+		{
+			name:  "issue opened carrying the ideation label holds off",
+			event: issueEvent(EventIssueOpened),
+			state: State{Issue: ideationIssue()},
+		},
+		{
+			name:  "issue opened carrying the outcome label holds off",
+			event: issueEvent(EventIssueOpened),
+			state: State{Issue: trackerIssue()},
+		},
+		{
+			name:  "labels changed on an issue carrying the ideation label holds off",
+			event: issueEvent(EventIssueLabelsChanged),
+			state: State{Issue: ideationIssue()},
+		},
+		{
+			name:  "feedback comment on an issue carrying the outcome label holds off",
+			event: issueEvent(EventIssueCommented),
+			state: State{Issue: trackerIssue()},
+		},
 	}
 
 	for _, tt := range tests {
@@ -613,6 +632,15 @@ func TestDecide_HoldOffReasons(t *testing.T) {
 		}
 		if strings.Contains(d.Reason, "already dispatched") {
 			t.Errorf("reason = %q, must not read as an already-dispatched hold-off", d.Reason)
+		}
+	})
+	t.Run("an event-path hold-off for a reserved label names the label", func(t *testing.T) {
+		d := Decide(issueEvent(EventIssueOpened), State{Issue: ideationIssue()}, nil)
+		if !d.HoldOff() {
+			t.Fatalf("expected hold-off, got dispatch of %q", d.Action)
+		}
+		if !strings.Contains(d.Reason, LabelIdeation) {
+			t.Errorf("reason = %q, want it to name the reserved label", d.Reason)
 		}
 	})
 }

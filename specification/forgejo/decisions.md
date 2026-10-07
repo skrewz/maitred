@@ -48,8 +48,8 @@ prompts:
 
 | Action | Dispatched when |
 |---|---|
-| `implement` | the issue is open, unblocked (all its blockers closed), and has no connected open PR — the issue was opened or became unblocked |
-| `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement) |
+| `implement` | the issue is open, unblocked (all its blockers closed), has no connected open PR, and carries no reserved label — the issue was opened or became unblocked |
+| `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement), and it carries no reserved label |
 | `review` | a mergeable PR opened, or synced while it has no review |
 | `re-review` | a mergeable PR synced while it has a review |
 | `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review |
@@ -64,6 +64,7 @@ prompts:
 |---|---|
 | issue opened (open, all blockers closed, no connected PR) | `implement` |
 | issue opened (blocked, or a connected open PR, or not open) | hold off |
+| issue opened / edited / labels changed / comment (issue carries a reserved label) | hold off, naming the label — the sweep is where `decompose` and `wrap-up` fire (§forgejo/reconciliation/watermark-exemptions) |
 | issue edited / labels changed / feedback comment (issue open, all blockers closed) | `reassess` |
 | issue edited / labels changed / feedback comment (issue open, an open blocker) | hold off — the reason names the open blockers |
 | issue edited / labels changed / feedback comment (issue not open) | hold off |

@@ -346,7 +346,7 @@ func TestReconcile_WatermarkExemptRefiresAtUnchangedRevision(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			eng, api, q, store := newTestEngine(t)
-			api.repos = []Repository{testRepo("o/r")}
+			api.repos = []Repository{testRepoBothRoles("o/r")}
 			issue := &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r", Labels: tc.labels}
 			api.issues[7] = issue
 			api.openIssues["r"] = []Issue{*issue}

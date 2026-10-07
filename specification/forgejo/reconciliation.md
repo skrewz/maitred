@@ -87,6 +87,12 @@ a re-dispatch while the prior task is still pending).
 When an issue carries both, `decompose` wins: a root is decomposed
 before it is wrapped up.
 
+The exemption is scoped to the sweep. On the **event path** an issue
+carrying either reserved label dispatches neither `implement` nor
+`reassess`: the decision is a hold-off naming the label. A protected
+issue is therefore never handed to the implementer on any path, however
+the label arrived.
+
 All other actions — `implement`, `reassess`, `review`, `re-review`,
 `rebase`, `fix-feedback`, `merge-or-wait` — keep revision-keyed
 watermarks: re-dispatching those would re-run real work.

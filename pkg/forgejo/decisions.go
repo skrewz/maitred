@@ -578,6 +578,21 @@ func hasLabel(issue *Issue, label string) bool {
 	return false
 }
 
+// reservedLabel returns the reserved watermark-exempt label the issue
+// carries, or the empty string when it carries none. Ideation is
+// reported first: the decompose-wins precedence applies to the hold-off
+// reason too (§forgejo/reconciliation/watermark-exemptions).
+func reservedLabel(issue *Issue) string {
+	switch {
+	case hasLabel(issue, LabelIdeation):
+		return LabelIdeation
+	case hasLabel(issue, LabelOutcome):
+		return LabelOutcome
+	default:
+		return ""
+	}
+}
+
 func dispatch(action Action, reason string) Decision {
 	return Decision{Dispatched: true, Action: action, Reason: reason}
 }
