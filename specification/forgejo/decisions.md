@@ -100,9 +100,16 @@ A PR's **connected issues** are the non-PR issues the PR blocks
 (§forgejo/webhook/re-fetch) — **recorded** blocker relationships, never
 inferred ones. Forgejo creates no PR→issue dependency from a `Fixes #NN`
 keyword in a PR body, and the engine's client is read-only
-(§forgejo/client/operations), so whoever opens the PR records the
-relationship and the engine only reads it; a PR whose opening recorded
-no dependency has no connected issues and decides as before.
+(§forgejo/client/operations), so the dependency must be recorded when
+the PR is opened: the workflow the `implement` prompt dispatches — the
+`/issue-implementer` invocation (§forgejo/config/canned-prompts) —
+records `issue-block <PR> → <issue>` for each issue the PR closes,
+cross-repo targets included, and the engine only reads it. That
+instruction lives in the canned prompts, deployed outside this
+repository (§forgejo/config/loading); **it does not exist yet**, and
+until it does the `reject-pr` row cannot be reached — a PR whose
+opening recorded no dependency has no connected issues and decides as
+before.
 
 When **any** connected issue is blocked by an **open** issue carrying
 the reserved `ideation` label — work whose release gate has not opened:
