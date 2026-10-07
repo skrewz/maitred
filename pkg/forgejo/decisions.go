@@ -31,19 +31,6 @@ const (
 	ActionRejectPR Action = "reject-pr"
 )
 
-// The reserved label names the engine consults. They are vocabulary
-// fixed by the specification, not configuration.
-const (
-	// LabelIdeation marks an issue as a root to decompose; an **open**
-	// issue carrying it also marks work whose release gate has not
-	// opened — an ideation issue closes only at wrap-up
-	// (§forgejo/decisions/actions).
-	LabelIdeation = "ideation"
-	// LabelOutcome marks an issue as a tracker to wrap up once all
-	// its blockers are closed.
-	LabelOutcome = "outcome"
-)
-
 // The Forgejo review states the decision function reacts to
 // (§forgejo/client/operations).
 const (
