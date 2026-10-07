@@ -97,6 +97,11 @@ type fakeAPI struct {
 	// blockGetIssue when it is set.
 	blockGetIssue   chan struct{}
 	getIssueEntered chan struct{}
+
+	// ListOrgRepositories blocking hooks, mirroring the GetIssue ones,
+	// for the scope-cache single-flight test.
+	blockListRepos   chan struct{}
+	listReposEntered chan struct{}
 }
 
 func newFakeAPI() *fakeAPI {
@@ -171,6 +176,16 @@ func (f *fakeAPI) GetPullRequest(owner, repo string, number int) (*PullRequest, 
 
 func (f *fakeAPI) ListOrgRepositories(org string) ([]Repository, error) {
 	f.record("ListOrgRepositories:" + org)
+	if f.listReposEntered != nil {
+		select {
+		case <-f.listReposEntered:
+		default:
+			close(f.listReposEntered)
+		}
+	}
+	if f.blockListRepos != nil {
+		<-f.blockListRepos
+	}
 	// Deliberately not consulting f.err: the global error models a
 	// failing object re-fetch, which must leave the scope listing
 	// healthy so scope-tested deliveries still reach refetch.

@@ -2,9 +2,11 @@ package forgejo
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -199,6 +201,114 @@ func TestDispatchCascade_UnenabledRepoHeldOff(t *testing.T) {
 
 	if tasks := q.all(); len(tasks) != 0 {
 		t.Fatalf("got %d cascade tasks into an un-enabled repository, want none", len(tasks))
+	}
+}
+
+// TestHandleEvent_ListingFailure_HoldsOff: a repository listing that
+// fails is a hold-off whose reason names the listing failure — not a
+// "not maitred-enabled" exclusion a transient API blip would masquerade
+// as — with no re-fetch and no dispatch (§forgejo/webhook/the-scope-cache).
+func TestHandleEvent_ListingFailure_HoldsOff(t *testing.T) {
+	var log bytes.Buffer
+	api := newFakeAPI()
+	api.repos = []Repository{testRepo("o/r")}
+	api.listReposErr = errors.New("boom")
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewJSONHandler(&log, nil)))
+	api.issues[7] = testIssue(7, "open")
+
+	eng.HandleEvent(Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks after a failed listing, want none", len(tasks))
+	}
+	if n := api.callCount("GetIssue"); n != 0 {
+		t.Errorf("re-fetch happened after a failed listing: %d GetIssue call(s)", n)
+	}
+	entry := findEntry(t, parseLogLines(t, log.Bytes()), "decision")
+	if dispatched, _ := entry["dispatched"].(bool); dispatched {
+		t.Errorf("decision logged as dispatched: %v", entry)
+	}
+	reason, _ := entry["reason"].(string)
+	if !strings.Contains(reason, "scope of repo o/r unknown") || !strings.Contains(reason, "boom") {
+		t.Errorf("hold-off reason = %q, want it to name the listing failure", reason)
+	}
+	if strings.Contains(reason, "not maitred-enabled") {
+		t.Errorf("failed listing reported as an exclusion: %q", reason)
+	}
+}
+
+// TestHandleEvent_ListingFailureRetriesBackoff: a failed listing must
+// not turn into one full org listing per delivery — while the failure
+// is within the retry backoff, later deliveries hold off without
+// re-attempting; once past it, one retry happens
+// (§forgejo/webhook/the-scope-cache).
+func TestHandleEvent_ListingFailureRetriesBackoff(t *testing.T) {
+	api := newFakeAPI()
+	api.repos = []Repository{testRepo("o/r")}
+	api.listReposErr = errors.New("boom")
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	for n := 7; n <= 9; n++ {
+		eng.HandleEvent(Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: n, Sender: "alice"})
+	}
+	if n := api.callCount("ListOrgRepositories"); n != 1 {
+		t.Errorf("ListOrgRepositories called %d time(s) during the failure backoff, want 1", n)
+	}
+	if len(q.all()) != 0 {
+		t.Errorf("got %d tasks during a failed listing, want none", len(q.all()))
+	}
+
+	// Past the backoff, the next delivery re-attempts the listing once.
+	eng.scopeMu.Lock()
+	eng.scopeFailedAt = time.Time{}
+	eng.scopeMu.Unlock()
+	eng.HandleEvent(Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 10, Sender: "alice"})
+	if n := api.callCount("ListOrgRepositories"); n != 2 {
+		t.Errorf("ListOrgRepositories called %d time(s) past the backoff, want 2", n)
+	}
+}
+
+// TestHandleEvent_ScopeCacheStaleSingleListing: deliveries that find
+// the cache stale concurrently must share one listing — the refresh is
+// single-flight, not one listing per waiting delivery
+// (§forgejo/webhook/the-scope-cache).
+func TestHandleEvent_ScopeCacheStaleSingleListing(t *testing.T) {
+	eng, api, _, _ := newScopeEngine(t)
+	for n := 7; n <= 9; n++ {
+		api.issues[n] = testIssue(n, "open")
+	}
+	eng.scopeMu.Lock()
+	eng.scopeAt = time.Time{} // force every delivery to find the cache stale
+	eng.scopeMu.Unlock()
+	release := make(chan struct{})
+	api.blockListRepos = release
+	api.listReposEntered = make(chan struct{})
+
+	var wg sync.WaitGroup
+	for n := 7; n <= 9; n++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			eng.HandleEvent(Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: n, Sender: "alice"})
+		}(n)
+	}
+	<-api.listReposEntered // the first delivery is inside the listing
+	time.Sleep(50 * time.Millisecond)
+	close(release) // the others, having found the cache stale, re-check under the refresh lock
+	wg.Wait()
+
+	if n := api.callCount("ListOrgRepositories"); n != 1 {
+		t.Errorf("ListOrgRepositories called %d time(s) for three concurrent stale deliveries, want 1", n)
 	}
 }
 

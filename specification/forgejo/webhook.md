@@ -40,7 +40,11 @@ On each `POST`:
    know — **holds off** with the reason `repo <name> is not
    maitred-enabled`, logged like any other hold-off
    (§forgejo/observability/the-decision-log); nothing is re-fetched,
-   dispatched, or cascaded for it, and the delivery is acknowledged.
+   dispatched, or cascaded for it, and the delivery is acknowledged. A
+   repository listing that **fails** also holds off, but with a reason
+   naming the failure — never the topic wording — so a transient API
+   failure is not recorded as a deliberate exclusion
+   (§forgejo/webhook/the-scope-cache).
 4. **Re-fetch the state.** The affected issue/PR — plus what the
    transition needs (reviews, blockers, connected PRs, blocker graph) — is
    re-fetched from Forgejo through the read-only client
@@ -90,9 +94,19 @@ event path that finds the cache empty or older than one
 deciding (§forgejo/client/operations). Entries are therefore never older
 than one interval: a repository whose topic has just been removed is not
 acted on for longer than that. A repository absent from the snapshot is
-not enabled — the test **fails closed**. A repository listing that fails is also a
-hold-off — logged, acknowledged, and re-derived by the next sweep, which
-refreshes the cache again (§forgejo/reconciliation/failure-handling). The keys of an unblock cascade are tested the
+not enabled — the test **fails closed**. Deliveries that find the cache
+stale **share one refresh**: the refresh is single-flight, so a burst
+against a stale cache costs one repository listing, not one each.
+A repository listing that **fails** is also a hold-off — logged,
+acknowledged, and re-derived by the next sweep, which refreshes the
+cache again (§forgejo/reconciliation/failure-handling) — with a reason
+naming the listing failure, distinct from the `not maitred-enabled`
+wording, so an API failure never reads as an exclusion. The failed
+attempt is stamped like a successful one: while the listing keeps
+failing, re-attempts are bounded to a short retry interval rather than
+one listing per delivery. The last known snapshot is kept across the
+failure but **never acted on while stale** — scope stays unknown, and
+the test still fails closed. The keys of an unblock cascade are tested the
 same way before their dispatch, so a cascade never starts an agent in a
 repository outside the remit (§forgejo/decisions/unblock-cascade).
 

@@ -461,3 +461,13 @@ func holdOff(reason string) Decision {
 func holdOffUnenabledRepo(repo string) Decision {
 	return holdOff(fmt.Sprintf("repo %s is not maitred-enabled", repo))
 }
+
+// holdOffScopeUnknown is the scope test's failure hold-off: the
+// repository listing failed, so the engine cannot tell whether the
+// repository is in its remit. The reason names the listing failure,
+// never the topic, so a transient API failure does not read in the
+// decision log as a deliberate exclusion
+// (§forgejo/webhook/the-scope-cache, §forgejo/observability/the-decision-log).
+func holdOffScopeUnknown(repo string, err error) Decision {
+	return holdOff(fmt.Sprintf("scope of repo %s unknown: repository listing failed: %v", repo, err))
+}

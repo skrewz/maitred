@@ -66,6 +66,13 @@ type Engine struct {
 	scopeMu sync.Mutex
 	scope   map[string]bool
 	scopeAt time.Time
+	// scopeFailedAt stamps the last failed listing attempt, bounding
+	// the retry of a failing API to one listing per scopeRetryInterval.
+	scopeFailedAt time.Time
+	// refreshMu single-flights the event path's cache refresh: deliveries
+	// finding the cache stale wait here and re-check staleness, so a
+	// burst costs one listing rather than one each.
+	refreshMu sync.Mutex
 }
 
 // NewEngine creates the event path over the given Forgejo API, watermark
@@ -94,7 +101,15 @@ func NewEngine(api API, store *Store, cfg *Config, q queue.TaskQueueProvider, lo
 // of truth (§forgejo/webhook/the-pipeline).
 func (e *Engine) HandleEvent(ev Event) {
 	key := ev.KeyOf()
-	if !e.repoEnabled(ev.Repo) {
+	enabled, err := e.repoEnabled(ev.Repo)
+	if err != nil {
+		// Scope unknown: the repository listing failed. Hold off with a
+		// reason naming the failure, never as a deliberate exclusion
+		// (§forgejo/webhook/the-scope-cache).
+		e.recordDecision(key, ev, State{}, holdOffScopeUnknown(ev.Repo, err))
+		return
+	}
+	if !enabled {
 		// The repository is outside the engine's remit: hold off before
 		// re-fetching, so an inert repository costs nothing and
 		// dispatches nothing — cascade included
@@ -300,8 +315,12 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 // not carry the maitred-enabled topic is outside the engine's remit and
 // is not dispatched (§forgejo/webhook/the-scope-cache).
 func (e *Engine) dispatchCascade(k Key, sender string) error {
-	if !e.repoEnabled(k.Repo) {
+	enabled, err := e.repoEnabled(k.Repo)
+	if err != nil || !enabled {
 		held := holdOffUnenabledRepo(k.Repo)
+		if err != nil {
+			held = holdOffScopeUnknown(k.Repo, err)
+		}
 		e.log.Info("cascade held off", "key", k.String(), "reason", held.Reason)
 		return nil
 	}
