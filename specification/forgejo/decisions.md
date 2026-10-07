@@ -132,7 +132,10 @@ The cascade is **transitive**: a blocked issue that is itself closed
 cascades onward to the issues it blocks (A→B→C). It **terminates**
 without double-dispatching: each issue is visited once. The engine
 applies each cascaded key's own watermark before dispatching, so an
-already-dispatched `(action, revision)` is not re-dispatched.
+already-dispatched `(action, revision)` is not re-dispatched. A
+cascaded key carrying a reserved label holds off, naming the label:
+the cascade dispatches `implement`, and a labelled issue is decided by
+the sweep (§forgejo/reconciliation/watermark-exemptions).
 
 The cascade dispatches `implement`: an issue newly unblocked but
 carrying a reserved label (`ideation`, `outcome`, `human-task` — see

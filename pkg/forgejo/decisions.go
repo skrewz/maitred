@@ -52,24 +52,20 @@ const (
 // (§forgejo/decisions/transition-table).
 const LabelHumanTask = "human-task"
 
-// neverWorkItemLabels are the labels whose issues are never implement
-// or reassess candidates: the outcomes workflow's reserved labels and
-// the human-task convention (§forgejo/decisions/transition-table).
-// The ideation and outcome names become constants when the outcomes
-// chain dispatches their actions (#83, #84, #85); the names themselves
-// are reserved specification vocabulary.
-var neverWorkItemLabels = []string{"ideation", "outcome", LabelHumanTask}
-
 // neverWorkItemLabel returns the issue label that denies the
 // implement and reassess actions, or "" when the issue may be an
-// implement or reassess candidate (§forgejo/decisions/transition-table).
+// implement or reassess candidate. Label names match
+// case-insensitively, and ideation is reported first: the
+// decompose-wins precedence applies to the hold-off reason too
+// (§forgejo/decisions/transition-table,
+// §forgejo/reconciliation/watermark-exemptions).
 func neverWorkItemLabel(labels []string) string {
-	for _, l := range labels {
-		for _, reserved := range neverWorkItemLabels {
-			if l == reserved {
-				return l
-			}
-		}
+	issue := &Issue{Labels: labels}
+	if label := reservedLabel(issue); label != "" {
+		return label
+	}
+	if hasLabel(issue, LabelHumanTask) {
+		return LabelHumanTask
 	}
 	return ""
 }
