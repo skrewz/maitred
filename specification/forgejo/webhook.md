@@ -211,10 +211,12 @@ For each decision event, the re-fetch assembles the state
   For issue closed, the blocker graph rooted at the closed issue.
 - **PR events** — the PR itself, and its reviews, for the review
   transitions. For PR opened, the connected issue — the non-PR issue the PR
-  blocks — and that issue's blockers as well: one hop, no recursion, the
-  input to the `reject-pr` test (§forgejo/decisions/actions). This is the
-  only place the engine grows a new read. For PR merged, the blocker graph
-  rooted at the connected issue — the non-PR issue the PR blocks.
+  blocks, read from the issue-blocks surface and carrying its own
+  repository, which may differ from the PR's — and that issue's blockers as
+  well: one hop, no recursion, the input to the `reject-pr` test
+  (§forgejo/decisions/actions). This is the only place the engine grows a
+  new read. For PR merged, the blocker graph rooted at the connected
+  issue — the non-PR issue the PR blocks.
 
 The blocker graph is re-fetched to the depth the unblock cascade walks:
 each closed block is followed, each open block is fetched with its

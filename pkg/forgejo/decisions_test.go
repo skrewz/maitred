@@ -281,6 +281,34 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionRejectPR,
 		},
 		{
+			// The connected issue's own state is not consulted: the gate
+			// has not opened either way (§forgejo/decisions/transition-table).
+			name:  "PR opened against a closed connected issue blocked by an open ideation issue dispatches reject-pr",
+			event: prEvent(EventPROpened, "alice"),
+			state: State{
+				PR: openPR("abc"),
+				ConnectedIssue: func() *Issue {
+					issue := connectedIssue()
+					issue.State = "closed"
+					return issue
+				}(),
+				ConnectedIssueBlockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+			},
+			wantAction: ActionRejectPR,
+		},
+		{
+			// The reserved name is matched exactly and case-sensitively
+			// (§forgejo/decisions/transition-table).
+			name:  "PR opened whose connected issue is blocked by an open issue labelled Ideation dispatches review",
+			event: prEvent(EventPROpened, "alice"),
+			state: State{
+				PR:                     openPR("abc"),
+				ConnectedIssue:         connectedIssue(),
+				ConnectedIssueBlockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{"Ideation"}}},
+			},
+			wantAction: ActionReview,
+		},
+		{
 			name:  "PR opened whose connected issue is blocked only by a closed ideation issue dispatches review",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
@@ -458,6 +486,18 @@ func TestDecide(t *testing.T) {
 			event:      prEvent(EventReconcile, "maitred"),
 			state:      State{PR: openPR("def"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
 			wantAction: ActionReReview,
+		},
+		{
+			// The sweep does not apply the reject-pr test: the documented
+			// boundary of this change (§forgejo/decisions/transition-table).
+			name:  "reconcile PR whose connected issue is blocked by an open ideation issue decides as PR synced",
+			event: prEvent(EventReconcile, "maitred"),
+			state: State{
+				PR:                     openPR("abc"),
+				ConnectedIssue:         connectedIssue(),
+				ConnectedIssueBlockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+			},
+			wantAction: ActionReview,
 		},
 		{
 			name:      "implement already dispatched at the revision holds off",

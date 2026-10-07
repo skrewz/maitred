@@ -343,10 +343,13 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 // release gate: its connected issue blocked by an **open** issue
 // carrying the reserved ideation label (§forgejo/decisions/actions).
 // A PR whose connected issue has no such blocker — or with no connected
-// issue at all — is not rejected: a *closed* ideation blocker means the
-// release gate has opened, and an unlabelled blocker is ordinary work,
-// both decided on as review or rebase. When the test does not apply,
-// ok is false and the PR-opened path decides on
+// issue at all, because the PR's opening recorded no dependency — is not
+// rejected: a *closed* ideation blocker means the release gate has
+// opened, and an unlabelled blocker is ordinary work, both decided on as
+// review or rebase. The connected issue's own state is not consulted:
+// the gate is the blocker's, so a PR opened against a closed connected
+// issue still blocked by an open ideation issue is rejected. When the
+// test does not apply, ok is false and the PR-opened path decides on
 // (§forgejo/decisions/transition-table).
 func decideRejectPR(pr *PullRequest, s State, w *Watermark) (Decision, bool) {
 	if s.ConnectedIssue == nil {

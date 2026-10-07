@@ -88,13 +88,33 @@ prompts:
 
 The **reject-pr test precedes the review and rebase rows**: reviewing work
 that must not exist wastes a reviewer and produces a diff nobody asked for.
+It is the PR-opened path's test alone. The reconciliation sweep does not
+apply it, so a PR the sweep feeds through `decide` decides as PR synced —
+review, re-review, fix-feedback or, at an approved mergeable review,
+merge-or-wait — even when its connected issue is blocked by an open
+`ideation` issue. Closing that gap needs the same hop in the sweep's
+re-fetch: a separate change, stated here so the gap is a known limitation
+and not a silent contradiction of the gate.
+
 A PR's **connected issue** is the non-PR issue the PR blocks
-(§forgejo/webhook/re-fetch). When that issue is blocked by an **open** issue
-carrying the reserved `ideation` label — work whose release gate has not
-opened: an ideation issue closes only at wrap-up — the PR is work started
-before its release, and `reject-pr` is decided. A blocked *closed* ideation
-issue, an open blocker without the label, and the absence of a connected
-issue all decide as before.
+(§forgejo/webhook/re-fetch) — a **recorded** blocker relationship, never
+an inferred one. Forgejo creates no PR→issue dependency from a `Fixes #NN`
+keyword in a PR body, and the engine's client is read-only
+(§forgejo/client/operations), so whoever opens the PR records the
+relationship and the engine only reads it; a PR whose opening recorded
+none has no connected issue and decides as before.
+
+When the connected issue *is* blocked by an **open** issue carrying the
+reserved `ideation` label — work whose release gate has not opened: an
+ideation issue closes only at wrap-up — the PR is work started before its
+release, and `reject-pr` is decided. Reserved names are matched exactly
+and case-sensitively, as elsewhere in the engine: renaming the label in
+the UI disables the test silently, a fragility accepted with the name.
+The connected issue's **own** state is not consulted — the gate is the
+blocker's — so a PR opened against a closed connected issue still blocked
+by an open ideation issue is rejected. A blocked *closed* ideation issue,
+an open blocker without the label, and the absence of a connected issue
+all decide as before.
 
 The "latest review" is the PR's most recently submitted review. An
 issue that *became unblocked* is dispatched `implement` through the

@@ -203,10 +203,12 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		switch ev.Type {
 		case EventPROpened:
 			// The reject-pr test's one hop: the connected issue — the
-			// non-PR issue the PR blocks — and that issue's blockers,
-			// no recursion. A failure to resolve the connected issue is
-			// a re-fetch failure — a hold-off naming the failure, never
-			// the review default (§forgejo/webhook/re-fetch,
+			// non-PR issue the PR blocks, a relationship recorded on the
+			// blocker graph rather than inferred from the PR body — and
+			// that issue's blockers, read from the connected issue's own
+			// repository, no recursion. A failure to resolve the connected
+			// issue is a re-fetch failure — a hold-off naming the failure,
+			// never the review default (§forgejo/webhook/re-fetch,
 			// §forgejo/decisions/actions).
 			blocks, err := e.api.IssueBlocks(owner, name, ev.Number)
 			if err != nil {
