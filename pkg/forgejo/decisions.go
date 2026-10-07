@@ -2,6 +2,7 @@ package forgejo
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -197,7 +198,9 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 
 // decideIssueActivity handles an edited issue, a label change, or a
 // feedback comment: dispatch reassess if the re-fetched issue is open
-// (§forgejo/decisions/transition-table).
+// and has no open blocker; activity on a blocked issue has nothing to
+// reassess — the work is held by the blocker, so the decision holds
+// off naming the open blockers (§forgejo/decisions/transition-table).
 func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	issue := s.Issue
 	if issue == nil {
@@ -205,6 +208,9 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	}
 	if issue.State != "open" {
 		return holdOff(fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State))
+	}
+	if open := openBlockers(s.Blockers); len(open) > 0 {
+		return holdOff(fmt.Sprintf("issue %d is blocked by %s; not reassessing", issue.Number, blockerNames(open)))
 	}
 	rev := issueRevision(issue)
 	if alreadyDispatched(w, ActionReassess, rev) {
@@ -413,6 +419,17 @@ func openBlockers(blockers []Issue) []Issue {
 		}
 	}
 	return open
+}
+
+// blockerNames renders blockers as a comma-separated list of
+// "repo#number" references, so a hold-off reason can name them —
+// cross-repo blockers included (§forgejo/decisions/transition-table).
+func blockerNames(blockers []Issue) string {
+	names := make([]string, len(blockers))
+	for i := range blockers {
+		names[i] = fmt.Sprintf("%s#%d", blockers[i].Repository, blockers[i].Number)
+	}
+	return strings.Join(names, ", ")
 }
 
 // prOpen reports whether the re-fetched PR is open (not closed, not

@@ -45,7 +45,7 @@ prompts:
 | Action | Dispatched when |
 |---|---|
 | `implement` | the issue is open, unblocked (all its blockers closed), and has no connected open PR — the issue was opened or became unblocked |
-| `reassess` | an open issue was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement) |
+| `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement) |
 | `review` | a mergeable PR opened, or synced while it has no review |
 | `re-review` | a mergeable PR synced while it has a review |
 | `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review |
@@ -58,7 +58,8 @@ prompts:
 |---|---|
 | issue opened (open, all blockers closed, no connected PR) | `implement` |
 | issue opened (blocked, or a connected open PR, or not open) | hold off |
-| issue edited / labels changed / feedback comment (issue open) | `reassess` |
+| issue edited / labels changed / feedback comment (issue open, all blockers closed) | `reassess` |
+| issue edited / labels changed / feedback comment (issue open, an open blocker) | hold off — the reason names the open blockers |
 | issue edited / labels changed / feedback comment (issue not open) | hold off |
 | issue closed | unblock cascade |
 | PR opened (open, mergeable) | `review` |
@@ -76,6 +77,15 @@ prompts:
 The "latest review" is the PR's most recently submitted review. An
 issue that *became unblocked* is dispatched `implement` through the
 unblock cascade, under the same conditions as an opened issue.
+
+Activity on a **blocked** issue — an edit, a label change, a comment on
+an issue with an open blocker — has nothing to reassess: the work is
+held by the blocker, not by the activity, so the decision holds off and
+names the open blockers (each as `repo#number`, cross-repo included).
+This is what makes it safe to attach go-ahead labels to forest members
+in any order: labelling a blocked issue wakes no implementer. When the
+issue becomes unblocked, the cascade — not the activity — dispatches
+`implement`.
 
 A PR's **last activity is a review** when its latest review is a
 changes-requested, approved, or comment review submitted against the PR's
@@ -132,8 +142,9 @@ sweep.
 
 **State** — the re-fetched state of the affected object: the issue or
 PR itself; the issue's blockers (with their states) and its connected
-open PRs, for the `implement` conditions; the PR's reviews, for the
-review transitions; and, for close events, the blocker-graph root —
+open PRs, for the `implement` and `reassess` conditions; the PR's
+reviews, for the review transitions; and, for close events, the
+blocker-graph root —
 the closed issue — with each node carrying the issues it blocks and
 the issues that block it.
 
