@@ -553,6 +553,26 @@ func TestDecide(t *testing.T) {
 			event: issueEvent(EventIssueCommented),
 			state: State{Issue: trackerIssue()},
 		},
+		// Reserved label names match case-insensitively: label names are
+		// user-authored strings, and a miss must not silently decide as
+		// implement (§forgejo/reconciliation/watermark-exemptions).
+		{
+			name:       "reconcile open issue carrying a differently cased ideation label dispatches decompose",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{"Ideation"}}},
+			wantAction: ActionDecompose,
+		},
+		{
+			name:       "reconcile open tracker carrying an upper-cased outcome label dispatches wrap-up",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{"OUTCOME"}}},
+			wantAction: ActionWrapUp,
+		},
+		{
+			name:  "issue opened carrying a differently cased reserved label holds off",
+			event: issueEvent(EventIssueOpened),
+			state: State{Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{"Outcome"}}},
+		},
 	}
 
 	for _, tt := range tests {

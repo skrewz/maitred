@@ -87,8 +87,10 @@ while the prior task is still pending).
 | `wrap-up` | the issue is open, carries the `outcome` label, and has no open blockers |
 
 `ideation` and `outcome` are reserved label names, not configuration.
-When an issue carries both, `decompose` wins: a root is decomposed
-before it is wrapped up.
+They match **case-insensitively**: a label name is a user-authored
+string, and a label created as `Ideation` must not silently decide as
+`implement`. When an issue carries both, `decompose` wins: a root is
+decomposed before it is wrapped up.
 
 The exemption is scoped to the sweep. On the **event path** an issue
 carrying either reserved label dispatches neither `implement` nor

@@ -553,10 +553,13 @@ func alreadyDispatched(w *Watermark, action Action, revision string) bool {
 	return w != nil && w.Action == string(action) && w.Revision == revision
 }
 
-// hasLabel reports whether the issue carries the label.
+// hasLabel reports whether the issue carries the label. Label names are
+// user-authored strings, so the reserved names match
+// case-insensitively: a label created as "Ideation" must not silently
+// decide as implement (§forgejo/reconciliation/watermark-exemptions).
 func hasLabel(issue *Issue, label string) bool {
 	for _, l := range issue.Labels {
-		if l == label {
+		if strings.EqualFold(l, label) {
 			return true
 		}
 	}
