@@ -5,12 +5,17 @@ import (
 )
 
 // maitredEnabledTopic is the repository topic marking a repository as
-// tracked by the engine (§forgejo/reconciliation/the-sweep).
+// a work-item source (§forgejo/webhook/repository-roles).
 const maitredEnabledTopic = "maitred-enabled"
+
+// maitredOutcomesTopic is the repository topic marking a repository as
+// an outcomes source (§forgejo/webhook/repository-roles).
+const maitredOutcomesTopic = "maitred-outcomes-repo"
 
 // Reconcile runs one reconciliation sweep
 // (§forgejo/reconciliation/the-sweep): it enumerates the org's
-// maitred-enabled repositories, lists their open issues and pull
+// repositories holding at least one role — the union of the
+// work-item and outcomes role sets — lists their open issues and pull
 // requests, and feeds each a synthetic reconcile event through the same
 // pipeline as the event path — re-fetch, decide, dispatch, watermark,
 // serialised on the watermark store's per-key lock. A sweep that starts
@@ -33,7 +38,10 @@ func (e *Engine) Reconcile() {
 	e.refreshScopeCache(repos)
 	for i := range repos {
 		repo := &repos[i]
-		if !hasTopic(repo.Topics, maitredEnabledTopic) {
+		// The sweep visits the union of both role sets, so a missed
+		// delivery in an outcomes-only repository self-heals too
+		// (§forgejo/reconciliation/the-sweep, §forgejo/webhook/repository-roles).
+		if !hasTopic(repo.Topics, maitredEnabledTopic) && !hasTopic(repo.Topics, maitredOutcomesTopic) {
 			continue
 		}
 		issues, err := e.api.ListOpenIssues(repo.Owner, repo.Name)

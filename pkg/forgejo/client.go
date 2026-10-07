@@ -32,8 +32,8 @@ type Repository struct {
 	// Owner is the login of the repository's owner.
 	Owner   string
 	HTMLURL string
-	// Topics are the repository's topic tags; the engine uses them to find
-	// the maitred-enabled repositories.
+	// Topics are the repository's topic tags; the engine uses them to
+	// derive the repository's roles (§forgejo/webhook/repository-roles).
 	Topics []string
 }
 
@@ -104,7 +104,7 @@ type Review struct {
 // against a fake.
 type API interface {
 	// ListOrgRepositories lists every repository of the given org, with
-	// topics (to find the maitred-enabled repos).
+	// topics (to derive the repository roles, §forgejo/webhook/repository-roles).
 	ListOrgRepositories(org string) ([]Repository, error)
 	// ListOpenIssues lists the open issues of a repository.
 	ListOpenIssues(owner, repo string) ([]Issue, error)

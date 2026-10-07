@@ -2,6 +2,7 @@ package forgejo
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -30,6 +31,14 @@ func openIssue() *Issue {
 func closedIssue() *Issue {
 	issue := openIssue()
 	issue.State = "closed"
+	return issue
+}
+
+// labelledIssue is an open issue carrying the given labels
+// (§forgejo/decisions/transition-table).
+func labelledIssue(labels ...string) *Issue {
+	issue := openIssue()
+	issue.Labels = labels
 	return issue
 }
 
@@ -115,6 +124,26 @@ func TestDecide(t *testing.T) {
 			state: State{Issue: closedIssue()},
 		},
 		{
+			name:  "issue opened carrying human-task holds off",
+			event: issueEvent(EventIssueOpened),
+			state: State{Issue: labelledIssue(LabelHumanTask)},
+		},
+		{
+			name:  "issue opened carrying ideation holds off",
+			event: issueEvent(EventIssueOpened),
+			state: State{Issue: labelledIssue("ideation")},
+		},
+		{
+			name:  "issue opened carrying outcome holds off",
+			event: issueEvent(EventIssueOpened),
+			state: State{Issue: labelledIssue("outcome")},
+		},
+		{
+			name:  "reconciled issue carrying ideation holds off",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: labelledIssue("ideation")},
+		},
+		{
 			name:  "issue opened without re-fetched state holds off",
 			event: issueEvent(EventIssueOpened),
 		},
@@ -140,6 +169,27 @@ func TestDecide(t *testing.T) {
 			name:  "issue edited but closed on re-fetch holds off",
 			event: issueEvent(EventIssueEdited),
 			state: State{Issue: closedIssue()},
+		},
+		{
+			name:  "issue edited carrying ideation holds off",
+			event: issueEvent(EventIssueEdited),
+			state: State{Issue: labelledIssue("ideation")},
+		},
+		{
+			name:  "issue labels changed carrying outcome holds off",
+			event: issueEvent(EventIssueLabelsChanged),
+			state: State{Issue: labelledIssue("outcome")},
+		},
+		{
+			name:  "issue commented carrying human-task holds off",
+			event: issueEvent(EventIssueCommented),
+			state: State{Issue: labelledIssue(LabelHumanTask)},
+		},
+		{
+			name:       "issue edited carrying an ordinary label dispatches reassess",
+			event:      issueEvent(EventIssueEdited),
+			state:      State{Issue: labelledIssue("bug")},
+			wantAction: ActionReassess,
 		},
 		{
 			name:        "issue closed runs the unblock cascade",
@@ -588,6 +638,22 @@ func TestUnblockCascade(t *testing.T) {
 			want: []Key{{Repo: "o/r", Kind: KindIssue, Number: 4}},
 		},
 		{
+			// The walk is label-blind: what is finally dispatched for a
+			// labelled member is the cascade dispatch's call
+			// (§forgejo/decisions/unblock-cascade).
+			name: "a reserved label does not blind the walk",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue:    Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelHumanTask}},
+						Blockers: []IssueNode{node("o/r", 1, "closed")},
+					},
+				},
+			},
+			want: []Key{{Repo: "o/r", Kind: KindIssue, Number: 2}},
+		},
+		{
 			name: "a cycle terminates",
 			root: &IssueNode{
 				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
@@ -609,5 +675,84 @@ func TestUnblockCascade(t *testing.T) {
 				t.Errorf("unblockCascade() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestDecide_ReservedLabelHoldOffsNameTheLabel pins that the label
+// insurance hold-offs name the reserved label that denied the action
+// (§forgejo/decisions/transition-table).
+func TestDecide_ReservedLabelHoldOffsNameTheLabel(t *testing.T) {
+	tests := []struct {
+		name       string
+		event      Event
+		state      State
+		wantReason string
+	}{
+		{
+			name:       "opened: implement denied by the label",
+			event:      issueEvent(EventIssueOpened),
+			state:      State{Issue: labelledIssue(LabelHumanTask)},
+			wantReason: "never an implement candidate",
+		},
+		{
+			name:       "activity: reassess denied by the label",
+			event:      issueEvent(EventIssueCommented),
+			state:      State{Issue: labelledIssue("ideation")},
+			wantReason: "never a reassess candidate",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := Decide(tt.event, tt.state, nil)
+			if !d.HoldOff() {
+				t.Fatalf("decision = %+v, want a hold-off", d)
+			}
+			label := tt.state.Issue.Labels[0]
+			if !strings.Contains(d.Reason, label) || !strings.Contains(d.Reason, tt.wantReason) {
+				t.Errorf("hold-off reason = %q, want it to name %q and %q", d.Reason, label, tt.wantReason)
+			}
+		})
+	}
+}
+
+// TestAdmissibleInRoles pins the action-to-role table: the work-item
+// actions are admitted by the maitred-enabled role, the outcomes
+// actions by the maitred-outcomes-repo role, and an unknown action is
+// inadmissible anywhere (§forgejo/webhook/repository-roles).
+func TestAdmissibleInRoles(t *testing.T) {
+	workItem := roles{workItems: true}
+	outcomes := roles{outcomes: true}
+	both := roles{workItems: true, outcomes: true}
+	tests := []struct {
+		action Action
+		r      roles
+		want   bool
+	}{
+		{ActionImplement, workItem, true},
+		{ActionReassess, workItem, true},
+		{ActionReview, workItem, true},
+		{ActionReReview, workItem, true},
+		{ActionRebase, workItem, true},
+		{ActionFixFeedback, workItem, true},
+		{ActionMergeOrWait, workItem, true},
+		{ActionImplement, outcomes, false},
+		{ActionReassess, outcomes, false},
+		{ActionReview, outcomes, false},
+		// The outcomes actions are reserved vocabulary until the
+		// outcomes chain dispatches them (#83, #84, #85).
+		{Action("decompose"), outcomes, true},
+		{Action("wrap-up"), outcomes, true},
+		{Action("decompose"), workItem, false},
+		{Action("wrap-up"), workItem, false},
+		{ActionImplement, both, true},
+		{Action("wrap-up"), both, true},
+		{Action("frobnicate"), both, false},
+		{Action("frobnicate"), roles{}, false},
+		{ActionImplement, roles{}, false},
+	}
+	for _, tt := range tests {
+		if got := admissibleInRoles(tt.action, tt.r); got != tt.want {
+			t.Errorf("admissibleInRoles(%q, %+v) = %v, want %v", tt.action, tt.r, got, tt.want)
+		}
 	}
 }

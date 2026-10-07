@@ -1327,3 +1327,52 @@ func wireEventFromPayload(t *testing.T, payload map[string]any) wireEvent {
 	}
 	return p
 }
+
+// TestDispatchCascade_ReservedLabelHeldOff: a newly unblocked issue
+// carrying a reserved label (here human-task) is never an implement
+// dispatch — the cascade hold-off names the label and is recorded in
+// the decision log for the cascade key
+// (§forgejo/decisions/unblock-cascade, §forgejo/decisions/transition-table).
+func TestDispatchCascade_ReservedLabelHeldOff(t *testing.T) {
+	var log bytes.Buffer
+	api := newFakeAPI()
+	api.repos = []Repository{testRepo("o/r")}
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewJSONHandler(&log, nil)))
+	closed := &Issue{Number: 7, State: "closed", UpdatedAt: testUpdatedAt, Repository: "o/r"}
+	api.issues[7] = closed
+	unblocked := &Issue{Number: 8, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r", Labels: []string{LabelHumanTask}}
+	api.issues[8] = unblocked
+	api.blocks[7] = []Issue{*unblocked}
+	api.deps[8] = []Issue{*closed}
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d cascade tasks for a human-ticketed issue, want none", len(tasks))
+	}
+	var rec map[string]any
+	for _, e := range parseLogLines(t, log.Bytes()) {
+		if e["msg"] == "decision" && e["key"] == "o/r/issue/8" {
+			rec = e
+		}
+	}
+	if rec == nil {
+		t.Fatalf("cascade key has no decision-log entry, want its hold-off recorded")
+	}
+	reason, _ := rec["reason"].(string)
+	if !strings.Contains(reason, "human-task") || !strings.Contains(reason, "never an implement candidate") {
+		t.Errorf("cascade hold-off reason = %q, want it to name the label and the denial", reason)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 8})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none", w)
+	}
+}

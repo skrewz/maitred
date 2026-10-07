@@ -48,8 +48,8 @@ type PromptConfig struct {
 // Config is the engine's canned-prompt configuration
 // (§forgejo/config/canned-prompts).
 type Config struct {
-	// Org is the organisation whose maitred-enabled repositories the
-	// engine tracks.
+	// Org is the organisation whose role-holding repositories the
+	// engine tracks (§forgejo/webhook/repository-roles).
 	Org string `yaml:"org"`
 	// ReconcileInterval is how often the reconciliation sweep runs
 	// (§forgejo/reconciliation/scheduling).

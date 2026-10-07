@@ -12,7 +12,7 @@ authenticated with a bearer token:
 
 | Operation | What the engine does with it |
 |---|---|
-| list an org's repositories (with `topics`) | find the `maitred-enabled` repos |
+| list an org's repositories (with `topics`) | derive each repository's roles (§forgejo/webhook/repository-roles) |
 | list open issues in a repo | event filtering and reconciliation enumeration |
 | list open pull requests in a repo | event filtering and reconciliation enumeration |
 | get a single issue (state, labels, `updated_at`, `html_url`) | authoritative issue state |

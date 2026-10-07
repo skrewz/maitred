@@ -60,11 +60,11 @@ type Engine struct {
 	doneCh   chan struct{}
 	sweeping atomic.Bool
 
-	// The scope cache: which of the org's repositories carry the
-	// maitred-enabled topic, refreshed at most once per reconcile
-	// interval (§forgejo/webhook/the-scope-cache).
+	// The scope cache: the roles each of the org's repositories holds,
+	// refreshed at most once per reconcile interval
+	// (§forgejo/webhook/the-scope-cache, §forgejo/webhook/repository-roles).
 	scopeMu sync.Mutex
-	scope   map[string]bool
+	scope   map[string]roles
 	scopeAt time.Time
 	// scopeFailedAt stamps the last failed listing attempt, bounding
 	// the retry of a failing API to one listing per scopeRetryInterval.
@@ -94,14 +94,14 @@ func NewEngine(api API, store *Store, cfg *Config, q queue.TaskQueueProvider, lo
 // HandleEvent processes one event end to end — scope test, re-fetch,
 // decide, dispatch, watermark — under the key's lock, so concurrent
 // events for the same key cannot race the watermark
-// (§forgejo/webhook/serialisation). A repository that does not carry the
-// maitred-enabled topic is outside the engine's remit: it holds off
-// before the re-fetch (§forgejo/webhook/the-scope-cache). A re-fetch
-// failure holds off: the reconciliation sweep re-derives from the source
-// of truth (§forgejo/webhook/the-pipeline).
+// (§forgejo/webhook/serialisation). A repository holding no maitred
+// role is outside the engine's remit: it holds off before the re-fetch
+// (§forgejo/webhook/repository-roles). A re-fetch failure holds off: the
+// reconciliation sweep re-derives from the source of truth
+// (§forgejo/webhook/the-pipeline).
 func (e *Engine) HandleEvent(ev Event) {
 	key := ev.KeyOf()
-	enabled, err := e.repoEnabled(ev.Repo)
+	r, err := e.repoRoles(ev.Repo)
 	if err != nil {
 		// Scope unknown: the repository listing failed. Hold off with a
 		// reason naming the failure, never as a deliberate exclusion
@@ -109,12 +109,12 @@ func (e *Engine) HandleEvent(ev Event) {
 		e.recordDecision(key, ev, State{}, holdOffScopeUnknown(ev.Repo, err))
 		return
 	}
-	if !enabled {
-		// The repository is outside the engine's remit: hold off before
-		// re-fetching, so an inert repository costs nothing and
-		// dispatches nothing — cascade included
-		// (§forgejo/webhook/the-scope-cache).
-		e.recordDecision(key, ev, State{}, holdOffUnenabledRepo(ev.Repo))
+	if !r.any() {
+		// The repository holds no role: outside the engine's remit, so
+		// hold off before re-fetching, so an inert repository costs
+		// nothing and dispatches nothing — cascade included
+		// (§forgejo/webhook/repository-roles).
+		e.recordDecision(key, ev, State{}, holdOffOutOfRemit(ev.Repo))
 		return
 	}
 	e.store.WithKeyLock(key, func() {
@@ -129,6 +129,12 @@ func (e *Engine) HandleEvent(ev Event) {
 			w = nil
 		}
 		d := Decide(ev, st, w)
+		// Admissibility: an action fires only if the repository holding
+		// the object under consideration carries the role admitting it
+		// (§forgejo/webhook/repository-roles).
+		if d.Dispatched && !admissibleInRoles(d.Action, r) {
+			d = holdOffActionInadmissible(d.Action, ev.Repo)
+		}
 		e.recordDecision(key, ev, st, d)
 		if d.Dispatched {
 			if err := e.dispatch(ev, st, d.Action); err != nil {
@@ -311,23 +317,31 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 // dispatchCascade dispatches implement for one key of the unblock
 // cascade, applying the key's own watermark first, so an
 // already-dispatched (action, revision) is not re-dispatched
-// (§forgejo/decisions/unblock-cascade). A key in a repository that does
-// not carry the maitred-enabled topic is outside the engine's remit and
-// is not dispatched (§forgejo/webhook/the-scope-cache).
+// (§forgejo/decisions/unblock-cascade). Admissibility is judged by the
+// roles of the repository holding the key, never the repository whose
+// closure rooted the cascade: implement requires the work-item role
+// (§forgejo/webhook/repository-roles). An issue carrying a reserved
+// label is never an implement candidate, cascade included
+// (§forgejo/decisions/transition-table).
 func (e *Engine) dispatchCascade(k Key, sender string) error {
-	enabled, err := e.repoEnabled(k.Repo)
-	if err != nil || !enabled {
+	r, err := e.repoRoles(k.Repo)
+	if err != nil || !r.any() {
 		// A cascade key is tested the same way as the event path, and its
 		// hold-off is recorded in the decision log like any other
 		// decision, wherever it is made
-		// (§forgejo/webhook/the-scope-cache,
+		// (§forgejo/webhook/repository-roles,
 		// §forgejo/observability/the-decision-log).
-		held := holdOffUnenabledRepo(k.Repo)
+		held := holdOffOutOfRemit(k.Repo)
 		if err != nil {
 			held = holdOffScopeUnknown(k.Repo, err)
 		}
 		ev := Event{Type: EventIssueOpened, Repo: k.Repo, Kind: k.Kind, Number: k.Number, Sender: sender}
 		e.recordDecision(k, ev, State{}, held)
+		return nil
+	}
+	if !admissibleInRoles(ActionImplement, r) {
+		ev := Event{Type: EventIssueOpened, Repo: k.Repo, Kind: k.Kind, Number: k.Number, Sender: sender}
+		e.recordDecision(k, ev, State{}, holdOffActionInadmissible(ActionImplement, k.Repo))
 		return nil
 	}
 	owner, name := splitRepo(k.Repo)
@@ -337,6 +351,11 @@ func (e *Engine) dispatchCascade(k Key, sender string) error {
 	}
 	if issue.State != "open" {
 		return nil // closed in the meantime: nothing to dispatch
+	}
+	if label := neverWorkItemLabel(issue.Labels); label != "" {
+		ev := Event{Type: EventIssueOpened, Repo: k.Repo, Kind: k.Kind, Number: k.Number, Sender: sender}
+		e.recordDecision(k, ev, State{Issue: issue}, holdOffNeverImplement(k.Number, label))
+		return nil
 	}
 	w, err := e.store.Load(k)
 	if err != nil {

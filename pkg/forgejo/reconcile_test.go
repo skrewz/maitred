@@ -432,3 +432,53 @@ func TestEngine_StopWithoutStart(t *testing.T) {
 	eng, _, _, _ := newTestEngine(t)
 	eng.Stop() // must not panic
 }
+
+// TestReconcile_VisitsOutcomesOnlyRepo: the sweep enumerates the union
+// of both role sets, so an outcomes-only repository is reconciled too —
+// a missed delivery there self-heals — even though implement is
+// inadmissible for its objects and nothing dispatches
+// (§forgejo/reconciliation/the-sweep, §forgejo/webhook/repository-roles).
+func TestReconcile_VisitsOutcomesOnlyRepo(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	api.repos = []Repository{testRepoOutcomes("o/out")}
+	issue := &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/out"}
+	api.issues[7] = issue
+	api.openIssues["out"] = []Issue{*issue}
+
+	eng.Reconcile()
+
+	if n := api.callCount("GetIssue"); n != 1 {
+		t.Errorf("GetIssue called %d time(s), want 1: the sweep must visit an outcomes-only repository", n)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d dispatched tasks from an outcomes-only repository, want none", len(tasks))
+	}
+}
+
+// TestReconcile_VisitsBothRoleSets: one listing feeds both roles — a
+// mixed org is swept in full: the enabled repository dispatches as
+// ever, the outcomes-only one is visited and held off
+// (§forgejo/reconciliation/the-sweep).
+func TestReconcile_VisitsBothRoleSets(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	api.repos = []Repository{testRepo("o/r"), testRepoOutcomes("o/out")}
+	enabled := &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r"}
+	outcomes := &Issue{Number: 8, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/out"}
+	api.issues[7] = enabled
+	api.issues[8] = outcomes
+	api.openIssues["r"] = []Issue{*enabled}
+	api.openIssues["out"] = []Issue{*outcomes}
+
+	eng.Reconcile()
+
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d dispatched tasks, want the single implement from the enabled repository", len(tasks))
+	}
+	if n := api.callCount("GetIssue"); n != 2 {
+		t.Errorf("GetIssue called %d time(s), want 2: both repositories must be visited", n)
+	}
+	if n := api.callCount("ListOrgRepositories"); n != 1 {
+		t.Errorf("ListOrgRepositories called %d time(s), want one listing feeding both roles", n)
+	}
+}

@@ -12,12 +12,17 @@ created while the engine was down.
 `Reconcile()` on the engine:
 
 1. **Enumerate the repositories.** List the org's repositories
-   (§forgejo/config/canned-prompts names the org) and keep those whose
-   topics include `maitred-enabled`. The same listing refreshes the
-   event path's **scope cache** — the snapshot of which repositories carry
-   the topic (§forgejo/webhook/the-scope-cache) — so the sweep adds no API
-   call to the scope test, and a repository excluded here is held off on
-   the event path too.
+   (§forgejo/config/canned-prompts names the org) and keep those holding
+   at least one role — repositories whose topics include
+   `maitred-enabled` **or** `maitred-outcomes-repo`
+   (§forgejo/webhook/repository-roles). Visiting an outcomes-only
+   repository is what makes a missed delivery there self-heal like
+   anywhere else; what may be dispatched for its objects is gated by
+   admissibility (§forgejo/webhook/repository-roles). The same listing
+   refreshes the event path's **scope cache** — the snapshot of which
+   roles each repository holds (§forgejo/webhook/the-scope-cache) — so the
+   sweep adds no API call to the scope test, and a repository excluded
+   here is held off on the event path too.
 2. **Enumerate the objects.** For each such repository, list **all**
    open issues and all open pull requests
    (§forgejo/client/operations). The issue list includes pull requests

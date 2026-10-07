@@ -5,17 +5,30 @@ import (
 	"time"
 )
 
-// The scope cache: the snapshot of which of the organisation's
-// repositories carry the maitred-enabled topic, consulted by the event
-// path so the scope test costs no API round-trip per delivery
-// (§forgejo/webhook/the-scope-cache).
+// The scope cache: the snapshot of the roles the organisation's
+// repositories hold, consulted by the event path so the scope test
+// costs no API round-trip per delivery
+// (§forgejo/webhook/the-scope-cache, §forgejo/webhook/repository-roles).
+
+// roles are the repository roles held by topic
+// (§forgejo/webhook/repository-roles): workItems is the
+// maitred-enabled role, outcomes the maitred-outcomes-repo role. A
+// repository may hold both or neither.
+type roles struct {
+	workItems bool
+	outcomes  bool
+}
+
+// any reports whether the repository holds at least one role — the
+// admission test (§forgejo/webhook/repository-roles).
+func (r roles) any() bool { return r.workItems || r.outcomes }
 
 // errScopeUnavailable reports that the engine could not establish scope:
 // the snapshot is older than one reconcile interval and the repository
 // listing is failing, so a refresh is waiting out the retry backoff.
 // The caller holds off with a reason naming the listing failure rather
-// than "not maitred-enabled", so a transient API failure is not recorded
-// as a deliberate exclusion (§forgejo/webhook/the-scope-cache).
+// than a missing role, so a transient API failure is not recorded as a
+// deliberate exclusion (§forgejo/webhook/the-scope-cache).
 var errScopeUnavailable = errors.New("repository listing unavailable")
 
 // scopeRetryInterval bounds how often the event path re-attempts a
@@ -35,15 +48,20 @@ func (e *Engine) scopeRetry() time.Duration {
 }
 
 // refreshScopeCache replaces the scope cache with a snapshot of the
-// given repository listing, recording the moment of the snapshot so the
-// staleness bound can be applied and clearing any failure backoff.
+// given repository listing — one listing feeds both roles
+// (§forgejo/webhook/repository-roles) — recording the moment of the
+// snapshot so the staleness bound can be applied and clearing any
+// failure backoff.
 func (e *Engine) refreshScopeCache(repos []Repository) {
-	enabled := make(map[string]bool, len(repos))
+	scoped := make(map[string]roles, len(repos))
 	for i := range repos {
-		enabled[repos[i].FullName] = hasTopic(repos[i].Topics, maitredEnabledTopic)
+		scoped[repos[i].FullName] = roles{
+			workItems: hasTopic(repos[i].Topics, maitredEnabledTopic),
+			outcomes:  hasTopic(repos[i].Topics, maitredOutcomesTopic),
+		}
 	}
 	e.scopeMu.Lock()
-	e.scope = enabled
+	e.scope = scoped
 	e.scopeAt = time.Now()
 	e.scopeFailedAt = time.Time{}
 	e.scopeMu.Unlock()
@@ -80,35 +98,35 @@ func (e *Engine) tryRefreshScopeCache() error {
 	return nil
 }
 
-// repoEnabled reports whether the repository carries the
-// maitred-enabled topic (§forgejo/reconciliation/the-sweep), according
-// to the scope cache (§forgejo/webhook/the-scope-cache). The cache is
-// refreshed when it has never been taken or is older than one reconcile
-// interval; concurrent deliveries finding it stale share one listing —
-// they wait on refreshMu and re-check staleness under it. A repository
-// absent from a fresh snapshot is not enabled: the test fails closed.
-// A non-nil error means scope is unknown — the listing failed, or a
-// failure is waiting out the retry backoff with the snapshot gone stale
-// — and the caller must hold off naming the failure instead of acting
-// on the boolean.
-func (e *Engine) repoEnabled(repo string) (bool, error) {
+// repoRoles reports the roles the repository holds
+// (§forgejo/webhook/repository-roles), according to the scope cache
+// (§forgejo/webhook/the-scope-cache). The cache is refreshed when it
+// has never been taken or is older than one reconcile interval;
+// concurrent deliveries finding it stale share one listing — they wait
+// on refreshMu and re-check staleness under it. A repository absent
+// from a fresh snapshot holds no role: the test fails closed. A non-nil
+// error means scope is unknown — the listing failed, or a failure is
+// waiting out the retry backoff with the snapshot gone stale — and the
+// caller must hold off naming the failure instead of acting on the
+// roles.
+func (e *Engine) repoRoles(repo string) (roles, error) {
 	if e.scopeNeedsRefresh() {
 		e.refreshMu.Lock()
 		defer e.refreshMu.Unlock()
 		if e.scopeNeedsRefresh() {
 			if err := e.tryRefreshScopeCache(); err != nil {
-				return false, err
+				return roles{}, err
 			}
 		}
 	}
 	e.scopeMu.Lock()
-	enabled := e.scope[repo]
+	r := e.scope[repo]
 	stale := time.Since(e.scopeAt) > e.cfg.ReconcileInterval
 	e.scopeMu.Unlock()
 	if stale {
 		// Only reachable inside the failure backoff window: a refresh
 		// was needed but is not yet due to be re-attempted.
-		return false, errScopeUnavailable
+		return roles{}, errScopeUnavailable
 	}
-	return enabled, nil
+	return r, nil
 }
