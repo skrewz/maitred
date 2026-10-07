@@ -108,7 +108,9 @@ one listing per delivery. The last known snapshot is kept across the
 failure but **never acted on while stale** — scope stays unknown, and
 the test still fails closed. The keys of an unblock cascade are tested the
 same way before their dispatch, so a cascade never starts an agent in a
-repository outside the remit (§forgejo/decisions/unblock-cascade).
+repository outside the remit; a cascade hold-off is recorded in the
+decision log like any other decision, wherever it is made
+(§forgejo/observability/the-decision-log).
 
 ## Event mapping
 

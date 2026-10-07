@@ -317,11 +317,17 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 func (e *Engine) dispatchCascade(k Key, sender string) error {
 	enabled, err := e.repoEnabled(k.Repo)
 	if err != nil || !enabled {
+		// A cascade key is tested the same way as the event path, and its
+		// hold-off is recorded in the decision log like any other
+		// decision, wherever it is made
+		// (§forgejo/webhook/the-scope-cache,
+		// §forgejo/observability/the-decision-log).
 		held := holdOffUnenabledRepo(k.Repo)
 		if err != nil {
 			held = holdOffScopeUnknown(k.Repo, err)
 		}
-		e.log.Info("cascade held off", "key", k.String(), "reason", held.Reason)
+		ev := Event{Type: EventIssueOpened, Repo: k.Repo, Kind: k.Kind, Number: k.Number, Sender: sender}
+		e.recordDecision(k, ev, State{}, held)
 		return nil
 	}
 	owner, name := splitRepo(k.Repo)

@@ -187,9 +187,11 @@ func TestHandleEvent_ScopeCacheRefreshedWhenStale(t *testing.T) {
 
 // TestDispatchCascade_UnenabledRepoHeldOff: a cross-repo unblock
 // cascade must not start an agent in a repository the sweep deliberately
-// skips (§forgejo/webhook/the-scope-cache).
+// skips, and the hold-off is recorded in the decision log for the
+// cascade key like any other decision (§forgejo/webhook/the-scope-cache).
 func TestDispatchCascade_UnenabledRepoHeldOff(t *testing.T) {
-	eng, api, q, _ := newScopeEngine(t)
+	var log bytes.Buffer
+	eng, api, q, _ := newScopeEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log, nil)))
 	closed := &Issue{Number: 7, State: "closed", UpdatedAt: testUpdatedAt, Repository: "o/r"}
 	api.issues[7] = closed
 	unblocked := &Issue{Number: 8, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/off"}
@@ -201,6 +203,21 @@ func TestDispatchCascade_UnenabledRepoHeldOff(t *testing.T) {
 
 	if tasks := q.all(); len(tasks) != 0 {
 		t.Fatalf("got %d cascade tasks into an un-enabled repository, want none", len(tasks))
+	}
+	var rec map[string]any
+	for _, e := range parseLogLines(t, log.Bytes()) {
+		if e["msg"] == "decision" && e["key"] == "o/off/issue/8" {
+			rec = e
+		}
+	}
+	if rec == nil {
+		t.Fatalf("cascade key has no decision-log entry, want its hold-off recorded")
+	}
+	if dispatched, _ := rec["dispatched"].(bool); dispatched {
+		t.Errorf("cascade key logged as dispatched: %v", rec)
+	}
+	if reason, _ := rec["reason"].(string); !strings.Contains(reason, "repo o/off is not maitred-enabled") {
+		t.Errorf("cascade hold-off reason = %q, want it to name the repository", reason)
 	}
 }
 
