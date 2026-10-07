@@ -19,8 +19,16 @@ type stubForgejoAPI struct {
 	issue *forgejo.Issue
 }
 
+// The stub's organisation holds the one maitred-enabled repository the
+// tests dispatch in — the event path's scope test consults the listing
+// (§forgejo/webhook/the-scope-cache).
 func (s *stubForgejoAPI) ListOrgRepositories(string) ([]forgejo.Repository, error) {
-	return nil, nil
+	return []forgejo.Repository{{
+		Name:     "r",
+		FullName: "o/r",
+		Owner:    "o",
+		Topics:   []string{"maitred-enabled"},
+	}}, nil
 }
 
 func (s *stubForgejoAPI) ListOpenIssues(string, string) ([]forgejo.Issue, error) {

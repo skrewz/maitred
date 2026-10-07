@@ -320,7 +320,7 @@ func TestReconcile_PRListingErrorContinues(t *testing.T) {
 // (§forgejo/reconciliation/failure-handling).
 func TestReconcile_ListOrgRepositoriesError(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
-	api.err = errors.New("boom")
+	api.listReposErr = errors.New("boom")
 
 	eng.Reconcile()
 

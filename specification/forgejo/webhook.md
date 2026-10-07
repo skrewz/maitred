@@ -32,17 +32,30 @@ On each `POST`:
    Deliveries that are not an issue, pull request, or review transition
    (the table below) are **cheaply ignored** — no re-fetch, no decision —
    and acknowledged.
-3. **Re-fetch the state.** The affected issue/PR — plus what the
+3. **Test the scope.** The event's repository must carry the
+   `maitred-enabled` topic (§forgejo/reconciliation/the-sweep): the topic
+   scopes **both** engine paths, not just the sweep. The test is made from
+   the event payload's repository, **before** any re-fetch. A repository
+   that does not carry the topic — or whose topics the engine does not
+   know — **holds off** with the reason `repo <name> is not
+   maitred-enabled`, logged like any other hold-off
+   (§forgejo/observability/the-decision-log); nothing is re-fetched,
+   dispatched, or cascaded for it, and the delivery is acknowledged. A
+   repository listing that **fails** also holds off, but with a reason
+   naming the failure — never the topic wording — so a transient API
+   failure is not recorded as a deliberate exclusion
+   (§forgejo/webhook/the-scope-cache).
+4. **Re-fetch the state.** The affected issue/PR — plus what the
    transition needs (reviews, blockers, connected PRs, blocker graph) — is
    re-fetched from Forgejo through the read-only client
    (§forgejo/client/operations). The event's own claims are never trusted.
    A `pull_request` delivery with action `closed` is refined by the
    re-fetch: a merged PR is a PR-merged event, an unmerged one a
    PR-closed event.
-4. **Decide.** `Decide(event, state, watermark)`
+5. **Decide.** `Decide(event, state, watermark)`
    (§forgejo/decisions/the-decision-function) — the re-fetched state wins
    over the event.
-5. **Dispatch.** A dispatch fills the action's canned prompt
+6. **Dispatch.** A dispatch fills the action's canned prompt
    (§forgejo/config/placeholders) and enqueues the task through the queue
    provider, with the persona and timeout from the config
    (§forgejo/config/canned-prompts). The task carries a **dedup key** — the
@@ -53,13 +66,13 @@ On each `POST`:
    an edited issue) is a different key and dispatches freely. The key carries
    the repo verbatim (slash retained — it is opaque to the queue system), so
    two distinct repos never produce the same key.
-6. **Watermark.** A dispatch records its watermark — the action and the
+7. **Watermark.** A dispatch records its watermark — the action and the
    revision (the PR head sha, or the issue's `updated_at`) — in the store
    (§forgejo/state/watermark); a hold-off records nothing. Each key of the
    unblock cascade (§forgejo/decisions/unblock-cascade) has its own
    watermark applied before its dispatch, so an already-dispatched
    `(action, revision)` is not re-dispatched.
-7. **Acknowledge.** The response is `204` once the pipeline has run; the
+8. **Acknowledge.** The response is `204` once the pipeline has run; the
    engine does not block on the dispatched agent — dispatch only enqueues.
    A slow pipeline (several re-fetch calls) can exceed Forgejo's delivery
    timeout, in which case Forgejo records the delivery as failed without
@@ -68,6 +81,36 @@ On each `POST`:
 
 A re-fetch failure is a hold-off: it is logged and acknowledged, and the
 reconciliation sweep re-derives from the source of truth.
+
+### The scope cache
+
+The scope test does not add an API round-trip to every delivery. The
+engine keeps an in-memory **scope cache**: a snapshot of the
+organisation's repositories and whether each carries the
+`maitred-enabled` topic. The reconciliation sweep refreshes it from the
+listing it already enumerates (§forgejo/reconciliation/the-sweep), and an
+event path that finds the cache empty or older than one
+`reconcile_interval` refreshes it with a single repository listing before
+deciding (§forgejo/client/operations). Entries are therefore never older
+than one interval: a repository whose topic has just been removed is not
+acted on for longer than that. A repository absent from the snapshot is
+not enabled — the test **fails closed**. Deliveries that find the cache
+stale **share one refresh**: the refresh is single-flight, so a burst
+against a stale cache costs one repository listing, not one each.
+A repository listing that **fails** is also a hold-off — logged,
+acknowledged, and re-derived by the next sweep, which refreshes the
+cache again (§forgejo/reconciliation/failure-handling) — with a reason
+naming the listing failure, distinct from the `not maitred-enabled`
+wording, so an API failure never reads as an exclusion. The failed
+attempt is stamped like a successful one: while the listing keeps
+failing, re-attempts are bounded to a short retry interval rather than
+one listing per delivery. The last known snapshot is kept across the
+failure but **never acted on while stale** — scope stays unknown, and
+the test still fails closed. The keys of an unblock cascade are tested the
+same way before their dispatch, so a cascade never starts an agent in a
+repository outside the remit; a cascade hold-off is recorded in the
+decision log like any other decision, wherever it is made
+(§forgejo/observability/the-decision-log).
 
 ## Event mapping
 

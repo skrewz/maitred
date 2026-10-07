@@ -13,7 +13,11 @@ created while the engine was down.
 
 1. **Enumerate the repositories.** List the org's repositories
    (§forgejo/config/canned-prompts names the org) and keep those whose
-   topics include `maitred-enabled`.
+   topics include `maitred-enabled`. The same listing refreshes the
+   event path's **scope cache** — the snapshot of which repositories carry
+   the topic (§forgejo/webhook/the-scope-cache) — so the sweep adds no API
+   call to the scope test, and a repository excluded here is held off on
+   the event path too.
 2. **Enumerate the objects.** For each such repository, list **all**
    open issues and all open pull requests
    (§forgejo/client/operations). The issue list includes pull requests

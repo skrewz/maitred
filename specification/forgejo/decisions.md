@@ -27,6 +27,16 @@ When the event and the re-fetched state disagree (out-of-order or
 stale delivery), the **state wins**: a transition whose preconditions
 the state does not satisfy holds off.
 
+The engine's own scope is tested **ahead** of this function, in the
+pipeline (§forgejo/webhook/the-scope-cache): an event whose repository
+does not carry the `maitred-enabled` topic holds off with the reason
+`repo <name> is not maitred-enabled` and never reaches `Decide`, so the
+function stays pure — repository topics are not among its inputs. When
+the engine cannot establish scope because the repository listing failed,
+the hold-off reason instead names the failure (`scope of repo <name>
+unknown: ...`), keeping exclusion and API failure distinguishable in the
+decision log.
+
 ## Actions
 
 The action names form the enum the engine config maps to canned
