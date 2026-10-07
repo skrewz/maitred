@@ -87,6 +87,11 @@ type fakeAPI struct {
 	listIssuesErr map[string]error
 	listPullsErr  map[string]error
 
+	// listReposErr, when set, fails only ListOrgRepositories — so a
+	// test can break the scope listing without breaking the object
+	// re-fetches, and vice versa (§forgejo/webhook/the-scope-cache).
+	listReposErr error
+
 	// GetIssue blocking hooks for the concurrency tests: GetIssue
 	// closes getIssueEntered (once) on entry, then waits on
 	// blockGetIssue when it is set.
@@ -166,8 +171,11 @@ func (f *fakeAPI) GetPullRequest(owner, repo string, number int) (*PullRequest, 
 
 func (f *fakeAPI) ListOrgRepositories(org string) ([]Repository, error) {
 	f.record("ListOrgRepositories:" + org)
-	if f.err != nil {
-		return nil, f.err
+	// Deliberately not consulting f.err: the global error models a
+	// failing object re-fetch, which must leave the scope listing
+	// healthy so scope-tested deliveries still reach refetch.
+	if f.listReposErr != nil {
+		return nil, f.listReposErr
 	}
 	return f.repos, nil
 }
@@ -611,11 +619,17 @@ func TestHandler_RefetchWins(t *testing.T) {
 func TestHandler_RefetchFailure_HoldsOff(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
 	h := NewHandler(eng, "s3cret", nil)
+	// f.err fails the object re-fetch only; the scope listing stays
+	// healthy so the delivery actually reaches the re-fetch stage
+	// rather than holding off at the scope test.
 	api.err = errors.New("boom")
 
 	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "opened", issuePayload("o/r", 7, "opened")))
 	if rec.Code != http.StatusNoContent {
 		t.Errorf("status = %d, want 204", rec.Code)
+	}
+	if n := api.callCount("GetIssue"); n != 1 {
+		t.Errorf("GetIssue called %d time(s), want 1: the delivery must reach the re-fetch for this test to test it", n)
 	}
 	if len(q.all()) != 0 {
 		t.Errorf("task dispatched despite failed re-fetch")
