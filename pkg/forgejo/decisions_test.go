@@ -210,13 +210,13 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "PR synced pushed by the implementer after a review dispatches re-review",
 			event:      prEvent(EventPRSynced, "alice"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review("CHANGES_REQUESTED", "carol", testTime)}},
+			state:      State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
 			wantAction: ActionReReview,
 		},
 		{
 			name:       "PR review changes-requested dispatches fix-feedback",
 			event:      prEvent(EventPRReviewed, "carol"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review("CHANGES_REQUESTED", "carol", testTime)}},
+			state:      State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
 			wantAction: ActionFixFeedback,
 		},
 		{
@@ -238,7 +238,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "PR review latest review wins",
 			event:      prEvent(EventPRReviewed, "carol"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review("CHANGES_REQUESTED", "carol", testTime), review("APPROVED", "carol", testTime2)}},
+			state:      State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime), review("APPROVED", "carol", testTime2)}},
 			wantAction: ActionMergeOrWait,
 		},
 		{
@@ -283,7 +283,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "reconcile PR standing at a changes-requested review dispatches fix-feedback",
 			event:      prEvent(EventReconcile, "maitred"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review("CHANGES_REQUESTED", "carol", testTime)}},
+			state:      State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
 			wantAction: ActionFixFeedback,
 		},
 		{
@@ -301,7 +301,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "reconcile PR whose latest review predates the head dispatches re-review",
 			event:      prEvent(EventReconcile, "maitred"),
-			state:      State{PR: openPR("def"), Reviews: []Review{review("CHANGES_REQUESTED", "carol", testTime)}},
+			state:      State{PR: openPR("def"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
 			wantAction: ActionReReview,
 		},
 		{
@@ -331,7 +331,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:      "fix-feedback already dispatched at the revision holds off",
 			event:     prEvent(EventPRReviewed, "carol"),
-			state:     State{PR: openPR("abc"), Reviews: []Review{review("CHANGES_REQUESTED", "carol", testTime)}},
+			state:     State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
 			watermark: &Watermark{Action: "fix-feedback", Revision: "abc"},
 		},
 		{
@@ -343,7 +343,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:      "reconcile PR fix-feedback already dispatched at the revision holds off",
 			event:     prEvent(EventReconcile, "maitred"),
-			state:     State{PR: openPR("abc"), Reviews: []Review{review("CHANGES_REQUESTED", "carol", testTime)}},
+			state:     State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
 			watermark: &Watermark{Action: "fix-feedback", Revision: "abc"},
 		},
 		{

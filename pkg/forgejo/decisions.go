@@ -26,7 +26,7 @@ const (
 // (§forgejo/client/operations).
 const (
 	ReviewApproved         = "APPROVED"
-	ReviewChangesRequested = "CHANGES_REQUESTED"
+	ReviewChangesRequested = "REQUEST_CHANGES"
 	ReviewComment          = "COMMENT"
 )
 

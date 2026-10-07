@@ -402,7 +402,7 @@ func TestListPullRequestReviews(t *testing.T) {
 				"submitted_at": "2026-09-17T23:51:30Z",
 			},
 			{
-				"state":        "CHANGES_REQUESTED",
+				"state":        "REQUEST_CHANGES",
 				"user":         map[string]any{"login": "s-reviewer"},
 				"commit_id":    "1f5401a",
 				"submitted_at": "2026-09-17T20:00:00Z",

@@ -87,7 +87,7 @@ type PullRequest struct {
 // Review is a pull request review, slimmed to the fields the engine needs
 // (§forgejo/client/operations).
 type Review struct {
-	// Event is the review's state, e.g. "APPROVED", "CHANGES_REQUESTED",
+	// Event is the review's state, e.g. "APPROVED", "REQUEST_CHANGES",
 	// or "COMMENT".
 	Event string
 	// Author is the login of the reviewing user.
