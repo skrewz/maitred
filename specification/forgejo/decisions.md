@@ -53,7 +53,7 @@ prompts:
 | `review` | a mergeable PR opened, or synced while it has no review |
 | `re-review` | a mergeable PR synced while it has a review |
 | `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review |
-| `merge-or-wait` | the PR's latest review approves (the merge policy is the prompt's) |
+| `merge-or-wait` | the PR's latest review approves **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's |
 | `rebase` | an open PR is not mergeable (conflicts) |
 | `decompose` | the reconciliation sweep finds an open issue carrying the `ideation` label — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
@@ -78,14 +78,15 @@ prompts:
 | PR synced (open, mergeable, has a review) | `re-review` |
 | review submitted (a connected issue blocked by an open `ideation` issue) | `reject-pr` |
 | review submitted (latest review requests changes) | `fix-feedback` |
-| review submitted (latest review approves) | `merge-or-wait` |
+| review submitted (latest review approves, no connected issue has an open blocker) | `merge-or-wait` |
+| review submitted (latest review approves, a connected issue has an open blocker) | hold off — the reason names the open blockers (§forgejo/decisions/merge-gate) |
 | review submitted (latest review is anything else) | hold off |
 | PR merged | unblock cascade (for the connected issue) |
 | PR closed without merging | hold off |
 | reconcile — open issue with the `ideation` label | `decompose`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue, no open blockers | `wrap-up`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue with open blockers | hold off, naming the open blockers — state calls for no action |
-| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, `reject-pr` when a connected issue is blocked by an open `ideation` issue and otherwise as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` |
+| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, `reject-pr` when a connected issue is blocked by an open `ideation` issue and otherwise as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate) |
 
 The **reject-pr test precedes the review and rebase rows** on every path
 that can dispatch review, re-review, fix-feedback, or merge-or-wait: it
@@ -161,9 +162,46 @@ decides as if that review had just been submitted — except that a comment
 review, which holds off on the event path, dispatches `fix-feedback`: the
 review is feedback for the implementer, and the sweep moves the PR along by
 triggering the implementer, not the reviewer. Changes-requested dispatches
-`fix-feedback`, approved dispatches `merge-or-wait`. A PR whose latest
+`fix-feedback`, approved dispatches `merge-or-wait` — unless the merge
+gate holds it off on an open blocker (§forgejo/decisions/merge-gate). A
+PR whose latest
 review is anything else (e.g. dismissed), or whose latest review predates
 the current head, is reconciled as PR synced.
+
+## Merge gate
+
+`merge-or-wait` is dispatched **only when no connected issue of the PR
+has an open blocker**. A PR's **connected issues** are the non-PR issues
+the PR blocks (its dependency rows, read cross-repo where the connected
+issue lives elsewhere); an issue's **blockers** are the issues that
+block it. A go-ahead label on the issue or the PR authorises merging on
+its own — it does not authorise merging **past a blocker**. The gate is
+the merge-path twin of the open-blocker rule that holds off `reassess`
+(§forgejo/decisions/transition-table), and every path that dispatches
+`merge-or-wait` consults it through one shared test: the review event,
+the sweep's PR path, and the unblock cascade's release of a held PR.
+
+The PR's **own entry** in a connected issue's blocker list is not a
+blocker: the PR *is* the connected issue's delivery vehicle (the
+issue-blocks record that connects them makes the PR one of the issue's
+blockers), so the test excludes the PR itself and counts every other
+open blocker.
+
+A blocked merge **holds off**; it does not reject. `reject-pr` means
+"this PR should not have been opened" — the unreleased-work test of
+§forgejo/decisions/transition-table — and is decided ahead of this gate;
+a PR that opened clean and was blocked afterwards is legitimate work
+waiting to land. It holds off silently on the merge
+path — the hold-off reason names each open blocker as `repo#number`,
+cross-repo included — and the unblock cascade (or the sweep) moves it
+when its blockers close.
+
+The gate reads dependency rows of the connected issues; where none are
+recorded, the gate sees no blockers and merges as before. The
+recording half lives outside the decision function (the workflow the
+`implement` prompt dispatches records `issue-block PR → issue`,
+cross-repo targets included); until that record exists the gate
+cannot fire — it never blocks more than the graph states.
 
 ## Unblock cascade
 
@@ -188,6 +226,21 @@ carrying a reserved label (`ideation`, `outcome`, `human-task` — see
 instead of dispatched. Each cascaded key's admissibility is judged by
 the roles of the repository **holding the key**, never the repository
 whose closure rooted the cascade (§forgejo/webhook/repository-roles).
+
+An issue whose remaining open blockers are **its connected open PRs**
+is not an implement candidate — the work exists as a PR, and the
+`implement` condition denies a connected open PR. When the closure that
+rooted the cascade closes such an issue's last *issue-side* blocker, the
+cascade instead moves those PRs: each connected open PR becomes a
+cascade key of the pull-request kind, dispatched `merge-or-wait` — the
+release held off by the merge gate (§forgejo/decisions/merge-gate)
+fires on the closure that removed the last blocker, exactly as a newly
+unblocked issue is released with `implement`. A cascaded PR key pays
+the same admission, insurance, and watermark as an issue key: the
+re-fetch of the PR decides it, and only a decision of `merge-or-wait`
+dispatches — a PR not standing at an approved head stays silent and the
+sweep remains the backstop. The cascade dispatches nothing else for
+PRs.
 
 The walk itself is label-blind: labelled nodes are visited and
 traversed, so graph walking stays independent of what is finally
@@ -230,9 +283,11 @@ PR itself; the issue's blockers (with their states) and its connected
 open PRs, for the `implement` and `reassess` conditions; the PR's
 reviews, for the review transitions; for PR opened, PR reviewed and the
 sweep's PR path, the issues the PR blocks and each issue's blockers, for
-the `reject-pr` test; and, for close events, the blocker-graph root — the
-closed issue — with each node carrying the issues it blocks and the issues
-that block it.
+the `reject-pr` test (§forgejo/decisions/actions) and for the merge gate
+(§forgejo/decisions/merge-gate), which reads the same rows on the PR
+reviewed event and the sweep's synthetic PR event; and, for close events,
+the blocker-graph root — the closed issue — with each node carrying the
+issues it blocks and the issues that block it.
 
 **Watermark** — the last dispatch for the object's key
 (§forgejo/state/watermark), or none.
