@@ -92,6 +92,11 @@ type fakeAPI struct {
 	// re-fetches, and vice versa (§forgejo/webhook/the-scope-cache).
 	listReposErr error
 
+	// depsErr, when set, fails only IssueDependencies — so a test can
+	// break the blockers re-fetch without breaking the object fetches
+	// (§forgejo/webhook/re-fetch).
+	depsErr error
+
 	// GetIssue blocking hooks for the concurrency tests: GetIssue
 	// closes getIssueEntered (once) on entry, then waits on
 	// blockGetIssue when it is set.
@@ -237,6 +242,9 @@ func (f *fakeAPI) IssueDependencies(owner, repo string, number int) ([]Issue, er
 	f.record("IssueDependencies:" + repo + "/" + strconv.Itoa(number))
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.depsErr != nil {
+		return nil, f.depsErr
 	}
 	return f.deps[number], nil
 }
@@ -506,6 +514,26 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			want: "",
 		},
 		{
+			name:      "issue edited, open blocker",
+			eventType: "issues", action: "edited",
+			payload: issuePayload("o/r", 7, "edited"),
+			setup: func(api *fakeAPI) {
+				api.issues[7] = testIssue(7, "open")
+				api.deps[7] = []Issue{*testIssue(10, "open")}
+			},
+			want: "",
+		},
+		{
+			name:      "issue labels changed, closed blockers only",
+			eventType: "issue_label", action: "label_updated",
+			payload: issuePayload("o/r", 7, "label_updated"),
+			setup: func(api *fakeAPI) {
+				api.issues[7] = testIssue(7, "open")
+				api.deps[7] = []Issue{*testIssue(10, "closed")}
+			},
+			want: ActionReassess,
+		},
+		{
 			name:      "PR opened, mergeable",
 			eventType: "pull_request", action: "opened",
 			payload: prPayload("o/r", 9, "opened"),
@@ -613,6 +641,57 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 				t.Errorf("prompt = %q, want it to carry action %s", tasks[0].Prompt, tc.want)
 			}
 		})
+	}
+}
+
+// TestHandler_IssueActivity_FetchesBlockers pins that the activity
+// path fetches the issue's blockers — the re-fetch the blocked-issue
+// hold-off needs — exactly once per delivery (§forgejo/webhook/re-fetch,
+// §forgejo/decisions/transition-table).
+func TestHandler_IssueActivity_FetchesBlockers(t *testing.T) {
+	for _, tc := range []struct {
+		eventType string
+		action    string
+	}{
+		{"issues", "edited"},
+		{"issue_label", "label_updated"},
+		{"issue_comment", "created"},
+	} {
+		eng, api, q, _ := newTestEngine(t)
+		h := NewHandler(eng, "s3cret", nil)
+		api.issues[7] = testIssue(7, "open")
+
+		serve(t, h, signedRequest(t, "s3cret", tc.eventType, tc.action, issuePayload("o/r", 7, tc.action)))
+		if n := api.callCount("IssueDependencies:r/7"); n != 1 {
+			t.Errorf("%s/%s: IssueDependencies called %d times, want 1", tc.eventType, tc.action, n)
+		}
+		if len(q.all()) != 1 {
+			t.Errorf("%s/%s: unblocked issue dispatched %d tasks, want 1 reassess", tc.eventType, tc.action, len(q.all()))
+		}
+	}
+}
+
+// TestHandler_IssueActivity_BlockersFetchFailureHoldsOff pins that a
+// failing blockers read never reaches the decision as "no blockers":
+// the re-fetch fails, so nothing dispatches and no watermark is
+// recorded; the reconciliation sweep re-derives
+// (§forgejo/webhook/the-pipeline, §forgejo/webhook/re-fetch).
+func TestHandler_IssueActivity_BlockersFetchFailureHoldsOff(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.issues[7] = testIssue(7, "open")
+	api.depsErr = errors.New("dependencies endpoint down")
+
+	serve(t, h, signedRequest(t, "s3cret", "issue_comment", "created", issuePayload("o/r", 7, "created")))
+	if n := api.callCount("IssueDependencies:r/7"); n == 0 {
+		t.Error("the failing blockers read was never reached")
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Errorf("dispatched %d tasks after the blockers read failed: %+v", len(tasks), tasks)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 7})
+	if err != nil || w != nil {
+		t.Errorf("watermark recorded after the hold-off: %v, %v", w, err)
 	}
 }
 

@@ -2,6 +2,7 @@ package forgejo
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -134,6 +135,27 @@ func TestDecide(t *testing.T) {
 			name:       "issue feedback comment dispatches reassess",
 			event:      issueEvent(EventIssueCommented),
 			state:      State{Issue: openIssue()},
+			wantAction: ActionReassess,
+		},
+		{
+			name:  "issue edited with an open blocker holds off",
+			event: issueEvent(EventIssueEdited),
+			state: State{Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
+		},
+		{
+			name:  "issue labels changed with an open blocker holds off",
+			event: issueEvent(EventIssueLabelsChanged),
+			state: State{Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
+		},
+		{
+			name:  "issue commented with an open blocker holds off",
+			event: issueEvent(EventIssueCommented),
+			state: State{Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
+		},
+		{
+			name:       "issue edited with only closed blockers dispatches reassess",
+			event:      issueEvent(EventIssueEdited),
+			state:      State{Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "closed", Repository: "o/r"}}},
 			wantAction: ActionReassess,
 		},
 		{
@@ -411,6 +433,35 @@ func TestDecide(t *testing.T) {
 				t.Error("Reason is empty; every decision carries a reason")
 			}
 		})
+	}
+}
+
+// TestDecide_ActivityBlockerHoldOffNamesBlockers pins the acceptance
+// that activity on an issue with an open blocker holds off with a
+// reason naming the open blockers — cross-repo included — and not the
+// closed ones (§forgejo/decisions/transition-table).
+func TestDecide_ActivityBlockerHoldOffNamesBlockers(t *testing.T) {
+	state := State{
+		Issue: openIssue(),
+		Blockers: []Issue{
+			{Number: 3, State: "open", Repository: "o/r"},
+			{Number: 12, State: "open", Repository: "other/repo"},
+			{Number: 5, State: "closed", Repository: "o/r"},
+		},
+	}
+	for _, typ := range []EventType{EventIssueEdited, EventIssueLabelsChanged, EventIssueCommented} {
+		d := Decide(issueEvent(typ), state, nil)
+		if !d.HoldOff() {
+			t.Fatalf("%s: dispatched %q, want hold-off", typ, d.Action)
+		}
+		for _, want := range []string{"o/r#3", "other/repo#12"} {
+			if !strings.Contains(d.Reason, want) {
+				t.Errorf("%s: reason %q does not name blocker %s", typ, d.Reason, want)
+			}
+		}
+		if strings.Contains(d.Reason, "o/r#5") {
+			t.Errorf("%s: reason %q names a closed blocker", typ, d.Reason)
+		}
 	}
 }
 

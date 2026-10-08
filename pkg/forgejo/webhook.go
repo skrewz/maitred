@@ -162,7 +162,12 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		}
 		st := State{Issue: issue}
 		switch ev.Type {
-		case EventIssueOpened, EventReconcile:
+		case EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged,
+			EventIssueCommented, EventReconcile:
+			// The opened path needs the blockers for the implement
+			// condition and the activity path for the reassess
+			// condition: an open blocker holds off both
+			// (§forgejo/decisions/transition-table, §forgejo/webhook/re-fetch).
 			blockers, err := e.api.IssueDependencies(owner, name, ev.Number)
 			if err != nil {
 				return ev, State{}, err

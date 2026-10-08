@@ -139,10 +139,15 @@ not listed (e.g. `reopened`) — is ignored.
 For each decision event, the re-fetch assembles the state
 §forgejo/decisions/inputs demands:
 
-- **Issue events** — the issue itself. For issue opened (and the sweep's
-  synthetic current-state event), the issue's blockers as well; the
-  connected open PRs are the pull requests among those blockers. For
-  issue closed, the blocker graph rooted at the closed issue.
+- **Issue events** — the issue itself. For issue opened, edited, labels
+  changed, and commented (and the sweep's synthetic current-state
+  event), the issue's blockers as well; the connected open PRs are the
+  pull requests among those blockers. The activity path needs the
+  blockers because an open blocker holds off the `reassess` decision
+  (§forgejo/decisions/transition-table); if the blockers read fails,
+  the re-fetch fails — a hold-off naming the failure, never
+  "no blockers".
+  For issue closed, the blocker graph rooted at the closed issue.
 - **PR events** — the PR itself, and its reviews, for the review
   transitions. For PR merged, the blocker graph rooted at the connected
   issue — the non-PR issue the PR blocks.
