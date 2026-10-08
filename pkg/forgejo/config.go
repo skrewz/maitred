@@ -45,8 +45,8 @@ type PromptConfig struct {
 	Timeout time.Duration `yaml:"timeout"`
 }
 
-// Config is the engine's canned-prompt configuration
-// (§forgejo/config/canned-prompts).
+// Config is the engine's configuration: canned prompts plus the scalar
+// keys (§forgejo/config/canned-prompts, §forgejo/config/decomposer-identity).
 type Config struct {
 	// Org is the organisation whose maitred-enabled repositories the
 	// engine tracks.
@@ -54,6 +54,12 @@ type Config struct {
 	// ReconcileInterval is how often the reconciliation sweep runs
 	// (§forgejo/reconciliation/scheduling).
 	ReconcileInterval time.Duration `yaml:"reconcile_interval"`
+	// DecomposerIdentity names the Forgejo identity that performs
+	// decomposition — the persona the engine holds off on, and the author
+	// of forest members (§forgejo/config/decomposer-identity). Optional:
+	// unset, the authorship hold-off is inert and this is never a load
+	// error.
+	DecomposerIdentity string `yaml:"decomposer_identity"`
 	// Actions maps each action the decision function references to its
 	// canned prompt.
 	Actions map[string]PromptConfig `yaml:"actions"`
@@ -193,8 +199,10 @@ func loadConfigFile(path string) (*Config, error) {
 }
 
 // loadConfigDir parses every .yaml/.yml file in dir, in sorted order,
-// and merges them: the org must agree, and an action may be defined in
-// only one file (§forgejo/config/loading, §forgejo/config/validation).
+// and merges them: the org and the optional decomposer identity must
+// agree, and an action may be defined in only one file
+// (§forgejo/config/loading, §forgejo/config/validation,
+// §forgejo/config/decomposer-identity).
 func loadConfigDir(dir string) (*Config, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -230,6 +238,12 @@ func loadConfigDir(dir string) (*Config, error) {
 		}
 		if cfg.ReconcileInterval > 0 {
 			merged.ReconcileInterval = cfg.ReconcileInterval
+		}
+		if cfg.DecomposerIdentity != "" && merged.DecomposerIdentity != "" && cfg.DecomposerIdentity != merged.DecomposerIdentity {
+			return nil, fmt.Errorf("config %q: decomposer_identity %q conflicts with %q", name, cfg.DecomposerIdentity, merged.DecomposerIdentity)
+		}
+		if cfg.DecomposerIdentity != "" {
+			merged.DecomposerIdentity = cfg.DecomposerIdentity
 		}
 		if merged.Actions == nil {
 			merged.Actions = make(map[string]PromptConfig)
