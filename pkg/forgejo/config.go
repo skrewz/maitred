@@ -23,6 +23,8 @@ var AllActions = []Action{
 	ActionFixFeedback,
 	ActionMergeOrWait,
 	ActionRebase,
+	ActionDecompose,
+	ActionWrapUp,
 }
 
 // ConfigEnvVar is the environment variable that locates the engine

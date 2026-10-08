@@ -21,6 +21,22 @@ const (
 	ActionFixFeedback Action = "fix-feedback"
 	ActionMergeOrWait Action = "merge-or-wait"
 	ActionRebase      Action = "rebase"
+	// ActionDecompose and ActionWrapUp are the watermark-exempt
+	// actions: their watermark is the state, not the revision
+	// (§forgejo/reconciliation/watermark-exemptions).
+	ActionDecompose Action = "decompose"
+	ActionWrapUp    Action = "wrap-up"
+)
+
+// The reserved label names the watermark-exempt sweep rows consult
+// (§forgejo/reconciliation/watermark-exemptions). They are vocabulary
+// fixed by the specification, not configuration.
+const (
+	// LabelIdeation marks an issue as a root to decompose.
+	LabelIdeation = "ideation"
+	// LabelOutcome marks an issue as a tracker to wrap up once all
+	// its blockers are closed.
+	LabelOutcome = "outcome"
 )
 
 // The Forgejo review states the decision function reacts to
@@ -36,24 +52,20 @@ const (
 // (§forgejo/decisions/transition-table).
 const LabelHumanTask = "human-task"
 
-// neverWorkItemLabels are the labels whose issues are never implement
-// or reassess candidates: the outcomes workflow's reserved labels and
-// the human-task convention (§forgejo/decisions/transition-table).
-// The ideation and outcome names become constants when the outcomes
-// chain dispatches their actions (#83, #84, #85); the names themselves
-// are reserved specification vocabulary.
-var neverWorkItemLabels = []string{"ideation", "outcome", LabelHumanTask}
-
 // neverWorkItemLabel returns the issue label that denies the
 // implement and reassess actions, or "" when the issue may be an
-// implement or reassess candidate (§forgejo/decisions/transition-table).
+// implement or reassess candidate. Label names match
+// case-insensitively, and ideation is reported first: the
+// decompose-wins precedence applies to the hold-off reason too
+// (§forgejo/decisions/transition-table,
+// §forgejo/reconciliation/watermark-exemptions).
 func neverWorkItemLabel(labels []string) string {
-	for _, l := range labels {
-		for _, reserved := range neverWorkItemLabels {
-			if l == reserved {
-				return l
-			}
-		}
+	issue := &Issue{Labels: labels}
+	if label := reservedLabel(issue); label != "" {
+		return label
+	}
+	if hasLabel(issue, LabelHumanTask) {
+		return LabelHumanTask
 	}
 	return ""
 }
@@ -78,9 +90,11 @@ const (
 	// EventReconcile is the synthetic current-state event the
 	// reconciliation sweep feeds through the same decision function
 	// (§forgejo/reconciliation): for an issue it decides like
-	// EventIssueOpened, for a pull request like EventPRSynced — except
-	// when the last activity is a review: changes-requested or comment
-	// dispatches fix-feedback, approved dispatches merge-or-wait
+	// EventIssueOpened unless a watermark-exempt row applies
+	// (§forgejo/reconciliation/watermark-exemptions), for a pull
+	// request like EventPRSynced — except when the last activity is a
+	// review: changes-requested or comment dispatches fix-feedback,
+	// approved dispatches merge-or-wait
 	// (§forgejo/decisions/transition-table).
 	EventReconcile EventType = "reconcile"
 )
@@ -178,7 +192,7 @@ func Decide(e Event, s State, w *Watermark) Decision {
 		if e.Kind == KindPR {
 			return decidePRReconcile(e, s, w)
 		}
-		return decideIssueOpened(e, s, w)
+		return decideIssueReconcile(e, s, w)
 	case EventIssueEdited, EventIssueLabelsChanged, EventIssueCommented:
 		return decideIssueActivity(e, s, w)
 	case EventIssueClosed:
@@ -196,6 +210,39 @@ func Decide(e Event, s State, w *Watermark) Decision {
 	default:
 		return holdOff(fmt.Sprintf("unhandled event type %q", e.Type))
 	}
+}
+
+// decideIssueReconcile handles the reconciliation sweep's synthetic
+// current-state event for an issue. The watermark-exempt rows come
+// first, and they are the exemption: unlike every other path, they
+// decide without consulting the watermark, so an open ideation root
+// dispatches decompose and an open, fully unblocked outcome tracker
+// dispatches wrap-up, revision notwithstanding — state is the watermark
+// (§forgejo/reconciliation/watermark-exemptions). These two rows are
+// the exempt set: the exemption is scoped to the sweep, and an exempt
+// action reached from an event keeps the revision-keyed guard like any
+// other action. A blocked tracker holds off naming its open blockers, so
+// the decision log reads "state calls for no action", never "already
+// dispatched at this revision". An issue carrying neither reserved label
+// decides as issue opened (§forgejo/decisions/transition-table).
+func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
+	issue := s.Issue
+	if issue == nil || issue.State != "open" {
+		return decideIssueOpened(e, s, w) // the same hold-offs as the event path
+	}
+	if hasLabel(issue, LabelIdeation) {
+		// A root is decomposed even when a tracker's wrap-up would
+		// also apply: decompose wins over wrap-up
+		// (§forgejo/reconciliation/watermark-exemptions).
+		return dispatch(ActionDecompose, fmt.Sprintf("issue %d is an open %s issue; the state calls for decompose regardless of revision %s", issue.Number, LabelIdeation, issueRevision(issue)))
+	}
+	if hasLabel(issue, LabelOutcome) {
+		if open := openBlockers(s.Blockers); len(open) > 0 {
+			return holdOff(fmt.Sprintf("issue %d is an open %s tracker blocked by %d open issue(s); state calls for no action", issue.Number, LabelOutcome, len(open)))
+		}
+		return dispatch(ActionWrapUp, fmt.Sprintf("issue %d is an open, fully unblocked %s tracker; the state calls for wrap-up regardless of revision %s", issue.Number, LabelOutcome, issueRevision(issue)))
+	}
+	return decideIssueOpened(e, s, w)
 }
 
 // decideIssueOpened handles an issue that was opened (or the
@@ -490,11 +537,44 @@ func issueRevision(issue *Issue) string {
 }
 
 // alreadyDispatched reports whether the watermark already records
-// action at revision — the idempotency guard: the same (event, state,
-// revision) does not re-dispatch the same action
-// (§forgejo/decisions/loop-prevention).
+// action at revision — the idempotency guard, revision-keyed on every
+// path: the same (event, state, revision) does not re-dispatch the same
+// action (§forgejo/decisions/loop-prevention). The watermark exemption
+// is not implemented here: it is scoped to the sweep, whose exempt rows
+// in decideIssueReconcile simply never consult the watermark
+// (§forgejo/reconciliation/watermark-exemptions). Keying the bypass on
+// the action instead of the path would hand every future event row for
+// those actions a suppression-free path by accident.
 func alreadyDispatched(w *Watermark, action Action, revision string) bool {
 	return w != nil && w.Action == string(action) && w.Revision == revision
+}
+
+// hasLabel reports whether the issue carries the label. Label names are
+// user-authored strings, so the reserved names match
+// case-insensitively: a label created as "Ideation" must not silently
+// decide as implement (§forgejo/reconciliation/watermark-exemptions).
+func hasLabel(issue *Issue, label string) bool {
+	for _, l := range issue.Labels {
+		if strings.EqualFold(l, label) {
+			return true
+		}
+	}
+	return false
+}
+
+// reservedLabel returns the reserved watermark-exempt label the issue
+// carries, or the empty string when it carries none. Ideation is
+// reported first: the decompose-wins precedence applies to the hold-off
+// reason too (§forgejo/reconciliation/watermark-exemptions).
+func reservedLabel(issue *Issue) string {
+	switch {
+	case hasLabel(issue, LabelIdeation):
+		return LabelIdeation
+	case hasLabel(issue, LabelOutcome):
+		return LabelOutcome
+	default:
+		return ""
+	}
 }
 
 func dispatch(action Action, reason string) Decision {

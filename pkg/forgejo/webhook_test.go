@@ -994,6 +994,29 @@ func TestHandler_IssueClosed_CascadeWatermarkHolds(t *testing.T) {
 	}
 }
 
+// TestHandler_IssueClosed_CascadeReservedLabelHoldsOff: the cascade
+// dispatches implement, and an issue carrying a reserved label is not
+// implemented — the sweep decides it
+// (§forgejo/reconciliation/watermark-exemptions).
+func TestHandler_IssueClosed_CascadeReservedLabelHoldsOff(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.issues[7] = testIssue(7, "closed")
+	tracker := testIssue(10, "open")
+	tracker.Labels = append(tracker.Labels, LabelOutcome)
+	api.issues[10] = tracker
+	api.blocks[7] = []Issue{*tracker}
+	api.deps[10] = []Issue{*testIssue(7, "closed")}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Errorf("got %d tasks, want none (a labelled issue is decided by the sweep)", len(tasks))
+	}
+}
+
 // TestHandler_PRMerged_Cascade: a merged PR's connected issue is the
 // cascade root; its open blocks whose blockers are all closed are
 // dispatched.

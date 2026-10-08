@@ -48,13 +48,15 @@ prompts:
 
 | Action | Dispatched when |
 |---|---|
-| `implement` | the issue is open, unblocked (all its blockers closed), and has no connected open PR — the issue was opened or became unblocked |
-| `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement) |
+| `implement` | the issue is open, unblocked (all its blockers closed), has no connected open PR, and carries no reserved label — the issue was opened or became unblocked |
+| `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement), and it carries no reserved label |
 | `review` | a mergeable PR opened, or synced while it has no review |
 | `re-review` | a mergeable PR synced while it has a review |
 | `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review |
 | `merge-or-wait` | the PR's latest review approves (the merge policy is the prompt's) |
 | `rebase` | an open PR is not mergeable (conflicts) |
+| `decompose` | the reconciliation sweep finds an open issue carrying the `ideation` label — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
+| `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 
 ## Transition table
 
@@ -62,6 +64,7 @@ prompts:
 |---|---|
 | issue opened (open, all blockers closed, no connected PR) | `implement` |
 | issue opened (blocked, or a connected open PR, or not open) | hold off |
+| issue opened / edited / labels changed / comment (issue carries a reserved label) | hold off, naming the label — the sweep is where `decompose` and `wrap-up` fire (§forgejo/reconciliation/watermark-exemptions) |
 | issue edited / labels changed / feedback comment (issue open, all blockers closed) | `reassess` |
 | issue edited / labels changed / feedback comment (issue open, an open blocker) | hold off — the reason names the open blockers |
 | issue edited / labels changed / feedback comment (issue not open) | hold off |
@@ -76,7 +79,10 @@ prompts:
 | review submitted (latest review is anything else) | hold off |
 | PR merged | unblock cascade (for the connected issue) |
 | PR closed without merging | hold off |
-| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` |
+| reconcile — open issue with the `ideation` label | `decompose`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
+| reconcile — open `outcome` issue, no open blockers | `wrap-up`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
+| reconcile — open `outcome` issue with open blockers | hold off, naming the open blockers — state calls for no action |
+| reconcile — the sweep's synthetic current-state event | otherwise as issue opened (issue); for a PR, as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` |
 
 The "latest review" is the PR's most recently submitted review. An
 issue that *became unblocked* is dispatched `implement` through the
@@ -126,7 +132,10 @@ The cascade is **transitive**: a blocked issue that is itself closed
 cascades onward to the issues it blocks (A→B→C). It **terminates**
 without double-dispatching: each issue is visited once. The engine
 applies each cascaded key's own watermark before dispatching, so an
-already-dispatched `(action, revision)` is not re-dispatched.
+already-dispatched `(action, revision)` is not re-dispatched. A
+cascaded key carrying a reserved label holds off, naming the label:
+the cascade dispatches `implement`, and a labelled issue is decided by
+the sweep (§forgejo/reconciliation/watermark-exemptions).
 
 The cascade dispatches `implement`: an issue newly unblocked but
 carrying a reserved label (`ideation`, `outcome`, `human-task` — see
@@ -150,7 +159,12 @@ Three mechanisms, in this order:
 2. **Idempotency + watermark.** The same `(event, state, revision)`
    does not re-dispatch the same action: when the watermark already
    records the action at the current revision (the PR head sha, or the
-   issue's `updated_at`), the decision holds off.
+   issue's `updated_at`), the decision holds off. The guard is
+   revision-keyed on every path. The watermark-exempt actions
+   `decompose` and `wrap-up` are exempt only **on the sweep**, whose
+   rows for them decide without consulting the watermark: state is
+   their watermark (§forgejo/reconciliation/watermark-exemptions), and
+   the agent's silence-on-noop keeps the re-firing quiet.
 3. **Targeted per-transition sender guards**, only where an agent's
    *own* action would re-trigger the *same* action: a commit pushed by
    the PR's reviewing author (the author of its latest review) must
