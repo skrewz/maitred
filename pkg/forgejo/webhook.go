@@ -130,7 +130,9 @@ func (e *Engine) HandleEvent(ev Event) {
 		}
 		d := Decide(ev, st, w)
 		// Admissibility: an action fires only if the repository holding
-		// the object under consideration carries the role admitting it
+		// the object under consideration carries the role admitting it.
+		// Applied after the re-fetch deliberately — the action is
+		// Decide's answer, not the event's
 		// (§forgejo/webhook/repository-roles).
 		if d.Dispatched && !admissibleInRoles(d.Action, r) {
 			d = holdOffActionInadmissible(d.Action, ev.Repo)

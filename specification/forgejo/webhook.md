@@ -38,8 +38,9 @@ On each `POST`:
    scope **both** engine paths, not just the sweep. The test is made from
    the event payload's repository, **before** any re-fetch. A repository
    that holds no role — or whose topics the engine does not know —
-   **holds off** with the reason `repo <name> holds no maitred role`,
-   logged like any other hold-off
+   **holds off** with the reason
+   `repo <name> holds no maitred role (neither maitred-enabled nor
+   maitred-outcomes-repo)`, logged like any other hold-off
    (§forgejo/observability/the-decision-log); nothing is re-fetched,
    dispatched, or cascaded for it, and the delivery is acknowledged. A
    repository listing that **fails** also holds off, but with a reason
@@ -116,7 +117,25 @@ Two distinct rules consult the roles:
   arrived from. A cascade therefore crosses the role boundary: a closed
   issue in an outcomes repository dispatches `implement` for a member in an
   enabled repository. An action denied by this rule is a hold-off naming
-  the action, the repository, and the required role's topic.
+  the action, the repository, and the required role's topic; an action no
+  role admits (an unknown one) is a hold-off stating
+  `action <a> is admitted by no maitred role` — never the wording of a
+  role that does not admit it.
+
+Admissibility is applied **after** the re-fetch and `Decide`, not beside
+admission at step 3, and this shape is deliberate. Admissibility judges
+an **action** against the roles of the repository holding **the object
+under consideration**; the action is the decision function's answer, not
+the event's, and the object's repository only differs from the event's
+for cascade keys, which step 3 never sees. Testing an event's whole
+action family before the re-fetch would hard-code an event-to-action-family
+mapping the pipeline otherwise does not carry, one the outcomes chain
+(#83, #84, #85) will redraw. The accepted cost: a delivery for an
+outcomes-only repository (or a reconciled object in one) is re-fetched
+before its work-item action is denied — one re-fetch per object, paid
+for the visibility that each denial is a recorded, self-healing
+hold-off in the decision log rather than a silent no-op
+(§forgejo/reconciliation/the-sweep).
 
 Unknown scope keeps these semantics verbatim: fail closed, hold off naming
 the listing failure — never "lacks `maitred-outcomes-repo`"

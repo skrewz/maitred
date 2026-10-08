@@ -572,3 +572,26 @@ func TestDispatchCascade_OutcomesMemberHeldOff(t *testing.T) {
 		t.Errorf("cascade hold-off reason = %q, want it to name the action and the required role's topic", reason)
 	}
 }
+
+// TestRolesFromTopics pins the single role-derivation rule shared by
+// the scope cache and the sweep filter: topics grant roles, and a
+// repository carrying none of them holds no role
+// (§forgejo/webhook/repository-roles, §forgejo/reconciliation/the-sweep).
+func TestRolesFromTopics(t *testing.T) {
+	tests := []struct {
+		name   string
+		topics []string
+		want   roles
+	}{
+		{"work-item only", []string{maitredEnabledTopic}, roles{workItems: true}},
+		{"outcomes only", []string{maitredOutcomesTopic}, roles{outcomes: true}},
+		{"both roles", []string{maitredEnabledTopic, maitredOutcomesTopic}, roles{workItems: true, outcomes: true}},
+		{"no role", []string{"some-other-topic"}, roles{}},
+		{"no topics", nil, roles{}},
+	}
+	for _, tt := range tests {
+		if got := rolesFromTopics(tt.topics); got != tt.want {
+			t.Errorf("%s: rolesFromTopics(%v) = %+v, want %+v", tt.name, tt.topics, got, tt.want)
+		}
+	}
+}

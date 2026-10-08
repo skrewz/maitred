@@ -30,7 +30,8 @@ the state does not satisfy holds off.
 The engine's own scope is tested **ahead** of this function, in the
 pipeline (§forgejo/webhook/repository-roles, §forgejo/webhook/the-scope-cache):
 an event whose repository holds no maitred role holds off with the
-reason `repo <name> holds no maitred role` and never reaches `Decide`;
+reason `repo <name> holds no maitred role (neither maitred-enabled nor
+maitred-outcomes-repo)` and never reaches `Decide`;
 whether an action is *admissible* in the roles of the repository holding
 the object is applied by the pipeline after `Decide`
 (§forgejo/webhook/the-pipeline). Either way the function stays pure —

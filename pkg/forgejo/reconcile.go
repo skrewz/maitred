@@ -41,7 +41,7 @@ func (e *Engine) Reconcile() {
 		// The sweep visits the union of both role sets, so a missed
 		// delivery in an outcomes-only repository self-heals too
 		// (§forgejo/reconciliation/the-sweep, §forgejo/webhook/repository-roles).
-		if !hasTopic(repo.Topics, maitredEnabledTopic) && !hasTopic(repo.Topics, maitredOutcomesTopic) {
+		if !rolesFromTopics(repo.Topics).any() {
 			continue
 		}
 		issues, err := e.api.ListOpenIssues(repo.Owner, repo.Name)

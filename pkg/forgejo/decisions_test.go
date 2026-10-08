@@ -756,3 +756,25 @@ func TestAdmissibleInRoles(t *testing.T) {
 		}
 	}
 }
+
+// TestHoldOffActionInadmissibleNamesTheRole pins the hold-off wording:
+// a known action names the topic of the role that would admit it; an
+// action no role admits states exactly that rather than pointing at a
+// role admissibleInRoles has just denied — the fail-closed case
+// (§forgejo/webhook/repository-roles).
+func TestHoldOffActionInadmissibleNamesTheRole(t *testing.T) {
+	tests := []struct {
+		action Action
+		want   string
+	}{
+		{ActionImplement, "action implement is inadmissible for repo o/r: requires the maitred-enabled role"},
+		{ActionReview, "action review is inadmissible for repo o/r: requires the maitred-enabled role"},
+		{Action("wrap-up"), "action wrap-up is inadmissible for repo o/r: requires the maitred-outcomes-repo role"},
+		{Action("frobnicate"), "action frobnicate is admitted by no maitred role"},
+	}
+	for _, tt := range tests {
+		if got := holdOffActionInadmissible(tt.action, "o/r").Reason; got != tt.want {
+			t.Errorf("holdOffActionInadmissible(%q) reason = %q, want %q", tt.action, got, tt.want)
+		}
+	}
+}

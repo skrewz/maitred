@@ -48,10 +48,11 @@ HTTP queue system.
 - **Forgejo engine.** A stateful webhook component that tracks issue/PR
   state and dispatches canned hotelier tasks when a tracked transition
   warrants it, reconciling periodically so missed webhooks are recovered.
-  The `maitred-enabled` repository topic scopes the engine's domain on
+  The repository roles — the `maitred-enabled` work-item role and the
+  `maitred-outcomes-repo` outcomes role — scope the engine's domain on
   **both** paths — the reconciliation sweep and the webhook event path
-  (§forgejo/webhook/the-scope-cache). Specified in
-  `specification/forgejo/`.
+  (§forgejo/webhook/repository-roles, §forgejo/webhook/the-scope-cache).
+  Specified in `specification/forgejo/`.
 
 ## Non-goals
 

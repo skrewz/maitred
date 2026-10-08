@@ -526,20 +526,31 @@ func admissibleInRoles(a Action, r roles) bool {
 }
 
 // roleTopicFor names the topic of a role admitting the action, for the
-// hold-off reason (§forgejo/webhook/repository-roles).
+// hold-off reason (§forgejo/webhook/repository-roles). An action no
+// table admits — an unknown one — has no such topic and returns the
+// empty string, so its hold-off never names a role that
+// admissibleInRoles has just denied.
 func roleTopicFor(a Action) string {
 	if outcomesActions[a] {
 		return maitredOutcomesTopic
 	}
-	return maitredEnabledTopic
+	if workItemActions[a] {
+		return maitredEnabledTopic
+	}
+	return ""
 }
 
 // holdOffActionInadmissible is the admissibility hold-off: the action
 // may not fire for an object in this repository — the roles of the
 // repository holding the object, never the repository the event
-// arrived from, deny it (§forgejo/webhook/repository-roles).
+// arrived from, deny it (§forgejo/webhook/repository-roles). An action
+// no role admits names that plainly, rather than a role that does not
+// admit it.
 func holdOffActionInadmissible(a Action, repo string) Decision {
-	return holdOff(fmt.Sprintf("action %s is inadmissible for repo %s: requires the %s role", a, repo, roleTopicFor(a)))
+	if topic := roleTopicFor(a); topic != "" {
+		return holdOff(fmt.Sprintf("action %s is inadmissible for repo %s: requires the %s role", a, repo, topic))
+	}
+	return holdOff(fmt.Sprintf("action %s is admitted by no maitred role", a))
 }
 
 // holdOffNeverImplement and holdOffNeverReassess are the reserved-label

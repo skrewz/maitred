@@ -23,6 +23,18 @@ type roles struct {
 // admission test (§forgejo/webhook/repository-roles).
 func (r roles) any() bool { return r.workItems || r.outcomes }
 
+// rolesFromTopics derives a repository's roles from its topics
+// (§forgejo/webhook/repository-roles). The derivation is written once
+// here and shared by the scope cache and the sweep filter
+// (§forgejo/reconciliation/the-sweep), so a third role means extending
+// this function only — never two divergent admission tests.
+func rolesFromTopics(topics []string) roles {
+	return roles{
+		workItems: hasTopic(topics, maitredEnabledTopic),
+		outcomes:  hasTopic(topics, maitredOutcomesTopic),
+	}
+}
+
 // errScopeUnavailable reports that the engine could not establish scope:
 // the snapshot is older than one reconcile interval and the repository
 // listing is failing, so a refresh is waiting out the retry backoff.
@@ -55,10 +67,7 @@ func (e *Engine) scopeRetry() time.Duration {
 func (e *Engine) refreshScopeCache(repos []Repository) {
 	scoped := make(map[string]roles, len(repos))
 	for i := range repos {
-		scoped[repos[i].FullName] = roles{
-			workItems: hasTopic(repos[i].Topics, maitredEnabledTopic),
-			outcomes:  hasTopic(repos[i].Topics, maitredOutcomesTopic),
-		}
+		scoped[repos[i].FullName] = rolesFromTopics(repos[i].Topics)
 	}
 	e.scopeMu.Lock()
 	e.scope = scoped
