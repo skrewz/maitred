@@ -192,6 +192,25 @@ type IssueNode struct {
 	Blockers []IssueNode
 }
 
+// CascadeDispatch is one emission of the unblock cascade: the key of
+// a newly unblocked issue and the action its state calls for —
+// implement, or wrap-up when the issue carries the outcome label: a
+// tracker whose last blocker just closed is a tracker whose work is
+// finished (§forgejo/decisions/unblock-cascade).
+type CascadeDispatch struct {
+	Key    Key
+	Action Action
+}
+
+// CascadeHoldOff is one cascade outcome that dispatches nothing but
+// belongs in the decision log: an open tracker the walk finds still
+// blocked, its reason naming which blockers remain open
+// (§forgejo/decisions/unblock-cascade).
+type CascadeHoldOff struct {
+	Key    Key
+	Reason string
+}
+
 // Decision is the outcome of Decide: a dispatch (a named action for the
 // event's own object) or a hold-off, always with a human-readable
 // reason, plus the unblock-cascade dispatches for close events
@@ -207,14 +226,21 @@ type Decision struct {
 	// logged with every decision.
 	Reason string
 	// Cascade lists the objects the unblock cascade now unblocks (close
-	// events only): newly unblocked issues, each warranting a dispatch
-	// of ActionImplement, and the connected open PRs of issues whose
+	// events only), each with the action its state calls for: newly
+	// unblocked issues — implement, or wrap-up for a newly unblocked
+	// outcome tracker — and the connected open PRs of issues whose
 	// remaining open blockers are only those PRs, each warranting a
 	// dispatch of ActionMergeOrWait
 	// (§forgejo/decisions/unblock-cascade). The engine applies each
 	// key's own watermark before dispatching, so the same (action,
 	// revision) is not re-dispatched.
-	Cascade []Key
+	Cascade []CascadeDispatch
+	// CascadeHoldOffs lists the cascade's non-silent hold-offs (close
+	// events only): an open tracker the walk found still blocked, its
+	// reason naming the open blockers, recorded in the decision log so
+	// the log says why wrap-up did not fire
+	// (§forgejo/decisions/unblock-cascade).
+	CascadeHoldOffs []CascadeHoldOff
 }
 
 // HoldOff reports whether the decision dispatches nothing for the
@@ -463,7 +489,7 @@ func decideIssueClosed(s State) Decision {
 		return holdOff("issue is not closed on re-fetch")
 	}
 	d := holdOff(fmt.Sprintf("issue %d closed; unblock cascade", s.Issue.Number))
-	d.Cascade = unblockCascade(s.CascadeRoot)
+	d.Cascade, d.CascadeHoldOffs = unblockCascade(s.CascadeRoot)
 	return d
 }
 
@@ -691,23 +717,31 @@ func decidePRMerged(s State) Decision {
 		return holdOff("PR is not merged on re-fetch")
 	}
 	d := holdOff(fmt.Sprintf("PR %d merged; unblock cascade for the connected issue", s.PR.Number))
-	d.Cascade = unblockCascade(s.CascadeRoot)
+	d.Cascade, d.CascadeHoldOffs = unblockCascade(s.CascadeRoot)
 	return d
 }
 
 // unblockCascade walks the blocker graph from the closed issue and
-// returns the objects it now unblocks — open issues with all their
-// issue-side blockers closed (dispatched implement) and, for issues
-// whose remaining open blockers are only their connected open PRs, those
-// PRs (dispatched merge-or-wait) — each exactly once. The walk is
-// transitive (a blocked issue that is itself closed cascades onward) and
-// terminates on cycles via a visited set
+// returns the dispatches for the objects it now unblocks — open
+// issues with all their issue-side blockers closed (dispatched
+// implement, or wrap-up when the issue carries the outcome label)
+// and, for issues whose remaining open blockers are only their
+// connected open PRs, those PRs (dispatched merge-or-wait) — each
+// exactly once, plus the hold-offs of the open outcome trackers the
+// walk finds still blocked. The dispatch's action is classified at
+// emission from the node's labels (the walk itself stays
+// label-blind); a newly unblocked tracker dispatches wrap-up, never
+// implement. The walk is transitive (a blocked issue that is itself
+// closed cascades onward) and terminates on cycles via a visited set
 // (§forgejo/decisions/unblock-cascade).
-func unblockCascade(root *IssueNode) []Key {
+func unblockCascade(root *IssueNode) ([]CascadeDispatch, []CascadeHoldOff) {
 	if root == nil {
-		return nil
+		return nil, nil
 	}
-	var unblocked []Key // nil when nothing is unblocked
+	var (
+		emissions []CascadeDispatch
+		holds     []CascadeHoldOff
+	)
 	seenPR := map[Key]bool{}
 	visited := map[Key]bool{
 		{Repo: root.Issue.Repository, Kind: KindIssue, Number: root.Issue.Number}: true,
@@ -730,25 +764,88 @@ func unblockCascade(root *IssueNode) []Key {
 				// the work exists as a PR, and the closure that
 				// removed the last issue-side blocker unblocks that
 				// PR instead (§forgejo/decisions/unblock-cascade).
-				if prs := openPullBlockers(b.Blockers); len(prs) > 0 {
-					if allClosed(issueBlockers(b.Blockers)) {
-						for _, p := range prs {
-							pk := Key{Repo: p.Repository, Kind: KindPR, Number: p.Number}
-							if seenPR[pk] {
-								continue // unblocked once, even by several issues
-							}
-							seenPR[pk] = true
-							unblocked = append(unblocked, pk)
+				if prs := openPullBlockers(b.Blockers); len(prs) > 0 && allClosed(issueBlockers(b.Blockers)) {
+					for _, p := range prs {
+						pk := Key{Repo: p.Repository, Kind: KindPR, Number: p.Number}
+						if seenPR[pk] {
+							continue // unblocked once, even by several issues
 						}
+						seenPR[pk] = true
+						emissions = append(emissions, CascadeDispatch{Key: pk, Action: ActionMergeOrWait})
 					}
 				} else if allClosed(b.Blockers) {
-					unblocked = append(unblocked, k)
+					emissions = append(emissions, CascadeDispatch{Key: k, Action: cascadeAction(&b.Issue)})
+				} else if h, ok := trackerStillBlocked(&b.Issue, b.Blockers); ok {
+					holds = append(holds, h)
 				}
 			}
 		}
 	}
 	walk(root)
-	return unblocked
+	return emissions, holds
+}
+
+// cascadeAction classifies a newly unblocked cascade issue at
+// emission: an issue carrying the outcome label is a tracker whose
+// members are all finished, so it warrants wrap-up; everything else
+// warrants implement. An issue carrying ideation as well does not
+// warrant wrap-up — decompose wins over wrap-up — so it takes the
+// implement emission, which the reserved-label insurance then holds
+// off naming ideation (§forgejo/decisions/unblock-cascade).
+func cascadeAction(issue *Issue) Action {
+	if hasLabel(issue, LabelOutcome) && !hasLabel(issue, LabelIdeation) {
+		return ActionWrapUp
+	}
+	return ActionImplement
+}
+
+// trackerStillBlocked is the cascade hold-off for an open outcome
+// tracker the walk finds still blocked: the reason names the open
+// blockers (cross-repo included) so the decision log says why
+// wrap-up did not fire when one of several blockers closed. An
+// ideation-carrying issue is not this hold-off's subject —
+// decompose wins over wrap-up and the sweep's rows decide it
+// (§forgejo/decisions/unblock-cascade).
+func trackerStillBlocked(issue *Issue, blockers []IssueNode) (CascadeHoldOff, bool) {
+	if !hasLabel(issue, LabelOutcome) || hasLabel(issue, LabelIdeation) {
+		return CascadeHoldOff{}, false
+	}
+	var open []Issue
+	for i := range blockers {
+		if blockers[i].Issue.State == "open" {
+			open = append(open, blockers[i].Issue)
+		}
+	}
+	if len(open) == 0 {
+		return CascadeHoldOff{}, false
+	}
+	return CascadeHoldOff{
+		Key:    issueKey(issue),
+		Reason: fmt.Sprintf("issue %d is an open %s tracker still blocked by %s; wrap-up held off", issue.Number, LabelOutcome, blockerNames(open)),
+	}, true
+}
+
+// cascadeActionFitsState re-checks a cascade emission against the
+// re-fetched issue — the state wins over the graph data. An implement
+// emission is covered by the reserved-label insurance: a tracker is
+// never an implement candidate, the cascade included. A wrap-up
+// emission demands the issue still be an outcome tracker without
+// ideation; otherwise the sweep decides the issue afresh
+// (§forgejo/decisions/unblock-cascade).
+func cascadeActionFitsState(action Action, issue *Issue) (Decision, bool) {
+	if action == ActionWrapUp {
+		switch {
+		case hasLabel(issue, LabelIdeation):
+			return holdOff(fmt.Sprintf("issue %d carries the %s label; decompose wins over wrap-up", issue.Number, LabelIdeation)), false
+		case !hasLabel(issue, LabelOutcome):
+			return holdOff(fmt.Sprintf("issue %d no longer carries the %s label; nothing to wrap up", issue.Number, LabelOutcome)), false
+		}
+		return Decision{}, true
+	}
+	if label := neverWorkItemLabel(issue.Labels); label != "" {
+		return holdOffNeverImplement(issue.Number, label), false
+	}
+	return Decision{}, true
 }
 
 // issueBlockers returns the non-pull-request entries of a blocker
@@ -948,7 +1045,8 @@ func holdOffOutOfRemit(repo string) Decision {
 // admissibility to; outcomesActions are those the
 // maitred-outcomes-repo role grants it to
 // (§forgejo/webhook/repository-roles). decompose fires on the event
-// path and on the sweep (#84); wrap-up fires on the sweep (#83, #85).
+// path and on the sweep (#84); wrap-up fires on the sweep (#83, #85)
+// and in the unblock cascade (#85).
 var (
 	workItemActions = map[Action]bool{
 		ActionImplement:   true,
