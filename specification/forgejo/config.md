@@ -1,9 +1,13 @@
 # Forgejo config
 
-The engine is configured **exclusively** through canned prompts: every named
-action the decision function can dispatch (§forgejo/decisions/actions) is
-mapped, in the config, to the canned prompt that implements it. The engine
-code decides *when* to act; the config decides *what* is dispatched.
+The engine is configured through canned prompts: every named action the
+decision function can dispatch (§forgejo/decisions/actions) is mapped, in the
+config, to the canned prompt that implements it. The engine code decides
+*when* to act; the config decides *what* is dispatched. Alongside the
+prompts sit a small number of scalar keys — the org, the reconciliation
+interval, and the optional **decomposer identity**
+(§forgejo/config/decomposer-identity). Config is therefore no longer
+exclusively canned prompts.
 
 ## Canned prompts
 
@@ -22,6 +26,28 @@ whose role-holding repositories it watches
 (§forgejo/webhook/repository-roles)), and sets the
 **reconciliation interval** (`reconcile_interval`): how often the
 reconciliation sweep runs (§forgejo/reconciliation/scheduling).
+
+## Decomposer identity
+
+One optional key names the Forgejo identity that performs decomposition —
+the persona the engine holds off on, and the author of forest members:
+
+| Key | Required | Value |
+|---|---|---|
+| `decomposer_identity` | no | the login of the decomposer account, compared exactly (no fuzzy matching) |
+
+The key is **optional**: with no identity configured, the authorship
+hold-off is inert and everything else works. An unset optional key is never
+a load error (§forgejo/config/validation). The key grants no privilege and
+admits nothing by itself — it only names the account that authorship
+decisions compare against. In a directory merge, files that set the key
+must agree, exactly as with the org; a conflict is a load error.
+
+Why a config key and not a repository topic: topics mark *repositories*
+(the discovery vocabulary, exactly as `maitred-enabled` works), not users.
+"Who authored this issue?" is a fact about an account, which the
+repository-marking vocabulary cannot answer; and the identity must be the
+operator's declaration, not something the engine infers.
 
 ## Placeholders
 
@@ -56,6 +82,9 @@ Loading **fails at load time** — mirroring the trigger `Validate()` — when:
 - a prompt template does not parse, or references a placeholder that is not
   in the placeholder table above,
 - the config names an action the decision function does not dispatch,
-- the org is missing, or a directory's files disagree about it or about
-  `reconcile_interval`,
+- the org is missing, or a directory's files disagree about it, about
+  `reconcile_interval`, or about `decomposer_identity`,
 - a directory's files define the same action twice.
+
+Optional keys are the exception: `decomposer_identity` unset is valid and
+never a load error (§forgejo/config/decomposer-identity).

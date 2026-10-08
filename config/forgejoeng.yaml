@@ -5,6 +5,9 @@
 # (§forgejo/config/loading).
 org: o
 reconcile_interval: 1h
+# Optional: the identity authorship decisions hold off on
+# (§forgejo/config/decomposer-identity). Unset, the hold-off is inert.
+decomposer_identity: decomposer
 
 actions:
   implement:
