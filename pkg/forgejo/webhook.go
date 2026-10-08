@@ -168,7 +168,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		if err != nil {
 			return ev, State{}, err
 		}
-		st := State{Issue: issue}
+		st := State{Issue: issue, DecomposerIdentity: e.cfg.DecomposerIdentity}
 		switch ev.Type {
 		case EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged,
 			EventIssueCommented, EventReconcile:

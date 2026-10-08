@@ -135,6 +135,12 @@ type State struct {
 	// and the sweep's synthetic PR event; empty when the PR's opening
 	// recorded no dependency.
 	ConnectedIssues []ConnectedIssue
+	// DecomposerIdentity is the configured login of the identity that
+	// performs decomposition (§forgejo/config/decomposer-identity). It is
+	// a declared configuration input the engine passes verbatim from its
+	// config, not fetched state; when empty the authorship rule is inert
+	// (§forgejo/decisions/inputs).
+	DecomposerIdentity string
 	// CascadeRoot is the closed issue the unblock cascade walks from,
 	// for close events.
 	CascadeRoot *IssueNode
@@ -265,7 +271,10 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 // decideIssueOpened handles an issue that was opened (or the
 // reconciliation sweep's synthetic current-state event): dispatch
 // implement if the re-fetched issue is open, unblocked, and has no
-// connected PR (§forgejo/decisions/transition-table).
+// connected PR. An issue authored by the configured decomposer identity
+// is never an implement candidate on either path: it is released by the
+// unblock cascade alone (§forgejo/decisions/transition-table,
+// §forgejo/decisions/loop-prevention).
 func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 	issue := s.Issue
 	if issue == nil {
@@ -276,6 +285,9 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 	}
 	if label := neverWorkItemLabel(issue.Labels); label != "" {
 		return holdOffNeverImplement(issue.Number, label)
+	}
+	if decomposerAuthored(issue, s.DecomposerIdentity) {
+		return holdOffDecomposerAuthored(issue.Number, issue.Author)
 	}
 	if open := openBlockers(s.Blockers); len(open) > 0 {
 		return holdOff(fmt.Sprintf("issue %d is blocked by %d open issue(s)", issue.Number, len(open)))
@@ -830,6 +842,23 @@ func holdOffNeverImplement(number int, label string) Decision {
 
 func holdOffNeverReassess(number int, label string) Decision {
 	return holdOff(fmt.Sprintf("issue %d carries the %s label; never a reassess candidate", number, label))
+}
+
+// decomposerAuthored reports whether the issue was opened by the
+// configured decomposer identity. The match is exact — no case folding,
+// no substring — and an unset identity (or an issue with no author) never
+// matches, which keeps the rule inert
+// (§forgejo/config/decomposer-identity, §forgejo/decisions/loop-prevention).
+func decomposerAuthored(issue *Issue, identity string) bool {
+	return identity != "" && issue.Author == identity
+}
+
+// holdOffDecomposerAuthored is the authorship hold-off: the issue was
+// authored by the configured decomposer identity, so it is a forest
+// member that the unblock cascade releases, never the event path or the
+// sweep (§forgejo/decisions/loop-prevention).
+func holdOffDecomposerAuthored(number int, author string) Decision {
+	return holdOff(fmt.Sprintf("issue %d is authored by the decomposer %s; held for the unblock cascade, not dispatched as an implement candidate", number, author))
 }
 
 // holdOffScopeUnknown is the scope test's failure hold-off: the

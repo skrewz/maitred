@@ -48,7 +48,7 @@ prompts:
 
 | Action | Dispatched when |
 |---|---|
-| `implement` | the issue is open, unblocked (all its blockers closed), has no connected open PR, and carries no reserved label — the issue was opened or became unblocked |
+| `implement` | the issue is open, unblocked (all its blockers closed), has no connected open PR, carries no reserved label, and is not authored by the configured decomposer identity — the issue was opened or became unblocked |
 | `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement), and it carries no reserved label |
 | `review` | a mergeable PR opened, or synced while it has no review |
 | `re-review` | a mergeable PR synced while it has a review |
@@ -64,6 +64,7 @@ prompts:
 | When (event + re-fetched state) | Decision |
 |---|---|
 | issue opened (open, all blockers closed, no connected PR) | `implement` |
+| issue opened (open, authored by the configured decomposer identity) | hold off — the reason names the authorship; only the unblock cascade releases it |
 | issue opened (blocked, or a connected open PR, or not open) | hold off |
 | issue opened / edited / labels changed / comment (issue carries a reserved label) | hold off, naming the label — the sweep is where `decompose` and `wrap-up` fire (§forgejo/reconciliation/watermark-exemptions) |
 | issue edited / labels changed / feedback comment (issue open, all blockers closed) | `reassess` |
@@ -153,6 +154,26 @@ This is what makes it safe to attach go-ahead labels to forest members
 in any order: labelling a blocked issue wakes no implementer. When the
 issue becomes unblocked, the cascade — not the activity — dispatches
 `implement`.
+
+**Authorship of a forest member.** An issue whose author is the configured
+decomposer identity (§forgejo/config/decomposer-identity) is **never** an
+`implement` candidate on the event path or on the reconciliation sweep (which
+decides as issue opened): the decision holds off and the reason names the
+authorship. The rule exists because `issues:opened` arrives the instant the
+decomposer creates a member, while the edge blocking it on its ideation ticket is
+attached afterwards and emits no delivery — so the re-fetch sees zero blockers and
+`implement` would be vacuously correct for work that has not been released.
+Authorship is the only fact about a member that is true at the instant of its
+creation, and the identity is the operator's declaration rather than an inference;
+the engine cannot forge it, because the identities it dispatches cannot edit an
+issue's author. The comparison is **exact** — no case folding, no substring
+matching — the same shape as the reviewing-author sender guard
+(§forgejo/decisions/loop-prevention). With no identity configured the rule is
+inert (§forgejo/config/decomposer-identity). The rule denies `implement`
+candidacy only: it does not deny `reassess`, which the open-blocker rule above
+governs. The **unblock cascade is not narrowed**: a decomposer-authored member
+still dispatches `implement` when the cascade finds it newly unblocked, which is
+how the ideation ticket releases it.
 
 A PR's **last activity is a review** when its latest review is a
 changes-requested, approved, or comment review submitted against the PR's
@@ -248,7 +269,7 @@ dispatched.
 
 ## Loop prevention
 
-Three mechanisms, in this order:
+Four mechanisms, in this order:
 
 1. **The machine is terminating.** Each action's side-effect maps to
    the *next* transition, never a re-run of the same one: a review
@@ -269,6 +290,13 @@ Three mechanisms, in this order:
    not re-review that same commit. Cross-persona triggering (a
    reviewer's changes-requested leading to the implementer's fix) is
    intended and unguarded.
+4. **Targeted authorship guards**, where an agent's *own* creation would
+   otherwise re-trigger the *same* action: an issue authored by the configured
+   decomposer identity is never an `implement` candidate on the event path or the
+   sweep, because the creation delivery is new to the key and no watermark can
+   show that the work is unreleased. The guard is by the issue's **author**, not
+   the delivery's **sender**, and the cascade that releases the member is
+   unguarded (§forgejo/decisions/transition-table).
 
 ## Inputs
 
@@ -279,15 +307,22 @@ closed; and the synthetic `reconcile` event of the reconciliation
 sweep.
 
 **State** — the re-fetched state of the affected object: the issue or
-PR itself; the issue's blockers (with their states) and its connected
-open PRs, for the `implement` and `reassess` conditions; the PR's
-reviews, for the review transitions; for PR opened, PR reviewed and the
-sweep's PR path, the issues the PR blocks and each issue's blockers, for
-the `reject-pr` test (§forgejo/decisions/actions) and for the merge gate
-(§forgejo/decisions/merge-gate), which reads the same rows on the PR
-reviewed event and the sweep's synthetic PR event; and, for close events,
-the blocker-graph root — the closed issue — with each node carrying the
-issues it blocks and the issues that block it.
+PR itself (an issue carrying its **author**, the login of whoever opened
+it, §forgejo/client/operations); the issue's blockers (with their states)
+and its connected open PRs, for the `implement` and `reassess`
+conditions; the PR's reviews, for the review transitions; for PR opened,
+PR reviewed and the sweep's PR path, the issues the PR blocks and each
+issue's blockers, for the `reject-pr` test (§forgejo/decisions/actions)
+and for the merge gate (§forgejo/decisions/merge-gate), which reads the
+same rows on the PR reviewed event and the sweep's synthetic PR event;
+and, for close events, the blocker-graph root — the closed issue — with
+each node carrying the issues it blocks and the issues that block it.
+
+Carried on the state is the one **declared configuration input** the
+function consults: the configured **decomposer identity**
+(§forgejo/config/decomposer-identity), which the engine passes verbatim
+rather than inferring. It is empty when the key is unset, in which case
+the authorship rule is inert.
 
 **Watermark** — the last dispatch for the object's key
 (§forgejo/state/watermark), or none.

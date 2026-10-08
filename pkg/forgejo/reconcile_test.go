@@ -521,3 +521,49 @@ func TestReconcile_VisitsBothRoleSets(t *testing.T) {
 		t.Errorf("ListOrgRepositories called %d time(s), want one listing feeding both roles", n)
 	}
 }
+
+// TestReconcile_DecomposerAuthoredIssueHoldsOff: the sweep is covered by
+// the authorship rule — an open member the decomposer authored whose
+// blocker edge has not arrived is not dispatched by the sweep; the
+// cascade releases it (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/the-sweep).
+func TestReconcile_DecomposerAuthoredIssueHoldsOff(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	eng.cfg.DecomposerIdentity = "decomposer"
+	api.repos = []Repository{testRepo("o/r")}
+	member := &Issue{Number: 7, State: "open", Author: "decomposer", UpdatedAt: testUpdatedAt, Repository: "o/r"}
+	api.issues[7] = member
+	api.openIssues["r"] = []Issue{*member}
+
+	eng.Reconcile()
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d sweep tasks for a decomposer-authored issue, want none", len(tasks))
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 7})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none", w)
+	}
+}
+
+// TestReconcile_OtherAuthorIssueDispatches: the sweep still dispatches
+// an unblocked issue authored by anyone else with the identity
+// configured (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/the-sweep).
+func TestReconcile_OtherAuthorIssueDispatches(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	eng.cfg.DecomposerIdentity = "decomposer"
+	api.repos = []Repository{testRepo("o/r")}
+	issue := &Issue{Number: 7, State: "open", Author: "alice", UpdatedAt: testUpdatedAt, Repository: "o/r"}
+	api.issues[7] = issue
+	api.openIssues["r"] = []Issue{*issue}
+
+	eng.Reconcile()
+
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d sweep tasks, want 1 (implement)", len(tasks))
+	}
+}

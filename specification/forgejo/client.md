@@ -15,11 +15,17 @@ authenticated with a bearer token:
 | list an org's repositories (with `topics`) | derive each repository's roles (§forgejo/webhook/repository-roles) |
 | list open issues in a repo | event filtering and reconciliation enumeration |
 | list open pull requests in a repo | event filtering and reconciliation enumeration |
-| get a single issue (state, labels, `updated_at`, `html_url`) | authoritative issue state |
+| get a single issue (state, labels, author, `updated_at`, `html_url`) | authoritative issue state |
 | get a single pull request (state, merged, head sha, `mergeable`, `html_url`) | authoritative PR state |
 | list the issues an issue **blocks** (`issue-blocks`) | the unblock cascade, including cross-repo blockers |
 | list the issues that block an issue (`issue-dependencies`) | the unblock cascade, including cross-repo blockers |
 | list a pull request's reviews (event + author + commit) | the review transitions |
+
+Issue responses also report **who opened the issue** (`user.login`): the
+author is the fact the authorship rule compares against, because it is the
+only fact about a forest member that is true at the instant it is created
+(§forgejo/decisions/loop-prevention). A response without a `user` object
+yields an empty author, which matches no configured identity.
 
 Issue responses also report **whether the issue is a pull request** —
 Forgejo represents pull requests as issues, and the API marks them with a
