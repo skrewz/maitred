@@ -298,11 +298,14 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 }
 
 // decideIssueOpened handles an issue that was opened (or the
-// reconciliation sweep's synthetic current-state event): dispatch
-// implement if the re-fetched issue is open, unblocked, and has no
-// connected PR. An issue authored by the configured decomposer identity
-// is never an implement candidate on either path: it waits for the
-// unblock cascade alone (§forgejo/decisions/transition-table,
+// reconciliation sweep's synthetic current-state event): an open issue
+// carrying the ideation label is a root and dispatches decompose — the
+// label, not the repository and not the title, is what makes a root
+// (§forgejo/decisions/transition-table); otherwise dispatch implement
+// if the re-fetched issue is open, unblocked, and has no connected PR.
+// An issue authored by the configured decomposer identity is never an
+// implement candidate on either path: it waits for the unblock cascade
+// alone (§forgejo/decisions/transition-table,
 // §forgejo/decisions/loop-prevention).
 func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 	issue := s.Issue
@@ -311,6 +314,9 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 	}
 	if issue.State != "open" {
 		return holdOff(fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State))
+	}
+	if hasLabel(issue, LabelIdeation) {
+		return decideDecompose(issue, w)
 	}
 	if label := neverWorkItemLabel(issue.Labels); label != "" {
 		return holdOffNeverImplement(issue.Number, label)
@@ -332,10 +338,15 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 }
 
 // decideIssueActivity handles an edited issue, a label change, or a
-// feedback comment: dispatch reassess if the re-fetched issue is open
-// and has no open blocker; activity on a blocked issue has nothing to
-// reassess — the work is held by the blocker, so the decision holds
-// off naming the open blockers (§forgejo/decisions/transition-table).
+// feedback comment: on an open issue carrying the ideation label the
+// edit or label change is the revision of intent the decomposer
+// re-cures against and dispatches decompose — attaching the label is
+// the first trigger — while a comment is not a revision of intent and
+// holds off (§forgejo/decisions/transition-table); otherwise dispatch
+// reassess if the re-fetched issue is open and has no open blocker;
+// activity on a blocked issue has nothing to reassess — the work is
+// held by the blocker, so the decision holds off naming the open
+// blockers.
 func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	issue := s.Issue
 	if issue == nil {
@@ -343,6 +354,12 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	}
 	if issue.State != "open" {
 		return holdOff(fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State))
+	}
+	if hasLabel(issue, LabelIdeation) {
+		if e.Type == EventIssueCommented {
+			return holdOff(fmt.Sprintf("issue %d is an open %s root; a comment is not a revision of intent", issue.Number, LabelIdeation))
+		}
+		return decideDecompose(issue, w)
 	}
 	if label := neverWorkItemLabel(issue.Labels); label != "" {
 		return holdOffNeverReassess(issue.Number, label)
@@ -355,6 +372,22 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 		return holdOff(fmt.Sprintf("reassess already dispatched at revision %s", rev))
 	}
 	return dispatch(ActionReassess, fmt.Sprintf("issue %d: %s", issue.Number, e.Type))
+}
+
+// decideDecompose is the event path's root row: an open ideation issue
+// dispatches decompose under the ordinary revision-keyed watermark
+// guard — the watermark exemption is a property of the sweep's row,
+// not of the action (§forgejo/reconciliation/watermark-exemptions). A
+// root is decomposed whatever blocks it; a closed root holds off
+// upstream, because closing it is the release gate and the unblock
+// cascade dispatches the forest members
+// (§forgejo/decisions/transition-table).
+func decideDecompose(issue *Issue, w *Watermark) Decision {
+	rev := issueRevision(issue)
+	if alreadyDispatched(w, ActionDecompose, rev) {
+		return holdOff(fmt.Sprintf("decompose already dispatched at revision %s", rev))
+	}
+	return dispatch(ActionDecompose, fmt.Sprintf("issue %d is an open %s root: the label makes the root", issue.Number, LabelIdeation))
 }
 
 // decideIssueClosed runs the unblock cascade from the closed issue
@@ -827,9 +860,8 @@ func holdOffOutOfRemit(repo string) Decision {
 // workItemActions are the actions the maitred-enabled role grants
 // admissibility to; outcomesActions are those the
 // maitred-outcomes-repo role grants it to
-// (§forgejo/webhook/repository-roles). The outcomes actions are
-// reserved vocabulary here: the outcomes chain (#83, #84, #85)
-// introduces their constants and dispatches them.
+// (§forgejo/webhook/repository-roles). decompose fires on the event
+// path and on the sweep (#84); wrap-up fires on the sweep (#83, #85).
 var (
 	workItemActions = map[Action]bool{
 		ActionImplement:   true,
@@ -842,8 +874,8 @@ var (
 		ActionRejectPR:    true,
 	}
 	outcomesActions = map[Action]bool{
-		"decompose": true,
-		"wrap-up":   true,
+		ActionDecompose: true,
+		ActionWrapUp:    true,
 	}
 )
 

@@ -189,9 +189,10 @@ func TestDecide(t *testing.T) {
 			state: State{Issue: labelledIssue(LabelHumanTask)},
 		},
 		{
-			name:  "issue opened carrying ideation holds off",
-			event: issueEvent(EventIssueOpened),
-			state: State{Issue: labelledIssue("ideation")},
+			name:       "issue opened carrying ideation dispatches decompose",
+			event:      issueEvent(EventIssueOpened),
+			state:      State{Issue: labelledIssue("ideation")},
+			wantAction: ActionDecompose,
 		},
 		{
 			name:  "issue opened carrying outcome holds off",
@@ -284,9 +285,10 @@ func TestDecide(t *testing.T) {
 			state: State{Issue: closedIssue()},
 		},
 		{
-			name:  "issue edited carrying ideation holds off",
-			event: issueEvent(EventIssueEdited),
-			state: State{Issue: labelledIssue("ideation")},
+			name:       "issue edited carrying ideation dispatches decompose",
+			event:      issueEvent(EventIssueEdited),
+			state:      State{Issue: labelledIssue("ideation")},
+			wantAction: ActionDecompose,
 		},
 		{
 			name:  "issue labels changed carrying outcome holds off",
@@ -998,14 +1000,98 @@ func TestDecide(t *testing.T) {
 			state:     State{Issue: openIssue()},
 			watermark: &Watermark{Action: "implement", Revision: testRev},
 		},
-		// The event path never dispatches an exempt action, and never
-		// implements or reassesses an issue carrying a reserved label:
-		// the sweep is where the exempt actions fire
-		// (§forgejo/reconciliation/watermark-exemptions).
+		// The event path dispatches `decompose` for an open ideation
+		// root — the label, not the repository and not the title, is
+		// what makes a root — but never implements or reassesses an
+		// issue carrying a reserved label, and a comment is not a
+		// revision of intent
+		// (§forgejo/decisions/transition-table).
 		{
-			name:  "issue opened carrying the ideation label holds off",
+			name:       "issue opened carrying the ideation label dispatches decompose",
+			event:      issueEvent(EventIssueOpened),
+			state:      State{Issue: ideationIssue()},
+			wantAction: ActionDecompose,
+		},
+		{
+			name:       "labels changed on an issue carrying the ideation label dispatches decompose",
+			event:      issueEvent(EventIssueLabelsChanged),
+			state:      State{Issue: ideationIssue()},
+			wantAction: ActionDecompose,
+		},
+		{
+			name:  "feedback comment on an issue carrying the ideation label holds off",
+			event: issueEvent(EventIssueCommented),
+			state: State{Issue: ideationIssue()},
+		},
+		{
+			name:  "decompose already dispatched at the revision holds off on the event path",
 			event: issueEvent(EventIssueOpened),
 			state: State{Issue: ideationIssue()},
+			watermark: &Watermark{
+				Action:   string(ActionDecompose),
+				Revision: testRev,
+			},
+		},
+		{
+			name:  "decompose already dispatched at an older revision re-fires on an edit at a new revision",
+			event: issueEvent(EventIssueEdited),
+			state: State{Issue: func() *Issue {
+				i := ideationIssue()
+				i.UpdatedAt = testTime2
+				return i
+			}()},
+			watermark: &Watermark{
+				Action:   string(ActionDecompose),
+				Revision: testRev,
+			},
+			wantAction: ActionDecompose,
+		},
+		{
+			name:       "a root is decomposed whatever blocks it",
+			event:      issueEvent(EventIssueOpened),
+			state:      State{Issue: ideationIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
+			wantAction: ActionDecompose,
+		},
+		{
+			name:       "an ideation label takes precedence over human-task on the event path",
+			event:      issueEvent(EventIssueLabelsChanged),
+			state:      State{Issue: labelledIssue(LabelHumanTask, LabelIdeation)},
+			wantAction: ActionDecompose,
+		},
+		{
+			name:       "an ideation label takes precedence over outcome on the event path",
+			event:      issueEvent(EventIssueOpened),
+			state:      State{Issue: labelledIssue(LabelOutcome, LabelIdeation)},
+			wantAction: ActionDecompose,
+		},
+		{
+			name:       "issue opened carrying a differently cased ideation label dispatches decompose",
+			event:      issueEvent(EventIssueOpened),
+			state:      State{Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{"Ideation"}}},
+			wantAction: ActionDecompose,
+		},
+		{
+			name:  "ideation issue closed on re-fetch holds off",
+			event: issueEvent(EventIssueOpened),
+			state: State{Issue: func() *Issue {
+				i := ideationIssue()
+				i.State = "closed"
+				return i
+			}()},
+		},
+		{
+			name:  "edited ideation issue closed on re-fetch holds off",
+			event: issueEvent(EventIssueEdited),
+			state: State{Issue: func() *Issue {
+				i := ideationIssue()
+				i.State = "closed"
+				return i
+			}()},
+		},
+		{
+			name:  "feedback comment on an issue carrying the outcome label holds off",
+			event: issueEvent(EventIssueCommented),
+			state: State{Issue: trackerIssue()},
 		},
 		{
 			name:  "issue opened carrying the outcome label holds off",
@@ -1013,19 +1099,10 @@ func TestDecide(t *testing.T) {
 			state: State{Issue: trackerIssue()},
 		},
 		{
-			name:  "labels changed on an issue carrying the ideation label holds off",
-			event: issueEvent(EventIssueLabelsChanged),
-			state: State{Issue: ideationIssue()},
-		},
-		{
-			name:  "feedback comment on an issue carrying the outcome label holds off",
-			event: issueEvent(EventIssueCommented),
-			state: State{Issue: trackerIssue()},
-		},
-		// Reserved label names match case-insensitively: label names are
-		// user-authored strings, and a miss must not silently decide as
-		// implement (§forgejo/reconciliation/watermark-exemptions).
-		{
+			// Reserved label names match case-insensitively: label
+			// names are user-authored strings, and a miss must not
+			// silently decide as implement
+			// (§forgejo/reconciliation/watermark-exemptions).
 			name:       "reconcile open issue carrying a differently cased ideation label dispatches decompose",
 			event:      issueEvent(EventReconcile),
 			state:      State{Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{"Ideation"}}},
@@ -1167,11 +1244,11 @@ func TestDecide_HoldOffReasons(t *testing.T) {
 		}
 	})
 	t.Run("an event-path hold-off for a reserved label names the label", func(t *testing.T) {
-		d := Decide(issueEvent(EventIssueOpened), State{Issue: ideationIssue()}, nil)
+		d := Decide(issueEvent(EventIssueOpened), State{Issue: trackerIssue()}, nil)
 		if !d.HoldOff() {
 			t.Fatalf("expected hold-off, got dispatch of %q", d.Action)
 		}
-		if !strings.Contains(d.Reason, LabelIdeation) {
+		if !strings.Contains(d.Reason, LabelOutcome) {
 			t.Errorf("reason = %q, want it to name the reserved label", d.Reason)
 		}
 	})
@@ -1513,7 +1590,7 @@ func TestDecide_ReservedLabelHoldOffsNameTheLabel(t *testing.T) {
 		{
 			name:       "activity: reassess denied by the label",
 			event:      issueEvent(EventIssueCommented),
-			state:      State{Issue: labelledIssue("ideation")},
+			state:      State{Issue: labelledIssue(LabelOutcome)},
 			wantReason: "never a reassess candidate",
 		},
 	}
@@ -1586,6 +1663,32 @@ func TestDecide_CascadeUnblocksDecomposerAuthoredMember(t *testing.T) {
 	}
 }
 
+// TestDecide_IdeationRowsReasons pins the reasons of the ideation event
+// rows: a comment on an open root holds off saying a comment is not a
+// revision of intent, and an opened, edited, or re-labelled root
+// dispatches decompose naming the root
+// (§forgejo/decisions/transition-table).
+func TestDecide_IdeationRowsReasons(t *testing.T) {
+	t.Run("comment hold-off says a comment is not a revision of intent", func(t *testing.T) {
+		d := Decide(issueEvent(EventIssueCommented), State{Issue: ideationIssue()}, nil)
+		if !d.HoldOff() {
+			t.Fatalf("dispatched %q, want a hold-off", d.Action)
+		}
+		if !strings.Contains(d.Reason, "revision of intent") {
+			t.Errorf("reason = %q, want it to say a comment is not a revision of intent", d.Reason)
+		}
+	})
+	for _, typ := range []EventType{EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged} {
+		d := Decide(issueEvent(typ), State{Issue: ideationIssue()}, nil)
+		if d.HoldOff() || d.Action != ActionDecompose {
+			t.Fatalf("%s: decision = %+v, want a dispatch of %q", typ, d, ActionDecompose)
+		}
+		if !strings.Contains(d.Reason, LabelIdeation) {
+			t.Errorf("%s: reason = %q, want it to name the ideation label", typ, d.Reason)
+		}
+	}
+}
+
 // TestAdmissibleInRoles pins the action-to-role table: the work-item
 // actions are admitted by the maitred-enabled role, the outcomes
 // actions by the maitred-outcomes-repo role, and an unknown action is
@@ -1611,8 +1714,8 @@ func TestAdmissibleInRoles(t *testing.T) {
 		{ActionReassess, outcomes, false},
 		{ActionReview, outcomes, false},
 		{ActionRejectPR, outcomes, false},
-		// The outcomes actions are reserved vocabulary until the
-		// outcomes chain dispatches them (#83, #84, #85).
+		// The outcomes actions: decompose fires on the event path and
+		// on the sweep, wrap-up on the sweep (#83, #84, #85).
 		{Action("decompose"), outcomes, true},
 		{Action("wrap-up"), outcomes, true},
 		{Action("decompose"), workItem, false},
