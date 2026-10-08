@@ -107,6 +107,11 @@ type fakeAPI struct {
 	// (§forgejo/webhook/re-fetch).
 	issueDepsErr error
 
+	// pullErr, when set, fails only GetPullRequest — so a test can
+	// break the cascade's PR re-fetch without breaking the event's
+	// reads (§forgejo/decisions/unblock-cascade).
+	pullErr error
+
 	// GetIssue blocking hooks for the concurrency tests: GetIssue
 	// closes getIssueEntered (once) on entry, then waits on
 	// blockGetIssue when it is set.
@@ -181,6 +186,9 @@ func (f *fakeAPI) GetPullRequest(owner, repo string, number int) (*PullRequest, 
 	f.record("GetPullRequest:" + repo + "/" + strconv.Itoa(number))
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.pullErr != nil {
+		return nil, f.pullErr
 	}
 	pr, ok := f.pulls[number]
 	if !ok {
@@ -1830,6 +1838,380 @@ func TestDispatchCascade_ReservedLabelHeldOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load watermark: %v", err)
 	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none", w)
+	}
+}
+
+// --- The merge gate (§forgejo/decisions/merge-gate) -------------------------------------------
+
+// mergeGateFixtures wires PR 9 (open, mergeable, approved at head) whose
+// connected issue 7 it blocks; issue 7 is blocked by open issue 3 and
+// by PR 9 itself (the delivery record). It returns the pieces a merge
+// gate test needs.
+func mergeGateFixtures(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store, *bytes.Buffer) {
+	t.Helper()
+	var log bytes.Buffer
+	api := newFakeAPI()
+	api.repos = []Repository{testRepo("o/r")}
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewJSONHandler(&log, nil)))
+	api.pulls[9] = testPR(9, "open", true)
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
+	api.blocks[9] = []Issue{*testIssue(7, "open")}
+	prSelf := testIssue(9, "open")
+	prSelf.IsPull = true
+	api.deps[7] = []Issue{*testIssue(3, "open"), *prSelf}
+	return eng, api, q, store, &log
+}
+
+func reasonFor(t *testing.T, log *bytes.Buffer, key string) string {
+	t.Helper()
+	for _, e := range parseLogLines(t, log.Bytes()) {
+		if e["msg"] == "decision" && e["key"] == key {
+			reason, _ := e["reason"].(string)
+			return reason
+		}
+	}
+	return ""
+}
+
+// TestHandler_PRReviewed_ConnectedIssueBlockerHoldsOffMerge: an
+// approved, mergeable PR whose connected issue has an open blocker
+// dispatches no merge-or-wait on the review-event path; the hold-off
+// names the open blockers and no watermark is recorded
+// (§forgejo/decisions/merge-gate).
+func TestHandler_PRReviewed_ConnectedIssueBlockerHoldsOffMerge(t *testing.T) {
+	eng, api, q, store, log := mergeGateFixtures(t)
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "", prPayload("o/r", 9, "")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none (connected issue blocked); first = %+v", len(tasks), tasks)
+	}
+	reason := reasonFor(t, log, "o/r/pr/9")
+	if !strings.Contains(reason, "o/r#3") {
+		t.Errorf("decision-log reason %q does not name the open blocker o/r#3", reason)
+	}
+	if n := api.callCount("IssueBlocks:r/9"); n != 1 {
+		t.Errorf("IssueBlocks on the PR = %d, want 1", n)
+	}
+	if n := api.callCount("IssueDependencies:r/7"); n != 1 {
+		t.Errorf("IssueDependencies on the connected issue = %d, want 1", n)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none", w)
+	}
+}
+
+// TestHandler_PRReviewed_ConnectedIssueSelfEntryMerges: the PR's own
+// entry among the connected issue's blockers is not a blocker — with
+// every other blocker closed the approved PR dispatches merge-or-wait
+// (§forgejo/decisions/merge-gate).
+func TestHandler_PRReviewed_ConnectedIssueSelfEntryMerges(t *testing.T) {
+	eng, api, q, store, _ := mergeGateFixtures(t)
+	prSelf := testIssue(9, "open")
+	prSelf.IsPull = true
+	api.deps[7] = []Issue{*testIssue(3, "closed"), *prSelf}
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "", prPayload("o/r", 9, "")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (merge-or-wait despite the self entry)", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=merge-or-wait") {
+		t.Errorf("prompt = %q, want merge-or-wait", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w == nil || w.Action != string(ActionMergeOrWait) || w.Revision != "sha-9" {
+		t.Errorf("watermark = %+v, want merge-or-wait at sha-9", w)
+	}
+}
+
+// TestHandler_PRReviewed_MergeGateFetchFailureHoldsOff: a failed
+// dependency read on the merge path is a hold-off — never a silent
+// "no blockers" (§forgejo/webhook/re-fetch, §forgejo/decisions/merge-gate).
+func TestHandler_PRReviewed_MergeGateFetchFailureHoldsOff(t *testing.T) {
+	eng, api, q, store, _ := mergeGateFixtures(t)
+	api.depsErr = errors.New("dependency listing failed")
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "", prPayload("o/r", 9, "")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none (failed gate read holds off)", len(tasks))
+	}
+	w, _ := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if w != nil {
+		t.Errorf("watermark = %+v, want none", w)
+	}
+}
+
+// TestHandler_PRReviewed_ConnectedIssueInAnotherRepo: the gate's hop
+// reads the dependency rows in the connected issue's own repository,
+// never the event's (§forgejo/webhook/re-fetch).
+func TestHandler_PRReviewed_ConnectedIssueInAnotherRepo(t *testing.T) {
+	eng, api, q, _, log := mergeGateFixtures(t)
+	cross := testIssue(7, "open")
+	cross.Repository = "o/other"
+	api.blocks[9] = []Issue{*cross}
+
+	rec := serve(t, NewHandler(eng, "s3cret", nil),
+		signedRequest(t, "s3cret", "pull_request_review_approved", "", prPayload("o/r", 9, "")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none (connected issue blocked)", len(tasks))
+	}
+	if n := api.callCount("IssueDependencies:other/7"); n != 1 {
+		t.Errorf("IssueDependencies on the cross-repo connected issue = %d, want 1 (read in its own repo)", n)
+	}
+	if reason := reasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "o/r#3") {
+		t.Errorf("reason %q does not name the open blocker", reason)
+	}
+}
+
+// TestHandler_PRSynced_DoesNotFetchConnectedIssues: the push path
+// dispatches no merge, so it grows no gate read
+// (§forgejo/webhook/re-fetch). The open path is not tested here: it
+// performs the hop for the reject-pr test, so a PR opened is covered by
+// TestHandler_PROpened_FetchesConnectedIssueOneHop
+// (§forgejo/decisions/actions).
+func TestHandler_PRSynced_DoesNotFetchConnectedIssues(t *testing.T) {
+	eng, api, q, _, _ := mergeGateFixtures(t)
+	serve(t, NewHandler(eng, "s3cret", nil),
+		signedRequest(t, "s3cret", "pull_request_sync", "synchronized", prPayload("o/r", 9, "synchronized")))
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (re-review)", len(tasks))
+	}
+	if n := api.callCount("IssueBlocks"); n != 0 {
+		t.Errorf("IssueBlocks calls = %d, want 0 (no gate read on the push path)", n)
+	}
+}
+
+// TestHandler_ReconcilePR_ConnectedIssueBlockerHoldsOffMerge: the sweep
+// path holds off the merge at an approved head when a connected issue
+// has an open blocker (§forgejo/decisions/merge-gate).
+func TestHandler_ReconcilePR_ConnectedIssueBlockerHoldsOffMerge(t *testing.T) {
+	eng, api, q, store, log := mergeGateFixtures(t)
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none (sweep gate holds off); first = %+v", len(tasks), tasks)
+	}
+	if reason := reasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "o/r#3") {
+		t.Errorf("decision-log reason %q does not name the open blocker o/r#3", reason)
+	}
+	w, _ := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if w != nil {
+		t.Errorf("watermark = %+v, want none", w)
+	}
+	if n := api.callCount("IssueBlocks:r/9"); n != 1 {
+		t.Errorf("IssueBlocks on the PR = %d, want 1 (the sweep reads the gate too)", n)
+	}
+}
+
+// --- The unblock cascade releases a held PR (§forgejo/decisions/unblock-cascade) ---------------
+
+// cascadePRFixtures: closing issue 7 releases issue 10, whose only
+// remaining open blocker is its connected open PR 9.
+func cascadePRFixtures(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store, *bytes.Buffer) {
+	t.Helper()
+	var log bytes.Buffer
+	api := newFakeAPI()
+	api.repos = []Repository{testRepo("o/r")}
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewJSONHandler(&log, nil)))
+	api.issues[7] = testIssue(7, "closed")
+	api.issues[10] = testIssue(10, "open")
+	api.blocks[7] = []Issue{*testIssue(10, "open")}
+	prSelf := testIssue(9, "open")
+	prSelf.IsPull = true
+	api.deps[10] = []Issue{*testIssue(7, "closed"), *prSelf}
+	api.pulls[9] = testPR(9, "open", true)
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
+	api.blocks[9] = []Issue{*testIssue(10, "open")}
+	return eng, api, q, store, &log
+}
+
+// TestHandler_IssueClosed_CascadeReleasesConnectedPR: the closure of
+// the last issue-side blocker moves the connected PR — one
+// merge-or-wait dispatch, no implement for the issue, and the PR key's
+// watermark recorded (§forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadeReleasesConnectedPR(t *testing.T) {
+	eng, _, q, store, _ := cascadePRFixtures(t)
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (merge-or-wait for PR 9); all = %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=merge-or-wait repo=o/r kind=pr number=9") {
+		t.Errorf("prompt = %q, want merge-or-wait for o/r PR 9", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w == nil || w.Action != string(ActionMergeOrWait) || w.Revision != "sha-9" {
+		t.Errorf("PR watermark = %+v, want merge-or-wait at sha-9", w)
+	}
+}
+
+// TestHandler_IssueClosed_CascadePRNotApprovedStaysSilent: a cascaded
+// PR that does not stand at an approved head dispatches nothing but
+// merge-or-wait — here nothing at all; the sweep is the backstop
+// (§forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadePRNotApprovedStaysSilent(t *testing.T) {
+	eng, api, q, store, _ := cascadePRFixtures(t)
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewChangesRequested, CommitID: "sha-9"}}
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none (the cascade dispatches nothing but merge-or-wait)", len(tasks))
+	}
+	w, _ := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if w != nil {
+		t.Errorf("watermark = %+v, want none", w)
+	}
+}
+
+// TestHandler_IssueClosed_CascadePRClosedInMeantime: a cascaded PR
+// closed or merged between the closure and the re-fetch is silent
+// (§forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadePRClosedInMeantime(t *testing.T) {
+	eng, api, q, _, _ := cascadePRFixtures(t)
+	api.pulls[9] = testPR(9, "closed", true)
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none (PR closed in the meantime)", len(tasks))
+	}
+}
+
+// TestHandler_IssueClosed_CascadePRInadmissibleInOutcomesRepo: the
+// cascaded PR key's admissibility is judged by the roles of the
+// repository holding the PR; merge-or-wait needs the work-item role,
+// and the hold-off is recorded in the decision log
+// (§forgejo/webhook/repository-roles).
+func TestHandler_IssueClosed_CascadePRInadmissibleInOutcomesRepo(t *testing.T) {
+	eng, api, q, store, log := cascadePRFixtures(t)
+	api.repos = []Repository{testRepo("o/r"), testRepoOutcomes("o/other")}
+	prCross := testIssue(9, "open")
+	prCross.IsPull = true
+	prCross.Repository = "o/other"
+	api.deps[10] = []Issue{*testIssue(7, "closed"), *prCross}
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none (merge-or-wait is inadmissible in an outcomes repo)", len(tasks))
+	}
+	if reason := reasonFor(t, log, "o/other/pr/9"); !strings.Contains(reason, "inadmissible") {
+		t.Errorf("cascade hold-off reason %q does not name the inadmissibility", reason)
+	}
+	w, _ := store.Load(Key{Repo: "o/other", Kind: KindPR, Number: 9})
+	if w != nil {
+		t.Errorf("watermark = %+v, want none", w)
+	}
+}
+
+// TestHandler_IssueClosed_CascadePRFetchFailure: a failed PR re-fetch
+// on the cascade dispatch is a logged dispatch failure — nothing
+// dispatched, no watermark, the sweep retries. It mirrors the issue
+// key's failure handling (§forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadePRFetchFailure(t *testing.T) {
+	eng, api, q, store, _ := cascadePRFixtures(t)
+	api.pullErr = errors.New("PR fetch failed")
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none (failed PR fetch)", len(tasks))
+	}
+	w, _ := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if w != nil {
+		t.Errorf("watermark = %+v, want none", w)
+	}
+}
+
+// TestHandler_IssueClosed_CascadePRWatermarkHolds: a released PR whose
+// watermark already records merge-or-wait at the current head is not
+// re-dispatched (§forgejo/decisions/unblock-cascade,
+// §forgejo/decisions/loop-prevention).
+func TestHandler_IssueClosed_CascadePRWatermarkHolds(t *testing.T) {
+	eng, _, q, store, _ := cascadePRFixtures(t)
+	if err := store.Save(Key{Repo: "o/r", Kind: KindPR, Number: 9},
+		Watermark{Action: string(ActionMergeOrWait), Revision: "sha-9"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none (already dispatched at the head)", len(tasks))
+	}
+}
+
+// TestHandler_IssueClosed_CascadePROutOfRemit: a released PR in a
+// repository holding no maitred role is a recorded hold-off on the
+// cascade key — admission is tested the same way as for issue keys
+// (§forgejo/webhook/repository-roles, §forgejo/observability/the-decision-log).
+func TestHandler_IssueClosed_CascadePROutOfRemit(t *testing.T) {
+	eng, api, q, store, log := cascadePRFixtures(t)
+	api.repos = []Repository{testRepo("o/r"), testRepoDisabled("o/other")}
+	prCross := testIssue(9, "open")
+	prCross.IsPull = true
+	prCross.Repository = "o/other"
+	api.deps[10] = []Issue{*testIssue(7, "closed"), *prCross}
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none (repo holds no role)", len(tasks))
+	}
+	if reason := reasonFor(t, log, "o/other/pr/9"); !strings.Contains(reason, "holds no maitred role") {
+		t.Errorf("cascade hold-off reason %q does not name the missing role", reason)
+	}
+	w, _ := store.Load(Key{Repo: "o/other", Kind: KindPR, Number: 9})
 	if w != nil {
 		t.Errorf("watermark = %+v, want none", w)
 	}

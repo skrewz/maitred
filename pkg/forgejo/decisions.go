@@ -129,9 +129,11 @@ type State struct {
 	// ConnectedPRs are the open pull requests connected to State.Issue.
 	ConnectedPRs []PullRequest
 	// ConnectedIssues are the non-PR issues a pull request blocks, each
-	// with its own blockers, for PR opened — the reject-pr test's
-	// input; empty when the PR's opening recorded no dependency
-	// (§forgejo/decisions/actions).
+	// with its own blockers: the input both to the reject-pr test
+	// (§forgejo/decisions/actions) and to the merge gate
+	// (§forgejo/decisions/merge-gate). Read for PR opened, PR reviewed,
+	// and the sweep's synthetic PR event; empty when the PR's opening
+	// recorded no dependency.
 	ConnectedIssues []ConnectedIssue
 	// CascadeRoot is the closed issue the unblock cascade walks from,
 	// for close events.
@@ -139,14 +141,16 @@ type State struct {
 }
 
 // ConnectedIssue is one non-PR issue a pull request blocks, with the
-// issues that block it: the reject-pr test's input. The relationship
-// is recorded on the blocker graph, never inferred from the PR body
-// (§forgejo/webhook/re-fetch, §forgejo/decisions/actions).
+// issues that block it: the input to the reject-pr test and to the
+// merge gate. The relationship is recorded on the blocker graph, never
+// inferred from the PR body (§forgejo/webhook/re-fetch,
+// §forgejo/decisions/actions, §forgejo/decisions/merge-gate).
 type ConnectedIssue struct {
 	// Issue is the connected issue; its Repository may differ from
 	// the PR's (cross-repo relationships).
 	Issue Issue
-	// Blockers are the issues that block Issue: one hop, no recursion.
+	// Blockers are the issues that block Issue: one hop, no recursion,
+	// each with its own state and repository.
 	Blockers []Issue
 }
 
@@ -176,10 +180,14 @@ type Decision struct {
 	// Reason is a human-readable explanation of the decision; it is
 	// logged with every decision.
 	Reason string
-	// Cascade lists the issues the unblock cascade now unblocks (close
-	// events only); each warrants a dispatch of ActionImplement. The
-	// engine applies each key's own watermark before dispatching, so
-	// the same (action, revision) is not re-dispatched.
+	// Cascade lists the objects the unblock cascade now releases (close
+	// events only): newly unblocked issues, each warranting a dispatch
+	// of ActionImplement, and the connected open PRs of issues whose
+	// remaining open blockers are only those PRs, each warranting a
+	// dispatch of ActionMergeOrWait
+	// (§forgejo/decisions/unblock-cascade). The engine applies each
+	// key's own watermark before dispatching, so the same (action,
+	// revision) is not re-dispatched.
 	Cascade []Key
 }
 
@@ -438,7 +446,9 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 // comment review submitted against the PR's current head (no commit
 // has been pushed since) — in which case the decision follows the
 // latest review: changes-requested and comment dispatch fix-feedback,
-// approved dispatches merge-or-wait. A comment review holds off on the
+// approved dispatches merge-or-wait — held off, naming the open
+// blockers, when a connected issue has one
+// (§forgejo/decisions/merge-gate). A comment review holds off on the
 // event path, but the sweep moves the PR along by triggering the
 // implementer, not the reviewer (§forgejo/decisions/transition-table).
 func decidePRReconcile(e Event, s State, w *Watermark) Decision {
@@ -465,6 +475,9 @@ func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 				}
 				return dispatch(ActionFixFeedback, fmt.Sprintf("PR %d stands at a comment review by %s", pr.Number, latest.Author))
 			case ReviewApproved:
+				if open := mergeGateOpenBlockers(e, s); len(open) > 0 {
+					return holdOff(fmt.Sprintf("PR %d stands at an approved review, but a connected issue is blocked by %s; not merging", pr.Number, blockerNames(open)))
+				}
 				if alreadyDispatched(w, ActionMergeOrWait, pr.HeadSHA) {
 					return holdOff(fmt.Sprintf("merge-or-wait already dispatched at revision %s", pr.HeadSHA))
 				}
@@ -479,8 +492,10 @@ func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 // applied first, so a gate that closed after the PR opened cannot be
 // walked through by the review-following decisions; then the
 // re-fetched latest review decides — changes-requested dispatches
-// fix-feedback, approved dispatches merge-or-wait, anything else holds
-// off (§forgejo/decisions/transition-table).
+// fix-feedback, approved dispatches merge-or-wait only when the merge
+// gate lets it through, no connected issue having an open blocker
+// (§forgejo/decisions/merge-gate), anything else holds off
+// (§forgejo/decisions/transition-table).
 func decidePRReviewed(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
 	if pr == nil || !prOpen(pr) {
@@ -503,6 +518,9 @@ func decidePRReviewed(e Event, s State, w *Watermark) Decision {
 		}
 		return dispatch(ActionFixFeedback, fmt.Sprintf("PR %d: review by %s requests changes", pr.Number, latest.Author))
 	case ReviewApproved:
+		if open := mergeGateOpenBlockers(e, s); len(open) > 0 {
+			return holdOff(fmt.Sprintf("PR %d stands at an approved review, but a connected issue is blocked by %s; not merging", pr.Number, blockerNames(open)))
+		}
 		if alreadyDispatched(w, ActionMergeOrWait, pr.HeadSHA) {
 			return holdOff(fmt.Sprintf("merge-or-wait already dispatched at revision %s", pr.HeadSHA))
 		}
@@ -524,16 +542,19 @@ func decidePRMerged(s State) Decision {
 }
 
 // unblockCascade walks the blocker graph from the closed issue and
-// returns the issues that are now unblocked — open, with all their
-// blockers closed — each exactly once. The walk is transitive (a
-// blocked issue that is itself closed cascades onward) and terminates
-// on cycles via a visited set
+// returns the objects it now releases — open issues with all their
+// issue-side blockers closed (dispatched implement) and, for issues
+// whose remaining open blockers are only their connected open PRs, those
+// PRs (dispatched merge-or-wait) — each exactly once. The walk is
+// transitive (a blocked issue that is itself closed cascades onward) and
+// terminates on cycles via a visited set
 // (§forgejo/decisions/unblock-cascade).
 func unblockCascade(root *IssueNode) []Key {
 	if root == nil {
 		return nil
 	}
 	var unblocked []Key // nil when nothing is unblocked
+	seenPR := map[Key]bool{}
 	visited := map[Key]bool{
 		{Repo: root.Issue.Repository, Kind: KindIssue, Number: root.Issue.Number}: true,
 	}
@@ -550,7 +571,23 @@ func unblockCascade(root *IssueNode) []Key {
 			case "closed":
 				walk(b) // transitive: a closed issue cascades onward
 			case "open":
-				if allClosed(b.Blockers) {
+				// An issue whose remaining open blockers are its
+				// connected open PRs is not an implement candidate —
+				// the work exists as a PR, and the closure that
+				// removed the last issue-side blocker releases that
+				// PR instead (§forgejo/decisions/unblock-cascade).
+				if prs := openPullBlockers(b.Blockers); len(prs) > 0 {
+					if allClosed(issueBlockers(b.Blockers)) {
+						for _, p := range prs {
+							pk := Key{Repo: p.Repository, Kind: KindPR, Number: p.Number}
+							if seenPR[pk] {
+								continue // released once, even by several issues
+							}
+							seenPR[pk] = true
+							unblocked = append(unblocked, pk)
+						}
+					}
+				} else if allClosed(b.Blockers) {
 					unblocked = append(unblocked, k)
 				}
 			}
@@ -558,6 +595,33 @@ func unblockCascade(root *IssueNode) []Key {
 	}
 	walk(root)
 	return unblocked
+}
+
+// issueBlockers returns the non-pull-request entries of a blocker
+// list — the issue-side blockers the cascade and the PR release test
+// (§forgejo/decisions/unblock-cascade).
+func issueBlockers(blockers []IssueNode) []IssueNode {
+	var issues []IssueNode
+	for i := range blockers {
+		if !blockers[i].Issue.IsPull {
+			issues = append(issues, blockers[i])
+		}
+	}
+	return issues
+}
+
+// openPullBlockers returns the open pull-request entries of a
+// blocker list — an issue's connected open PRs, seen through the
+// dependency rows that make the PR a blocker of the issue it delivers
+// (§forgejo/decisions/unblock-cascade).
+func openPullBlockers(blockers []IssueNode) []Issue {
+	var pulls []Issue
+	for i := range blockers {
+		if blockers[i].Issue.IsPull && blockers[i].Issue.State == "open" {
+			pulls = append(pulls, blockers[i].Issue)
+		}
+	}
+	return pulls
 }
 
 // allClosed reports whether every blocker is closed; no blockers is
@@ -577,6 +641,32 @@ func openBlockers(blockers []Issue) []Issue {
 	for i := range blockers {
 		if blockers[i].State == "open" {
 			open = append(open, blockers[i])
+		}
+	}
+	return open
+}
+
+// mergeGateOpenBlockers is the merge gate's shared test, consulted by
+// every path that dispatches merge-or-wait: the open blockers of the
+// PR's connected issues, which must be none
+// (§forgejo/decisions/merge-gate). The PR's own entry in a connected
+// issue's blocker list is not
+// a blocker — the PR is that issue's delivery vehicle (the
+// issue-blocks record that connects them makes the PR one of the
+// issue's blockers) — so it is excluded; every other open blocker
+// counts, cross-repo included.
+func mergeGateOpenBlockers(ev Event, s State) []Issue {
+	var open []Issue
+	for i := range s.ConnectedIssues {
+		for j := range s.ConnectedIssues[i].Blockers {
+			b := s.ConnectedIssues[i].Blockers[j]
+			if b.State != "open" {
+				continue
+			}
+			if b.IsPull && b.Number == ev.Number && b.Repository == ev.Repo {
+				continue // the PR itself
+			}
+			open = append(open, b)
 		}
 	}
 	return open

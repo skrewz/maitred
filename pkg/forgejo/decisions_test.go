@@ -78,6 +78,30 @@ func openPR(sha string) *PullRequest {
 	}
 }
 
+// gateBlocker returns an issue blocker on a connected issue, for the
+// merge gate (§forgejo/decisions/merge-gate).
+func gateBlocker(repo string, number int, state string) Issue {
+	return Issue{Number: number, State: state, Repository: repo}
+}
+
+// gateBlockerPR returns a pull-request blocker on a connected issue —
+// a connected open PR, which is the PR's own entry when the numbers
+// match (§forgejo/decisions/merge-gate).
+func gateBlockerPR(repo string, number int, state string) Issue {
+	b := gateBlocker(repo, number, state)
+	b.IsPull = true
+	return b
+}
+
+// connectedIssueOf builds one of the PR's connected issues, carrying
+// its blockers, for the merge gate (§forgejo/decisions/merge-gate).
+func connectedIssueOf(number int, blockers ...Issue) ConnectedIssue {
+	return ConnectedIssue{
+		Issue:    Issue{Number: number, State: "open", Repository: "o/r"},
+		Blockers: blockers,
+	}
+}
+
 func issueEvent(typ EventType) Event {
 	return Event{Type: typ, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"}
 }
@@ -533,6 +557,72 @@ func TestDecide(t *testing.T) {
 			state:      State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime), review("APPROVED", "carol", testTime2)}},
 			wantAction: ActionMergeOrWait,
 		},
+		// The merge gate: merge-or-wait only when no connected
+		// issue has an open blocker (§forgejo/decisions/merge-gate).
+		{
+			name:  "PR review approved with a connected issue blocked by an open issue holds off",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "closed"), gateBlocker("o/r", 4, "open"))},
+			},
+		},
+		{
+			name:  "PR review approved with a connected issue's blockers all closed dispatches merge-or-wait",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "closed"))},
+			},
+			wantAction: ActionMergeOrWait,
+		},
+		{
+			name:  "PR review approved where the only open blocker is the PR itself dispatches merge-or-wait",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlockerPR("o/r", 9, "open"))},
+			},
+			wantAction: ActionMergeOrWait,
+		},
+		{
+			name:  "PR review approved with the second connected issue blocked holds off",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{
+					connectedIssueOf(7, gateBlocker("o/r", 3, "closed")),
+					connectedIssueOf(8, gateBlocker("other/repo", 5, "open")),
+				},
+			},
+		},
+		{
+			name:  "PR review changes-requested with a connected issue blocked still dispatches fix-feedback",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "open"))},
+			},
+			wantAction: ActionFixFeedback,
+		},
+		{
+			name:  "PR synced with a connected issue blocked dispatches re-review — the push path decides no merge",
+			event: prEvent(EventPRSynced, "alice"),
+			state: State{
+				PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "open"))},
+			},
+			wantAction: ActionReReview,
+		},
+		{
+			name:  "PR opened with a connected issue blocked dispatches review — the open path decides no merge",
+			event: prEvent(EventPROpened, "alice"),
+			state: State{
+				PR:              openPR("abc"),
+				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "open"))},
+			},
+			wantAction: ActionReview,
+		},
 		{
 			name:        "PR merged runs the unblock cascade",
 			event:       prEvent(EventPRMerged, "alice"),
@@ -583,6 +673,23 @@ func TestDecide(t *testing.T) {
 			event:      prEvent(EventReconcile, "maitred"),
 			state:      State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 			wantAction: ActionMergeOrWait,
+		},
+		{
+			name:  "reconcile PR standing at an approved review with a connected issue blocked holds off",
+			event: prEvent(EventReconcile, "maitred"),
+			state: State{
+				PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "open"))},
+			},
+		},
+		{
+			name:  "reconcile PR standing at a changes-requested review with a connected issue blocked still dispatches fix-feedback",
+			event: prEvent(EventReconcile, "maitred"),
+			state: State{
+				PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "open"))},
+			},
+			wantAction: ActionFixFeedback,
 		},
 		{
 			name:       "reconcile PR standing at a dismissed review dispatches re-review",
@@ -864,6 +971,49 @@ func TestDecide_ActivityBlockerHoldOffNamesBlockers(t *testing.T) {
 	}
 }
 
+// TestDecide_MergeGateHoldOffNamesBlockers pins the acceptance that an
+// approved, mergeable PR whose connected issue has an open blocker
+// dispatches no merge-or-wait — on the review event and on the sweep —
+// with a reason naming the open blockers, cross-repo included, and not
+// the closed ones or the PR itself (§forgejo/decisions/merge-gate).
+func TestDecide_MergeGateHoldOffNamesBlockers(t *testing.T) {
+	state := State{
+		PR:      openPR("abc"),
+		Reviews: []Review{review("APPROVED", "carol", testTime)},
+		ConnectedIssues: []ConnectedIssue{connectedIssueOf(7,
+			gateBlocker("o/r", 3, "open"),
+			gateBlocker("other/repo", 12, "open"),
+			gateBlocker("o/r", 5, "closed"),
+			gateBlockerPR("o/r", 9, "open"), // the PR's own entry: not a blocker
+		)},
+	}
+	for _, tt := range []struct {
+		name  string
+		event Event
+	}{
+		{"review event", prEvent(EventPRReviewed, "carol")},
+		{"sweep", prEvent(EventReconcile, "maitred")},
+	} {
+		d := Decide(tt.event, state, nil)
+		if d.Action == ActionMergeOrWait {
+			t.Errorf("%s: dispatched merge-or-wait, want hold-off (reason %q)", tt.name, d.Reason)
+		}
+		if d.Dispatched {
+			t.Errorf("%s: dispatched %q, want hold-off", tt.name, d.Action)
+		}
+		for _, want := range []string{"o/r#3", "other/repo#12"} {
+			if !strings.Contains(d.Reason, want) {
+				t.Errorf("%s: reason %q does not name blocker %s", tt.name, d.Reason, want)
+			}
+		}
+		for _, not := range []string{"o/r#5", "o/r#9"} {
+			if strings.Contains(d.Reason, not) {
+				t.Errorf("%s: reason %q names a closed blocker or the PR itself (%s)", tt.name, d.Reason, not)
+			}
+		}
+	}
+}
+
 // TestDecide_HoldOffReasons distinguishes the two hold-off families:
 // revision-keyed actions hold off with "already dispatched at
 // revision", watermark-exempt actions with the state fact that calls
@@ -994,6 +1144,11 @@ func TestUnblockCascade(t *testing.T) {
 	node := func(repo string, number int, state string) IssueNode {
 		return IssueNode{Issue: Issue{Number: number, State: state, Repository: repo}}
 	}
+	pullNode := func(repo string, number int, state string) IssueNode {
+		n := node(repo, number, state)
+		n.Issue.IsPull = true
+		return n
+	}
 
 	tests := []struct {
 		name string
@@ -1114,6 +1269,80 @@ func TestUnblockCascade(t *testing.T) {
 				},
 			},
 			want: []Key{{Repo: "o/r", Kind: KindIssue, Number: 2}},
+		},
+		{
+			// A closed issue-side blocker releases the connected
+			// open PR, not the issue: the PR is the work
+			// (§forgejo/decisions/unblock-cascade).
+			name: "an issue whose remaining open blocker is its connected PR releases the PR",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue: Issue{Number: 2, State: "open", Repository: "o/r"},
+						Blockers: []IssueNode{
+							node("o/r", 1, "closed"),
+							pullNode("o/r", 9, "open"),
+						},
+					},
+				},
+			},
+			want: []Key{{Repo: "o/r", Kind: KindPR, Number: 9}},
+		},
+		{
+			name: "a connected PR released by two issues is released once",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue: Issue{Number: 2, State: "open", Repository: "o/r"},
+						Blockers: []IssueNode{
+							node("o/r", 1, "closed"),
+							pullNode("o/r", 9, "open"),
+						},
+					},
+					{
+						Issue: Issue{Number: 3, State: "open", Repository: "o/r"},
+						Blockers: []IssueNode{
+							node("o/r", 1, "closed"),
+							pullNode("o/r", 9, "open"),
+						},
+					},
+				},
+			},
+			want: []Key{{Repo: "o/r", Kind: KindPR, Number: 9}},
+		},
+		{
+			name: "an issue still blocked on the issue side is not released, connected PR included",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue: Issue{Number: 2, State: "open", Repository: "o/r"},
+						Blockers: []IssueNode{
+							node("o/r", 1, "closed"),
+							node("o/r", 3, "open"),
+							pullNode("o/r", 9, "open"),
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "a cross-repo connected PR carries its own key",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue: Issue{Number: 2, State: "open", Repository: "o/r"},
+						Blockers: []IssueNode{
+							node("o/r", 1, "closed"),
+							pullNode("other/repo", 9, "open"),
+						},
+					},
+				},
+			},
+			want: []Key{{Repo: "other/repo", Kind: KindPR, Number: 9}},
 		},
 		{
 			name: "a cycle terminates",
