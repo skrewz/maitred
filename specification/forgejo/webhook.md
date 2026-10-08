@@ -32,19 +32,25 @@ On each `POST`:
    Deliveries that are not an issue, pull request, or review transition
    (the table below) are **cheaply ignored** — no re-fetch, no decision —
    and acknowledged.
-3. **Test the scope.** The event's repository must carry the
-   `maitred-enabled` topic (§forgejo/reconciliation/the-sweep): the topic
-   scopes **both** engine paths, not just the sweep. The test is made from
+3. **Test the scope.** A repository holds **roles** by topic
+   (§forgejo/webhook/repository-roles). A delivery may be considered when
+   the repository of its object holds **at least one** role; the roles
+   scope **both** engine paths, not just the sweep. The test is made from
    the event payload's repository, **before** any re-fetch. A repository
-   that does not carry the topic — or whose topics the engine does not
-   know — **holds off** with the reason `repo <name> is not
-   maitred-enabled`, logged like any other hold-off
+   that holds no role — or whose topics the engine does not know —
+   **holds off** with the reason
+   `repo <name> holds no maitred role (neither maitred-enabled nor
+   maitred-outcomes-repo)`, logged like any other hold-off
    (§forgejo/observability/the-decision-log); nothing is re-fetched,
    dispatched, or cascaded for it, and the delivery is acknowledged. A
    repository listing that **fails** also holds off, but with a reason
-   naming the failure — never the topic wording — so a transient API
-   failure is not recorded as a deliberate exclusion
-   (§forgejo/webhook/the-scope-cache).
+   naming the failure — never the role or topic wording — so a transient
+   API failure is not recorded as a deliberate exclusion
+   (§forgejo/webhook/the-scope-cache). A delivery that passes the scope
+   test may still be denied by **admissibility** further down the
+   pipeline: an action fires for an object only if the repository holding
+   the object under consideration carries the role that admits it
+   (§forgejo/webhook/repository-roles).
 4. **Re-fetch the state.** The affected issue/PR — plus what the
    transition needs (reviews, blockers, connected PRs, blocker graph) — is
    re-fetched from Forgejo through the read-only client
@@ -82,35 +88,90 @@ On each `POST`:
 A re-fetch failure is a hold-off: it is logged and acknowledged, and the
 reconciliation sweep re-derives from the source of truth.
 
+### Repository roles
+
+The engine's remit is a set of repository **roles**, held by topic, not
+one repository set. Topics are **reserved vocabulary** — no repository
+name appears in the engine or its config:
+
+| role | topic | grants admissibility to |
+|---|---|---|
+| work-item source | `maitred-enabled` | `implement`, `reassess`, `review`, `re-review`, `rebase`, `fix-feedback`, `merge-or-wait` |
+| outcomes source | `maitred-outcomes-repo` | `decompose`, `wrap-up` |
+
+One organisation listing feeds every repository's roles
+(§forgejo/webhook/the-scope-cache, §forgejo/reconciliation/the-sweep); a
+repository may hold both roles or neither.
+
+Two distinct rules consult the roles:
+
+- **Admission** — whether a delivery may be considered at all: the
+  repository of its object holds at least one role
+  (§forgejo/webhook/the-pipeline, step 3). Admission stays a Decision, never
+  a listener drop: a delivery from an out-of-remit repository appears in the
+  decision log as a hold-off.
+- **Admissibility** — whether an action may fire for an object: granted by
+  the roles of the repository holding **the object under consideration** —
+  the event's object on the event path and the sweep, the cascade key for
+  the unblock cascade — never by the roles of the repository the event
+  arrived from. A cascade therefore crosses the role boundary: a closed
+  issue in an outcomes repository dispatches `implement` for a member in an
+  enabled repository. An action denied by this rule is a hold-off naming
+  the action, the repository, and the required role's topic; an action no
+  role admits (an unknown one) is a hold-off stating
+  `action <a> is admitted by no maitred role` — never the wording of a
+  role that does not admit it.
+
+Admissibility is applied **after** the re-fetch and `Decide`, not beside
+admission at step 3, and this shape is deliberate. Admissibility judges
+an **action** against the roles of the repository holding **the object
+under consideration**; the action is the decision function's answer, not
+the event's, and the object's repository only differs from the event's
+for cascade keys, which step 3 never sees. Testing an event's whole
+action family before the re-fetch would hard-code an event-to-action-family
+mapping the pipeline otherwise does not carry, one the outcomes chain
+(#83, #84, #85) will redraw. The accepted cost: a delivery for an
+outcomes-only repository (or a reconciled object in one) is re-fetched
+before its work-item action is denied — one re-fetch per object, paid
+for the visibility that each denial is a recorded, self-healing
+hold-off in the decision log rather than a silent no-op
+(§forgejo/reconciliation/the-sweep).
+
+Unknown scope keeps these semantics verbatim: fail closed, hold off naming
+the listing failure — never "lacks `maitred-outcomes-repo`"
+(§forgejo/webhook/the-scope-cache).
+
 ### The scope cache
 
 The scope test does not add an API round-trip to every delivery. The
 engine keeps an in-memory **scope cache**: a snapshot of the
-organisation's repositories and whether each carries the
-`maitred-enabled` topic. The reconciliation sweep refreshes it from the
+organisation's repositories and which roles each holds — derived from
+**one** repository listing per refresh, so both roles come from the same
+snapshot. The reconciliation sweep refreshes it from the
 listing it already enumerates (§forgejo/reconciliation/the-sweep), and an
 event path that finds the cache empty or older than one
 `reconcile_interval` refreshes it with a single repository listing before
 deciding (§forgejo/client/operations). Entries are therefore never older
 than one interval: a repository whose topic has just been removed is not
-acted on for longer than that. A repository absent from the snapshot is
-not enabled — the test **fails closed**. Deliveries that find the cache
+acted on for longer than that. A repository absent from the snapshot holds
+no role — the test **fails closed**. Deliveries that find the cache
 stale **share one refresh**: the refresh is single-flight, so a burst
 against a stale cache costs one repository listing, not one each.
 A repository listing that **fails** is also a hold-off — logged,
 acknowledged, and re-derived by the next sweep, which refreshes the
 cache again (§forgejo/reconciliation/failure-handling) — with a reason
-naming the listing failure, distinct from the `not maitred-enabled`
+naming the listing failure, distinct from the `holds no maitred role`
 wording, so an API failure never reads as an exclusion. The failed
 attempt is stamped like a successful one: while the listing keeps
 failing, re-attempts are bounded to a short retry interval rather than
 one listing per delivery. The last known snapshot is kept across the
 failure but **never acted on while stale** — scope stays unknown, and
 the test still fails closed. The keys of an unblock cascade are tested the
-same way before their dispatch, so a cascade never starts an agent in a
-repository outside the remit; a cascade hold-off is recorded in the
-decision log like any other decision, wherever it is made
-(§forgejo/observability/the-decision-log).
+same way before their dispatch, against the role admitting the cascaded
+action (§forgejo/webhook/repository-roles), so a cascade never starts an
+agent in a repository where that action is inadmissible; a cascade
+hold-off is recorded in the decision log like any other decision,
+wherever it is made (§forgejo/observability/the-decision-log).
 
 ## Event mapping
 

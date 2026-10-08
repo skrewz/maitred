@@ -21,8 +21,9 @@ The config maps each action — `implement`, `reassess`, `review`, `re-review`,
   `s-autonomics-implementer`, `s-autonomics-reviewer`),
 - a **timeout** — how long the task may run.
 
-The config also names the **org** the engine tracks (the organisation whose
-`maitred-enabled` repositories it watches), and sets the
+The config also names the **org** the engine tracks (the organisation
+whose role-holding repositories it watches
+(§forgejo/webhook/repository-roles)), and sets the
 **reconciliation interval** (`reconcile_interval`): how often the
 reconciliation sweep runs (§forgejo/reconciliation/scheduling).
 

@@ -28,10 +28,14 @@ stale delivery), the **state wins**: a transition whose preconditions
 the state does not satisfy holds off.
 
 The engine's own scope is tested **ahead** of this function, in the
-pipeline (§forgejo/webhook/the-scope-cache): an event whose repository
-does not carry the `maitred-enabled` topic holds off with the reason
-`repo <name> is not maitred-enabled` and never reaches `Decide`, so the
-function stays pure — repository topics are not among its inputs. When
+pipeline (§forgejo/webhook/repository-roles, §forgejo/webhook/the-scope-cache):
+an event whose repository holds no maitred role holds off with the
+reason `repo <name> holds no maitred role (neither maitred-enabled nor
+maitred-outcomes-repo)` and never reaches `Decide`;
+whether an action is *admissible* in the roles of the repository holding
+the object is applied by the pipeline after `Decide`
+(§forgejo/webhook/the-pipeline). Either way the function stays pure —
+repository roles are not among its inputs. When
 the engine cannot establish scope because the repository listing failed,
 the hold-off reason instead names the failure (`scope of repo <name>
 unknown: ...`), keeping exclusion and API failure distinguishable in the
@@ -78,6 +82,17 @@ The "latest review" is the PR's most recently submitted review. An
 issue that *became unblocked* is dispatched `implement` through the
 unblock cascade, under the same conditions as an opened issue.
 
+**Reserved labels.** An issue carrying the `ideation`, `outcome`, or
+`human-task` label is **never** an `implement` or `reassess` candidate:
+the issue-opened, reconcile, and issue-activity decisions hold off on it
+whatever the repository's roles — a mislabelled outcomes ticket, or one
+in a repository holding both roles, must not wake the implementer. The
+`human-task` label marks a ticket claimed by a human: it is never an
+`implement` candidate anywhere in the engine, the unblock cascade
+included (§forgejo/decisions/unblock-cascade). The role model
+(§forgejo/webhook/repository-roles) is the load-bearing boundary; this
+rule is insurance.
+
 Activity on a **blocked** issue — an edit, a label change, a comment on
 an issue with an open blocker — has nothing to reassess: the work is
 held by the blocker, not by the activity, so the decision holds off and
@@ -112,6 +127,17 @@ cascades onward to the issues it blocks (A→B→C). It **terminates**
 without double-dispatching: each issue is visited once. The engine
 applies each cascaded key's own watermark before dispatching, so an
 already-dispatched `(action, revision)` is not re-dispatched.
+
+The cascade dispatches `implement`: an issue newly unblocked but
+carrying a reserved label (`ideation`, `outcome`, `human-task` — see
+§forgejo/decisions/transition-table) is held off, naming the label,
+instead of dispatched. Each cascaded key's admissibility is judged by
+the roles of the repository **holding the key**, never the repository
+whose closure rooted the cascade (§forgejo/webhook/repository-roles).
+
+The walk itself is label-blind: labelled nodes are visited and
+traversed, so graph walking stays independent of what is finally
+dispatched.
 
 ## Loop prevention
 

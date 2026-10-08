@@ -12,8 +12,8 @@ import (
 )
 
 // testRepoDisabled returns a fixture repository the engine must not act
-// on: it does not carry the maitred-enabled topic
-// (§forgejo/webhook/the-scope-cache).
+// on: it holds no maitred role — it carries neither the maitred-enabled
+// nor the maitred-outcomes-repo topic (§forgejo/webhook/repository-roles).
 func testRepoDisabled(fullName string) Repository {
 	owner, name := splitRepo(fullName)
 	return Repository{
@@ -34,12 +34,12 @@ func newScopeEngine(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store) {
 	return eng, api, q, store
 }
 
-// TestHandleEvent_RepoNotEnabled_HoldsOff: the maitred-enabled topic
-// scopes the event path as well as the sweep. An event for a repository
-// without the topic holds off — naming the repository in the reason —
+// TestHandleEvent_RepoWithoutRole_HoldsOff: the repository roles scope
+// the event path as well as the sweep. An event for a repository
+// holding no role holds off — naming the repository in the reason —
 // without re-fetching, dispatching, or recording a watermark
 // (§forgejo/webhook/the-pipeline).
-func TestHandleEvent_RepoNotEnabled_HoldsOff(t *testing.T) {
+func TestHandleEvent_RepoWithoutRole_HoldsOff(t *testing.T) {
 	var log bytes.Buffer
 	eng, api, q, store := newScopeEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log, nil)))
 	api.issues[7] = &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/off"}
@@ -64,7 +64,7 @@ func TestHandleEvent_RepoNotEnabled_HoldsOff(t *testing.T) {
 		t.Errorf("decision logged as dispatched: %v", entry)
 	}
 	reason, _ := entry["reason"].(string)
-	if !strings.Contains(reason, "repo o/off is not maitred-enabled") {
+	if !strings.Contains(reason, "repo o/off holds no maitred role") {
 		t.Errorf("hold-off reason = %q, want it to name the repository", reason)
 	}
 }
@@ -98,7 +98,8 @@ func TestHandleEvent_UnknownRepo_HoldsOff(t *testing.T) {
 }
 
 // TestHandleEvent_RepoEnabled_Unchanged: an event for a repository
-// carrying the topic behaves exactly as before (§forgejo/webhook/the-pipeline).
+// holding the work-item role behaves exactly as before
+// (§forgejo/webhook/the-pipeline).
 func TestHandleEvent_RepoEnabled_Unchanged(t *testing.T) {
 	eng, api, q, store := newScopeEngine(t)
 	api.issues[7] = testIssue(7, "open")
@@ -121,10 +122,10 @@ func TestHandleEvent_RepoEnabled_Unchanged(t *testing.T) {
 	}
 }
 
-// TestHandleEvent_NoCascadeForUnenabledRepo: the scope test precedes the
-// re-fetch, so an un-enabled repository yields no cascade dispatches
-// either (§forgejo/webhook/the-pipeline).
-func TestHandleEvent_NoCascadeForUnenabledRepo(t *testing.T) {
+// TestHandleEvent_NoCascadeForRepoWithoutRole: the scope test precedes
+// the re-fetch, so a repository holding no role yields no cascade
+// dispatches either (§forgejo/webhook/the-pipeline).
+func TestHandleEvent_NoCascadeForRepoWithoutRole(t *testing.T) {
 	eng, api, q, _ := newScopeEngine(t)
 	closed := &Issue{Number: 7, State: "closed", UpdatedAt: testUpdatedAt, Repository: "o/off"}
 	api.issues[7] = closed
@@ -185,11 +186,12 @@ func TestHandleEvent_ScopeCacheRefreshedWhenStale(t *testing.T) {
 	}
 }
 
-// TestDispatchCascade_UnenabledRepoHeldOff: a cross-repo unblock
-// cascade must not start an agent in a repository the sweep deliberately
-// skips, and the hold-off is recorded in the decision log for the
-// cascade key like any other decision (§forgejo/webhook/the-scope-cache).
-func TestDispatchCascade_UnenabledRepoHeldOff(t *testing.T) {
+// TestDispatchCascade_KeyWithoutRoleHeldOff: a cross-repo unblock
+// cascade must not start an agent in a repository holding no role, and
+// the hold-off is recorded in the decision log for the cascade key like
+// any other decision (§forgejo/webhook/repository-roles,
+// §forgejo/webhook/the-scope-cache).
+func TestDispatchCascade_KeyWithoutRoleHeldOff(t *testing.T) {
 	var log bytes.Buffer
 	eng, api, q, _ := newScopeEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log, nil)))
 	closed := &Issue{Number: 7, State: "closed", UpdatedAt: testUpdatedAt, Repository: "o/r"}
@@ -216,14 +218,14 @@ func TestDispatchCascade_UnenabledRepoHeldOff(t *testing.T) {
 	if dispatched, _ := rec["dispatched"].(bool); dispatched {
 		t.Errorf("cascade key logged as dispatched: %v", rec)
 	}
-	if reason, _ := rec["reason"].(string); !strings.Contains(reason, "repo o/off is not maitred-enabled") {
+	if reason, _ := rec["reason"].(string); !strings.Contains(reason, "repo o/off holds no maitred role") {
 		t.Errorf("cascade hold-off reason = %q, want it to name the repository", reason)
 	}
 }
 
 // TestHandleEvent_ListingFailure_HoldsOff: a repository listing that
 // fails is a hold-off whose reason names the listing failure — not a
-// "not maitred-enabled" exclusion a transient API blip would masquerade
+// "holds no maitred role" exclusion a transient API blip would masquerade
 // as — with no re-fetch and no dispatch (§forgejo/webhook/the-scope-cache).
 func TestHandleEvent_ListingFailure_HoldsOff(t *testing.T) {
 	var log bytes.Buffer
@@ -254,7 +256,7 @@ func TestHandleEvent_ListingFailure_HoldsOff(t *testing.T) {
 	if !strings.Contains(reason, "scope of repo o/r unknown") || !strings.Contains(reason, "boom") {
 		t.Errorf("hold-off reason = %q, want it to name the listing failure", reason)
 	}
-	if strings.Contains(reason, "not maitred-enabled") {
+	if strings.Contains(reason, "holds no maitred role") {
 		t.Errorf("failed listing reported as an exclusion: %q", reason)
 	}
 }
@@ -360,5 +362,236 @@ func TestHandleEvent_IgnoredEventNeedsNoScopeLookup(t *testing.T) {
 
 	if n := api.callCount("ListOrgRepositories"); n != 0 {
 		t.Errorf("ListOrgRepositories called %d time(s) for an ignored delivery, want 0", n)
+	}
+}
+
+// testRepoOutcomes returns a fixture repository holding only the
+// outcomes role: it carries the maitred-outcomes-repo topic and not
+// maitred-enabled (§forgejo/webhook/repository-roles).
+func testRepoOutcomes(fullName string) Repository {
+	owner, name := splitRepo(fullName)
+	return Repository{
+		Name:     name,
+		FullName: fullName,
+		Owner:    owner,
+		Topics:   []string{"maitred-outcomes-repo"},
+	}
+}
+
+// testRepoBothRoles returns a fixture repository holding both roles
+// (§forgejo/webhook/repository-roles).
+func testRepoBothRoles(fullName string) Repository {
+	owner, name := splitRepo(fullName)
+	return Repository{
+		Name:     name,
+		FullName: fullName,
+		Owner:    owner,
+		Topics:   []string{"maitred-enabled", "maitred-outcomes-repo"},
+	}
+}
+
+// TestHandleEvent_OutcomesOnlyRepo_ImplementInadmissible: an
+// outcomes-only repository is admitted — its objects are considered, so
+// the re-fetch happens — but implement is inadmissible there: the
+// decision is a hold-off naming the action and the required role, with
+// no dispatch and no watermark (§forgejo/webhook/repository-roles).
+func TestHandleEvent_OutcomesOnlyRepo_ImplementInadmissible(t *testing.T) {
+	var log bytes.Buffer
+	api := newFakeAPI()
+	api.repos = []Repository{testRepo("o/r"), testRepoOutcomes("o/out")}
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewJSONHandler(&log, nil)))
+	api.issues[7] = &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/out"}
+
+	eng.HandleEvent(Event{Type: EventIssueOpened, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d dispatched tasks for an outcomes-only repository, want none", len(tasks))
+	}
+	if n := api.callCount("GetIssue"); n != 1 {
+		t.Errorf("GetIssue called %d time(s), want 1: the delivery must be admitted and re-fetched", n)
+	}
+	w, err := store.Load(Key{Repo: "o/out", Kind: KindIssue, Number: 7})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none", w)
+	}
+	entry := findEntry(t, parseLogLines(t, log.Bytes()), "decision")
+	if dispatched, _ := entry["dispatched"].(bool); dispatched {
+		t.Errorf("decision logged as dispatched: %v", entry)
+	}
+	reason, _ := entry["reason"].(string)
+	if !strings.Contains(reason, "implement is inadmissible") || !strings.Contains(reason, "maitred-enabled") {
+		t.Errorf("hold-off reason = %q, want it to name the action and the required role's topic", reason)
+	}
+}
+
+// TestHandleEvent_OutcomesOnlyRepo_ReviewInadmissible: the PR actions
+// belong to the work-item role, so a PR in an outcomes-only repository
+// is admitted but never reviewed (§forgejo/webhook/repository-roles).
+func TestHandleEvent_OutcomesOnlyRepo_ReviewInadmissible(t *testing.T) {
+	var log bytes.Buffer
+	api := newFakeAPI()
+	api.repos = []Repository{testRepoOutcomes("o/out")}
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewJSONHandler(&log, nil)))
+	api.pulls[9] = &PullRequest{Number: 9, State: "open", Mergeable: true, HeadSHA: "abc"}
+
+	eng.HandleEvent(Event{Type: EventPROpened, Repo: "o/out", Kind: KindPR, Number: 9, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d dispatched tasks for an outcomes-only repository, want none", len(tasks))
+	}
+	if n := api.callCount("GetPullRequest"); n != 1 {
+		t.Errorf("GetPullRequest called %d time(s), want 1: the delivery must be admitted and re-fetched", n)
+	}
+	entry := findEntry(t, parseLogLines(t, log.Bytes()), "decision")
+	reason, _ := entry["reason"].(string)
+	if !strings.Contains(reason, "review is inadmissible") || !strings.Contains(reason, "maitred-enabled") {
+		t.Errorf("hold-off reason = %q, want it to name the action and maitred-enabled", reason)
+	}
+}
+
+// TestHandleEvent_BothRolesRepo_Unchanged: a repository holding both
+// roles admits its work items exactly as an enabled one — admission is
+// by any role, admissibility by the object's role table
+// (§forgejo/webhook/repository-roles).
+func TestHandleEvent_BothRolesRepo_Unchanged(t *testing.T) {
+	api := newFakeAPI()
+	api.repos = []Repository{testRepoBothRoles("o/both")}
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	api.issues[7] = &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/both"}
+
+	eng.HandleEvent(Event{Type: EventIssueOpened, Repo: "o/both", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1: a both-roles repository is a work-item source too", len(tasks))
+	}
+	w, err := store.Load(Key{Repo: "o/both", Kind: KindIssue, Number: 7})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w == nil || w.Action != string(ActionImplement) {
+		t.Errorf("watermark = %+v, want implement recorded", w)
+	}
+}
+
+// TestDispatchCascade_OutcomesRootEnabledMember: a cascade rooted at a
+// closed issue in an outcomes-only repository dispatches implement for
+// a newly unblocked member in an enabled repository — admissibility is
+// judged by the repository holding the object under consideration,
+// never the repository the event arrived from
+// (§forgejo/webhook/repository-roles).
+func TestDispatchCascade_OutcomesRootEnabledMember(t *testing.T) {
+	api := newFakeAPI()
+	api.repos = []Repository{testRepo("o/r"), testRepoOutcomes("o/out")}
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	closed := &Issue{Number: 7, State: "closed", UpdatedAt: testUpdatedAt, Repository: "o/out"}
+	api.issues[7] = closed
+	member := &Issue{Number: 8, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r"}
+	api.issues[8] = member
+	api.blocks[7] = []Issue{*member}
+	api.deps[8] = []Issue{*closed}
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d cascade tasks, want 1 into the enabled repository", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=implement") {
+		t.Errorf("prompt = %q, want the implement action", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 8})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w == nil || w.Action != string(ActionImplement) {
+		t.Errorf("watermark = %+v, want implement recorded for the member", w)
+	}
+}
+
+// TestDispatchCascade_OutcomesMemberHeldOff: a cascade key in an
+// outcomes-only repository is not an implement dispatch — the hold-off
+// names the action and the required role, and is recorded in the
+// decision log for the cascade key
+// (§forgejo/webhook/repository-roles).
+func TestDispatchCascade_OutcomesMemberHeldOff(t *testing.T) {
+	var log bytes.Buffer
+	api := newFakeAPI()
+	api.repos = []Repository{testRepo("o/r"), testRepoOutcomes("o/out")}
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewJSONHandler(&log, nil)))
+	closed := &Issue{Number: 7, State: "closed", UpdatedAt: testUpdatedAt, Repository: "o/r"}
+	api.issues[7] = closed
+	member := &Issue{Number: 8, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/out"}
+	api.issues[8] = member
+	api.blocks[7] = []Issue{*member}
+	api.deps[8] = []Issue{*closed}
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d cascade tasks into an outcomes-only repository, want none", len(tasks))
+	}
+	var rec map[string]any
+	for _, e := range parseLogLines(t, log.Bytes()) {
+		if e["msg"] == "decision" && e["key"] == "o/out/issue/8" {
+			rec = e
+		}
+	}
+	if rec == nil {
+		t.Fatalf("cascade key has no decision-log entry, want its hold-off recorded")
+	}
+	reason, _ := rec["reason"].(string)
+	if !strings.Contains(reason, "implement is inadmissible") || !strings.Contains(reason, "maitred-enabled") {
+		t.Errorf("cascade hold-off reason = %q, want it to name the action and the required role's topic", reason)
+	}
+}
+
+// TestRolesFromTopics pins the single role-derivation rule shared by
+// the scope cache and the sweep filter: topics grant roles, and a
+// repository carrying none of them holds no role
+// (§forgejo/webhook/repository-roles, §forgejo/reconciliation/the-sweep).
+func TestRolesFromTopics(t *testing.T) {
+	tests := []struct {
+		name   string
+		topics []string
+		want   roles
+	}{
+		{"work-item only", []string{maitredEnabledTopic}, roles{workItems: true}},
+		{"outcomes only", []string{maitredOutcomesTopic}, roles{outcomes: true}},
+		{"both roles", []string{maitredEnabledTopic, maitredOutcomesTopic}, roles{workItems: true, outcomes: true}},
+		{"no role", []string{"some-other-topic"}, roles{}},
+		{"no topics", nil, roles{}},
+	}
+	for _, tt := range tests {
+		if got := rolesFromTopics(tt.topics); got != tt.want {
+			t.Errorf("%s: rolesFromTopics(%v) = %+v, want %+v", tt.name, tt.topics, got, tt.want)
+		}
 	}
 }

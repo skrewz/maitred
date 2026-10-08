@@ -31,6 +31,33 @@ const (
 	ReviewComment          = "COMMENT"
 )
 
+// LabelHumanTask marks a ticket claimed by a human: an issue carrying
+// it is never an implement candidate anywhere in the engine
+// (§forgejo/decisions/transition-table).
+const LabelHumanTask = "human-task"
+
+// neverWorkItemLabels are the labels whose issues are never implement
+// or reassess candidates: the outcomes workflow's reserved labels and
+// the human-task convention (§forgejo/decisions/transition-table).
+// The ideation and outcome names become constants when the outcomes
+// chain dispatches their actions (#83, #84, #85); the names themselves
+// are reserved specification vocabulary.
+var neverWorkItemLabels = []string{"ideation", "outcome", LabelHumanTask}
+
+// neverWorkItemLabel returns the issue label that denies the
+// implement and reassess actions, or "" when the issue may be an
+// implement or reassess candidate (§forgejo/decisions/transition-table).
+func neverWorkItemLabel(labels []string) string {
+	for _, l := range labels {
+		for _, reserved := range neverWorkItemLabels {
+			if l == reserved {
+				return l
+			}
+		}
+	}
+	return ""
+}
+
 // EventType identifies a Forgejo notification the engine reacts to
 // (§forgejo/decisions/inputs).
 type EventType string
@@ -183,6 +210,9 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 	if issue.State != "open" {
 		return holdOff(fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State))
 	}
+	if label := neverWorkItemLabel(issue.Labels); label != "" {
+		return holdOffNeverImplement(issue.Number, label)
+	}
 	if open := openBlockers(s.Blockers); len(open) > 0 {
 		return holdOff(fmt.Sprintf("issue %d is blocked by %d open issue(s)", issue.Number, len(open)))
 	}
@@ -208,6 +238,9 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	}
 	if issue.State != "open" {
 		return holdOff(fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State))
+	}
+	if label := neverWorkItemLabel(issue.Labels); label != "" {
+		return holdOffNeverReassess(issue.Number, label)
 	}
 	if open := openBlockers(s.Blockers); len(open) > 0 {
 		return holdOff(fmt.Sprintf("issue %d is blocked by %s; not reassessing", issue.Number, blockerNames(open)))
@@ -472,11 +505,79 @@ func holdOff(reason string) Decision {
 	return Decision{Reason: reason}
 }
 
-// holdOffUnenabledRepo is the scope test's hold-off: the repository does
-// not carry the maitred-enabled topic, so it is outside the engine's
-// remit on either path (§forgejo/webhook/the-scope-cache).
-func holdOffUnenabledRepo(repo string) Decision {
-	return holdOff(fmt.Sprintf("repo %s is not maitred-enabled", repo))
+// holdOffOutOfRemit is the admission hold-off: the repository holds no
+// maitred role, so it is outside the engine's remit on either path
+// (§forgejo/webhook/repository-roles, §forgejo/webhook/the-scope-cache).
+func holdOffOutOfRemit(repo string) Decision {
+	return holdOff(fmt.Sprintf("repo %s holds no maitred role (neither %s nor %s)", repo, maitredEnabledTopic, maitredOutcomesTopic))
+}
+
+// workItemActions are the actions the maitred-enabled role grants
+// admissibility to; outcomesActions are those the
+// maitred-outcomes-repo role grants it to
+// (§forgejo/webhook/repository-roles). The outcomes actions are
+// reserved vocabulary here: the outcomes chain (#83, #84, #85)
+// introduces their constants and dispatches them.
+var (
+	workItemActions = map[Action]bool{
+		ActionImplement:   true,
+		ActionReassess:    true,
+		ActionReview:      true,
+		ActionReReview:    true,
+		ActionFixFeedback: true,
+		ActionMergeOrWait: true,
+		ActionRebase:      true,
+	}
+	outcomesActions = map[Action]bool{
+		"decompose": true,
+		"wrap-up":   true,
+	}
+)
+
+// admissibleInRoles reports whether the repository roles of the
+// repository holding the object under consideration admit the action
+// (§forgejo/webhook/repository-roles). An action no role admits — an
+// unknown one — is inadmissible: the test fails closed.
+func admissibleInRoles(a Action, r roles) bool {
+	return (r.outcomes && outcomesActions[a]) || (r.workItems && workItemActions[a])
+}
+
+// roleTopicFor names the topic of a role admitting the action, for the
+// hold-off reason (§forgejo/webhook/repository-roles). An action no
+// table admits — an unknown one — has no such topic and returns the
+// empty string, so its hold-off never names a role that
+// admissibleInRoles has just denied.
+func roleTopicFor(a Action) string {
+	if outcomesActions[a] {
+		return maitredOutcomesTopic
+	}
+	if workItemActions[a] {
+		return maitredEnabledTopic
+	}
+	return ""
+}
+
+// holdOffActionInadmissible is the admissibility hold-off: the action
+// may not fire for an object in this repository — the roles of the
+// repository holding the object, never the repository the event
+// arrived from, deny it (§forgejo/webhook/repository-roles). An action
+// no role admits names that plainly, rather than a role that does not
+// admit it.
+func holdOffActionInadmissible(a Action, repo string) Decision {
+	if topic := roleTopicFor(a); topic != "" {
+		return holdOff(fmt.Sprintf("action %s is inadmissible for repo %s: requires the %s role", a, repo, topic))
+	}
+	return holdOff(fmt.Sprintf("action %s is admitted by no maitred role", a))
+}
+
+// holdOffNeverImplement and holdOffNeverReassess are the reserved-label
+// insurance hold-offs (§forgejo/decisions/transition-table).
+func holdOffNeverImplement(number int, label string) Decision {
+	return holdOff(fmt.Sprintf("issue %d carries the %s label; never an implement candidate", number, label))
+}
+
+func holdOffNeverReassess(number int, label string) Decision {
+	return holdOff(fmt.Sprintf("issue %d carries the %s label; never a reassess candidate", number, label))
 }
 
 // holdOffScopeUnknown is the scope test's failure hold-off: the
