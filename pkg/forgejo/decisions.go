@@ -688,6 +688,7 @@ var (
 		ActionFixFeedback: true,
 		ActionMergeOrWait: true,
 		ActionRebase:      true,
+		ActionRejectPR:    true,
 	}
 	outcomesActions = map[Action]bool{
 		"decompose": true,

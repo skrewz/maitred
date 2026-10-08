@@ -96,7 +96,7 @@ name appears in the engine or its config:
 
 | role | topic | grants admissibility to |
 |---|---|---|
-| work-item source | `maitred-enabled` | `implement`, `reassess`, `review`, `re-review`, `rebase`, `fix-feedback`, `merge-or-wait` |
+| work-item source | `maitred-enabled` | `implement`, `reassess`, `review`, `re-review`, `rebase`, `fix-feedback`, `merge-or-wait`, `reject-pr` |
 | outcomes source | `maitred-outcomes-repo` | `decompose`, `wrap-up` |
 
 One organisation listing feeds every repository's roles

@@ -1197,9 +1197,11 @@ func TestAdmissibleInRoles(t *testing.T) {
 		{ActionRebase, workItem, true},
 		{ActionFixFeedback, workItem, true},
 		{ActionMergeOrWait, workItem, true},
+		{ActionRejectPR, workItem, true},
 		{ActionImplement, outcomes, false},
 		{ActionReassess, outcomes, false},
 		{ActionReview, outcomes, false},
+		{ActionRejectPR, outcomes, false},
 		// The outcomes actions are reserved vocabulary until the
 		// outcomes chain dispatches them (#83, #84, #85).
 		{Action("decompose"), outcomes, true},
