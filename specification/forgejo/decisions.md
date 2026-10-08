@@ -65,7 +65,7 @@ prompts:
 | `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review |
 | `merge-or-wait` | the PR's latest review approves **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's |
 | `rebase` | an open PR is not mergeable (conflicts) |
-| `decompose` | the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
+| `decompose` | an open issue carrying the `ideation` label was opened, edited, or had its labels changed; or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | `reject-pr` | a PR is connected to work that is not yet commissioned: a **connected issue** — any non-PR issue the PR blocks, every one being tested — is blocked by an **open** `ideation` issue; tested when a PR opens, when a review is submitted, and by the reconciliation sweep, ahead of every review, rebase, fix and merge decision; the prompt closes the PR, names the breach, and reports it |
 
@@ -76,7 +76,9 @@ prompts:
 | issue opened (open, all blockers closed, no connected PR) | `implement` |
 | issue opened (open, authored by the configured decomposer identity) | hold off — the reason names the authorship; only the unblock cascade unblocks it |
 | issue opened (blocked, or a connected open PR, or not open) | hold off |
-| issue opened / edited / labels changed / comment (issue carries a reserved label) | hold off, naming the label — the sweep is where `decompose` and `wrap-up` fire (§forgejo/reconciliation/watermark-exemptions) |
+| issue opened / edited / labels changed (issue open, carries the `ideation` label) | `decompose` — the label makes the root, whatever the repository and the title; attaching the label is the *first* trigger. The event path keeps the revision-keyed watermark guard; the sweep is watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
+| issue comment (issue open, carries the `ideation` label) | hold off — a comment is not a revision of intent; the reason says so |
+| issue opened / edited / labels changed / comment (issue carries the `outcome` or `human-task` label) | hold off, naming the label — the sweep is where `wrap-up` fires (§forgejo/reconciliation/watermark-exemptions) |
 | issue edited / labels changed / feedback comment (issue open, all blockers closed) | `reassess` |
 | issue edited / labels changed / feedback comment (issue open, an open blocker) | hold off — the reason names the open blockers |
 | issue edited / labels changed / feedback comment (issue not open) | hold off |
@@ -151,14 +153,25 @@ unblock cascade, under the same conditions as an opened issue.
 
 **Reserved labels.** An issue carrying the `ideation`, `outcome`, or
 `human-task` label is **never** an `implement` or `reassess` candidate:
-the issue-opened, reconcile, and issue-activity decisions hold off on it
 whatever the repository's roles — a mislabelled outcomes ticket, or one
 in a repository holding both roles, must not wake the implementer. The
-`human-task` label marks a ticket claimed by a human: it is never an
+`ideation` label makes its issue a **root**: an open issue carrying it
+is decided `decompose` on the issue-opened, issue-edited, and
+labels-changed rows — the label, not the repository and not the title,
+is what makes a root. The body of an edit is the revision of intent the
+decomposer re-cures against, so an edit re-fires `decompose`; a comment
+is not a revision of intent, so a comment on an open root holds off.
+A root that is closed on re-fetch holds off on every row: closing it is
+the release gate, and the unblock cascade dispatches the forest members.
+The `outcome` and `human-task` labels keep their hold-offs, naming the
+label. The `human-task` label marks a ticket claimed by a human: it is
+never an
 `implement` candidate anywhere in the engine, the unblock cascade
 included (§forgejo/decisions/unblock-cascade). The role model
 (§forgejo/webhook/repository-roles) is the load-bearing boundary; this
-rule is insurance.
+rule is insurance. When an issue carries `ideation` alongside another
+reserved label, `decompose` wins: a root is decomposed before anything
+else is decided for it.
 
 Activity on a **blocked** issue — an edit, a label change, a comment on
 an issue with an open blocker — has nothing to reassess: the work is

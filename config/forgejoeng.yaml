@@ -39,7 +39,7 @@ actions:
     persona: ui-test
     timeout: 1h
   decompose:
-    prompt: "decompose {{.Repo}} {{.Kind}} {{.Number}}"
+    prompt: "decompose {{.Repo}} {{.Kind}} {{.Number}}: the fan-out cap is 20 tickets per forest — cite this cap when refusing"
     persona: ui-test
     timeout: 1h
   wrap-up:

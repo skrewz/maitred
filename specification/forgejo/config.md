@@ -21,6 +21,14 @@ The config maps each action — `implement`, `reassess`, `review`, `re-review`,
   `s-autonomics-implementer`, `s-autonomics-reviewer`),
 - a **timeout** — how long the task may run.
 
+The `decompose` prompt template is held to one content requirement: it
+must **name the fan-out cap** — at most 20 tickets per forest — and
+require the agent to **cite the cap when refusing** to fan out further
+(a root whose forest would exceed it must be refused by name, not
+silently trimmed). The cap itself belongs to the outcomes design, not
+to the engine; what the config must guarantee is that the agent is
+told the number and is told to cite it.
+
 The config also names the **org** the engine tracks (the organisation
 whose role-holding repositories it watches
 (§forgejo/webhook/repository-roles)), and sets the
