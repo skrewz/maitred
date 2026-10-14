@@ -787,6 +787,46 @@ func TestDecide(t *testing.T) {
 			watermark: &Watermark{Action: "fix-feedback", Revision: "abc"},
 		},
 		{
+			name:       "PR commented decides as reconcile: approved at head dispatches merge-or-wait",
+			event:      prEvent(EventPRCommented, "alice"),
+			state:      State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			wantAction: ActionMergeOrWait,
+		},
+		{
+			name:       "PR commented decides as reconcile: changes-requested at head dispatches fix-feedback",
+			event:      prEvent(EventPRCommented, "alice"),
+			state:      State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
+			wantAction: ActionFixFeedback,
+		},
+		{
+			name:       "PR commented decides as reconcile: comment review at head dispatches fix-feedback",
+			event:      prEvent(EventPRCommented, "alice"),
+			state:      State{PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
+			wantAction: ActionFixFeedback,
+		},
+		{
+			name:       "PR commented decides as reconcile: no review dispatches review",
+			event:      prEvent(EventPRCommented, "alice"),
+			state:      State{PR: openPR("abc")},
+			wantAction: ActionReview,
+		},
+		{
+			name:      "PR commented, merge-or-wait already dispatched at the revision, holds off",
+			event:     prEvent(EventPRCommented, "alice"),
+			state:     State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
+		},
+		{
+			name:  "PR commented but closed on re-fetch holds off",
+			event: prEvent(EventPRCommented, "alice"),
+			state: State{PR: closedPR("abc")},
+		},
+		{
+			name:  "commented event on an issue kind holds off",
+			event: issueEvent(EventPRCommented),
+			state: State{Issue: openIssue()},
+		},
+		{
 			name:      "rebase already dispatched at the revision holds off",
 			event:     prEvent(EventPRSynced, "alice"),
 			state:     State{PR: notMergeablePR("abc")},

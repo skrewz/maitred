@@ -79,6 +79,11 @@ const (
 	EventPRReviewed         EventType = "pr_reviewed"
 	EventPRMerged           EventType = "pr_merged"
 	EventPRClosed           EventType = "pr_closed"
+	// EventPRCommented is a general comment on a pull request — the
+	// PR-side analogue of EventIssueCommented. It decides as the
+	// reconciliation sweep's PR path: the re-fetched PR state decides
+	// the next action (§forgejo/decisions/transition-table).
+	EventPRCommented EventType = "pr_commented"
 	// EventReconcile is the synthetic current-state event the
 	// reconciliation sweep feeds through the same decision function
 	// (§forgejo/reconciliation): for an issue it decides like
@@ -224,6 +229,16 @@ func Decide(e Event, s State, w *Watermark) Decision {
 		return decidePRMerged(s)
 	case EventPRClosed:
 		return holdOff("PR closed without merging; nothing to dispatch")
+	case EventPRCommented:
+		// A comment on a PR is the PR-side analogue of a comment on an
+		// issue: something was said, re-evaluate what happens next. The
+		// PR equivalent of reassess is the reconcile logic — the
+		// re-fetched PR state decides the next action
+		// (§forgejo/decisions/transition-table).
+		if e.Kind == KindPR {
+			return decidePRReconcile(e, s, w)
+		}
+		return holdOff(fmt.Sprintf("PR-commented event on kind %q", e.Kind))
 	default:
 		return holdOff(fmt.Sprintf("unhandled event type %q", e.Type))
 	}

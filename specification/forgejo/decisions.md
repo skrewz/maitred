@@ -83,6 +83,7 @@ prompts:
 | review submitted (latest review is anything else) | hold off |
 | PR merged | unblock cascade (for the connected issue) |
 | PR closed without merging | hold off |
+| PR commented (open) | as reconcile — the sweep's logic: the re-fetched PR state decides the next action |
 | reconcile — open issue with the `ideation` label | `decompose`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue, no open blockers | `wrap-up`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue with open blockers | hold off, naming the open blockers — state calls for no action |
@@ -275,8 +276,10 @@ Three mechanisms, in this order:
 **Event** — type, the affected object (repo, kind, number), and the
 sender's login. The event types are: issue opened / edited / labels
 changed / commented / closed; PR opened / synced / reviewed / merged /
-closed; and the synthetic `reconcile` event of the reconciliation
-sweep.
+closed / commented; and the synthetic `reconcile` event of the
+reconciliation sweep. A general comment on a pull request arrives as
+`pull_request_comment` — the PR-side analogue of an issue comment — and
+decides as reconcile (§forgejo/decisions/transition-table).
 
 **State** — the re-fetched state of the affected object: the issue or
 PR itself; the issue's blockers (with their states) and its connected
