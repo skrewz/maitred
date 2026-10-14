@@ -46,6 +46,11 @@ type Issue struct {
 	State string
 	// Labels are the issue's label names.
 	Labels []string
+	// Author is the login of the user who opened the issue. The engine
+	// compares it with the configured decomposer identity, which is the
+	// only fact about a forest member that is true at the instant of its
+	// creation (§forgejo/decisions/loop-prevention).
+	Author string
 	// UpdatedAt is the issue's last update time; it serves as the issue's
 	// activity revision for the watermark (§forgejo/client/operations).
 	UpdatedAt time.Time
@@ -391,6 +396,7 @@ type wireIssue struct {
 	Title     string      `json:"title"`
 	State     string      `json:"state"`
 	Labels    []wireLabel `json:"labels"`
+	User      wireUser    `json:"user"` // the issue's author (§forgejo/decisions/loop-prevention)
 	UpdatedAt time.Time   `json:"updated_at"`
 	HTMLURL   string      `json:"html_url"`
 	// PullRequest is non-nil only when the issue is a pull request —
@@ -442,6 +448,7 @@ func toIssue(w wireIssue) Issue {
 		Title:     w.Title,
 		State:     w.State,
 		Labels:    labelNames(w.Labels),
+		Author:    w.User.Login,
 		UpdatedAt: w.UpdatedAt,
 		HTMLURL:   w.HTMLURL,
 		IsPull:    w.PullRequest != nil,

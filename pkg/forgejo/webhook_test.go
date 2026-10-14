@@ -2216,3 +2216,119 @@ func TestHandler_IssueClosed_CascadePROutOfRemit(t *testing.T) {
 		t.Errorf("watermark = %+v, want none", w)
 	}
 }
+
+// TestHandler_IssueOpened_DecomposerAuthoredHoldsOff: a forest member
+// the decomposer authored reaches the engine before its blocker edge is
+// attached, so the re-fetch sees no blockers — the authorship rule is
+// what keeps the engine from dispatching implement for unreleased work.
+// The hold-off is recorded in the decision log naming the authorship and
+// records no watermark (§forgejo/decisions/loop-prevention,
+// §forgejo/observability/the-decision-log).
+func TestHandler_IssueOpened_DecomposerAuthoredHoldsOff(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, q, store := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log, nil)))
+	eng.cfg.DecomposerIdentity = "decomposer"
+	member := testIssue(7, "open")
+	member.Author = "decomposer"
+	api.issues[7] = member
+
+	rec := serve(t, NewHandler(eng, "s3cret", nil), signedRequest(t, "s3cret", "issues", "opened", issuePayload("o/r", 7, "opened")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks for a decomposer-authored issue, want none", len(tasks))
+	}
+	entry := findEntry(t, parseLogLines(t, log.Bytes()), "decision")
+	reason, _ := entry["reason"].(string)
+	if !strings.Contains(reason, "authored by the decomposer") || !strings.Contains(reason, "decomposer") {
+		t.Errorf("hold-off reason = %q, want it to name the authorship", reason)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 7})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none", w)
+	}
+}
+
+// TestHandler_IssueOpened_OtherAuthorImplements: an issue authored by
+// anyone else, with no blockers and no connected PR, is an implement
+// candidate as before, identity configured or not
+// (§forgejo/decisions/loop-prevention).
+func TestHandler_IssueOpened_OtherAuthorImplements(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	eng.cfg.DecomposerIdentity = "decomposer"
+	member := testIssue(7, "open")
+	member.Author = "alice"
+	api.issues[7] = member
+
+	rec := serve(t, NewHandler(eng, "s3cret", nil), signedRequest(t, "s3cret", "issues", "opened", issuePayload("o/r", 7, "opened")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (implement for issue 7)", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=implement") {
+		t.Errorf("prompt = %q, want the implement action", tasks[0].Prompt)
+	}
+}
+
+// TestHandler_IssueOpened_AuthorshipRuleInertWithoutIdentity: with no
+// decomposer identity configured the rule is inert and a
+// decomposer-named author is an implement candidate as any other
+// (§forgejo/config/decomposer-identity, §forgejo/decisions/loop-prevention).
+func TestHandler_IssueOpened_AuthorshipRuleInertWithoutIdentity(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	member := testIssue(7, "open")
+	member.Author = "decomposer"
+	api.issues[7] = member
+
+	rec := serve(t, NewHandler(eng, "s3cret", nil), signedRequest(t, "s3cret", "issues", "opened", issuePayload("o/r", 7, "opened")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (the rule is inert with no identity configured)", len(tasks))
+	}
+}
+
+// TestHandler_IssueClosed_CascadeReleasesDecomposerAuthoredMember: the
+// cascade path is not narrowed by the authorship rule — the ideation
+// ticket closing dispatches implement for the member the decomposer
+// authored (§forgejo/decisions/loop-prevention,
+// §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadeReleasesDecomposerAuthoredMember(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	eng.cfg.DecomposerIdentity = "decomposer"
+	// Issue 7 (the ideation ticket, closed) blocks issue 10 (the member,
+	// authored by the decomposer); 10's only blocker is 7.
+	api.issues[7] = testIssue(7, "closed")
+	member := testIssue(10, "open")
+	member.Author = "decomposer"
+	api.issues[10] = member
+	api.blocks[7] = []Issue{*member}
+	api.deps[10] = []Issue{*testIssue(7, "closed")}
+
+	rec := serve(t, NewHandler(eng, "s3cret", nil), signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (implement for issue 10 from the cascade)", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "kind=issue number=10") {
+		t.Errorf("prompt = %q, want implement for issue 10", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 10})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w == nil || w.Action != string(ActionImplement) {
+		t.Errorf("cascade watermark = %+v, want implement", w)
+	}
+}

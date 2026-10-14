@@ -34,6 +34,14 @@ func closedIssue() *Issue {
 	return issue
 }
 
+// authoredIssue is an open issue authored by the given login
+// (§forgejo/decisions/loop-prevention).
+func authoredIssue(author string) *Issue {
+	issue := openIssue()
+	issue.Author = author
+	return issue
+}
+
 // labelledIssue is an open issue carrying the given labels
 // (§forgejo/decisions/transition-table).
 func labelledIssue(labels ...string) *Issue {
@@ -189,6 +197,43 @@ func TestDecide(t *testing.T) {
 			name:  "issue opened carrying outcome holds off",
 			event: issueEvent(EventIssueOpened),
 			state: State{Issue: labelledIssue("outcome")},
+		},
+		{
+			name:  "issue opened authored by the decomposer holds off",
+			event: issueEvent(EventIssueOpened),
+			state: State{Issue: authoredIssue("decomposer"), DecomposerIdentity: "decomposer"},
+		},
+		{
+			name:       "issue opened authored by anyone else dispatches implement",
+			event:      issueEvent(EventIssueOpened),
+			state:      State{Issue: authoredIssue("alice"), DecomposerIdentity: "decomposer"},
+			wantAction: ActionImplement,
+		},
+		{
+			name:       "issue opened authored by the decomposer with the identity unset dispatches implement",
+			event:      issueEvent(EventIssueOpened),
+			state:      State{Issue: authoredIssue("decomposer")},
+			wantAction: ActionImplement,
+		},
+		{
+			name:       "issue opened authored by a differently cased login dispatches implement",
+			event:      issueEvent(EventIssueOpened),
+			state:      State{Issue: authoredIssue("Decomposer"), DecomposerIdentity: "decomposer"},
+			wantAction: ActionImplement,
+		},
+		{
+			name:  "issue opened authored by the decomposer with closed blockers holds off",
+			event: issueEvent(EventIssueOpened),
+			state: State{
+				Issue:              authoredIssue("decomposer"),
+				Blockers:           []Issue{{Number: 3, State: "closed", Repository: "o/r"}},
+				DecomposerIdentity: "decomposer",
+			},
+		},
+		{
+			name:  "reconciled issue authored by the decomposer holds off",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: authoredIssue("decomposer"), DecomposerIdentity: "decomposer"},
 		},
 		{
 			name:  "issue opened without re-fetched state holds off",
@@ -1403,6 +1448,61 @@ func TestDecide_ReservedLabelHoldOffsNameTheLabel(t *testing.T) {
 				t.Errorf("hold-off reason = %q, want it to name %q and %q", d.Reason, label, tt.wantReason)
 			}
 		})
+	}
+}
+
+// TestDecide_DecomposerAuthorshipHoldOffNamesTheAuthorship pins the
+// authorship hold-off's reason on the event path and on the sweep: the
+// reason names the authorship that denied the action
+// (§forgejo/decisions/loop-prevention).
+func TestDecide_DecomposerAuthorshipHoldOffNamesTheAuthorship(t *testing.T) {
+	tests := []struct {
+		name  string
+		event Event
+		state State
+	}{
+		{
+			name:  "issue opened",
+			event: issueEvent(EventIssueOpened),
+			state: State{Issue: authoredIssue("decomposer"), DecomposerIdentity: "decomposer"},
+		},
+		{
+			name:  "reconcile — the sweep's synthetic current-state event",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: authoredIssue("decomposer"), DecomposerIdentity: "decomposer"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := Decide(tt.event, tt.state, nil)
+			if !d.HoldOff() {
+				t.Fatalf("decision = %+v, want a hold-off", d)
+			}
+			if !strings.Contains(d.Reason, "authored by the decomposer") || !strings.Contains(d.Reason, "decomposer") {
+				t.Errorf("hold-off reason = %q, want it to name the authorship and the identity", d.Reason)
+			}
+		})
+	}
+}
+
+// TestDecide_CascadeReleasesDecomposerAuthoredMember pins that the
+// authorship rule does not narrow the unblock cascade: the ideation
+// ticket closing releases the member the decomposer authored
+// (§forgejo/decisions/loop-prevention, §forgejo/decisions/unblock-cascade).
+func TestDecide_CascadeReleasesDecomposerAuthoredMember(t *testing.T) {
+	root := &IssueNode{
+		Issue: Issue{Number: 3, State: "closed", Repository: "o/r"},
+		Blocks: []IssueNode{
+			{
+				Issue:    Issue{Number: 7, State: "open", Repository: "o/r", Author: "decomposer"},
+				Blockers: []IssueNode{{Issue: Issue{Number: 3, State: "closed", Repository: "o/r"}}},
+			},
+		},
+	}
+	d := Decide(issueEvent(EventIssueClosed), State{Issue: closedIssue(), CascadeRoot: root, DecomposerIdentity: "decomposer"}, nil)
+	want := []Key{{Repo: "o/r", Kind: KindIssue, Number: 7}}
+	if !reflect.DeepEqual(d.Cascade, want) {
+		t.Errorf("cascade = %v, want %v (the cascade is not narrowed by authorship)", d.Cascade, want)
 	}
 }
 

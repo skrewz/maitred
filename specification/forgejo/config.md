@@ -40,8 +40,10 @@ The key is **optional**: with no identity configured, the authorship
 hold-off is inert and everything else works. An unset optional key is never
 a load error (§forgejo/config/validation). The key grants no privilege and
 admits nothing by itself — it only names the account that authorship
-decisions compare against. In a directory merge, files that set the key
-must agree, exactly as with the org; a conflict is a load error.
+decisions compare against, and where that comparison applies is the
+decision function's business (§forgejo/decisions/transition-table). In a
+directory merge, files that set the key must agree, exactly as with the
+org; a conflict is a load error.
 
 Why a config key and not a repository topic: topics mark *repositories*
 (the discovery vocabulary, exactly as `maitred-enabled` works), not users.

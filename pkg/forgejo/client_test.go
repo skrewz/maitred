@@ -278,6 +278,44 @@ func TestGetIssue_NotPull(t *testing.T) {
 	}
 }
 
+// TestGetIssue_Author pins that the issue's author is read from the
+// API's "user" object: authorship is the fact the decomposer-authorship
+// hold-off compares against (§forgejo/decisions/loop-prevention).
+func TestGetIssue_Author(t *testing.T) {
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		issue := issueJSON(48, "acme/maitred")
+		issue["user"] = map[string]any{"login": "decomposer"}
+		_ = json.NewEncoder(w).Encode(issue)
+	})
+
+	c := New(srv.URL, "test-token", nil)
+	issue, err := c.GetIssue("acme", "maitred", 48)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.Author != "decomposer" {
+		t.Errorf("Author = %q, want %q", issue.Author, "decomposer")
+	}
+}
+
+// TestGetIssue_AuthorAbsent pins that an issue payload without a
+// "user" object yields an empty author, which matches no configured
+// identity (§forgejo/decisions/loop-prevention).
+func TestGetIssue_AuthorAbsent(t *testing.T) {
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(issueJSON(48, "acme/maitred"))
+	})
+
+	c := New(srv.URL, "test-token", nil)
+	issue, err := c.GetIssue("acme", "maitred", 48)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.Author != "" {
+		t.Errorf("Author = %q, want empty", issue.Author)
+	}
+}
+
 func TestGetIssue_NotFound(t *testing.T) {
 	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
