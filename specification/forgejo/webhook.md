@@ -215,11 +215,16 @@ For each decision event, the re-fetch assembles the state
   the PR blocks, read from the issue-blocks surface, each carrying its
   own repository, which may differ from the PR's — and each issue's
   blockers as well: one hop per connected issue, no recursion, the input
-  to the `reject-pr` test (§forgejo/decisions/actions). Every non-PR
-  entry is resolved: the gate's decision is not left to the order the
-  listing happens to return. The hop is performed wherever the test
-  applies; the PR synced event grows no such read — the push path decides
-  without the test, and the next review submission or sweep applies it
+  both to the `reject-pr` test (§forgejo/decisions/actions) and to the
+  merge gate (§forgejo/decisions/merge-gate, §forgejo/decisions/inputs),
+  the latter consulted wherever a merge may be dispatched — the PR
+  reviewed event and the sweep's PR path. Every non-PR entry is
+  resolved: neither gate's decision is left to the order the listing
+  happens to return; a failed read fails the re-fetch — a hold-off
+  naming the failure, never "no blockers". The hop is performed wherever
+  the tests apply; the PR synced event grows no such read — the push path
+  decides without them, dispatches no merge, and the next review
+  submission or sweep applies them
   (§forgejo/decisions/transition-table). For PR merged, the blocker graph
   rooted at the connected issue — the non-PR issue the PR blocks.
 

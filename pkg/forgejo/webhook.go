@@ -202,32 +202,23 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		st := State{PR: pr}
 		switch ev.Type {
 		case EventPROpened, EventPRReviewed, EventReconcile:
-			// The reject-pr test's one hop, performed wherever the
-			// test applies (PR opened, PR reviewed, and the sweep's
+			// The one hop performed wherever the reject-pr test and the
+			// merge gate apply (PR opened, PR reviewed, and the sweep's
 			// synthetic current-state event): every non-PR issue the
 			// PR blocks — relationships recorded on the blocker graph
 			// rather than inferred from the PR body — and each issue's
 			// blockers, read from that issue's own repository, no
-			// recursion. Every non-PR entry is resolved: the test is not
+			// recursion. Every non-PR entry is resolved: neither test is
 			// left to API ordering. A failure to resolve any connected
 			// issue is a re-fetch failure — a hold-off naming the
 			// failure, never the path's default (§forgejo/webhook/re-
-			// fetch, §forgejo/decisions/actions).
-			blocks, err := e.api.IssueBlocks(owner, name, ev.Number)
+			// fetch, §forgejo/decisions/actions,
+			// §forgejo/decisions/merge-gate).
+			connected, err := e.connectedIssues(owner, name, ev.Number)
 			if err != nil {
 				return ev, State{}, err
 			}
-			for i := range blocks {
-				if blocks[i].IsPull {
-					continue
-				}
-				co, cn := splitRepo(blocks[i].Repository)
-				deps, err := e.api.IssueDependencies(co, cn, blocks[i].Number)
-				if err != nil {
-					return ev, State{}, err
-				}
-				st.ConnectedIssues = append(st.ConnectedIssues, ConnectedIssue{Issue: blocks[i], Blockers: deps})
-			}
+			st.ConnectedIssues = connected
 			fallthrough
 		case EventPRSynced:
 			reviews, err := e.api.ListPullRequestReviews(owner, name, ev.Number)
@@ -257,6 +248,33 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		return ev, st, nil
 	}
 	return ev, State{}, fmt.Errorf("unknown kind %q", ev.Kind)
+}
+
+// connectedIssues fetches the one hop shared by the reject-pr test and
+// the merge gate: every non-PR issue the PR blocks — its connected
+// issues — each carrying the issues that block it. The hop is read in
+// the connected issue's own repository (cross-repo aware), one hop per
+// connected issue, no recursion; a failed read fails the whole re-fetch
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/actions,
+// §forgejo/decisions/merge-gate).
+func (e *Engine) connectedIssues(owner, name string, number int) ([]ConnectedIssue, error) {
+	blocks, err := e.api.IssueBlocks(owner, name, number)
+	if err != nil {
+		return nil, err
+	}
+	var connected []ConnectedIssue
+	for i := range blocks {
+		if blocks[i].IsPull {
+			continue // only issues connect a PR to the graph this way
+		}
+		co, cn := splitRepo(blocks[i].Repository)
+		blockers, err := e.api.IssueDependencies(co, cn, blocks[i].Number)
+		if err != nil {
+			return nil, err
+		}
+		connected = append(connected, ConnectedIssue{Issue: blocks[i], Blockers: blockers})
+	}
+	return connected, nil
 }
 
 // graphNode builds the blocker-graph node for issue: its blocks, each
@@ -349,16 +367,19 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	return nil
 }
 
-// dispatchCascade dispatches implement for one key of the unblock
-// cascade, applying the key's own watermark first, so an
+// dispatchCascade dispatches the unblock cascade for one key: a newly
+// unblocked issue is dispatched implement, a released PR
+// merge-or-wait, each applying the key's own watermark first, so an
 // already-dispatched (action, revision) is not re-dispatched
 // (§forgejo/decisions/unblock-cascade). Admissibility is judged by the
 // roles of the repository holding the key, never the repository whose
-// closure rooted the cascade: implement requires the work-item role
-// (§forgejo/webhook/repository-roles). An issue carrying a reserved
-// label is never an implement candidate, cascade included
-// (§forgejo/decisions/transition-table).
+// closure rooted the cascade (§forgejo/webhook/repository-roles). An
+// issue carrying a reserved label is never an implement candidate,
+// cascade included (§forgejo/decisions/transition-table).
 func (e *Engine) dispatchCascade(k Key, sender string) error {
+	if k.Kind == KindPR {
+		return e.dispatchCascadePR(k, sender)
+	}
 	r, err := e.repoRoles(k.Repo)
 	if err != nil || !r.any() {
 		// A cascade key is tested the same way as the event path, and its
@@ -406,6 +427,66 @@ func (e *Engine) dispatchCascade(k Key, sender string) error {
 		return err
 	}
 	return e.store.Save(k, Watermark{Action: string(ActionImplement), Revision: rev})
+}
+
+// dispatchCascadePR dispatches the unblock cascade for a released PR
+// key (§forgejo/decisions/unblock-cascade): the closure that rooted
+// the cascade closed the last issue-side blocker of the PR's connected
+// issue, so the merge the gate held off now fires — merge-or-wait and
+// nothing else. Admission and admissibility are judged by the roles of
+// the repository holding the PR, never the repository whose closure
+// rooted the cascade (§forgejo/webhook/repository-roles), and the
+// re-fetched PR state decides: only a decision of merge-or-wait
+// dispatches — a PR not standing at an approved head, or whose gate
+// still sees an open blocker on re-fetch, stays silent and the sweep
+// is the backstop (§forgejo/decisions/merge-gate). The PR key's own
+// watermark applies before dispatching.
+func (e *Engine) dispatchCascadePR(k Key, sender string) error {
+	ev := Event{Type: EventPRReviewed, Repo: k.Repo, Kind: KindPR, Number: k.Number, Sender: sender}
+	r, err := e.repoRoles(k.Repo)
+	if err != nil || !r.any() {
+		held := holdOffOutOfRemit(k.Repo)
+		if err != nil {
+			held = holdOffScopeUnknown(k.Repo, err)
+		}
+		e.recordDecision(k, ev, State{}, held)
+		return nil
+	}
+	if !admissibleInRoles(ActionMergeOrWait, r) {
+		e.recordDecision(k, ev, State{}, holdOffActionInadmissible(ActionMergeOrWait, k.Repo))
+		return nil
+	}
+	owner, name := splitRepo(k.Repo)
+	pr, err := e.api.GetPullRequest(owner, name, k.Number)
+	if err != nil {
+		return err
+	}
+	if !prOpen(pr) {
+		return nil // closed or merged in the meantime: nothing to dispatch
+	}
+	reviews, err := e.api.ListPullRequestReviews(owner, name, k.Number)
+	if err != nil {
+		return err
+	}
+	connected, err := e.connectedIssues(owner, name, k.Number)
+	if err != nil {
+		return err
+	}
+	w, err := e.store.Load(k)
+	if err != nil {
+		e.log.Warn("load watermark (continuing without)", "key", k.String(), "error", err)
+		w = nil
+	}
+	// Insurance against the re-fetched state, through the same pure
+	// decision and the same gate the event path takes.
+	d := Decide(ev, State{PR: pr, Reviews: reviews, ConnectedIssues: connected}, w)
+	if d.Action != ActionMergeOrWait {
+		return nil
+	}
+	if err := e.dispatch(ev, State{PR: pr}, ActionMergeOrWait); err != nil {
+		return err
+	}
+	return e.store.Save(k, Watermark{Action: string(ActionMergeOrWait), Revision: pr.HeadSHA})
 }
 
 // revisionFor is the revision a dispatch's watermark records: the PR
