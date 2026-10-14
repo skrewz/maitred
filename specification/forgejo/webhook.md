@@ -96,7 +96,7 @@ name appears in the engine or its config:
 
 | role | topic | grants admissibility to |
 |---|---|---|
-| work-item source | `maitred-enabled` | `implement`, `reassess`, `review`, `re-review`, `rebase`, `fix-feedback`, `merge-or-wait` |
+| work-item source | `maitred-enabled` | `implement`, `reassess`, `review`, `re-review`, `rebase`, `fix-feedback`, `merge-or-wait`, `reject-pr` |
 | outcomes source | `maitred-outcomes-repo` | `decompose`, `wrap-up` |
 
 One organisation listing feeds every repository's roles
@@ -210,8 +210,18 @@ For each decision event, the re-fetch assembles the state
   "no blockers".
   For issue closed, the blocker graph rooted at the closed issue.
 - **PR events** — the PR itself, and its reviews, for the review
-  transitions. For PR merged, the blocker graph rooted at the connected
-  issue — the non-PR issue the PR blocks.
+  transitions. For PR opened, PR reviewed, and the sweep's synthetic
+  current-state event for a PR, the connected issues — the non-PR issues
+  the PR blocks, read from the issue-blocks surface, each carrying its
+  own repository, which may differ from the PR's — and each issue's
+  blockers as well: one hop per connected issue, no recursion, the input
+  to the `reject-pr` test (§forgejo/decisions/actions). Every non-PR
+  entry is resolved: the gate's decision is not left to the order the
+  listing happens to return. The hop is performed wherever the test
+  applies; the PR synced event grows no such read — the push path decides
+  without the test, and the next review submission or sweep applies it
+  (§forgejo/decisions/transition-table). For PR merged, the blocker graph
+  rooted at the connected issue — the non-PR issue the PR blocks.
 
 The blocker graph is re-fetched to the depth the unblock cascade walks:
 each closed block is followed, each open block is fetched with its

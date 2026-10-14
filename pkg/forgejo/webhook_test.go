@@ -97,6 +97,16 @@ type fakeAPI struct {
 	// (§forgejo/webhook/re-fetch).
 	depsErr error
 
+	// issueBlocksErr, when set, fails only IssueBlocks — so a test can
+	// break the connected-issue resolution without breaking the other
+	// re-fetches (§forgejo/webhook/re-fetch).
+	issueBlocksErr error
+
+	// issueDepsErr, when set, fails only IssueDependencies — so a test
+	// can break the blocker resolution of the connected issue alone
+	// (§forgejo/webhook/re-fetch).
+	issueDepsErr error
+
 	// GetIssue blocking hooks for the concurrency tests: GetIssue
 	// closes getIssueEntered (once) on entry, then waits on
 	// blockGetIssue when it is set.
@@ -232,6 +242,9 @@ func (f *fakeAPI) ListPullRequestReviews(owner, repo string, number int) ([]Revi
 
 func (f *fakeAPI) IssueBlocks(owner, repo string, number int) ([]Issue, error) {
 	f.record("IssueBlocks:" + repo + "/" + strconv.Itoa(number))
+	if f.issueBlocksErr != nil {
+		return nil, f.issueBlocksErr
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -240,6 +253,9 @@ func (f *fakeAPI) IssueBlocks(owner, repo string, number int) ([]Issue, error) {
 
 func (f *fakeAPI) IssueDependencies(owner, repo string, number int) ([]Issue, error) {
 	f.record("IssueDependencies:" + repo + "/" + strconv.Itoa(number))
+	if f.issueDepsErr != nil {
+		return nil, f.issueDepsErr
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -548,6 +564,45 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			want:    ActionRebase,
 		},
 		{
+			name:      "PR opened, connected issue blocked by an open ideation issue",
+			eventType: "pull_request", action: "opened",
+			payload: prPayload("o/r", 9, "opened"),
+			setup: func(api *fakeAPI) {
+				api.pulls[9] = testPR(9, "open", true)
+				api.blocks[9] = []Issue{*testIssue(4, "open")}
+				ideation := testIssue(1, "open")
+				ideation.Labels = []string{LabelIdeation}
+				api.deps[4] = []Issue{*ideation}
+			},
+			want: ActionRejectPR,
+		},
+		{
+			name:      "PR opened, not mergeable but blocked by an open ideation issue: reject-pr precedes rebase",
+			eventType: "pull_request", action: "opened",
+			payload: prPayload("o/r", 9, "opened"),
+			setup: func(api *fakeAPI) {
+				api.pulls[9] = testPR(9, "open", false)
+				api.blocks[9] = []Issue{*testIssue(4, "open")}
+				ideation := testIssue(1, "open")
+				ideation.Labels = []string{LabelIdeation}
+				api.deps[4] = []Issue{*ideation}
+			},
+			want: ActionRejectPR,
+		},
+		{
+			name:      "PR opened, connected issue blocked only by a closed ideation issue",
+			eventType: "pull_request", action: "opened",
+			payload: prPayload("o/r", 9, "opened"),
+			setup: func(api *fakeAPI) {
+				api.pulls[9] = testPR(9, "open", true)
+				api.blocks[9] = []Issue{*testIssue(4, "open")}
+				ideation := testIssue(1, "closed")
+				ideation.Labels = []string{LabelIdeation}
+				api.deps[4] = []Issue{*ideation}
+			},
+			want: ActionReview,
+		},
+		{
 			name:      "PR synced, no reviews",
 			eventType: "pull_request_sync", action: "synchronized",
 			payload: prPayload("o/r", 9, "synchronized"),
@@ -585,6 +640,34 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			setup: func(api *fakeAPI) {
 				api.pulls[9] = testPR(9, "open", true)
 				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved}}
+			},
+			want: ActionMergeOrWait,
+		},
+		{
+			name:      "PR reviewed, approved but the connected issue is blocked by an open ideation issue: reject-pr precedes merge-or-wait",
+			eventType: "pull_request_review_approved", action: "approved",
+			payload: prPayload("o/r", 9, "approved"),
+			setup: func(api *fakeAPI) {
+				api.pulls[9] = testPR(9, "open", true)
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved}}
+				api.blocks[9] = []Issue{*testIssue(4, "open")}
+				ideation := testIssue(1, "open")
+				ideation.Labels = []string{LabelIdeation}
+				api.deps[4] = []Issue{*ideation}
+			},
+			want: ActionRejectPR,
+		},
+		{
+			name:      "PR reviewed, approved, connected issue blocked only by a closed ideation issue",
+			eventType: "pull_request_review_approved", action: "approved",
+			payload: prPayload("o/r", 9, "approved"),
+			setup: func(api *fakeAPI) {
+				api.pulls[9] = testPR(9, "open", true)
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved}}
+				api.blocks[9] = []Issue{*testIssue(4, "open")}
+				ideation := testIssue(1, "closed")
+				ideation.Labels = []string{LabelIdeation}
+				api.deps[4] = []Issue{*ideation}
 			},
 			want: ActionMergeOrWait,
 		},
@@ -692,6 +775,279 @@ func TestHandler_IssueActivity_BlockersFetchFailureHoldsOff(t *testing.T) {
 	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 7})
 	if err != nil || w != nil {
 		t.Errorf("watermark recorded after the hold-off: %v, %v", w, err)
+	}
+}
+
+// TestHandler_RejectPR_ConnectedIssueFetchFailureHoldsOff pins that a
+// re-fetch which fails to resolve the connected issue holds off naming
+// the failure — never defaulting to review
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/actions).
+func TestHandler_RejectPR_ConnectedIssueFetchFailureHoldsOff(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	api.issueBlocksErr = errors.New("blocks unavailable")
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request", "opened", prPayload("o/r", 9, "opened")))
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want 204", rec.Code)
+	}
+	if n := api.callCount("IssueBlocks"); n != 1 {
+		t.Errorf("IssueBlocks called %d time(s), want 1: the delivery must reach the connected-issue resolution for this test to test it", n)
+	}
+	if len(q.all()) != 0 {
+		t.Errorf("task dispatched despite failed connected-issue re-fetch")
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark recorded after failed re-fetch: %+v", w)
+	}
+}
+
+// TestHandler_RejectPR_ConnectedIssueBlocksFetchFailureHoldsOff pins
+// the same hold-off when it is the connected issue's *blockers* whose
+// re-fetch fails (§forgejo/webhook/re-fetch).
+func TestHandler_RejectPR_ConnectedIssueBlocksFetchFailureHoldsOff(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	api.blocks[9] = []Issue{*testIssue(4, "open")}
+	api.issueDepsErr = errors.New("dependencies unavailable")
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request", "opened", prPayload("o/r", 9, "opened")))
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want 204", rec.Code)
+	}
+	if n := api.callCount("IssueDependencies"); n != 1 {
+		t.Errorf("IssueDependencies called %d time(s), want 1: the delivery must reach the blocker resolution for this test to test it", n)
+	}
+	if len(q.all()) != 0 {
+		t.Errorf("task dispatched despite failed blocker re-fetch")
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark recorded after failed re-fetch: %+v", w)
+	}
+}
+
+// TestHandler_PROpened_FetchesConnectedIssueOneHop pins the fetch
+// surface: PR opened fetches the connected issue's blockers exactly
+// once — one hop, no recursion — and PR synced fetches neither
+// (§forgejo/webhook/re-fetch).
+func TestHandler_PROpened_FetchesConnectedIssueOneHop(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	api.blocks[9] = []Issue{*testIssue(4, "open")}
+	ideation := testIssue(1, "open")
+	ideation.Labels = []string{LabelIdeation}
+	api.deps[4] = []Issue{*ideation}
+
+	serve(t, h, signedRequest(t, "s3cret", "pull_request", "opened", prPayload("o/r", 9, "opened")))
+	if len(q.all()) != 1 || !strings.Contains(q.all()[0].Prompt, "action="+string(ActionRejectPR)) {
+		t.Fatalf("want one reject-pr dispatch, got %+v", q.all())
+	}
+	if n := api.callCount("IssueBlocks"); n != 1 {
+		t.Errorf("IssueBlocks called %d time(s), want 1 (one hop, no recursion)", n)
+	}
+	if n := api.callCount("IssueDependencies:r/4"); n != 1 {
+		t.Errorf("IssueDependencies on the connected issue called %d time(s), want 1", n)
+	}
+}
+
+// TestHandler_PROpened_ConnectedIssueInAnotherRepo pins the cross-repo
+// half of the one hop: the connected issue's blockers are read from the
+// connected issue's own repository, not the event's. Cross-repo is the
+// normal shape of this data — the ideation blockers live in the outcomes
+// repository — so the split must not be lost silently
+// (§forgejo/webhook/re-fetch).
+func TestHandler_PROpened_ConnectedIssueInAnotherRepo(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	connected := testIssue(4, "open")
+	connected.Repository = "o/outcomes"
+	api.blocks[9] = []Issue{*connected}
+	ideation := testIssue(1, "open")
+	ideation.Repository = "o/outcomes"
+	ideation.Labels = []string{LabelIdeation}
+	api.deps[4] = []Issue{*ideation}
+
+	serve(t, h, signedRequest(t, "s3cret", "pull_request", "opened", prPayload("o/r", 9, "opened")))
+	if len(q.all()) != 1 || !strings.Contains(q.all()[0].Prompt, "action="+string(ActionRejectPR)) {
+		t.Fatalf("want one reject-pr dispatch, got %+v", q.all())
+	}
+	if n := api.callCount("IssueDependencies:outcomes/4"); n != 1 {
+		t.Errorf("IssueDependencies on the connected issue's own repo called %d time(s), want 1: the hop must read the connected issue's repository, not the event's", n)
+	}
+	if n := api.callCount("IssueDependencies:r/4"); n != 0 {
+		t.Errorf("IssueDependencies on the event's repo called %d time(s), want 0", n)
+	}
+}
+
+// TestHandler_PROpened_TestsEveryConnectedIssue pins the re-fetch
+// surface when a PR blocks several non-PR issues: every non-PR entry is
+// resolved with its blockers — one hop each, once per issue — so the
+// reject-pr decision cannot depend on the order the API returned the
+// relationships in (§forgejo/webhook/re-fetch).
+func TestHandler_PROpened_TestsEveryConnectedIssue(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	first := testIssue(4, "open")
+	second := testIssue(5, "open")
+	second.Repository = "o/outcomes"
+	api.blocks[9] = []Issue{*first, *second}
+	api.deps[4] = []Issue{*testIssue(1, "open")} // ordinary unlabelled blocker
+	ideation := testIssue(2, "open")
+	ideation.Repository = "o/outcomes"
+	ideation.Labels = []string{LabelIdeation}
+	api.deps[5] = []Issue{*ideation}
+
+	serve(t, h, signedRequest(t, "s3cret", "pull_request", "opened", prPayload("o/r", 9, "opened")))
+	if len(q.all()) != 1 || !strings.Contains(q.all()[0].Prompt, "action="+string(ActionRejectPR)) {
+		t.Fatalf("want one reject-pr dispatch, got %+v", q.all())
+	}
+	if n := api.callCount("IssueBlocks"); n != 1 {
+		t.Errorf("IssueBlocks called %d time(s), want 1", n)
+	}
+	if n := api.callCount("IssueDependencies:r/4"); n != 1 {
+		t.Errorf("IssueDependencies on the first connected issue called %d time(s), want 1", n)
+	}
+	if n := api.callCount("IssueDependencies:outcomes/5"); n != 1 {
+		t.Errorf("IssueDependencies on the second connected issue called %d time(s), want 1", n)
+	}
+	if n := api.callCount("IssueDependencies:outcomes/2"); n != 0 {
+		t.Errorf("IssueDependencies on a connected issue's blocker called %d time(s), want 0: one hop per connected issue, no recursion", n)
+	}
+}
+
+func TestHandler_PRSynced_DoesNotFetchConnectedIssue(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+
+	serve(t, h, signedRequest(t, "s3cret", "pull_request_sync", "synchronized", prPayload("o/r", 9, "synchronized")))
+	if len(q.all()) != 1 || !strings.Contains(q.all()[0].Prompt, "action="+string(ActionReview)) {
+		t.Fatalf("want one review dispatch, got %+v", q.all())
+	}
+	if n := api.callCount("IssueBlocks"); n != 0 {
+		t.Errorf("IssueBlocks called %d time(s) on PR sync, want 0: the reject-pr hop is PR opened, PR reviewed and the sweep, not a sync", n)
+	}
+}
+
+// TestHandler_PRReviewed_FetchesConnectedIssueOneHop pins the fetch
+// surface of the review path: a PR-reviewed delivery performs the
+// reject-pr hop — one IssueBlocks, one IssueDependencies per connected
+// issue, no recursion — so the test is fed where it now applies
+// (§forgejo/webhook/re-fetch).
+func TestHandler_PRReviewed_FetchesConnectedIssueOneHop(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved}}
+	api.blocks[9] = []Issue{*testIssue(4, "open")}
+	ideation := testIssue(1, "open")
+	ideation.Labels = []string{LabelIdeation}
+	api.deps[4] = []Issue{*ideation}
+
+	serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
+	if len(q.all()) != 1 || !strings.Contains(q.all()[0].Prompt, "action="+string(ActionRejectPR)) {
+		t.Fatalf("want one reject-pr dispatch, got %+v", q.all())
+	}
+	if n := api.callCount("IssueBlocks"); n != 1 {
+		t.Errorf("IssueBlocks called %d time(s), want 1 (one hop, no recursion)", n)
+	}
+	if n := api.callCount("IssueDependencies:r/4"); n != 1 {
+		t.Errorf("IssueDependencies on the connected issue called %d time(s), want 1", n)
+	}
+	if n := api.callCount("IssueDependencies:r/1"); n != 0 {
+		t.Errorf("IssueDependencies on the blocker called %d time(s), want 0: one hop, no recursion", n)
+	}
+}
+
+// TestHandler_PRReviewed_ConnectedIssueFetchFailureHoldsOff pins the
+// fail-closed hold-off on the review path: a failed hop read holds the
+// PR open naming the failure, never defaulting into the
+// review-following decisions (§forgejo/webhook/re-fetch).
+func TestHandler_PRReviewed_ConnectedIssueFetchFailureHoldsOff(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved}}
+	api.issueBlocksErr = errors.New("blocks unavailable")
+
+	serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
+	if n := api.callCount("IssueBlocks"); n != 1 {
+		t.Errorf("IssueBlocks called %d time(s), want 1: the delivery must reach the hop for this test to test it", n)
+	}
+	if len(q.all()) != 0 {
+		t.Errorf("task dispatched despite failed connected-issue re-fetch: %+v", q.all())
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark recorded after failed re-fetch: %+v", w)
+	}
+}
+
+// TestHandler_ReconcilePR_FetchesConnectedIssueOneHop pins the sweep
+// half of the hop: the sweep's synthetic current-state event for a PR
+// performs the same one hop, so the gate is fed before the sweep's
+// review-following and synced-like branches
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/transition-table).
+func TestHandler_ReconcilePR_FetchesConnectedIssueOneHop(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	api.repos = []Repository{testRepo("o/r")}
+	api.pulls[9] = testPR(9, "open", true)
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: testPR(9, "open", true).HeadSHA}}
+	api.blocks[9] = []Issue{*testIssue(4, "open")}
+	ideation := testIssue(1, "open")
+	ideation.Labels = []string{LabelIdeation}
+	api.deps[4] = []Issue{*ideation}
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	if len(q.all()) != 1 || !strings.Contains(q.all()[0].Prompt, "action="+string(ActionRejectPR)) {
+		t.Fatalf("want one reject-pr dispatch, got %+v", q.all())
+	}
+	if n := api.callCount("IssueBlocks"); n != 1 {
+		t.Errorf("IssueBlocks called %d time(s), want 1 (one hop, no recursion)", n)
+	}
+	if n := api.callCount("IssueDependencies:r/4"); n != 1 {
+		t.Errorf("IssueDependencies on the connected issue called %d time(s), want 1", n)
+	}
+}
+
+// TestHandler_PRLabelDelivery_NeverRejects pins that a label delivery
+// stays cheaply ignored even amid the full reject-pr fixtures: it must
+// not reach the decision, no re-fetch, no dispatch
+// (§forgejo/webhook/event-mapping, §forgejo/decisions/actions).
+func TestHandler_PRLabelDelivery_NeverRejects(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	api.blocks[9] = []Issue{*testIssue(4, "open")}
+	ideation := testIssue(1, "open")
+	ideation.Labels = []string{LabelIdeation}
+	api.deps[4] = []Issue{*ideation}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_label", "labeled", prPayload("o/r", 9, "labeled")))
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want 204", rec.Code)
+	}
+	if len(api.calls) != 0 {
+		t.Errorf("client called for ignored label delivery: %v", api.calls)
+	}
+	if len(q.all()) != 0 {
+		t.Errorf("task dispatched for ignored label delivery")
 	}
 }
 
