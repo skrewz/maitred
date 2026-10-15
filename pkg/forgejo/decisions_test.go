@@ -189,15 +189,12 @@ func TestDecide(t *testing.T) {
 			state: State{Issue: labelledIssue(LabelHumanTask)},
 		},
 		{
-			name:       "issue opened carrying ideation dispatches decompose",
+			// The ideation branch is evaluated before the connected-PR
+			// check: a root is decomposed whatever else hangs off it.
+			name:       "an open ideation root with a connected open PR dispatches decompose",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: labelledIssue("ideation")},
+			state:      State{Issue: ideationIssue(), ConnectedPRs: []PullRequest{*openPR("abc")}},
 			wantAction: ActionDecompose,
-		},
-		{
-			name:  "issue opened carrying outcome holds off",
-			event: issueEvent(EventIssueOpened),
-			state: State{Issue: labelledIssue("outcome")},
 		},
 		{
 			name:  "issue opened authored by the decomposer holds off",
@@ -1062,6 +1059,16 @@ func TestDecide(t *testing.T) {
 			name:       "an ideation label takes precedence over outcome on the event path",
 			event:      issueEvent(EventIssueOpened),
 			state:      State{Issue: labelledIssue(LabelOutcome, LabelIdeation)},
+			wantAction: ActionDecompose,
+		},
+		{
+			name:  "an ideation root authored by the decomposer dispatches decompose",
+			event: issueEvent(EventIssueOpened),
+			state: State{Issue: func() *Issue {
+				i := ideationIssue()
+				i.Author = "decomposer"
+				return i
+			}(), DecomposerIdentity: "decomposer"},
 			wantAction: ActionDecompose,
 		},
 		{
