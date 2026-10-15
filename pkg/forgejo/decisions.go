@@ -21,8 +21,11 @@ const (
 	ActionFixFeedback Action = "fix-feedback"
 	ActionMergeOrWait Action = "merge-or-wait"
 	ActionRebase      Action = "rebase"
-	// ActionDecompose and ActionWrapUp are the watermark-exempt
-	// actions: their watermark is the state, not the revision
+	// ActionDecompose and ActionWrapUp are the actions the sweep's
+	// watermark-exempt rows dispatch, where the state is the
+	// watermark. On the event path decompose has rows of its own,
+	// under the ordinary revision-keyed guard — the exemption
+	// belongs to the sweep's rows, not to the action
 	// (§forgejo/reconciliation/watermark-exemptions).
 	ActionDecompose Action = "decompose"
 	ActionWrapUp    Action = "wrap-up"

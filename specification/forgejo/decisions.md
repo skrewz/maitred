@@ -76,7 +76,7 @@ prompts:
 | issue opened (open, all blockers closed, no connected PR) | `implement` |
 | issue opened (open, authored by the configured decomposer identity) | hold off — the reason names the authorship; only the unblock cascade unblocks it |
 | issue opened (blocked, or a connected open PR, or not open) | hold off |
-| issue opened / edited / labels changed (issue open, carries the `ideation` label) | `decompose` — the label makes the root, whatever the repository and the title; attaching the label is the *first* trigger. The event path keeps the revision-keyed watermark guard; the sweep is watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
+| issue opened / edited / labels changed (issue open, carries the `ideation` label) | `decompose` — the label makes the root, whatever the repository, the title, and the author (the root row wins over the authorship row); attaching the label is the *first* trigger. The event path keeps the revision-keyed watermark guard; the sweep is watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | issue comment (issue open, carries the `ideation` label) | hold off — a comment is not a revision of intent; the reason says so |
 | issue opened / edited / labels changed / comment (issue carries the `outcome` or `human-task` label) | hold off, naming the label — the sweep is where `wrap-up` fires (§forgejo/reconciliation/watermark-exemptions) |
 | issue edited / labels changed / feedback comment (issue open, all blockers closed) | `reassess` |
@@ -164,14 +164,17 @@ is not a revision of intent, so a comment on an open root holds off.
 A root that is closed on re-fetch holds off on every row: closing it is
 the release gate, and the unblock cascade dispatches the forest members.
 The `outcome` and `human-task` labels keep their hold-offs, naming the
-label. The `human-task` label marks a ticket claimed by a human: it is
-never an
-`implement` candidate anywhere in the engine, the unblock cascade
-included (§forgejo/decisions/unblock-cascade). The role model
+label: the `human-task` label marks a ticket claimed by a human and is
+never an `implement` candidate anywhere in the engine, the unblock
+cascade included (§forgejo/decisions/unblock-cascade). The role model
 (§forgejo/webhook/repository-roles) is the load-bearing boundary; this
 rule is insurance. When an issue carries `ideation` alongside another
 reserved label, `decompose` wins: a root is decomposed before anything
-else is decided for it.
+else is decided for it — a `human-task` claim on a root withholds
+`implement`, not `decompose`, since decomposition is precisely the work
+a human may have claimed on a root. The root row likewise wins over the
+authorship hold-off: a root authored by the configured decomposer
+identity is still decomposed.
 
 Activity on a **blocked** issue — an edit, a label change, a comment on
 an issue with an open blocker — has nothing to reassess: the work is
