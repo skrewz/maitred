@@ -201,9 +201,10 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		}
 		st := State{PR: pr}
 		switch ev.Type {
-		case EventPROpened, EventPRReviewed, EventReconcile:
+		case EventPROpened, EventPRReviewed, EventPRCommented, EventReconcile:
 			// The one hop performed wherever the reject-pr test and the
-			// merge gate apply (PR opened, PR reviewed, and the sweep's
+			// merge gate apply (PR opened, PR reviewed, PR commented —
+			// which decides as the sweep's PR path — and the sweep's
 			// synthetic current-state event): every non-PR issue the
 			// PR blocks — relationships recorded on the blocker graph
 			// rather than inferred from the PR body — and each issue's
@@ -683,6 +684,13 @@ func mapEvent(eventType string, p wireEvent) (Event, bool) {
 		}
 	case "pull_request_review_approved", "pull_request_review_rejected", "pull_request_review_comment":
 		return pr(EventPRReviewed)
+	case "pull_request_comment":
+		// General comments on a PR arrive as pull_request_comment,
+		// distinct from issue_comment (issues only) and
+		// pull_request_review_comment (inline review comments).
+		if p.Action == "created" {
+			return pr(EventPRCommented)
+		}
 	}
 	return Event{}, false
 }

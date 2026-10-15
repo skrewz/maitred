@@ -188,12 +188,13 @@ wherever it is made (§forgejo/observability/the-decision-log).
 | `pull_request_review_approved` | — | PR reviewed |
 | `pull_request_review_rejected` | — | PR reviewed |
 | `pull_request_review_comment` | — | PR reviewed |
+| `pull_request_comment` | `created` | PR commented |
 
 Everything else — push, create, delete, fork, release, wiki, package,
-workflows, `issue_assign`, `issue_milestone`, `pull_request_comment`,
-`pull_request_assign`, `pull_request_label`, `pull_request_milestone`,
-`pull_request_review_request`, and any `issues` or `pull_request` action
-not listed (e.g. `reopened`) — is ignored.
+workflows, `issue_assign`, `issue_milestone`, `pull_request_assign`,
+`pull_request_label`, `pull_request_milestone`, `pull_request_review_request`,
+and any `issues` or `pull_request` action not listed (e.g. `reopened`) — is
+ignored.
 
 ## Re-fetch
 
@@ -210,7 +211,8 @@ For each decision event, the re-fetch assembles the state
   "no blockers".
   For issue closed, the blocker graph rooted at the closed issue.
 - **PR events** — the PR itself, and its reviews, for the review
-  transitions. For PR opened, PR reviewed, and the sweep's synthetic
+  transitions and for PR comments (which decide as reconcile). For PR
+  opened, PR reviewed, PR commented, and the sweep's synthetic
   current-state event for a PR, the connected issues — the non-PR issues
   the PR blocks, read from the issue-blocks surface, each carrying its
   own repository, which may differ from the PR's — and each issue's
@@ -218,13 +220,13 @@ For each decision event, the re-fetch assembles the state
   both to the `reject-pr` test (§forgejo/decisions/actions) and to the
   merge gate (§forgejo/decisions/merge-gate, §forgejo/decisions/inputs),
   the latter consulted wherever a merge may be dispatched — the PR
-  reviewed event and the sweep's PR path. Every non-PR entry is
-  resolved: neither gate's decision is left to the order the listing
-  happens to return; a failed read fails the re-fetch — a hold-off
-  naming the failure, never "no blockers". The hop is performed wherever
-  the tests apply; the PR synced event grows no such read — the push path
-  decides without them, dispatches no merge, and the next review
-  submission or sweep applies them
+  reviewed event and the sweep's PR path (which PR commented also
+  decides as). Every non-PR entry is resolved: neither gate's decision is
+  left to the order the listing happens to return; a failed read fails
+  the re-fetch — a hold-off naming the failure, never "no blockers". The
+  hop is performed wherever the tests apply; the PR synced event grows no
+  such read — the push path decides without them, dispatches no merge,
+  and the next review submission, PR comment or sweep applies them
   (§forgejo/decisions/transition-table). For PR merged, the blocker graph
   rooted at the connected issue — the non-PR issue the PR blocks.
 

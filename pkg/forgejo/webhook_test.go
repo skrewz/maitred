@@ -456,7 +456,7 @@ func TestHandler_IgnoresUnmappedEvents(t *testing.T) {
 		{"issues", "deleted"},
 		{"pull_request", "reopened"},
 		{"pull_request", "edited"},
-		{"pull_request_comment", "created"},
+		{"pull_request_comment", "deleted"},
 		{"pull_request_assign", "created"},
 		{"pull_request_label", "labeled"},
 		{"pull_request_milestone", "created"},
@@ -705,6 +705,69 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			payload: prPayload("o/r", 9, "closed"),
 			setup:   func(api *fakeAPI) { api.pulls[9] = testPR(9, "closed", true) },
 			want:    "",
+		},
+		{
+			// A comment on a PR decides as the reconcile sweep does
+			// (§forgejo/decisions/transition-table).
+			name:      "PR commented, standing at an approved review",
+			eventType: "pull_request_comment", action: "created",
+			payload: prPayload("o/r", 9, "created"),
+			setup: func(api *fakeAPI) {
+				api.pulls[9] = testPR(9, "open", true)
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9", SubmittedAt: testUpdatedAt}}
+			},
+			want: ActionMergeOrWait,
+		},
+		{
+			name:      "PR commented, standing at a changes-requested review",
+			eventType: "pull_request_comment", action: "created",
+			payload: prPayload("o/r", 9, "created"),
+			setup: func(api *fakeAPI) {
+				api.pulls[9] = testPR(9, "open", true)
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewChangesRequested, CommitID: "sha-9", SubmittedAt: testUpdatedAt}}
+			},
+			want: ActionFixFeedback,
+		},
+		{
+			name:      "PR commented, standing at a comment review",
+			eventType: "pull_request_comment", action: "created",
+			payload: prPayload("o/r", 9, "created"),
+			setup: func(api *fakeAPI) {
+				api.pulls[9] = testPR(9, "open", true)
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewComment, CommitID: "sha-9", SubmittedAt: testUpdatedAt}}
+			},
+			want: ActionFixFeedback,
+		},
+		{
+			name:      "PR commented, no reviews",
+			eventType: "pull_request_comment", action: "created",
+			payload: prPayload("o/r", 9, "created"),
+			setup:   func(api *fakeAPI) { api.pulls[9] = testPR(9, "open", true) },
+			want:    ActionReview,
+		},
+		{
+			name:      "PR commented, not mergeable",
+			eventType: "pull_request_comment", action: "created",
+			payload: prPayload("o/r", 9, "created"),
+			setup:   func(api *fakeAPI) { api.pulls[9] = testPR(9, "open", false) },
+			want:    ActionRebase,
+		},
+		{
+			name:      "PR commented, closed on re-fetch, hold off",
+			eventType: "pull_request_comment", action: "created",
+			payload: prPayload("o/r", 9, "created"),
+			setup:   func(api *fakeAPI) { api.pulls[9] = testPR(9, "closed", true) },
+			want:    "",
+		},
+		{
+			name:      "PR commented, latest review predates the head",
+			eventType: "pull_request_comment", action: "created",
+			payload: prPayload("o/r", 9, "created"),
+			setup: func(api *fakeAPI) {
+				api.pulls[9] = testPR(9, "open", true)
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewComment, CommitID: "stale-sha", SubmittedAt: testUpdatedAt}}
+			},
+			want: ActionReReview,
 		},
 	}
 
@@ -1760,6 +1823,11 @@ func TestMapEvent(t *testing.T) {
 		{
 			"pull_request_review_comment", "created", prPayload("o/r", 9, "created"),
 			Event{Type: EventPRReviewed, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"},
+			true,
+		},
+		{
+			"pull_request_comment", "created", prPayload("o/r", 9, "created"),
+			Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"},
 			true,
 		},
 		{"push", "", map[string]any{}, Event{}, false},
