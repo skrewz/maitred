@@ -919,9 +919,49 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionWrapUp,
 		},
 		{
-			name:  "reconcile outcome tracker with an open blocker holds off",
+			name:  "reconcile outcome tracker with an open blocker and no ideation blocker holds off",
 			event: issueEvent(EventReconcile),
 			state: State{Issue: trackerIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
+		},
+		// A released forest stays under curation: closing the ideation issue
+		// removes the root from the sweep's enumeration, so the tracker's own
+		// row carries the curation until the forest is finished
+		// (§forgejo/reconciliation/watermark-exemptions).
+		{
+			name:  "reconcile released unfinished tracker dispatches decompose",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: trackerIssue(), Blockers: []Issue{
+				{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
+				{Number: 8, State: "open", Repository: "o/r"},
+			}},
+			wantAction: ActionDecompose,
+		},
+		{
+			name:  "reconcile re-fires decompose for a released tracker already dispatched at an unchanged revision",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: trackerIssue(), Blockers: []Issue{
+				{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
+				{Number: 8, State: "open", Repository: "o/r"},
+			}},
+			watermark:  &Watermark{Action: "decompose", Revision: testRev},
+			wantAction: ActionDecompose,
+		},
+		{
+			name:  "reconcile unreleased tracker holds off naming its open root",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: trackerIssue(), Blockers: []Issue{
+				{Number: 3, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}},
+				{Number: 8, State: "open", Repository: "o/r"},
+			}},
+		},
+		{
+			name:  "reconcile fully unblocked tracker whose release edge is closed dispatches wrap-up",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: trackerIssue(), Blockers: []Issue{
+				{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
+				{Number: 8, State: "closed", Repository: "o/r"},
+			}},
+			wantAction: ActionWrapUp,
 		},
 		{
 			name:  "reconcile outcome tracker closed on re-fetch holds off",

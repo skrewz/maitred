@@ -254,15 +254,17 @@ func Decide(e Event, s State, w *Watermark) Decision {
 // current-state event for an issue. The watermark-exempt rows come
 // first, and they are the exemption: unlike every other path, they
 // decide without consulting the watermark, so an open ideation root
-// dispatches decompose and an open, fully unblocked outcome tracker
+// dispatches decompose, an open outcome tracker released by a closed root
+// dispatches decompose too, and an open, fully unblocked outcome tracker
 // dispatches wrap-up, revision notwithstanding — state is the watermark
-// (§forgejo/reconciliation/watermark-exemptions). These two rows are
-// the exempt set: the exemption is scoped to the sweep, and an exempt
-// action reached from an event keeps the revision-keyed guard like any
-// other action. A blocked tracker holds off naming its open blockers, so
-// the decision log reads "state calls for no action", never "already
-// dispatched at this revision". An issue carrying neither reserved label
-// decides as issue opened (§forgejo/decisions/transition-table).
+// (§forgejo/reconciliation/watermark-exemptions). These rows are the exempt
+// set: the exemption is scoped to the sweep, and an exempt action reached
+// from an event keeps the revision-keyed guard like any other action. A
+// tracker holds off only when there is nothing to curate — unreleased, so its
+// root's row is the pulse, or gated by no root at all — and the reason names
+// that fact, so the decision log reads "state calls for no action", never
+// "already dispatched at this revision". An issue carrying neither reserved
+// label decides as issue opened (§forgejo/decisions/transition-table).
 func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 	issue := s.Issue
 	if issue == nil || issue.State != "open" {
@@ -276,7 +278,18 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 	}
 	if hasLabel(issue, LabelOutcome) {
 		if open := openBlockers(s.Blockers); len(open) > 0 {
-			return holdOff(fmt.Sprintf("issue %d is an open %s tracker blocked by %d open issue(s); state calls for no action", issue.Number, LabelOutcome, len(open)))
+			// A released forest stays under curation: closing the root removes
+			// it from the sweep's enumeration of open issues, so the tracker's
+			// own row carries the curation until the forest is finished
+			// (§forgejo/reconciliation/watermark-exemptions).
+			gate := ideationGate(s.Blockers)
+			if gate == nil {
+				return holdOff(fmt.Sprintf("issue %d is an open %s tracker blocked by %d open issue(s) and gated by no %s issue; state calls for no action", issue.Number, LabelOutcome, len(open), LabelIdeation))
+			}
+			if gate.State == "open" {
+				return holdOff(fmt.Sprintf("issue %d is an open %s tracker whose %s root %d is still open; its own row carries the curation", issue.Number, LabelOutcome, LabelIdeation, gate.Number))
+			}
+			return dispatch(ActionDecompose, fmt.Sprintf("issue %d is an open %s tracker released by %s %d and still blocked by %d open issue(s); the state calls for decompose regardless of revision %s", issue.Number, LabelOutcome, LabelIdeation, gate.Number, len(open), issueRevision(issue)))
 		}
 		return dispatch(ActionWrapUp, fmt.Sprintf("issue %d is an open, fully unblocked %s tracker; the state calls for wrap-up regardless of revision %s", issue.Number, LabelOutcome, issueRevision(issue)))
 	}
@@ -660,6 +673,24 @@ func allClosed(blockers []IssueNode) bool {
 		}
 	}
 	return true
+}
+
+// ideationGate returns the issue gating an issue's release: the first
+// blocker carrying the reserved ideation label, or nil when no blocker
+// carries it. A tracker is gated one hop away because it is a member like
+// any other and carries the membership edge from its root — the engine never
+// walks a graph to find a release gate. A closed gate is a released forest;
+// an open one is not (§forgejo/reconciliation/watermark-exemptions).
+func ideationGate(blockers []Issue) *Issue {
+	for i := range blockers {
+		if blockers[i].IsPull {
+			continue // a pull request is a delivery vehicle, never a root
+		}
+		if hasLabel(&blockers[i], LabelIdeation) {
+			return &blockers[i]
+		}
+	}
+	return nil
 }
 
 // openBlockers returns the blockers that are still open.
