@@ -83,7 +83,7 @@ while the prior task is still pending).
 
 | Exempt action | The state that calls for it (on reconcile) |
 |---|---|
-| `decompose` | the issue is open and carries the `ideation` label |
+| `decompose` | the issue is open and carries the `ideation` label, or it is open, carries the `outcome` label, has an open blocker, and the `ideation` issue it is blocked by is closed |
 | `wrap-up` | the issue is open, carries the `outcome` label, and has no open blockers |
 
 `ideation` and `outcome` are reserved label names, not configuration.
@@ -126,5 +126,26 @@ cost should read the re-firing as the mechanism working, not as a fault.
 
 The two rows are not symmetric, and not by oversight: `wrap-up` waits
 for the tracker's blockers to close, because wrapping up means
-collecting finished work; `decompose` consults no blockers, because a
-root is a root whatever blocks it.
+collecting finished work; `decompose` on a root consults no blockers,
+because a root is a root whatever blocks it.
+
+`decompose` has a second row, on the **tracker**, and it is what keeps a
+forest alive after its release. Closing the ideation issue is the release
+gesture, and it also removes the root from the sweep's enumeration of open
+issues: were the root the only trigger, curation would end the moment the
+human authorised the work — while the work is exactly what reports the
+discoveries a forest must absorb (a blocker nobody listed, a member that
+turned out to need another, a landing set whose membership has moved). So an
+open tracker that is still blocked is decomposed too, **provided its release
+gate has opened**: the `ideation` issue blocking it is closed. An open
+tracker blocked by an **open** `ideation` issue holds off instead, naming
+that root, because the root's own row is already dispatching the same curation
+and a forest is curated once per sweep. A blocked tracker with no `ideation`
+blocker at all holds off naming that absence: a tracker not gated by a root is
+not a forest's tracker, and the engine does not guess which root it belongs to
+(§forgejo/decisions/transition-table).
+
+The test is one hop because the tracker's own blocker set is the forest, and
+the tracker is itself a member: it carries the membership edge from its root
+like every other member does. The engine reads that edge as the release gate;
+it never walks a graph to find one.

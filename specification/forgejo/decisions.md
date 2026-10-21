@@ -55,7 +55,7 @@ prompts:
 | `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review |
 | `merge-or-wait` | the PR's latest review approves **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's |
 | `rebase` | an open PR is not mergeable (conflicts) |
-| `decompose` | the reconciliation sweep finds an open issue carrying the `ideation` label — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
+| `decompose` | the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a released forest stays under curation until its tracker closes; watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | `reject-pr` | a PR is connected to unreleased work: a **connected issue** — any non-PR issue the PR blocks, every one being tested — is blocked by an **open** `ideation` issue; tested when a PR opens, when a review is submitted, and by the reconciliation sweep, ahead of every review, rebase, fix and merge decision; the prompt closes the PR, names the breach, and reports it |
 
@@ -87,7 +87,9 @@ prompts:
 | PR commented (open) | as reconcile — the sweep's logic: the re-fetched PR state decides the next action |
 | reconcile — open issue with the `ideation` label | `decompose`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue, no open blockers | `wrap-up`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
-| reconcile — open `outcome` issue with open blockers | hold off, naming the open blockers — state calls for no action |
+| reconcile — open `outcome` issue with open blockers, its `ideation` blocker closed | `decompose`, revision notwithstanding — the forest is released and unfinished, so curation continues (§forgejo/reconciliation/watermark-exemptions) |
+| reconcile — open `outcome` issue with open blockers, its `ideation` blocker open | hold off, naming the root — the forest is unreleased, and the root's own row is the pulse: a forest is curated once per sweep |
+| reconcile — open `outcome` issue with open blockers and no `ideation` blocker | hold off, naming the absence — a tracker not gated by a root is not a forest's tracker |
 | reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, `reject-pr` when a connected issue is blocked by an open `ideation` issue and otherwise as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate) |
 
 The **reject-pr test precedes the review and rebase rows** on every path
@@ -118,8 +120,9 @@ opening recorded no dependency has no connected issues and decides as
 before.
 
 When **any** connected issue is blocked by an **open** issue carrying
-the reserved `ideation` label — work whose release gate has not opened:
-an ideation issue closes only at wrap-up — the PR is work started before
+the reserved `ideation` label — work whose release gate has not opened: an
+ideation issue's closure *is* the release of its forest
+(§forgejo/reconciliation/watermark-exemptions) — the PR is work started before
 its release, and `reject-pr` is decided. The test applies to **every**
 connected issue, not just the first: any blocked connected issue is work
 started before its gate, so the decision does not depend on the order
