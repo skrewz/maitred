@@ -2101,9 +2101,9 @@ func TestHandler_ReconcilePR_ConnectedIssueBlockerHoldsOffMerge(t *testing.T) {
 	}
 }
 
-// --- The unblock cascade releases a held PR (§forgejo/decisions/unblock-cascade) ---------------
+// --- The unblock cascade unblocks a held PR (§forgejo/decisions/unblock-cascade) ---------------
 
-// cascadePRFixtures: closing issue 7 releases issue 10, whose only
+// cascadePRFixtures: closing issue 7 unblocks issue 10, whose only
 // remaining open blocker is its connected open PR 9.
 func cascadePRFixtures(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store, *bytes.Buffer) {
 	t.Helper()
@@ -2128,11 +2128,11 @@ func cascadePRFixtures(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store, *by
 	return eng, api, q, store, &log
 }
 
-// TestHandler_IssueClosed_CascadeReleasesConnectedPR: the closure of
+// TestHandler_IssueClosed_CascadeUnblocksConnectedPR: the closure of
 // the last issue-side blocker moves the connected PR — one
 // merge-or-wait dispatch, no implement for the issue, and the PR key's
 // watermark recorded (§forgejo/decisions/unblock-cascade).
-func TestHandler_IssueClosed_CascadeReleasesConnectedPR(t *testing.T) {
+func TestHandler_IssueClosed_CascadeUnblocksConnectedPR(t *testing.T) {
 	eng, _, q, store, _ := cascadePRFixtures(t)
 	h := NewHandler(eng, "s3cret", nil)
 
@@ -2241,7 +2241,7 @@ func TestHandler_IssueClosed_CascadePRFetchFailure(t *testing.T) {
 	}
 }
 
-// TestHandler_IssueClosed_CascadePRWatermarkHolds: a released PR whose
+// TestHandler_IssueClosed_CascadePRWatermarkHolds: a newly unblocked PR whose
 // watermark already records merge-or-wait at the current head is not
 // re-dispatched (§forgejo/decisions/unblock-cascade,
 // §forgejo/decisions/loop-prevention).
@@ -2259,7 +2259,7 @@ func TestHandler_IssueClosed_CascadePRWatermarkHolds(t *testing.T) {
 	}
 }
 
-// TestHandler_IssueClosed_CascadePROutOfRemit: a released PR in a
+// TestHandler_IssueClosed_CascadePROutOfRemit: a newly unblocked PR in a
 // repository holding no maitred role is a recorded hold-off on the
 // cascade key — admission is tested the same way as for issue keys
 // (§forgejo/webhook/repository-roles, §forgejo/observability/the-decision-log).
@@ -2288,9 +2288,10 @@ func TestHandler_IssueClosed_CascadePROutOfRemit(t *testing.T) {
 // TestHandler_IssueOpened_DecomposerAuthoredHoldsOff: a forest member
 // the decomposer authored reaches the engine before its blocker edge is
 // attached, so the re-fetch sees no blockers — the authorship rule is
-// what keeps the engine from dispatching implement for unreleased work.
-// The hold-off is recorded in the decision log naming the authorship and
-// records no watermark (§forgejo/decisions/loop-prevention,
+// what keeps the engine from dispatching implement for work that is not
+// yet commissioned. The hold-off is recorded in the decision log naming
+// the authorship and records no watermark
+// (§forgejo/decisions/loop-prevention,
 // §forgejo/observability/the-decision-log).
 func TestHandler_IssueOpened_DecomposerAuthoredHoldsOff(t *testing.T) {
 	var log bytes.Buffer
@@ -2364,12 +2365,12 @@ func TestHandler_IssueOpened_AuthorshipRuleInertWithoutIdentity(t *testing.T) {
 	}
 }
 
-// TestHandler_IssueClosed_CascadeReleasesDecomposerAuthoredMember: the
+// TestHandler_IssueClosed_CascadeUnblocksDecomposerAuthoredMember: the
 // cascade path is not narrowed by the authorship rule — the ideation
 // ticket closing dispatches implement for the member the decomposer
 // authored (§forgejo/decisions/loop-prevention,
 // §forgejo/decisions/unblock-cascade).
-func TestHandler_IssueClosed_CascadeReleasesDecomposerAuthoredMember(t *testing.T) {
+func TestHandler_IssueClosed_CascadeUnblocksDecomposerAuthoredMember(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
 	eng.cfg.DecomposerIdentity = "decomposer"
 	// Issue 7 (the ideation ticket, closed) blocks issue 10 (the member,

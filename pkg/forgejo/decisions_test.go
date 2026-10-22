@@ -923,12 +923,12 @@ func TestDecide(t *testing.T) {
 			event: issueEvent(EventReconcile),
 			state: State{Issue: trackerIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
 		},
-		// A released forest stays under curation: closing the ideation issue
+		// A commissioned forest stays under curation: closing the ideation issue
 		// removes the root from the sweep's enumeration, so the tracker's own
 		// row carries the curation until the forest is finished
 		// (§forgejo/reconciliation/watermark-exemptions).
 		{
-			name:  "reconcile released unfinished tracker dispatches decompose",
+			name:  "reconcile commissioned unfinished tracker dispatches decompose",
 			event: issueEvent(EventReconcile),
 			state: State{Issue: trackerIssue(), Blockers: []Issue{
 				{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
@@ -937,7 +937,7 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionDecompose,
 		},
 		{
-			name:  "reconcile re-fires decompose for a released tracker already dispatched at an unchanged revision",
+			name:  "reconcile re-fires decompose for a commissioned tracker already dispatched at an unchanged revision",
 			event: issueEvent(EventReconcile),
 			state: State{Issue: trackerIssue(), Blockers: []Issue{
 				{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
@@ -947,7 +947,7 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionDecompose,
 		},
 		{
-			name:  "reconcile unreleased tracker holds off naming its open root",
+			name:  "reconcile not-yet-commissioned tracker holds off naming its open root",
 			event: issueEvent(EventReconcile),
 			state: State{Issue: trackerIssue(), Blockers: []Issue{
 				{Number: 3, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}},
@@ -955,7 +955,7 @@ func TestDecide(t *testing.T) {
 			}},
 		},
 		{
-			name:  "reconcile fully unblocked tracker whose release edge is closed dispatches wrap-up",
+			name:  "reconcile fully unblocked tracker whose commissioning edge is closed dispatches wrap-up",
 			event: issueEvent(EventReconcile),
 			state: State{Issue: trackerIssue(), Blockers: []Issue{
 				{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
@@ -1396,10 +1396,10 @@ func TestUnblockCascade(t *testing.T) {
 			want: []Key{{Repo: "o/r", Kind: KindIssue, Number: 2}},
 		},
 		{
-			// A closed issue-side blocker releases the connected
+			// A closed issue-side blocker unblocks the connected
 			// open PR, not the issue: the PR is the work
 			// (§forgejo/decisions/unblock-cascade).
-			name: "an issue whose remaining open blocker is its connected PR releases the PR",
+			name: "an issue whose remaining open blocker is its connected PR unblocks the PR",
 			root: &IssueNode{
 				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
 				Blocks: []IssueNode{
@@ -1415,7 +1415,7 @@ func TestUnblockCascade(t *testing.T) {
 			want: []Key{{Repo: "o/r", Kind: KindPR, Number: 9}},
 		},
 		{
-			name: "a connected PR released by two issues is released once",
+			name: "a connected PR unblocked by two issues is unblocked once",
 			root: &IssueNode{
 				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
 				Blocks: []IssueNode{
@@ -1438,7 +1438,7 @@ func TestUnblockCascade(t *testing.T) {
 			want: []Key{{Repo: "o/r", Kind: KindPR, Number: 9}},
 		},
 		{
-			name: "an issue still blocked on the issue side is not released, connected PR included",
+			name: "an issue still blocked on the issue side is not unblocked, connected PR included",
 			root: &IssueNode{
 				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
 				Blocks: []IssueNode{
@@ -1565,11 +1565,11 @@ func TestDecide_DecomposerAuthorshipHoldOffNamesTheAuthorship(t *testing.T) {
 	}
 }
 
-// TestDecide_CascadeReleasesDecomposerAuthoredMember pins that the
+// TestDecide_CascadeUnblocksDecomposerAuthoredMember pins that the
 // authorship rule does not narrow the unblock cascade: the ideation
-// ticket closing releases the member the decomposer authored
+// ticket closing unblocks the member the decomposer authored
 // (§forgejo/decisions/loop-prevention, §forgejo/decisions/unblock-cascade).
-func TestDecide_CascadeReleasesDecomposerAuthoredMember(t *testing.T) {
+func TestDecide_CascadeUnblocksDecomposerAuthoredMember(t *testing.T) {
 	root := &IssueNode{
 		Issue: Issue{Number: 3, State: "closed", Repository: "o/r"},
 		Blocks: []IssueNode{

@@ -332,7 +332,7 @@ func TestReconcile_ListOrgRepositoriesError(t *testing.T) {
 // TestReconcile_WatermarkExemptRefiresAtUnchangedRevision: the sweep
 // re-fires the watermark-exempt actions whenever the state calls for
 // them, an unchanged updated_at notwithstanding — the dependency edge
-// that releases the work emits no delivery and moves no revision
+// that unblocks the work emits no delivery and moves no revision
 // (§forgejo/reconciliation/watermark-exemptions).
 func TestReconcile_WatermarkExemptRefiresAtUnchangedRevision(t *testing.T) {
 	cases := []struct {
@@ -525,7 +525,7 @@ func TestReconcile_VisitsBothRoleSets(t *testing.T) {
 // TestReconcile_DecomposerAuthoredIssueHoldsOff: the sweep is covered by
 // the authorship rule — an open member the decomposer authored whose
 // blocker edge has not arrived is not dispatched by the sweep; the
-// cascade releases it (§forgejo/decisions/loop-prevention,
+// cascade unblocks it (§forgejo/decisions/loop-prevention,
 // §forgejo/reconciliation/the-sweep).
 func TestReconcile_DecomposerAuthoredIssueHoldsOff(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)

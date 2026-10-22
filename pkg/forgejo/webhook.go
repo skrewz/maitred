@@ -369,7 +369,7 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 }
 
 // dispatchCascade dispatches the unblock cascade for one key: a newly
-// unblocked issue is dispatched implement, a released PR
+// unblocked issue is dispatched implement, a newly unblocked PR
 // merge-or-wait, each applying the key's own watermark first, so an
 // already-dispatched (action, revision) is not re-dispatched
 // (§forgejo/decisions/unblock-cascade). Admissibility is judged by the
@@ -430,7 +430,7 @@ func (e *Engine) dispatchCascade(k Key, sender string) error {
 	return e.store.Save(k, Watermark{Action: string(ActionImplement), Revision: rev})
 }
 
-// dispatchCascadePR dispatches the unblock cascade for a released PR
+// dispatchCascadePR dispatches the unblock cascade for a newly unblocked PR
 // key (§forgejo/decisions/unblock-cascade): the closure that rooted
 // the cascade closed the last issue-side blocker of the PR's connected
 // issue, so the merge the gate held off now fires — merge-or-wait and

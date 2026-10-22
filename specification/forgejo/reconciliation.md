@@ -130,14 +130,15 @@ collecting finished work; `decompose` on a root consults no blockers,
 because a root is a root whatever blocks it.
 
 `decompose` has a second row, on the **tracker**, and it is what keeps a
-forest alive after its release. Closing the ideation issue is the release
-gesture, and it also removes the root from the sweep's enumeration of open
-issues: were the root the only trigger, curation would end the moment the
-human authorised the work — while the work is exactly what reports the
-discoveries a forest must absorb (a blocker nobody listed, a member that
-turned out to need another, a landing set whose membership has moved). So an
-open tracker that is still blocked is decomposed too, **provided its release
-gate has opened**: the `ideation` issue blocking it is closed. An open
+forest alive after its commissioning (§forgejo/decisions/commissioning).
+Closing the ideation issue is the commissioning gesture, and it also removes
+the root from the sweep's enumeration of open issues: were the root the only
+trigger, curation would end the moment the human commissioned the work — while
+the work is exactly what reports the discoveries a forest must absorb (a
+blocker nobody listed, a member that turned out to need another, a landing
+set whose membership has moved). So an
+open tracker that is still blocked is decomposed too, **provided its forest
+is commissioned**: the `ideation` issue blocking it is closed. An open
 tracker blocked by an **open** `ideation` issue holds off instead, naming
 that root, because the root's own row is already dispatching the same curation
 and a forest is curated once per sweep. A blocked tracker with no `ideation`
@@ -147,5 +148,5 @@ not a forest's tracker, and the engine does not guess which root it belongs to
 
 The test is one hop because the tracker's own blocker set is the forest, and
 the tracker is itself a member: it carries the membership edge from its root
-like every other member does. The engine reads that edge as the release gate;
-it never walks a graph to find one.
+like every other member does. The engine reads that edge as the commissioning
+gate; it never walks a graph to find one.

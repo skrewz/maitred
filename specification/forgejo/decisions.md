@@ -41,6 +41,16 @@ the hold-off reason instead names the failure (`scope of repo <name>
 unknown: ...`), keeping exclusion and API failure distinguishable in the
 decision log.
 
+## Commissioning
+
+*Commissioning* is the specification's word for the human's gate. An ideation
+issue carries the reserved `ideation` label while the human still owns the
+idea; its closure **commissions** the forest, and that closure is what makes
+every member startable (§forgejo/decisions/transition-table). The word
+*release* is not used for this gate: it would name both the human's lift-of-hold
+and a blocker closing, and those gate different things — commissioning lifts the
+human's hold, unblocking says a blocker closed.
+
 ## Actions
 
 The action names form the enum the engine config maps to canned
@@ -55,16 +65,16 @@ prompts:
 | `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review |
 | `merge-or-wait` | the PR's latest review approves **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's |
 | `rebase` | an open PR is not mergeable (conflicts) |
-| `decompose` | the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a released forest stays under curation until its tracker closes; watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
+| `decompose` | the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
-| `reject-pr` | a PR is connected to unreleased work: a **connected issue** — any non-PR issue the PR blocks, every one being tested — is blocked by an **open** `ideation` issue; tested when a PR opens, when a review is submitted, and by the reconciliation sweep, ahead of every review, rebase, fix and merge decision; the prompt closes the PR, names the breach, and reports it |
+| `reject-pr` | a PR is connected to work that is not yet commissioned: a **connected issue** — any non-PR issue the PR blocks, every one being tested — is blocked by an **open** `ideation` issue; tested when a PR opens, when a review is submitted, and by the reconciliation sweep, ahead of every review, rebase, fix and merge decision; the prompt closes the PR, names the breach, and reports it |
 
 ## Transition table
 
 | When (event + re-fetched state) | Decision |
 |---|---|
 | issue opened (open, all blockers closed, no connected PR) | `implement` |
-| issue opened (open, authored by the configured decomposer identity) | hold off — the reason names the authorship; only the unblock cascade releases it |
+| issue opened (open, authored by the configured decomposer identity) | hold off — the reason names the authorship; only the unblock cascade unblocks it |
 | issue opened (blocked, or a connected open PR, or not open) | hold off |
 | issue opened / edited / labels changed / comment (issue carries a reserved label) | hold off, naming the label — the sweep is where `decompose` and `wrap-up` fire (§forgejo/reconciliation/watermark-exemptions) |
 | issue edited / labels changed / feedback comment (issue open, all blockers closed) | `reassess` |
@@ -87,8 +97,8 @@ prompts:
 | PR commented (open) | as reconcile — the sweep's logic: the re-fetched PR state decides the next action |
 | reconcile — open issue with the `ideation` label | `decompose`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue, no open blockers | `wrap-up`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
-| reconcile — open `outcome` issue with open blockers, its `ideation` blocker closed | `decompose`, revision notwithstanding — the forest is released and unfinished, so curation continues (§forgejo/reconciliation/watermark-exemptions) |
-| reconcile — open `outcome` issue with open blockers, its `ideation` blocker open | hold off, naming the root — the forest is unreleased, and the root's own row is the pulse: a forest is curated once per sweep |
+| reconcile — open `outcome` issue with open blockers, its `ideation` blocker closed | `decompose`, revision notwithstanding — the forest is commissioned and unfinished, so curation continues (§forgejo/reconciliation/watermark-exemptions) |
+| reconcile — open `outcome` issue with open blockers, its `ideation` blocker open | hold off, naming the root — the forest is not yet commissioned, and the root's own row is the pulse: a forest is curated once per sweep |
 | reconcile — open `outcome` issue with open blockers and no `ideation` blocker | hold off, naming the absence — a tracker not gated by a root is not a forest's tracker |
 | reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, `reject-pr` when a connected issue is blocked by an open `ideation` issue and otherwise as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate) |
 
@@ -120,10 +130,10 @@ opening recorded no dependency has no connected issues and decides as
 before.
 
 When **any** connected issue is blocked by an **open** issue carrying
-the reserved `ideation` label — work whose release gate has not opened: an
-ideation issue's closure *is* the release of its forest
-(§forgejo/reconciliation/watermark-exemptions) — the PR is work started before
-its release, and `reject-pr` is decided. The test applies to **every**
+the reserved `ideation` label — work whose gate has not opened: an
+ideation issue's closure *is* the commissioning of its forest
+(§forgejo/decisions/commissioning) — the PR is work started before
+its gate, and `reject-pr` is decided. The test applies to **every**
 connected issue, not just the first: any blocked connected issue is work
 started before its gate, so the decision does not depend on the order
 the API returns the relationships in. Reserved names are matched exactly
@@ -166,7 +176,7 @@ decides as issue opened): the decision holds off and the reason names the
 authorship. The rule exists because `issues:opened` arrives the instant the
 decomposer creates a member, while the edge blocking it on its ideation ticket is
 attached afterwards and emits no delivery — so the re-fetch sees zero blockers and
-`implement` would be vacuously correct for work that has not been released.
+`implement` would be vacuously correct for work that has not been commissioned.
 Authorship is the only fact about a member that is true at the instant of its
 creation, and the identity is the operator's declaration rather than an inference;
 the engine cannot forge it, because the identities it dispatches cannot edit an
@@ -176,8 +186,9 @@ matching — the same shape as the reviewing-author sender guard
 inert (§forgejo/config/decomposer-identity). The rule denies `implement`
 candidacy only: it does not deny `reassess`, which the open-blocker rule above
 governs. The **unblock cascade is not narrowed**: a decomposer-authored member
-still dispatches `implement` when the cascade finds it newly unblocked, which is
-how the ideation ticket releases it.
+still dispatches `implement` when the cascade finds it newly unblocked —
+the ideation ticket's closure is that member's last issue-side blocker, and
+the cascade is what dispatches it.
 
 A PR's **last activity is a review** when its latest review is a
 changes-requested, approved, or comment review submitted against the PR's
@@ -204,7 +215,7 @@ its own — it does not authorise merging **past a blocker**. The gate is
 the merge-path twin of the open-blocker rule that holds off `reassess`
 (§forgejo/decisions/transition-table), and every path that dispatches
 `merge-or-wait` consults it through one shared test: the review event,
-the sweep's PR path, and the unblock cascade's release of a held PR.
+the sweep's PR path, and the held PR the unblock cascade unblocks.
 
 The PR's **own entry** in a connected issue's blocker list is not a
 blocker: the PR *is* the connected issue's delivery vehicle (the
@@ -213,7 +224,7 @@ blockers), so the test excludes the PR itself and counts every other
 open blocker.
 
 A blocked merge **holds off**; it does not reject. `reject-pr` means
-"this PR should not have been opened" — the unreleased-work test of
+"this PR should not have been opened" — the work-not-yet-commissioned test of
 §forgejo/decisions/transition-table — and is decided ahead of this gate;
 a PR that opened clean and was blocked afterwards is legitimate work
 waiting to land. It holds off silently on the merge
@@ -258,10 +269,10 @@ is not an implement candidate — the work exists as a PR, and the
 rooted the cascade closes such an issue's last *issue-side* blocker, the
 cascade instead moves those PRs: each connected open PR becomes a
 cascade key of the pull-request kind, dispatched `merge-or-wait` — the
-release held off by the merge gate (§forgejo/decisions/merge-gate)
-fires on the closure that removed the last blocker, exactly as a newly
-unblocked issue is released with `implement`. A cascaded PR key pays
-the same admission, insurance, and watermark as an issue key: the
+merge the gate held off (§forgejo/decisions/merge-gate) fires on the closure
+that removed the last blocker, exactly as a newly unblocked issue is
+dispatched with `implement`. A cascaded PR key pays the same admission,
+insurance, and watermark as an issue key: the
 re-fetch of the PR decides it, and only a decision of `merge-or-wait`
 dispatches — a PR not standing at an approved head stays silent and the
 sweep remains the backstop. The cascade dispatches nothing else for
@@ -298,9 +309,9 @@ Four mechanisms, in this order:
    otherwise re-trigger the *same* action: an issue authored by the configured
    decomposer identity is never an `implement` candidate on the event path or the
    sweep, because the creation delivery is new to the key and no watermark can
-   show that the work is unreleased. The guard is by the issue's **author**, not
-   the delivery's **sender**, and the cascade that releases the member is
-   unguarded (§forgejo/decisions/transition-table).
+   show that the work is not yet commissioned. The guard is by the issue's
+   **author**, not the delivery's **sender**, and the cascade that unblocks the
+   member is unguarded (§forgejo/decisions/transition-table).
 
 ## Inputs
 

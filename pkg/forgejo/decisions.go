@@ -26,8 +26,8 @@ const (
 	// (§forgejo/reconciliation/watermark-exemptions).
 	ActionDecompose Action = "decompose"
 	ActionWrapUp    Action = "wrap-up"
-	// ActionRejectPR closes a PR opened against unreleased work
-	// (§forgejo/decisions/actions).
+	// ActionRejectPR closes a PR opened against work that is not yet
+	// commissioned (§forgejo/decisions/actions).
 	ActionRejectPR Action = "reject-pr"
 )
 
@@ -191,7 +191,7 @@ type Decision struct {
 	// Reason is a human-readable explanation of the decision; it is
 	// logged with every decision.
 	Reason string
-	// Cascade lists the objects the unblock cascade now releases (close
+	// Cascade lists the objects the unblock cascade now unblocks (close
 	// events only): newly unblocked issues, each warranting a dispatch
 	// of ActionImplement, and the connected open PRs of issues whose
 	// remaining open blockers are only those PRs, each warranting a
@@ -254,17 +254,18 @@ func Decide(e Event, s State, w *Watermark) Decision {
 // current-state event for an issue. The watermark-exempt rows come
 // first, and they are the exemption: unlike every other path, they
 // decide without consulting the watermark, so an open ideation root
-// dispatches decompose, an open outcome tracker released by a closed root
+// dispatches decompose, an open outcome tracker of a commissioned forest
 // dispatches decompose too, and an open, fully unblocked outcome tracker
 // dispatches wrap-up, revision notwithstanding — state is the watermark
 // (§forgejo/reconciliation/watermark-exemptions). These rows are the exempt
 // set: the exemption is scoped to the sweep, and an exempt action reached
 // from an event keeps the revision-keyed guard like any other action. A
-// tracker holds off only when there is nothing to curate — unreleased, so its
-// root's row is the pulse, or gated by no root at all — and the reason names
-// that fact, so the decision log reads "state calls for no action", never
-// "already dispatched at this revision". An issue carrying neither reserved
-// label decides as issue opened (§forgejo/decisions/transition-table).
+// tracker holds off only when there is nothing to curate — not yet
+// commissioned, so its root's row is the pulse, or gated by no root at
+// all — and the reason names that fact, so the decision log reads
+// "state calls for no action", never "already dispatched at this
+// revision". An issue carrying neither reserved label decides as issue
+// opened (§forgejo/decisions/transition-table).
 func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 	issue := s.Issue
 	if issue == nil || issue.State != "open" {
@@ -278,7 +279,7 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 	}
 	if hasLabel(issue, LabelOutcome) {
 		if open := openBlockers(s.Blockers); len(open) > 0 {
-			// A released forest stays under curation: closing the root removes
+			// A commissioned forest stays under curation: closing the root removes
 			// it from the sweep's enumeration of open issues, so the tracker's
 			// own row carries the curation until the forest is finished
 			// (§forgejo/reconciliation/watermark-exemptions).
@@ -289,7 +290,7 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 			if gate.State == "open" {
 				return holdOff(fmt.Sprintf("issue %d is an open %s tracker whose %s root %d is still open; its own row carries the curation", issue.Number, LabelOutcome, LabelIdeation, gate.Number))
 			}
-			return dispatch(ActionDecompose, fmt.Sprintf("issue %d is an open %s tracker released by %s %d and still blocked by %d open issue(s); the state calls for decompose regardless of revision %s", issue.Number, LabelOutcome, LabelIdeation, gate.Number, len(open), issueRevision(issue)))
+			return dispatch(ActionDecompose, fmt.Sprintf("issue %d is an open %s tracker commissioned by %s %d and still blocked by %d open issue(s); the state calls for decompose regardless of revision %s", issue.Number, LabelOutcome, LabelIdeation, gate.Number, len(open), issueRevision(issue)))
 		}
 		return dispatch(ActionWrapUp, fmt.Sprintf("issue %d is an open, fully unblocked %s tracker; the state calls for wrap-up regardless of revision %s", issue.Number, LabelOutcome, issueRevision(issue)))
 	}
@@ -300,7 +301,7 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 // reconciliation sweep's synthetic current-state event): dispatch
 // implement if the re-fetched issue is open, unblocked, and has no
 // connected PR. An issue authored by the configured decomposer identity
-// is never an implement candidate on either path: it is released by the
+// is never an implement candidate on either path: it waits for the
 // unblock cascade alone (§forgejo/decisions/transition-table,
 // §forgejo/decisions/loop-prevention).
 func decideIssueOpened(e Event, s State, w *Watermark) Decision {
@@ -396,24 +397,25 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 	return dispatch(ActionReview, fmt.Sprintf("PR %d opened", pr.Number))
 }
 
-// decideRejectPR tests whether a PR is work started before its release
-// gate, ahead of the review, rebase, fix and merge decisions: one of
+// decideRejectPR tests whether a PR is work started before its forest was
+// commissioned, ahead of the review, rebase, fix and merge decisions: one of
 // its connected issues — every non-PR issue the PR blocks is tested,
 // so the decision does not depend on the order the relationships are
 // returned in — blocked by an **open** issue carrying the reserved
-// ideation label (§forgejo/decisions/actions). It is consulted by the
-// PR-opened, PR-reviewed and reconcile paths, the paths that can
-// dispatch review, re-review, fix-feedback or merge-or-wait; the PR
-// synced event decides without it (§forgejo/decisions/transition-table).
-// A PR whose connected issues have no such blocker — or with no
-// connected issue at all, because the PR's opening recorded no
-// dependency — is not rejected: a *closed* ideation blocker means the
-// release gate has opened, and an unlabelled blocker is ordinary work,
-// both decided on as review or rebase. A connected issue's **own**
-// state is not consulted: the gate is the blocker's, so a PR opened
-// against a closed connected issue still blocked by an open ideation
-// issue is rejected. When the test does not apply, ok is false and the
-// calling path decides on (§forgejo/decisions/transition-table).
+// ideation label (§forgejo/decisions/commissioning,
+// §forgejo/decisions/actions). It is consulted by the PR-opened,
+// PR-reviewed and reconcile paths, the paths that can dispatch review,
+// re-review, fix-feedback or merge-or-wait; the PR synced event decides
+// without it (§forgejo/decisions/transition-table). A PR whose
+// connected issues have no such blocker — or with no connected issue at
+// all, because its opening recorded no dependency — is not rejected: a
+// *closed* ideation blocker means the forest is commissioned, and an
+// unlabelled blocker is ordinary work, both decided on as review or
+// rebase. A connected issue's **own** state is not consulted: the gate
+// is the blocker's, so a PR opened against a closed connected issue
+// still blocked by an open ideation issue is rejected. When the test
+// does not apply, ok is false and the calling path decides on
+// (§forgejo/decisions/transition-table).
 func decideRejectPR(pr *PullRequest, s State, w *Watermark) (Decision, bool) {
 	if len(s.ConnectedIssues) == 0 {
 		return Decision{}, false
@@ -438,7 +440,7 @@ func decideRejectPR(pr *PullRequest, s State, w *Watermark) (Decision, bool) {
 			if alreadyDispatched(w, ActionRejectPR, pr.HeadSHA) {
 				return holdOff(fmt.Sprintf("reject-pr already dispatched at revision %s", pr.HeadSHA)), true
 			}
-			return dispatch(ActionRejectPR, fmt.Sprintf("PR %d is connected to issue %d, blocked by open ideation issue %d: work started before its release gate", pr.Number, c.Issue.Number, b.Number)), true
+			return dispatch(ActionRejectPR, fmt.Sprintf("PR %d is connected to issue %d, blocked by open ideation issue %d: work started before its forest was commissioned", pr.Number, c.Issue.Number, b.Number)), true
 		}
 	}
 	return Decision{}, false
@@ -582,7 +584,7 @@ func decidePRMerged(s State) Decision {
 }
 
 // unblockCascade walks the blocker graph from the closed issue and
-// returns the objects it now releases — open issues with all their
+// returns the objects it now unblocks — open issues with all their
 // issue-side blockers closed (dispatched implement) and, for issues
 // whose remaining open blockers are only their connected open PRs, those
 // PRs (dispatched merge-or-wait) — each exactly once. The walk is
@@ -614,14 +616,14 @@ func unblockCascade(root *IssueNode) []Key {
 				// An issue whose remaining open blockers are its
 				// connected open PRs is not an implement candidate —
 				// the work exists as a PR, and the closure that
-				// removed the last issue-side blocker releases that
+				// removed the last issue-side blocker unblocks that
 				// PR instead (§forgejo/decisions/unblock-cascade).
 				if prs := openPullBlockers(b.Blockers); len(prs) > 0 {
 					if allClosed(issueBlockers(b.Blockers)) {
 						for _, p := range prs {
 							pk := Key{Repo: p.Repository, Kind: KindPR, Number: p.Number}
 							if seenPR[pk] {
-								continue // released once, even by several issues
+								continue // unblocked once, even by several issues
 							}
 							seenPR[pk] = true
 							unblocked = append(unblocked, pk)
@@ -638,7 +640,7 @@ func unblockCascade(root *IssueNode) []Key {
 }
 
 // issueBlockers returns the non-pull-request entries of a blocker
-// list — the issue-side blockers the cascade and the PR release test
+// list — the issue-side blockers the cascade and the reject-pr test
 // (§forgejo/decisions/unblock-cascade).
 func issueBlockers(blockers []IssueNode) []IssueNode {
 	var issues []IssueNode
@@ -675,12 +677,13 @@ func allClosed(blockers []IssueNode) bool {
 	return true
 }
 
-// ideationGate returns the issue gating an issue's release: the first
+// ideationGate returns the issue gating an issue's commissioning: the first
 // blocker carrying the reserved ideation label, or nil when no blocker
 // carries it. A tracker is gated one hop away because it is a member like
-// any other and carries the membership edge from its root — the engine never
-// walks a graph to find a release gate. A closed gate is a released forest;
-// an open one is not (§forgejo/reconciliation/watermark-exemptions).
+// any other and carries the membership edge from its root; the engine never
+// walks a graph to find the gate. A closed gate is a commissioned forest; an
+// open one is not (§forgejo/decisions/commissioning,
+// §forgejo/reconciliation/watermark-exemptions).
 func ideationGate(blockers []Issue) *Issue {
 	for i := range blockers {
 		if blockers[i].IsPull {
@@ -901,7 +904,7 @@ func decomposerAuthored(issue *Issue, identity string) bool {
 
 // holdOffDecomposerAuthored is the authorship hold-off: the issue was
 // authored by the configured decomposer identity, so it is a forest
-// member that the unblock cascade releases, never the event path or the
+// member that the unblock cascade unblocks, never the event path or the
 // sweep (§forgejo/decisions/loop-prevention).
 func holdOffDecomposerAuthored(number int, author string) Decision {
 	return holdOff(fmt.Sprintf("issue %d is authored by the decomposer %s; held for the unblock cascade, not dispatched as an implement candidate", number, author))
