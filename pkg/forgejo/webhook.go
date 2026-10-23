@@ -216,6 +216,18 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 				}
 				st.Blocked = downstream
 			}
+			if ev.Type == EventReconcile && hasLabel(issue, LabelSync) {
+				// The sweep's backstop row for landing sets: the sync
+				// predicate reads each member's delivering PR, so the
+				// blockers re-fetched above are projected onto the set
+				// members, each with its PR state
+				// (§forgejo/decisions/sync-set).
+				members, err := e.syncMembers(blockers)
+				if err != nil {
+					return ev, State{}, err
+				}
+				st.SyncMembers = members
+			}
 		case EventIssueClosed:
 			root, err := e.graphNode(issue)
 			if err != nil {
@@ -250,6 +262,14 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 				return ev, State{}, err
 			}
 			st.ConnectedIssues = connected
+			// A connected issue carrying agentic-sync-merge is a
+			// landing-set member: one more outbound hop reads the
+			// open sync issues it belongs to, so the approval path
+			// can emit the set without waiting for the sweep
+			// (§forgejo/decisions/sync-set).
+			if err := e.fetchSyncSets(&st); err != nil {
+				return ev, State{}, err
+			}
 			fallthrough
 		case EventPRSynced:
 			reviews, err := e.api.ListPullRequestReviews(owner, name, ev.Number)
@@ -306,6 +326,76 @@ func (e *Engine) connectedIssues(owner, name string, number int) ([]ConnectedIss
 		connected = append(connected, ConnectedIssue{Issue: blocks[i], Blockers: blockers})
 	}
 	return connected, nil
+}
+
+// fetchSyncSets reads the membership edges of every connected issue
+// that is a landing-set member (it carries agentic-sync-merge): the
+// open sync issues it blocks. The hop is taken only for members, so
+// the ordinary PR path costs what it always did
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/sync-set).
+func (e *Engine) fetchSyncSets(st *State) error {
+	for i := range st.ConnectedIssues {
+		c := &st.ConnectedIssues[i]
+		if !hasLabel(&c.Issue, LabelAgenticSyncMerge) {
+			continue
+		}
+		owner, name := splitRepo(c.Issue.Repository)
+		blocks, err := e.api.IssueBlocks(owner, name, c.Issue.Number)
+		if err != nil {
+			return err
+		}
+		for j := range blocks {
+			b := blocks[j]
+			if b.IsPull || b.State != "open" || !hasLabel(&b, LabelSync) {
+				continue // only open grouping issues are membership edges
+			}
+			c.SyncSets = append(c.SyncSets, b)
+		}
+	}
+	return nil
+}
+
+// syncMembers projects the blocking issues of a sync issue onto the
+// members of a landing set, attaching to every open member the state
+// of its delivering PR — mergeability and reviews — the sync
+// predicate reads. A member's PR is seen through the member's own
+// dependency rows (the PR is a blocker of the issue it delivers), the
+// same projection the unblock cascade uses; where a member has
+// several open PRs the first is read (§forgejo/decisions/sync-set).
+func (e *Engine) syncMembers(blockers []Issue) ([]SyncMember, error) {
+	var members []SyncMember
+	for i := range blockers {
+		b := blockers[i]
+		if b.IsPull {
+			continue // a set groups issues; a direct PR member is a graph error
+		}
+		m := SyncMember{Issue: b}
+		if b.State == "open" {
+			owner, name := splitRepo(b.Repository)
+			deps, err := e.api.IssueDependencies(owner, name, b.Number)
+			if err != nil {
+				return nil, err
+			}
+			for _, p := range openPullBlockers(issueNodes(deps)) {
+				po, pn := splitRepo(p.Repository)
+				pr, err := e.api.GetPullRequest(po, pn, p.Number)
+				if err != nil {
+					return nil, err
+				}
+				if !prOpen(pr) {
+					continue
+				}
+				reviews, err := e.api.ListPullRequestReviews(po, pn, p.Number)
+				if err != nil {
+					return nil, err
+				}
+				m.PR, m.Reviews = pr, reviews
+				break
+			}
+		}
+		members = append(members, m)
+	}
+	return members, nil
 }
 
 // graphNode builds the blocker-graph node for issue: its blocks, each
@@ -421,7 +511,9 @@ func (e *Engine) cascadeHoldOffReason(ch CascadeHoldOff) string {
 // dispatchCascade dispatches the entry's action for one key of the
 // unblock cascade, applying the key's own watermark first, so an
 // already-dispatched (action, revision) is not re-dispatched
-// (§forgejo/decisions/unblock-cascade). A newly unblocked PR key — whose
+// (§forgejo/decisions/unblock-cascade). A sync-set candidate — whose
+// emission's action is sync — is dispatched through dispatchSyncSet.
+// A newly unblocked PR key — whose
 // emission's action is merge-or-wait — is dispatched through
 // dispatchCascadePR. Admissibility is judged by the roles of the
 // repository holding the key, never the repository whose closure
@@ -434,6 +526,9 @@ func (e *Engine) cascadeHoldOffReason(ch CascadeHoldOff) string {
 // re-checks the emission — the state wins over the graph data
 // (§forgejo/decisions/unblock-cascade).
 func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
+	if cd.Action == ActionSync {
+		return e.dispatchSyncSet(cd, sender)
+	}
 	k := cd.Key
 	if k.Kind == KindPR {
 		return e.dispatchCascadePR(k, sender)
@@ -547,10 +642,82 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 	return e.store.Save(k, Watermark{Action: string(ActionMergeOrWait), Revision: pr.HeadSHA})
 }
 
+// dispatchSyncSet dispatches the sync-set candidate the cascade walk
+// or the approval path emitted: the grouping issue's own watermark
+// applies at the set revision, and the re-fetched set state is
+// decided through the same pure row the sweep takes — an unready set
+// stays silent, its hold-off at home only in the decision log and
+// nothing enqueued (§forgejo/decisions/sync-set). Admissibility is
+// judged by the roles of the repository holding the grouping issue:
+// sync requires the outcomes role, so a candidate emitted from a
+// work-item repository lands its decision in the outcomes repository
+// the set belongs to (§forgejo/webhook/repository-roles).
+func (e *Engine) dispatchSyncSet(cd CascadeDispatch, sender string) error {
+	k := cd.Key
+	ev := Event{Type: EventReconcile, Repo: k.Repo, Kind: KindIssue, Number: k.Number, Sender: sender}
+	r, err := e.repoRoles(k.Repo)
+	if err != nil || !r.any() {
+		held := holdOffOutOfRemit(k.Repo)
+		if err != nil {
+			held = holdOffScopeUnknown(k.Repo, err)
+		}
+		e.recordDecision(k, ev, State{}, held)
+		return nil
+	}
+	if !admissibleInRoles(ActionSync, r) {
+		e.recordDecision(k, ev, State{}, holdOffActionInadmissible(ActionSync, k.Repo))
+		return nil
+	}
+	owner, name := splitRepo(k.Repo)
+	issue, err := e.api.GetIssue(owner, name, k.Number)
+	if err != nil {
+		return err
+	}
+	if issue.State != "open" {
+		return nil // closed in the meantime: the set resolved itself
+	}
+	if !hasLabel(issue, LabelSync) {
+		// No longer a sync issue: only the decomposer retires sets,
+		// and it deletes rather than closes — nothing to dispatch.
+		return nil
+	}
+	blockers, err := e.api.IssueDependencies(owner, name, k.Number)
+	if err != nil {
+		return err
+	}
+	members, err := e.syncMembers(blockers)
+	if err != nil {
+		return err
+	}
+	w, err := e.store.Load(k)
+	if err != nil {
+		e.log.Warn("load watermark (continuing without)", "key", k.String(), "error", err)
+		w = nil
+	}
+	st := State{Issue: issue, SyncMembers: members, DecomposerIdentity: e.cfg.DecomposerIdentity}
+	d := Decide(ev, st, w)
+	if !d.Dispatched {
+		// Unready, or already dispatched at this set state: silent on
+		// the wire, one line in the decision log
+		// (§forgejo/decisions/sync-set).
+		e.recordDecision(k, ev, st, d)
+		return nil
+	}
+	if err := e.dispatch(ev, st, ActionSync); err != nil {
+		return err
+	}
+	return e.store.Save(k, Watermark{Action: string(ActionSync), Revision: syncSetRevision(members)})
+}
+
 // revisionFor is the revision a dispatch's watermark records: the PR
-// head sha for pull requests, the issue's updated_at for issues
-// (§forgejo/webhook/the-pipeline).
+// head sha for pull requests, the issue's updated_at for issues, and
+// the derived set revision for a landing set — the state of the whole
+// set, not of the grouping issue alone
+// (§forgejo/webhook/the-pipeline, §forgejo/decisions/sync-set).
 func revisionFor(ev Event, st State) string {
+	if len(st.SyncMembers) > 0 {
+		return syncSetRevision(st.SyncMembers)
+	}
 	if ev.Kind == KindPR && st.PR != nil {
 		return st.PR.HeadSHA
 	}

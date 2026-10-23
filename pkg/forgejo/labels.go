@@ -33,4 +33,21 @@ const (
 	// claim, and retires no work item
 	// (§forgejo/decisions/forest-teardown).
 	LabelTeardownForest = "teardown-forest"
+	// LabelSync marks a grouping issue: a sync issue whose blocking
+	// issues are the members of a landing set — changes that are not
+	// deployable alone and land together, in the order the body names
+	// (§forgejo/decisions/sync-set). It is a kind, like ideation and
+	// outcome: the issue carrying it is never a work item.
+	LabelSync = "sync"
+	// LabelAgenticSyncMerge marks a landing-set member: its PR may
+	// land automatically as part of the set, and must never be
+	// merged by merge-or-wait on its own — landing is the set's
+	// decision (§forgejo/decisions/sync-set).
+	LabelAgenticSyncMerge = "agentic-sync-merge"
+	// LabelAgenticAutoMerge is the work item's opt-in to merging on
+	// its own once approved and unblocked. The decision function
+	// does not read it — the merge-or-wait prompt's merge policy
+	// owns it — the constant exists so the set vocabulary lives in
+	// one place (§forgejo/decisions/sync-set).
+	LabelAgenticAutoMerge = "agentic-auto-merge"
 )

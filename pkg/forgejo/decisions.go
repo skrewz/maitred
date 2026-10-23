@@ -1,7 +1,10 @@
 package forgejo
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -29,6 +32,13 @@ const (
 	// (§forgejo/reconciliation/watermark-exemptions).
 	ActionDecompose Action = "decompose"
 	ActionWrapUp    Action = "wrap-up"
+	// ActionSync is the third meta-action on outcomes repos: it
+	// dispatches against a sync issue — a grouping issue whose
+	// members must land together — once every member is closed or
+	// stands approved at head, mergeable, and opted in with
+	// agentic-sync-merge (§forgejo/decisions/sync-set). Its
+	// watermark is a revision derived from the whole set.
+	ActionSync Action = "sync"
 	// ActionRejectPR closes a PR opened against work that is not yet
 	// commissioned (§forgejo/decisions/actions).
 	ActionRejectPR Action = "reject-pr"
@@ -150,6 +160,11 @@ type State struct {
 	// and the sweep's synthetic PR event; empty when the PR's opening
 	// recorded no dependency.
 	ConnectedIssues []ConnectedIssue
+	// SyncMembers are the blocking issues of the sync issue in
+	// State.Issue, each with the state of its delivering PR: the sync
+	// predicate's input, fetched when the issue under consideration
+	// carries the sync label (§forgejo/decisions/sync-set).
+	SyncMembers []SyncMember
 	// DecomposerIdentity is the configured login of the identity that
 	// performs decomposition (§forgejo/config/decomposer-identity). It is
 	// a declared configuration input the engine passes verbatim from its
@@ -178,6 +193,26 @@ type ConnectedIssue struct {
 	// Blockers are the issues that block Issue: one hop, no recursion,
 	// each with its own state and repository.
 	Blockers []Issue
+	// SyncSets are the open sync issues this connected issue is a
+	// member of — its outbound edges filtered to the grouping issues
+	// carrying the sync label. Read only when the connected issue
+	// carries agentic-sync-merge: the membership edges the approval
+	// path emits the sync-set candidate against
+	// (§forgejo/decisions/sync-set).
+	SyncSets []Issue
+}
+
+// SyncMember is one member of a landing set: the member issue and
+// the state of the PR that delivers it — the input to the sync
+// predicate, which asks of every open member that its PR be
+// mergeable and approved at its head while the issue carries
+// agentic-sync-merge (§forgejo/decisions/sync-set). A member with
+// several open PRs is read through its first one, the same
+// projection the unblock cascade uses.
+type SyncMember struct {
+	Issue   Issue
+	PR      *PullRequest
+	Reviews []Review
 }
 
 // IssueNode is one issue in the blocker graph, as re-fetched for the
@@ -350,6 +385,14 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 			return dispatch(ActionDecompose, fmt.Sprintf("issue %d is an open %s tracker commissioned by %s %d and still blocked by %d open issue(s); the state calls for decompose regardless of revision %s", issue.Number, LabelOutcome, LabelIdeation, gate.Number, len(open), issueRevision(issue)))
 		}
 		return dispatch(ActionWrapUp, fmt.Sprintf("issue %d is an open, fully unblocked %s tracker; the state calls for wrap-up regardless of revision %s", issue.Number, LabelOutcome, issueRevision(issue)))
+	}
+	if hasLabel(issue, LabelSync) {
+		// The sweep is the backstop for landing sets: a set that
+		// changed through a delivery-less move (an edge edit, a
+		// human closing a member) is found here, evaluated under
+		// the set-revision guard like every other sync row
+		// (§forgejo/decisions/sync-set).
+		return considerSyncIssue(issue, s.SyncMembers, w)
 	}
 	return decideIssueOpened(e, s, w)
 }
@@ -659,6 +702,9 @@ func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 				}
 				return dispatch(ActionFixFeedback, fmt.Sprintf("PR %d stands at a comment review by %s", pr.Number, latest.Author))
 			case ReviewApproved:
+				if d, ok := syncMemberSetHoldOff(pr, s); ok {
+					return d
+				}
 				if open := mergeGateOpenBlockers(e, s); len(open) > 0 {
 					return holdOff(fmt.Sprintf("PR %d stands at an approved review, but a connected issue is blocked by %s; not merging", pr.Number, blockerNames(open)))
 				}
@@ -702,6 +748,9 @@ func decidePRReviewed(e Event, s State, w *Watermark) Decision {
 		}
 		return dispatch(ActionFixFeedback, fmt.Sprintf("PR %d: review by %s requests changes", pr.Number, latest.Author))
 	case ReviewApproved:
+		if d, ok := syncMemberSetHoldOff(pr, s); ok {
+			return d
+		}
 		if open := mergeGateOpenBlockers(e, s); len(open) > 0 {
 			return holdOff(fmt.Sprintf("PR %d stands at an approved review, but a connected issue is blocked by %s; not merging", pr.Number, blockerNames(open)))
 		}
@@ -765,6 +814,16 @@ func unblockCascade(root *IssueNode) ([]CascadeDispatch, []CascadeHoldOff) {
 			case "closed":
 				walk(b) // transitive: a closed issue cascades onward
 			case "open":
+				// An open sync issue the walk finds is a grouping
+				// issue a member's outbound edge points at: emit it
+				// as a sync-set candidate whatever its readiness —
+				// the set's own re-fetched evaluation decides, and
+				// an unready one stays silent
+				// (§forgejo/decisions/sync-set).
+				if hasLabel(&b.Issue, LabelSync) {
+					emissions = append(emissions, CascadeDispatch{Key: k, Action: ActionSync})
+					continue
+				}
 				// An issue whose remaining open blockers are its
 				// connected open PRs is not an implement candidate —
 				// the work exists as a PR, and the closure that
@@ -942,6 +1001,110 @@ func openBlockers(blockers []Issue) []Issue {
 	return open
 }
 
+// syncMemberSetHoldOff is the approval path's sync-set hold-off,
+// consulted by every path about to dispatch merge-or-wait, ahead of
+// the merge gate: when any connected issue of the PR carries
+// agentic-sync-merge, the PR is a landing-set member and landing is
+// the set's decision, not the individual PR's — merge-or-wait must
+// never merge it. The hold-off is silent (an unready set is not an
+// event worth a comment) and emits the members' open sync sets as
+// sync dispatches against the grouping issues, so the last approval
+// that completes a set triggers it without waiting for the sweep
+// (§forgejo/decisions/sync-set). ok is false when no connected issue
+// is a member, and the caller's merge gate decides on.
+func syncMemberSetHoldOff(pr *PullRequest, s State) (Decision, bool) {
+	var members []string
+	var emissions []CascadeDispatch
+	seen := map[Key]bool{}
+	for i := range s.ConnectedIssues {
+		c := &s.ConnectedIssues[i]
+		if !hasLabel(&c.Issue, LabelAgenticSyncMerge) {
+			continue
+		}
+		members = append(members, fmt.Sprintf("%s#%d", c.Issue.Repository, c.Issue.Number))
+		for j := range c.SyncSets {
+			set := &c.SyncSets[j]
+			k := issueKey(set)
+			if seen[k] {
+				continue // one emission per grouping issue, even from several members
+			}
+			seen[k] = true
+			emissions = append(emissions, CascadeDispatch{Key: k, Action: ActionSync})
+		}
+	}
+	if len(members) == 0 {
+		return Decision{}, false
+	}
+	d := holdOff(fmt.Sprintf("PR %d stands at an approved review, but its connected issue %s is a member of a sync set; landing is the set's decision, not the PR's", pr.Number, strings.Join(members, ", ")))
+	d.Cascade = emissions
+	return d, true
+}
+
+// considerSyncIssue is the sync predicate, one function called from
+// every direction the set state moved from: the sweep's row, the
+// cascade walk's emission, and the approval path's emission re-checked
+// on re-fetch. An open issue carrying the sync label dispatches sync
+// once every blocking issue is closed — landed, or finished by a
+// human — or stands with its delivering PR approved at head and
+// mergeable while carrying agentic-sync-merge. The dispatch is
+// recorded against a revision derived from the whole set, so the
+// sweep does not re-fire at an unchanged set state
+// (§forgejo/decisions/sync-set).
+func considerSyncIssue(issue *Issue, members []SyncMember, w *Watermark) Decision {
+	if len(members) == 0 {
+		return holdOff(fmt.Sprintf("issue %d is an open %s issue with no blocking issues; an empty set has nothing to land", issue.Number, LabelSync))
+	}
+	var notReady []string
+	for i := range members {
+		m := &members[i]
+		if m.Issue.State != "open" {
+			continue // a closed member's work has landed, or a human finished it
+		}
+		ref := fmt.Sprintf("%s#%d", m.Issue.Repository, m.Issue.Number)
+		switch {
+		case !hasLabel(&m.Issue, LabelAgenticSyncMerge):
+			notReady = append(notReady, fmt.Sprintf("%s is open without the %s label: a member awaiting a human must be closed before the set lands", ref, LabelAgenticSyncMerge))
+		case m.PR == nil || !prOpen(m.PR) || !m.PR.Mergeable:
+			notReady = append(notReady, fmt.Sprintf("%s has no mergeable open PR", ref))
+		default:
+			if latest := latestReview(m.Reviews); latest == nil || latest.Event != ReviewApproved || latest.CommitID != m.PR.HeadSHA {
+				notReady = append(notReady, fmt.Sprintf("%s's PR %d is not approved at head %s", ref, m.PR.Number, m.PR.HeadSHA))
+			}
+		}
+	}
+	if len(notReady) > 0 {
+		// An unready set is not an event worth a comment: the hold-off
+		// is silent, at home only in the decision log
+		// (§forgejo/decisions/sync-set, §forgejo/observability/the-decision-log).
+		return holdOff(fmt.Sprintf("sync issue %d held off: %s", issue.Number, strings.Join(notReady, "; ")))
+	}
+	rev := syncSetRevision(members)
+	if alreadyDispatched(w, ActionSync, rev) {
+		return holdOff(fmt.Sprintf("sync already dispatched at set revision %s", rev))
+	}
+	return dispatch(ActionSync, fmt.Sprintf("issue %d is an open %s issue: all %d member(s) closed or approved, mergeable, and opted in; the state calls for sync at set revision %s", issue.Number, LabelSync, len(members), rev))
+}
+
+// syncSetRevision derives the set revision the sync dispatch's
+// watermark records: the members keyed by repository and number, each
+// at its issue revision and PR head sha, ordered by key so the API's
+// enumeration order cannot change the digest
+// (§forgejo/decisions/sync-set, §forgejo/state/watermark).
+func syncSetRevision(members []SyncMember) string {
+	lines := make([]string, 0, len(members))
+	for i := range members {
+		m := &members[i]
+		line := fmt.Sprintf("%s#%d@%s", m.Issue.Repository, m.Issue.Number, issueRevision(&m.Issue))
+		if m.PR != nil {
+			line += "@" + m.PR.HeadSHA
+		}
+		lines = append(lines, line)
+	}
+	sort.Strings(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
 // mergeGateOpenBlockers is the merge gate's shared test, consulted by
 // every path that dispatches merge-or-wait: the open blockers of the
 // PR's connected issues, which must be none
@@ -1037,16 +1200,19 @@ func carriesLabel(labels []string, label string) bool {
 	return false
 }
 
-// reservedLabel returns the reserved watermark-exempt label the issue
-// carries, or the empty string when it carries none. Ideation is
-// reported first: the decompose-wins precedence applies to the hold-off
-// reason too (§forgejo/reconciliation/watermark-exemptions).
+// reservedLabel returns the reserved kind label the issue carries —
+// the label that makes it something other than a work item — or the
+// empty string when it carries none. Ideation is reported first: the
+// decompose-wins precedence applies to the hold-off reason too
+// (§forgejo/reconciliation/watermark-exemptions, §forgejo/decisions/sync-set).
 func reservedLabel(issue *Issue) string {
 	switch {
 	case hasLabel(issue, LabelIdeation):
 		return LabelIdeation
 	case hasLabel(issue, LabelOutcome):
 		return LabelOutcome
+	case hasLabel(issue, LabelSync):
+		return LabelSync
 	default:
 		return ""
 	}
@@ -1088,6 +1254,7 @@ var (
 		ActionDecompose:      true,
 		ActionWrapUp:         true,
 		ActionTeardownForest: true,
+		ActionSync:           true,
 	}
 )
 

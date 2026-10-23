@@ -3,6 +3,7 @@ package forgejo
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,59 @@ func ideationIssue() *Issue {
 	issue := openIssue()
 	issue.Labels = append(issue.Labels, LabelIdeation)
 	return issue
+}
+
+// syncIssueFixture returns an open issue carrying the reserved sync
+// label: a grouping issue whose members must land together
+// (§forgejo/decisions/sync-set).
+func syncIssueFixture(number int) *Issue {
+	issue := openIssue()
+	issue.Number = number
+	issue.Labels = append(issue.Labels, LabelSync)
+	return issue
+}
+
+// syncMemberFixture is one ready member of a landing set: an open
+// issue carrying agentic-sync-merge whose connected PR is mergeable
+// and approved at its head (§forgejo/decisions/sync-set).
+func syncMemberFixture(number, prNumber int) SyncMember {
+	m := SyncMember{
+		Issue: Issue{
+			Number:     number,
+			State:      "open",
+			Repository: "o/r",
+			Labels:     []string{LabelAgenticSyncMerge},
+			UpdatedAt:  testTime,
+		},
+	}
+	m.PR = openPR("sha-" + strconv.Itoa(prNumber))
+	m.PR.Number = prNumber
+	m.Reviews = []Review{{Event: ReviewApproved, Author: "carol", CommitID: m.PR.HeadSHA, SubmittedAt: testTime}}
+	return m
+}
+
+// closedSyncMemberFixture is a member whose work has landed: closed,
+// which makes it ready whatever its labels (§forgejo/decisions/sync-set).
+func closedSyncMemberFixture(number int) SyncMember {
+	return SyncMember{Issue: Issue{
+		Number:     number,
+		State:      "closed",
+		Repository: "o/r",
+		Labels:     []string{LabelAgenticSyncMerge},
+		UpdatedAt:  testTime,
+	}}
+}
+
+// syncMemberConnected builds the connected issue of a PR under test
+// when it is a member of a landing set: it carries agentic-sync-merge
+// and points at the open sync issue it belongs to
+// (§forgejo/decisions/sync-set).
+func syncMemberConnected(number, syncNumber int) ConnectedIssue {
+	c := connectedIssueOf(number, gateBlockerPR("o/r", 9, "open"))
+	c.Issue.Labels = []string{LabelAgenticSyncMerge}
+	set := syncIssueFixture(syncNumber)
+	c.SyncSets = []Issue{*set}
+	return c
 }
 
 // connectedIssue is the non-PR issue a PR under test blocks — the
@@ -138,6 +192,7 @@ func TestActionNames(t *testing.T) {
 		ActionWrapUp:         "wrap-up",
 		ActionRejectPR:       "reject-pr",
 		ActionTeardownForest: "teardown-forest",
+		ActionSync:           "sync",
 	}
 	for action, name := range want {
 		if string(action) != name {
@@ -741,6 +796,103 @@ func TestDecide(t *testing.T) {
 				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "open"))},
 			},
 			wantAction: ActionReview,
+		},
+		// The sync set: a member PR's approval never merges on its
+		// own — landing is the set's decision — and the approval
+		// emits the set it belongs to for evaluation
+		// (§forgejo/decisions/sync-set).
+		{
+			name:  "PR review approved on a sync-set member PR holds off and emits its sync set",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberConnected(7, 11)},
+			},
+			wantCascade: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 11}, Action: ActionSync}},
+		},
+		{
+			name:  "reconcile PR approved at head on a sync-set member holds off and emits its sync set",
+			event: prEvent(EventReconcile, "maitred"),
+			state: State{
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberConnected(7, 11)},
+			},
+			wantCascade: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 11}, Action: ActionSync}},
+		},
+		{
+			name:  "PR review changes-requested on a sync-set member still dispatches fix-feedback",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:              openPR("abc"),
+				Reviews:         []Review{review(ReviewChangesRequested, "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberConnected(7, 11)},
+			},
+			wantAction: ActionFixFeedback,
+		},
+		{
+			name:  "reconcile issue carrying the sync label with no members holds off — an empty set has nothing to land",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: syncIssueFixture(7)},
+		},
+		{
+			name:       "reconcile sync issue with every member closed or approved dispatches sync",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}},
+			wantAction: ActionSync,
+		},
+		{
+			name:  "reconcile sync issue with an unlabelled open member holds off — the member awaits a human",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{
+				syncMemberFixture(4, 40),
+				{Issue: Issue{Number: 5, State: "open", Repository: "o/r", UpdatedAt: testTime}},
+			}},
+		},
+		{
+			name:  "reconcile sync issue with a member whose PR is not approved at head holds off",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{
+				syncMemberFixture(4, 40),
+				func() SyncMember {
+					m := syncMemberFixture(5, 50)
+					m.Reviews = []Review{{Event: ReviewChangesRequested, Author: "carol", CommitID: m.PR.HeadSHA, SubmittedAt: testTime}}
+					return m
+				}(),
+			}},
+		},
+		{
+			name:  "reconcile sync issue with a member whose PR has merge conflicts holds off",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{
+				func() SyncMember {
+					m := syncMemberFixture(4, 40)
+					m.PR.Mergeable = false
+					return m
+				}(),
+				closedSyncMemberFixture(5),
+			}},
+		},
+		{
+			name:  "reconcile sync issue already dispatched at the set revision holds off",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}},
+			watermark: &Watermark{Action: string(ActionSync), Revision: syncSetRevision([]SyncMember{
+				closedSyncMemberFixture(5), syncMemberFixture(4, 40),
+			})},
+		},
+		{
+			name:       "reconcile sync issue whose set state moved re-dispatches over the watermark",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{syncMemberFixture(4, 40), syncMemberFixture(5, 50)}},
+			watermark:  &Watermark{Action: string(ActionSync), Revision: syncSetRevision([]SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)})},
+			wantAction: ActionSync,
+		},
+		{
+			name:  "issue opened carrying the sync label holds off — never an implement candidate",
+			event: issueEvent(EventIssueOpened),
+			state: State{Issue: syncIssueFixture(7)},
 		},
 		{
 			name:        "PR merged runs the unblock cascade",
@@ -1748,6 +1900,23 @@ func TestUnblockCascade(t *testing.T) {
 			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 3}, Action: ActionImplement}},
 		},
 		{
+			// A member's outbound edges point at the sync issue it
+			// belongs to: the walk emits it as a sync candidate,
+			// whatever its readiness — the set's own evaluation
+			// decides (§forgejo/decisions/sync-set).
+			name: "a closed issue blocking a sync issue emits the sync-set candidate, not implement",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue:    Issue{Number: 11, State: "open", Repository: "o/r", Labels: []string{LabelSync}},
+						Blockers: []IssueNode{node("o/r", 1, "closed")},
+					},
+				},
+			},
+			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 11}, Action: ActionSync}},
+		},
+		{
 			name: "an issue with an open blocker is not unblocked",
 			root: &IssueNode{
 				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
@@ -2066,6 +2235,8 @@ func TestAdmissibleInRoles(t *testing.T) {
 		{Action("wrap-up"), workItem, false},
 		{ActionImplement, both, true},
 		{Action("wrap-up"), both, true},
+		{ActionSync, outcomes, true},
+		{ActionSync, workItem, false},
 		{Action("frobnicate"), both, false},
 		{Action("frobnicate"), roles{}, false},
 		{ActionImplement, roles{}, false},
@@ -2090,6 +2261,7 @@ func TestHoldOffActionInadmissibleNamesTheRole(t *testing.T) {
 		{ActionImplement, "action implement is inadmissible for repo o/r: requires the maitred-enabled role"},
 		{ActionReview, "action review is inadmissible for repo o/r: requires the maitred-enabled role"},
 		{Action("wrap-up"), "action wrap-up is inadmissible for repo o/r: requires the maitred-outcomes-repo role"},
+		{ActionSync, "action sync is inadmissible for repo o/r: requires the maitred-outcomes-repo role"},
 		{Action("frobnicate"), "action frobnicate is admitted by no maitred role"},
 	}
 	for _, tt := range tests {
@@ -2172,6 +2344,77 @@ func TestDecide_ForestTeardownRows(t *testing.T) {
 			if tc.name == "the label beside a kind label names the kind label" &&
 				!strings.Contains(d.Reason, LabelHumanTask) {
 				t.Errorf("reason = %q, want the kind label named first", d.Reason)
+			}
+		})
+	}
+}
+
+// TestSyncSetRevision pins the set revision's properties: it depends
+// on every member's issue revision and PR head sha, never on the
+// order the members are enumerated in — so the sweep does not re-fire
+// at an unchanged set state, and any member moving re-fires
+// (§forgejo/decisions/sync-set, §forgejo/state/watermark).
+func TestSyncSetRevision(t *testing.T) {
+	members := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
+	reversed := []SyncMember{closedSyncMemberFixture(5), syncMemberFixture(4, 40)}
+	if syncSetRevision(members) != syncSetRevision(reversed) {
+		t.Error("set revision must not depend on member order")
+	}
+
+	pushed := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
+	pushed[0].PR.HeadSHA = "sha-new"
+	if syncSetRevision(members) == syncSetRevision(pushed) {
+		t.Error("a member PR head moving must change the set revision")
+	}
+
+	edited := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
+	edited[1].Issue.UpdatedAt = testTime2
+	if syncSetRevision(members) == syncSetRevision(edited) {
+		t.Error("a member issue's activity must change the set revision")
+	}
+
+	if syncSetRevision(nil) == syncSetRevision(members) {
+		t.Error("an empty set must not share a revision with a populated one")
+	}
+}
+
+// TestDecide_SyncSetApprovalHoldOffNamesTheSet pins the approval
+// path's hold-off reason: the PR stands approved but its connected
+// issue is a set member — landing is the set's decision, not the
+// PR's (§forgejo/decisions/sync-set).
+func TestDecide_SyncSetApprovalHoldOffNamesTheSet(t *testing.T) {
+	tests := []struct {
+		name  string
+		event Event
+		state State
+	}{
+		{
+			name:  "review event",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberConnected(7, 11)},
+			},
+		},
+		{
+			name:  "sweep PR path standing at an approved head",
+			event: prEvent(EventReconcile, "maitred"),
+			state: State{
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberConnected(7, 11)},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := Decide(tt.event, tt.state, nil)
+			if d.Action != "" || !d.HoldOff() {
+				t.Fatalf("decision = %+v, want a hold-off dispatching nothing", d)
+			}
+			if !strings.Contains(d.Reason, "sync set") || !strings.Contains(d.Reason, "o/r#7") {
+				t.Errorf("hold-off reason = %q, want it to name the sync set and the member o/r#7", d.Reason)
 			}
 		})
 	}

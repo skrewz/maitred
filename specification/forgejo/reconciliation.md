@@ -111,6 +111,15 @@ guard for its own key, and the sweep stays the state-based backstop
 that re-fires the wrap-up at an unchanged revision when, say, a human
 deleted an edge and no delivery fired.
 
+The sweep's `sync` row is **not exempt**: a landing set's watermark is
+a revision **derived from the whole set** — the members' issue
+revisions and PR head shas — so the sweep does not re-fire at an
+unchanged set state, and any member moving re-fires
+(§forgejo/decisions/sync-set). The row is the backstop for set changes
+that carry no delivery — an edge edit, a human closing a member: the
+candidate not fired by any event is caught within one reconcile
+interval.
+
 All other actions — `implement`, `reassess`, `review`, `re-review`,
 `rebase`, `fix-feedback`, `merge-or-wait` — keep revision-keyed
 watermarks: re-dispatching those would re-run real work.

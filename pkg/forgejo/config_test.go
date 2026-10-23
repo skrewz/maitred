@@ -63,6 +63,10 @@ actions:
     prompt: "/forest-teardown {{.IssueURL}}"
     persona: s-autonomics-decomposer
     timeout: 1h
+  sync:
+    prompt: "/set-lander {{.IssueURL}}"
+    persona: s-autonomics-implementer
+    timeout: 1h
 `
 
 // writeConfig writes content to a file named name in dir and returns the
@@ -394,7 +398,7 @@ func TestAllActions(t *testing.T) {
 	want := []Action{
 		ActionImplement, ActionReassess, ActionReview, ActionReReview,
 		ActionFixFeedback, ActionMergeOrWait, ActionRebase,
-		ActionDecompose, ActionWrapUp, ActionRejectPR, ActionTeardownForest,
+		ActionDecompose, ActionWrapUp, ActionRejectPR, ActionTeardownForest, ActionSync,
 	}
 	if len(AllActions) != len(want) {
 		t.Fatalf("AllActions has %d entries, want %d", len(AllActions), len(want))
