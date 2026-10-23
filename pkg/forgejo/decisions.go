@@ -382,7 +382,7 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 // guard — the watermark exemption is a property of the sweep's row,
 // not of the action (§forgejo/reconciliation/watermark-exemptions). A
 // root is decomposed whatever blocks it; a closed root holds off
-// upstream, because closing it is the release gate and the unblock
+// upstream, because closing it commissions the forest and the unblock
 // cascade dispatches the forest members
 // (§forgejo/decisions/transition-table).
 func decideDecompose(issue *Issue, w *Watermark) Decision {

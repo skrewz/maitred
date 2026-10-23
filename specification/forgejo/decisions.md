@@ -161,8 +161,8 @@ labels-changed rows — the label, not the repository and not the title,
 is what makes a root. The body of an edit is the revision of intent the
 decomposer re-cures against, so an edit re-fires `decompose`; a comment
 is not a revision of intent, so a comment on an open root holds off.
-A root that is closed on re-fetch holds off on every row: closing it is
-the release gate, and the unblock cascade dispatches the forest members.
+A root that is closed on re-fetch holds off on every row: closing it
+commissions the forest; the unblock cascade dispatches its members.
 The `outcome` and `human-task` labels keep their hold-offs, naming the
 label: the `human-task` label marks a ticket claimed by a human and is
 never an `implement` candidate anywhere in the engine, the unblock
