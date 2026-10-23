@@ -92,11 +92,17 @@ string, and a label created as `Ideation` must not silently decide as
 `implement`. When an issue carries both, `decompose` wins: a root is
 decomposed before it is wrapped up.
 
-The exemption is scoped to the sweep. On the **event path** an issue
-carrying either reserved label dispatches neither `implement` nor
-`reassess`: the decision is a hold-off naming the label. A protected
-issue is therefore never handed to the implementer on any path, however
-the label arrived.
+The exemption is scoped to the sweep. An issue carrying either reserved
+label dispatches neither `implement` nor `reassess` on any path — a
+protected issue is therefore never handed to the implementer, however
+the label arrived. For `decompose` the event path has rows of its own:
+opening, editing, or changing the labels of an open `ideation` issue
+dispatches `decompose` like the sweep row does, but under the ordinary
+revision-keyed watermark guard — the exemption, not the action, is what
+belongs to the sweep (§forgejo/decisions/transition-table). A comment
+on an open root holds off: it is not a revision of intent. For
+`wrap-up` the sweep stays the only firing row: an `outcome` tracker's
+activity on the event path is a hold-off naming the label.
 
 All other actions — `implement`, `reassess`, `review`, `re-review`,
 `rebase`, `fix-feedback`, `merge-or-wait` — keep revision-keyed

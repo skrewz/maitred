@@ -2401,3 +2401,130 @@ func TestHandler_IssueClosed_CascadeUnblocksDecomposerAuthoredMember(t *testing.
 		t.Errorf("cascade watermark = %+v, want implement", w)
 	}
 }
+
+// newOutcomesEngine builds an engine whose org holds one
+// outcomes-role repository, o/out, alongside the usual work-item o/r
+// (§forgejo/webhook/repository-roles).
+func newOutcomesEngine(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store) {
+	t.Helper()
+	eng, api, q, store := newTestEngine(t)
+	api.repos = []Repository{testRepo("o/r"), testRepoOutcomes("o/out")}
+	return eng, api, q, store
+}
+
+// TestHandler_IdeationEventPath_DispatchesDecompose: opening, editing,
+// or changing the labels of an open ideation issue in a repository with
+// the outcomes role dispatches decompose and records the watermark; a
+// comment holds off — a comment is not a revision of intent
+// (§forgejo/decisions/transition-table).
+func TestHandler_IdeationEventPath_DispatchesDecompose(t *testing.T) {
+	for _, typ := range []EventType{EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged} {
+		t.Run(string(typ), func(t *testing.T) {
+			eng, api, q, store := newOutcomesEngine(t)
+			issue := &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/out", Labels: []string{LabelIdeation}}
+			api.issues[7] = issue
+
+			eng.HandleEvent(Event{Type: typ, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+			tasks := q.all()
+			if len(tasks) != 1 {
+				t.Fatalf("got %d tasks, want 1 decompose dispatch", len(tasks))
+			}
+			if !strings.Contains(tasks[0].Prompt, "action="+string(ActionDecompose)) {
+				t.Errorf("prompt = %q, want the decompose action", tasks[0].Prompt)
+			}
+			w, err := store.Load(Key{Repo: "o/out", Kind: KindIssue, Number: 7})
+			if err != nil {
+				t.Fatalf("load watermark: %v", err)
+			}
+			if w == nil || w.Action != string(ActionDecompose) {
+				t.Errorf("watermark = %+v, want decompose at the current revision", w)
+			}
+		})
+	}
+}
+
+// TestHandler_IdeationComment_HoldsOff: a comment created on an open
+// root is not a revision of intent: no dispatch, no watermark
+// (§forgejo/decisions/transition-table).
+func TestHandler_IdeationComment_HoldsOff(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, q, store := newOutcomesEngine(t)
+	eng.log = slog.New(slog.NewJSONHandler(&log, nil))
+	issue := &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/out", Labels: []string{LabelIdeation}}
+	api.issues[7] = issue
+
+	eng.HandleEvent(Event{Type: EventIssueCommented, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks for a comment on a root, want none", len(tasks))
+	}
+	w, err := store.Load(Key{Repo: "o/out", Kind: KindIssue, Number: 7})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none", w)
+	}
+	reason, _ := findEntry(t, parseLogLines(t, log.Bytes()), "decision")["reason"].(string)
+	if !strings.Contains(reason, "revision of intent") {
+		t.Errorf("decision-log reason = %q, want it to say a comment is not a revision of intent", reason)
+	}
+}
+
+// TestHandler_IdeationInWorkItemRepo_DecomposeInadmissible: an open
+// ideation issue in a repository holding only the work-item role is
+// admitted and re-fetched, but decompose is inadmissible there: no
+// dispatch, no watermark, and the hold-off names the action and the
+// required role (§forgejo/webhook/repository-roles).
+func TestHandler_IdeationInWorkItemRepo_DecomposeInadmissible(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, q, store := newTestEngine(t)
+	eng.log = slog.New(slog.NewJSONHandler(&log, nil))
+	issue := &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r", Labels: []string{LabelIdeation}}
+	api.issues[7] = issue
+
+	eng.HandleEvent(Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks in a work-item-only repository, want none", len(tasks))
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 7})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none", w)
+	}
+	reason, _ := findEntry(t, parseLogLines(t, log.Bytes()), "decision")["reason"].(string)
+	if !strings.Contains(reason, "decompose is inadmissible") || !strings.Contains(reason, "maitred-outcomes-repo") {
+		t.Errorf("hold-off reason = %q, want it to name the action and the required role's topic", reason)
+	}
+}
+
+// TestHandler_Decompose_NoPrompt_HoldsOffWithoutWatermark: with no
+// canned prompt configured for decompose the action cannot fire, and
+// the failure says so: nothing is enqueued and no watermark is recorded,
+// so the sweep retries (§forgejo/config/canned-prompts,
+// §forgejo/webhook/the-pipeline).
+func TestHandler_Decompose_NoPrompt_HoldsOffWithoutWatermark(t *testing.T) {
+	eng, api, q, store := newOutcomesEngine(t)
+	cfg := testConfig()
+	delete(cfg.Actions, string(ActionDecompose))
+	eng.cfg = cfg
+	issue := &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/out", Labels: []string{LabelIdeation}}
+	api.issues[7] = issue
+
+	eng.HandleEvent(Event{Type: EventIssueOpened, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks with no decompose prompt configured, want none", len(tasks))
+	}
+	w, err := store.Load(Key{Repo: "o/out", Kind: KindIssue, Number: 7})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none: a dispatch that cannot fire must not mark itself done", w)
+	}
+}
