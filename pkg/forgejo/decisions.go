@@ -1003,17 +1003,24 @@ func openBlockers(blockers []Issue) []Issue {
 
 // syncMemberSetHoldOff is the approval path's sync-set hold-off,
 // consulted by every path about to dispatch merge-or-wait, ahead of
-// the merge gate: when any connected issue of the PR carries
-// agentic-sync-merge, the PR is a landing-set member and landing is
-// the set's decision, not the individual PR's — merge-or-wait must
-// never merge it. The hold-off is silent (an unready set is not an
-// event worth a comment) and emits the members' open sync sets as
-// sync dispatches against the grouping issues, so the last approval
-// that completes a set triggers it without waiting for the sweep
-// (§forgejo/decisions/sync-set). ok is false when no connected issue
-// is a member, and the caller's merge gate decides on.
+// the merge gate: when any connected issue of the PR is a member of
+// an open landing set, landing is the set's decision, not the
+// individual PR's — merge-or-wait must never merge it. The hold-off
+// is silent (an unready set is not an event worth a comment) and
+// emits the members' open sync sets as sync dispatches against the
+// grouping issues, so the last approval that completes a set
+// triggers it without waiting for the sweep
+// (§forgejo/decisions/sync-set). Two readings of the label decide
+// alone: a member also carrying agentic-auto-merge is the authoring
+// error the hold-off exists to contain and holds off whatever sets
+// exist, naming both labels; a member of no open set — its set
+// retired by the decomposer, which deletes rather than closes — has
+// no set whose decision to wait for, and holding off would strand an
+// approved deliverable with no backstop, so its stale label is no
+// gate and ok is false, letting the caller's merge gate decide on.
+// ok is likewise false when no connected issue is a member at all.
 func syncMemberSetHoldOff(pr *PullRequest, s State) (Decision, bool) {
-	var members []string
+	var members, dualLabelled []string
 	var emissions []CascadeDispatch
 	seen := map[Key]bool{}
 	for i := range s.ConnectedIssues {
@@ -1021,7 +1028,11 @@ func syncMemberSetHoldOff(pr *PullRequest, s State) (Decision, bool) {
 		if !hasLabel(&c.Issue, LabelAgenticSyncMerge) {
 			continue
 		}
-		members = append(members, fmt.Sprintf("%s#%d", c.Issue.Repository, c.Issue.Number))
+		ref := fmt.Sprintf("%s#%d", c.Issue.Repository, c.Issue.Number)
+		members = append(members, ref)
+		if hasLabel(&c.Issue, LabelAgenticAutoMerge) {
+			dualLabelled = append(dualLabelled, ref)
+		}
 		for j := range c.SyncSets {
 			set := &c.SyncSets[j]
 			k := issueKey(set)
@@ -1035,7 +1046,19 @@ func syncMemberSetHoldOff(pr *PullRequest, s State) (Decision, bool) {
 	if len(members) == 0 {
 		return Decision{}, false
 	}
-	d := holdOff(fmt.Sprintf("PR %d stands at an approved review, but its connected issue %s is a member of a sync set; landing is the set's decision, not the PR's", pr.Number, strings.Join(members, ", ")))
+	if len(emissions) == 0 && len(dualLabelled) == 0 {
+		// A member of no open set: the set was retired or its
+		// membership edge removed. The label is stale authoring, not
+		// a gate — fall through to the caller's merge gate rather
+		// than hold off with nothing left to wait for
+		// (§forgejo/decisions/sync-set).
+		return Decision{}, false
+	}
+	reason := fmt.Sprintf("PR %d stands at an approved review, but its connected issue %s is a member of a sync set; landing is the set's decision, not the PR's", pr.Number, strings.Join(members, ", "))
+	if len(dualLabelled) > 0 {
+		reason = fmt.Sprintf("PR %d stands at an approved review, but its connected issue %s carries both %s and %s; a member is opted into the set, never into merging on its own — the double label is an authoring error the decomposer must retire", pr.Number, strings.Join(dualLabelled, ", "), LabelAgenticSyncMerge, LabelAgenticAutoMerge)
+	}
+	d := holdOff(reason)
 	d.Cascade = emissions
 	return d, true
 }

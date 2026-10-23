@@ -157,7 +157,7 @@ prompts:
 | `review` | a mergeable PR opened, or synced while it has no review, or an open mergeable PR carrying the `trigger-review` label while it has no review (§forgejo/decisions/label-triggered-review) |
 | `re-review` | a mergeable PR synced while it has a review, or an open mergeable PR carrying the `trigger-review` label while it has a review (§forgejo/decisions/label-triggered-review) |
 | `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review |
-| `merge-or-wait` | the PR's latest review approves **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's; never for a PR whose connected issue carries `agentic-sync-merge` — that PR is a landing-set member and landing is the set's decision (§forgejo/decisions/sync-set) |
+| `merge-or-wait` | the PR's latest review approves **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's; never for a PR whose connected issue is a member of an open sync set — landing is the set's decision (§forgejo/decisions/sync-set); a labelled member of no open set — its set retired — reads as stale authoring, not a gate, and the merge gate decides on (§forgejo/decisions/sync-set) |
 | `rebase` | an open PR is not mergeable (conflicts) |
 | `decompose` | an open issue carrying the `ideation` label was opened, edited, or had its labels changed; or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions); or the unblock cascade newly unblocks an open issue carrying the `outcome` label (§forgejo/decisions/unblock-cascade) |
@@ -195,7 +195,7 @@ prompts:
 | review submitted (latest review requests changes) | `fix-feedback` |
 | review submitted (latest review approves, no connected issue has an open blocker) | `merge-or-wait` |
 | review submitted (latest review approves, a connected issue has an open blocker) | hold off — the reason names the open blockers (§forgejo/decisions/merge-gate) |
-| review submitted (latest review approves, a connected issue carries `agentic-sync-merge`) | hold off, naming the sync set — the member never merges on its own; the member's open sync sets are emitted for a `sync` dispatch against their grouping issues (§forgejo/decisions/sync-set) |
+| review submitted (latest review approves, a connected issue carries `agentic-sync-merge`) | hold off, naming the sync set — the member never merges on its own; the member's open sync sets are emitted for a `sync` dispatch against their grouping issues. A member of **no open set** — its set retired — decides on through the merge gate, its label stale rather than a gate; a member also carrying `agentic-auto-merge` holds off naming both labels, whatever sets exist (§forgejo/decisions/sync-set) |
 | review submitted (latest review is anything else) | hold off |
 | PR merged | unblock cascade (for the connected issue) |
 | PR closed without merging | hold off |
@@ -438,6 +438,22 @@ cannot make cheaply: merge rights in every repository of the set,
 joint conflicts between individually-mergeable members, and the
 merge order the sync issue's body names.
 
+The approval hold-off fires on **set membership, not on the label
+alone**. A labelled member of no open set — the decomposer retired
+the set, or a membership edge went away — has no set whose decision
+to wait for, and a silent hold-off would strand its approved,
+mergeable PR with no backstop; such a stale label is no gate, and
+the merge gate decides on as if the member carried no set label. A
+member carrying `agentic-auto-merge` alongside `agentic-sync-merge`
+is the error state the hold-off exists to contain: it holds off
+whatever sets exist, the reason naming both labels.
+
+A member delivers its change through **one** open pull request —
+the authoring contract the decomposer keeps. Where a member
+nonetheless stands with several open PRs, the engine reads it
+through the first one, the same projection the unblock cascade
+uses; it does not gather reviews across deliveries.
+
 The dispatch's watermark is a **revision derived from the whole
 set** — the members keyed by repository and number, each at its issue
 revision and PR head sha — so the sweep does not re-fire at an
@@ -459,7 +475,10 @@ evaluates and dispatches. A member carrying `agentic-auto-merge` when
 it joins a set has the label removed by the decomposer — a member
 with both labels is the error state the approval hold-off exists to
 contain: it is never merged by `merge-or-wait`; landing is the set's
-decision.
+decision, and the hold-off names the condition by both label names.
+Retiring a set therefore includes removing `agentic-sync-merge` from
+its former members: the label is only ever a gate while an open set
+stands behind it.
 
 ## Unblock cascade
 

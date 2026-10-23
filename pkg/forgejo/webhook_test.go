@@ -3051,6 +3051,79 @@ func TestHandler_IssueClosed_CascadeEmitsSyncSetCandidate(t *testing.T) {
 	}
 }
 
+// TestHandler_Reconcile_SyncMemberReadsItsFirstOpenPR: the
+// one-delivery-per-member authoring contract — where a member
+// nonetheless stands with several open PRs the set reads it through
+// the first one, the unblock cascade's projection, and the second
+// does not hold the set
+// (§forgejo/decisions/sync-set, §forgejo/webhook/re-fetch).
+func TestHandler_Reconcile_SyncMemberReadsItsFirstOpenPR(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+	member := api.issues[4]
+	second := testPR(12, "open", true)
+	secondAsIssue := testIssue(12, "open")
+	secondAsIssue.IsPull = true
+	api.pulls[12] = second // open and mergeable, but no reviews at all
+	api.blocks[12] = []Issue{*member}
+	firstAsIssue := testIssue(9, "open")
+	firstAsIssue.IsPull = true
+	api.deps[4] = []Issue{*firstAsIssue, *secondAsIssue}
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1: the member is ready through its first open PR", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=sync repo=o/outcomes kind=issue number=11") {
+		t.Errorf("prompt = %q, want the sync dispatch for o/outcomes issue 11", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w == nil || w.Action != string(ActionSync) {
+		t.Errorf("sync watermark = %+v, want sync at the set revision", w)
+	}
+}
+
+// TestHandler_IssueClosed_SyncCandidateOnMislabelledIssueDispatchesNothing:
+// a grouping issue misauthorised with the sync label alongside
+// outcome decides the sweep's outcome row in dispatchSyncSet's
+// re-check — an exempt branch that can dispatch something other
+// than sync. The sibling cascade guard holds here too: nothing is
+// enqueued and no watermark is recorded against sync, so the queue
+// and the decision log cannot disagree
+// (§forgejo/decisions/sync-set, §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_SyncCandidateOnMislabelledIssueDispatchesNothing(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+	api.issues[11].Labels = append(api.issues[11].Labels, LabelOutcome) // sync + outcome: authoring error
+	api.issues[4] = testIssue(4, "closed")                              // fully unblocked: the outcome branch dispatches
+	api.deps[11] = []Issue{*api.issues[4], *api.issues[5]}
+	api.issues[7] = testIssue(7, "closed")
+	api.blocks[7] = []Issue{*api.issues[11]}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Errorf("got %d tasks, want none: a candidate that decides %s instead of %s enqueues nothing",
+			len(tasks), ActionWrapUp, ActionSync)
+	}
+	w, err := store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none: a forked candidate must not mark sync done", w)
+	}
+}
+
 // TestHandler_Reconcile_SyncIssueInadmissibleWithoutOutcomesRole: a
 // sync issue in a repository holding no outcomes role is not
 // dispatched — sync is admissible by the outcomes role of the

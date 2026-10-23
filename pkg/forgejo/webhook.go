@@ -694,13 +694,25 @@ func (e *Engine) dispatchSyncSet(cd CascadeDispatch, sender string) error {
 		e.log.Warn("load watermark (continuing without)", "key", k.String(), "error", err)
 		w = nil
 	}
-	st := State{Issue: issue, SyncMembers: members, DecomposerIdentity: e.cfg.DecomposerIdentity}
+	st := State{Issue: issue, Blockers: blockers, SyncMembers: members, DecomposerIdentity: e.cfg.DecomposerIdentity}
 	d := Decide(ev, st, w)
 	if !d.Dispatched {
 		// Unready, or already dispatched at this set state: silent on
 		// the wire, one line in the decision log
 		// (§forgejo/decisions/sync-set).
 		e.recordDecision(k, ev, st, d)
+		return nil
+	}
+	if d.Action != ActionSync {
+		// The candidate decided a different row — a mislabelled
+		// grouping issue (sync alongside outcome or ideation) takes
+		// the exempt branches first. The sibling cascade guard holds
+		// the same line: record the fork and enqueue nothing, so the
+		// queue and the decision log cannot disagree — the grouping
+		// issue's own sweep row decides its non-sync label
+		// (§forgejo/decisions/sync-set).
+		forked := holdOff(fmt.Sprintf("sync-set candidate against %s decided %s, not sync; nothing enqueued — the grouping issue's own row decides its other labels", k.String(), d.Action))
+		e.recordDecision(k, ev, st, forked)
 		return nil
 	}
 	if err := e.dispatch(ev, st, ActionSync); err != nil {
@@ -715,7 +727,14 @@ func (e *Engine) dispatchSyncSet(cd CascadeDispatch, sender string) error {
 // set, not of the grouping issue alone
 // (§forgejo/webhook/the-pipeline, §forgejo/decisions/sync-set).
 func revisionFor(ev Event, st State) string {
-	if len(st.SyncMembers) > 0 {
+	// The set revision describes a landing set, so it takes
+	// precedence only on the path that attached members to the
+	// object under consideration: the sweep's row for an open issue
+	// carrying the sync label. Tying the precedence to that label —
+	// not merely to members having been attached — keeps a future
+	// re-fetch that shares the field from silently re-typing a PR
+	// row's watermark (§forgejo/decisions/sync-set).
+	if ev.Kind == KindIssue && st.Issue != nil && hasLabel(st.Issue, LabelSync) && len(st.SyncMembers) > 0 {
 		return syncSetRevision(st.SyncMembers)
 	}
 	if ev.Kind == KindPR && st.PR != nil {

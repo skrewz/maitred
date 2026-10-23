@@ -45,9 +45,10 @@ const (
 	// decision (§forgejo/decisions/sync-set).
 	LabelAgenticSyncMerge = "agentic-sync-merge"
 	// LabelAgenticAutoMerge is the work item's opt-in to merging on
-	// its own once approved and unblocked. The decision function
-	// does not read it — the merge-or-wait prompt's merge policy
-	// owns it — the constant exists so the set vocabulary lives in
-	// one place (§forgejo/decisions/sync-set).
+	// its own once approved and unblocked. The merge-or-wait prompt's
+	// merge policy owns it; the decision function reads it only to
+	// name the error state of a landing-set member carrying both
+	// opt-ins, which the approval hold-off contains
+	// (§forgejo/decisions/sync-set).
 	LabelAgenticAutoMerge = "agentic-auto-merge"
 )

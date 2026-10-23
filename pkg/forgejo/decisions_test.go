@@ -121,6 +121,27 @@ func syncMemberConnected(number, syncNumber int) ConnectedIssue {
 	return c
 }
 
+// syncMemberWithoutSets is the connected issue of a PR under test
+// whose membership is gone: it carries agentic-sync-merge but stands
+// in no open set — the decomposer retired it, deleting rather than
+// closing — so the stale label is no gate
+// (§forgejo/decisions/sync-set).
+func syncMemberWithoutSets(number int) ConnectedIssue {
+	c := syncMemberConnected(number, 11)
+	c.SyncSets = nil
+	return c
+}
+
+// dualLabelledSyncMember is the connected issue of a PR under test
+// carrying both merge opt-ins with no open set behind them: the
+// authoring error the approval hold-off contains
+// (§forgejo/decisions/sync-set).
+func dualLabelledSyncMember(number int) ConnectedIssue {
+	c := syncMemberWithoutSets(number)
+	c.Issue.Labels = append(c.Issue.Labels, LabelAgenticAutoMerge)
+	return c
+}
+
 // connectedIssue is the non-PR issue a PR under test blocks — the
 // connected issue of the reject-pr test (§forgejo/decisions/actions).
 func connectedIssue() *Issue {
@@ -830,6 +851,35 @@ func TestDecide(t *testing.T) {
 				ConnectedIssues: []ConnectedIssue{syncMemberConnected(7, 11)},
 			},
 			wantAction: ActionFixFeedback,
+		},
+		{
+			name:  "PR review approved on a member of no open sync set dispatches merge-or-wait — a retired set is no gate",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberWithoutSets(7)},
+			},
+			wantAction: ActionMergeOrWait,
+		},
+		{
+			name:  "reconcile PR approved at head on a member of no open sync set dispatches merge-or-wait",
+			event: prEvent(EventReconcile, "maitred"),
+			state: State{
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberWithoutSets(7)},
+			},
+			wantAction: ActionMergeOrWait,
+		},
+		{
+			name:  "PR review approved on a member carrying both merge opt-ins holds off with no open set — the error state is contained",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{dualLabelledSyncMember(7)},
+			},
 		},
 		{
 			name:  "reconcile issue carrying the sync label with no members holds off — an empty set has nothing to land",
@@ -2561,4 +2611,37 @@ func TestDecide_EmptyForestStopsTheTeardownRefiring(t *testing.T) {
 				i+1, d.Action, d.Reason)
 		}
 	}
+}
+
+// TestDecide_SyncSetMemberEdgeCaseReasons: the hold-off reasons for
+// the two readings of the member label that decide alone — the
+// double opt-in names both labels; the member of no open set is not
+// held off at all, the merge gate deciding on
+// (§forgejo/decisions/sync-set).
+func TestDecide_SyncSetMemberEdgeCaseReasons(t *testing.T) {
+	t.Run("dual-labelled member names both labels", func(t *testing.T) {
+		d := Decide(prEvent(EventPRReviewed, "carol"), State{
+			PR:              openPR("abc"),
+			Reviews:         []Review{review("APPROVED", "carol", testTime)},
+			ConnectedIssues: []ConnectedIssue{dualLabelledSyncMember(7)},
+		}, nil)
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want a hold-off", d)
+		}
+		for _, want := range []string{LabelAgenticSyncMerge, LabelAgenticAutoMerge, "o/r#7"} {
+			if !strings.Contains(d.Reason, want) {
+				t.Errorf("hold-off reason = %q, want it to name %q", d.Reason, want)
+			}
+		}
+	})
+	t.Run("member of no open set is not held off", func(t *testing.T) {
+		d := Decide(prEvent(EventPRReviewed, "carol"), State{
+			PR:              openPR("abc"),
+			Reviews:         []Review{review("APPROVED", "carol", testTime)},
+			ConnectedIssues: []ConnectedIssue{syncMemberWithoutSets(7)},
+		}, nil)
+		if d.Action != ActionMergeOrWait {
+			t.Errorf("decision = %+v, want merge-or-wait: a stale member label is no gate", d)
+		}
+	})
 }

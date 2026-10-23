@@ -253,6 +253,9 @@ For each decision event, the re-fetch assembles the state
   reserved `sync` label grows one hop further: each blocking issue — a
   member of the landing set — is fetched with its delivering PR and
   that PR's reviews, the state the sync predicate reads
+  (§forgejo/decisions/sync-set). Where a member stands with several
+  open PRs the first is read, the unblock cascade's projection; the
+  one-delivery-per-member contract is the decomposer's to keep
   (§forgejo/decisions/sync-set).
   For issue closed, the blocker graph rooted at the closed issue.
 - **PR events** — the PR itself, and its reviews, for the review
