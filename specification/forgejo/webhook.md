@@ -16,8 +16,30 @@ no per-trigger webhooks for the engine.
 
 The engine is enabled when the engine config loads
 (§forgejo/config/loading) and the Forgejo credentials are present in the
-environment. Otherwise the route is not mounted, and the trigger-based
-handler serves `/v1/` as before.
+environment.
+
+**While the engine is disabled** the route is still mounted — mounted
+whenever the webhook API server runs — and every delivery to it is
+**refused**:
+
+- The response is `503 Service Unavailable`, the body naming the startup
+  error (the config or credential failure) verbatim.
+- One line is logged per refused delivery, naming the request path, the
+  delivery id (`X-Forgejo-Delivery`), and that same reason. Per-delivery
+  silence is a defect: a refused delivery must be findable from Forgejo's
+  delivery log alone.
+- The body is never read and nothing is verified, mapped, or dispatched.
+
+`503`, not `404`, is the diagnosis. Forgejo keeps the most recent
+deliveries and offers manual redelivery, but does not retry
+automatically; the status code is therefore read by a human, not
+consumed by a retry loop. `404 unknown provider` — what the trigger
+handler's `/v1/` fallback makes of the path — reads "nobody ever
+registered this endpoint" and points at the webhook configuration.
+`503` reads "the endpoint is here and cannot serve yet" and points at
+the engine's startup log, where the answer already is. The trigger
+fallback itself is unchanged: an unconfigured trigger provider's own
+route still answers `404`.
 
 ## The pipeline
 

@@ -215,8 +215,12 @@ func main() {
 	// (§forgejo/observability/the-dashboard-view).
 	var fjEngine *forgejo.Engine
 	var forgejoHandler http.Handler
-	if engine, fh, err := newForgejoEngine(dataDirStr, qe); err != nil {
+	var forgejoDisabledReason string
+	forgejoLog := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	if engine, fh, err := newForgejoEngine(dataDirStr, qe, forgejoLog); err != nil {
+		forgejoDisabledReason = err.Error()
 		log.Printf("forgejo engine disabled: %v", err)
+		log.Printf("  forgejo engine:   disabled (route %s answers 503)", forgejo.WebhookPath)
 	} else if fh != nil {
 		fjEngine = engine
 		forgejoHandler = fh
@@ -234,9 +238,11 @@ func main() {
 	var webhookSrv *webhook.Server
 	if apiPortVal > 0 && (webhookProviders != nil || forgejoHandler != nil) {
 		webhookSrv = webhook.New(apiPortVal, eng, eng.StateStore(), Version, webhookProviders)
-		if forgejoHandler != nil {
-			webhookSrv.MountOverride(forgejo.WebhookPath, forgejoHandler)
-		}
+		// The all-events route is mounted whether the engine came up or
+		// not: disabled, it refuses deliveries with 503 rather than
+		// letting the trigger handler 404 them
+		// (§forgejo/webhook/the-route).
+		mountForgejoRoute(webhookSrv, forgejoHandler, forgejoDisabledReason, forgejoLog)
 		if err := webhookSrv.Start(); err != nil {
 			log.Printf("webhook server error: %v (continuing without webhook API)", err)
 			webhookSrv = nil
@@ -265,10 +271,30 @@ func main() {
 	log.Printf("stopped")
 }
 
+// routeMounter mounts an exact path on the webhook API router,
+// taking precedence over the trigger-based /v1/ route.
+type routeMounter interface {
+	MountOverride(path string, handler http.Handler)
+}
+
+// mountForgejoRoute mounts the Forgejo all-events route on the webhook
+// API router (§forgejo/webhook/the-route). With the engine enabled its
+// handler serves the route; disabled, the route still exists and refuses
+// every delivery with 503 naming the startup error, so a delivery lands
+// in Forgejo's delivery log as "not serving yet" instead of "no such
+// endpoint".
+func mountForgejoRoute(m routeMounter, enabled http.Handler, disabledReason string, logger *slog.Logger) {
+	if enabled != nil {
+		m.MountOverride(forgejo.WebhookPath, enabled)
+		return
+	}
+	m.MountOverride(forgejo.WebhookPath, forgejo.NewDisabledHandler(disabledReason, logger))
+}
+
 // newForgejoEngine constructs the Forgejo engine and its webhook handler
 // from the environment and the engine config, or (nil, nil, err) when the
 // engine is not configured (§forgejo/webhook/the-route).
-func newForgejoEngine(dataDir string, qe queue.TaskQueueProvider) (*forgejo.Engine, http.Handler, error) {
+func newForgejoEngine(dataDir string, qe queue.TaskQueueProvider, logger *slog.Logger) (*forgejo.Engine, http.Handler, error) {
 	cfgPath := defaultEnv(forgejo.ConfigEnvVar, forgejo.DefaultConfigPath)
 	cfg, err := forgejo.LoadConfig(cfgPath)
 	if err != nil {
@@ -294,9 +320,8 @@ func newForgejoEngine(dataDir string, qe queue.TaskQueueProvider) (*forgejo.Engi
 	if err != nil {
 		return nil, nil, err
 	}
-	fjLog := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	fjEngine := forgejo.NewEngine(forgejo.New(baseURL, token, httpClient), store, cfg, qe, fjLog)
-	return fjEngine, forgejo.NewHandler(fjEngine, secret, fjLog), nil
+	fjEngine := forgejo.NewEngine(forgejo.New(baseURL, token, httpClient), store, cfg, qe, logger)
+	return fjEngine, forgejo.NewHandler(fjEngine, secret, logger), nil
 }
 
 // healthCheck validates that trigger and data directories are accessible
