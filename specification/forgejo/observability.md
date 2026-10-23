@@ -18,7 +18,11 @@ reasoning.
 The event path and the reconciliation sweep log their decisions alike:
 the sweep feeds the same decision function through the same pipeline
 (§forgejo/reconciliation/the-sweep), so every decision is logged exactly
-once, wherever it is made.
+once, wherever it is made. A cascade hold-off logs the object it names
+as the blocker graph showed it, so its state and revision fields carry
+the tracker's own values rather than blanks — an unrelated close event
+must not blank the row of an object it did not decide
+(§forgejo/decisions/unblock-cascade).
 
 ## The dashboard view
 

@@ -205,9 +205,13 @@ type CascadeDispatch struct {
 // CascadeHoldOff is one cascade outcome that dispatches nothing but
 // belongs in the decision log: an open tracker the walk finds still
 // blocked, its reason naming which blockers remain open
-// (§forgejo/decisions/unblock-cascade).
+// (§forgejo/decisions/unblock-cascade). It carries the tracker as the
+// graph showed it, so the record states the state and revision it was
+// made at instead of blanking them (§forgejo/observability/the-decision-log,
+// §forgejo/observability/the-dashboard-view).
 type CascadeHoldOff struct {
 	Key    Key
+	Issue  *Issue
 	Reason string
 }
 
@@ -728,7 +732,9 @@ func decidePRMerged(s State) Decision {
 // and, for issues whose remaining open blockers are only their
 // connected open PRs, those PRs (dispatched merge-or-wait) — each
 // exactly once, plus the hold-offs of the open outcome trackers the
-// walk finds still blocked. The dispatch's action is classified at
+// walk finds still blocked: every tracker it visits without emitting
+// for it is named, so no tracker is passed over in silence. The
+// dispatch's action is classified at
 // emission from the node's labels (the walk itself stays
 // label-blind); a newly unblocked tracker dispatches wrap-up, never
 // implement. The walk is transitive (a blocked issue that is itself
@@ -764,6 +770,7 @@ func unblockCascade(root *IssueNode) ([]CascadeDispatch, []CascadeHoldOff) {
 				// the work exists as a PR, and the closure that
 				// removed the last issue-side blocker unblocks that
 				// PR instead (§forgejo/decisions/unblock-cascade).
+				var emitted bool
 				if prs := openPullBlockers(b.Blockers); len(prs) > 0 && allClosed(issueBlockers(b.Blockers)) {
 					for _, p := range prs {
 						pk := Key{Repo: p.Repository, Kind: KindPR, Number: p.Number}
@@ -774,9 +781,17 @@ func unblockCascade(root *IssueNode) ([]CascadeDispatch, []CascadeHoldOff) {
 						emissions = append(emissions, CascadeDispatch{Key: pk, Action: ActionMergeOrWait})
 					}
 				} else if allClosed(b.Blockers) {
+					emitted = true
 					emissions = append(emissions, CascadeDispatch{Key: k, Action: cascadeAction(&b.Issue)})
-				} else if h, ok := trackerStillBlocked(&b.Issue, b.Blockers); ok {
-					holds = append(holds, h)
+				}
+				// A tracker the walk does not emit for is not silent
+				// either: the hold-off names what still holds it — an
+				// open issue blocker, or the open PR whose merge will
+				// fire its wrap-up (§forgejo/decisions/unblock-cascade).
+				if !emitted {
+					if h, ok := trackerStillBlocked(&b.Issue, b.Blockers); ok {
+						holds = append(holds, h)
+					}
 				}
 			}
 		}
@@ -800,29 +815,40 @@ func cascadeAction(issue *Issue) Action {
 }
 
 // trackerStillBlocked is the cascade hold-off for an open outcome
-// tracker the walk finds still blocked: the reason names the open
-// blockers (cross-repo included) so the decision log says why
-// wrap-up did not fire when one of several blockers closed. An
-// ideation-carrying issue is not this hold-off's subject —
-// decompose wins over wrap-up and the sweep's rows decide it
-// (§forgejo/decisions/unblock-cascade).
+// tracker the walk finds still blocked: the reason names the blockers
+// holding it (cross-repo included) so the decision log says why
+// wrap-up did not fire when one of several blockers closed. A blocker
+// holds the tracker unless its state is closed — one the engine cannot
+// read as closed holds as surely as an open one does, and is named
+// rather than dropped. An ideation-carrying issue is not this hold-off's
+// subject: decompose wins over wrap-up and the sweep's rows decide it.
+// A tracker whose ideation root is closed is a commissioned forest,
+// which the sweep curates, so the reason says that instead of
+// promising a wrap-up the state does not call for
+// (§forgejo/decisions/unblock-cascade,
+// §forgejo/reconciliation/watermark-exemptions).
 func trackerStillBlocked(issue *Issue, blockers []IssueNode) (CascadeHoldOff, bool) {
-	if !hasLabel(issue, LabelOutcome) || hasLabel(issue, LabelIdeation) {
+	if !hasLabel(issue, LabelOutcome) || hasLabel(issue, LabelIdeation) || allClosed(blockers) {
 		return CascadeHoldOff{}, false
 	}
-	var open []Issue
+	var (
+		open  []Issue
+		every = make([]Issue, 0, len(blockers))
+	)
 	for i := range blockers {
-		if blockers[i].Issue.State == "open" {
+		every = append(every, blockers[i].Issue)
+		if blockers[i].Issue.State != "closed" {
 			open = append(open, blockers[i].Issue)
 		}
 	}
-	if len(open) == 0 {
-		return CascadeHoldOff{}, false
+	reason := fmt.Sprintf("issue %d is an open %s tracker still blocked by %s", issue.Number, LabelOutcome, blockerNames(open))
+	if gate := ideationGate(every); gate != nil && gate.State != "open" {
+		reason = fmt.Sprintf("issue %d is an open %s tracker commissioned by %s %d and still blocked by %s; the sweep curates the forest",
+			issue.Number, LabelOutcome, LabelIdeation, gate.Number, blockerNames(open))
+	} else {
+		reason += "; wrap-up held off"
 	}
-	return CascadeHoldOff{
-		Key:    issueKey(issue),
-		Reason: fmt.Sprintf("issue %d is an open %s tracker still blocked by %s; wrap-up held off", issue.Number, LabelOutcome, blockerNames(open)),
-	}, true
+	return CascadeHoldOff{Key: issueKey(issue), Issue: issue, Reason: reason}, true
 }
 
 // cascadeActionFitsState re-checks a cascade emission against the

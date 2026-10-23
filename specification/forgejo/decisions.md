@@ -418,8 +418,24 @@ issue afresh.
 A still-blocked open tracker the walk visits is **not silent**: the
 cascade records a hold-off for its key naming which blockers remain
 open (each as `repo#number`), so closing one of several blockers logs
-why `wrap-up` did not fire. An unlabelled issue found still blocked
-stays silent — the walk merely passes through.
+why `wrap-up` did not fire. A blocker **holds** the tracker unless its
+state is `closed`: a state the engine does not recognise holds as
+surely as `open` does, and is named rather than passed over in silence.
+This holds for every way the walk can visit a tracker without emitting
+for it — including a tracker whose remaining open blockers are only its
+connected open PRs: those PRs are emitted `merge-or-wait` as for any
+other issue, and the tracker itself is named as still held, by a
+blocker whose own merge is what will dispatch its `wrap-up`. The
+hold-off carries the tracker as the graph showed it, so the decision
+log entry records the state and revision it was made at instead of
+blanking them (§forgejo/observability/the-decision-log,
+§forgejo/observability/the-dashboard-view) — an unrelated close event
+must not downgrade a tracker's dashboard row. Where the tracker's
+`ideation` root is **closed** the forest is commissioned and unfinished,
+so the hold-off says the sweep curates it
+(§forgejo/reconciliation/watermark-exemptions) rather than promising a
+`wrap-up` the state does not call for. An unlabelled issue found still
+blocked stays silent — the walk merely passes through.
 
 An issue whose remaining open blockers are **its connected open PRs**
 is not an implement candidate — the work exists as a PR, and the

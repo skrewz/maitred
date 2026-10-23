@@ -160,10 +160,15 @@ func (e *Engine) HandleEvent(ev Event) {
 		}
 		for _, ch := range d.CascadeHoldOffs {
 			// A still-blocked tracker is not silent: the hold-off belongs
-			// to the decision log like any other decision
-			// (§forgejo/decisions/unblock-cascade, §forgejo/observability/the-decision-log).
+			// to the decision log like any other decision, carries the
+			// tracker as the graph showed it (so its state and revision are
+			// its own), and is qualified by the roles of the repository
+			// holding the key, so it never promises an action those roles
+			// exclude (§forgejo/decisions/unblock-cascade,
+			// §forgejo/observability/the-decision-log,
+			// §forgejo/webhook/repository-roles).
 			cev := Event{Type: EventIssueOpened, Repo: ch.Key.Repo, Kind: ch.Key.Kind, Number: ch.Key.Number, Sender: ev.Sender}
-			e.recordDecision(ch.Key, cev, State{}, holdOff(ch.Reason))
+			e.recordDecision(ch.Key, cev, State{Issue: ch.Issue}, holdOff(e.cascadeHoldOffReason(ch)))
 		}
 	})
 }
@@ -391,6 +396,26 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	}
 	e.log.Info("dispatched", "key", ev.KeyOf().String(), "task", task.ID)
 	return nil
+}
+
+// cascadeHoldOffReason qualifies a cascade hold-off with the roles of
+// the repository holding its key. An emission names the action and the
+// role it requires when the roles deny it; a hold-off must not promise
+// an action those roles exclude either, so where they deny wrap-up the
+// reason says so in the same wording — the hold-off helpers keep the
+// two paths saying the same thing. The scope cache makes the test free
+// (§forgejo/webhook/repository-roles, §forgejo/decisions/unblock-cascade).
+func (e *Engine) cascadeHoldOffReason(ch CascadeHoldOff) string {
+	r, err := e.repoRoles(ch.Key.Repo)
+	switch {
+	case err != nil:
+		return ch.Reason + "; " + holdOffScopeUnknown(ch.Key.Repo, err).Reason
+	case !r.any():
+		return ch.Reason + "; " + holdOffOutOfRemit(ch.Key.Repo).Reason
+	case !admissibleInRoles(ActionWrapUp, r):
+		return ch.Reason + "; " + holdOffActionInadmissible(ActionWrapUp, ch.Key.Repo).Reason
+	}
+	return ch.Reason // the roles admit wrap-up: nothing to qualify
 }
 
 // dispatchCascade dispatches the entry's action for one key of the

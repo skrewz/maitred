@@ -338,7 +338,7 @@ func TestDecide(t *testing.T) {
 			name:      "issue closed leaves an outcome tracker blocked: the cascade records a hold-off naming the blockers",
 			event:     issueEvent(EventIssueClosed),
 			state:     State{Issue: closedIssue(), CascadeRoot: trackerCascadeFixture(true)},
-			wantHolds: []CascadeHoldOff{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 2}, Reason: "issue 2 is an open outcome tracker still blocked by o/r#3; wrap-up held off"}},
+			wantHolds: []CascadeHoldOff{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 2}, Issue: &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}}, Reason: "issue 2 is an open outcome tracker still blocked by o/r#3; wrap-up held off"}},
 		},
 		{
 			name:       "PR opened dispatches review",
@@ -1623,7 +1623,81 @@ func TestUnblockCascade(t *testing.T) {
 			},
 			wantHolds: []CascadeHoldOff{{
 				Key:    Key{Repo: "o/r", Kind: KindIssue, Number: 2},
+				Issue:  &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
 				Reason: "issue 2 is an open outcome tracker still blocked by other/repo#3; wrap-up held off",
+			}},
+		},
+		{
+			// A tracker's work is delivered by its members, never by a pull
+			// request of its own: the PR is emitted merge-or-wait and the
+			// tracker is named as still held — the walk is never silent for a
+			// tracker it does not emit for
+			// (§forgejo/decisions/unblock-cascade).
+			name: "a tracker held only by its connected open PR is named, not silent",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue: Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+						Blockers: []IssueNode{
+							node("o/r", 1, "closed"),
+							pullNode("o/r", 9, "open"),
+						},
+					},
+				},
+			},
+			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindPR, Number: 9}, Action: ActionMergeOrWait}},
+			wantHolds: []CascadeHoldOff{{
+				Key:    Key{Repo: "o/r", Kind: KindIssue, Number: 2},
+				Issue:  &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+				Reason: "issue 2 is an open outcome tracker still blocked by o/r#9; wrap-up held off",
+			}},
+		},
+		{
+			// #101 widened the commissioned forest to a tracker gated by a
+			// closed root one hop away: the sweep curates it, so the hold-off
+			// must not promise a wrap-up the state does not call for
+			// (§forgejo/reconciliation/watermark-exemptions).
+			name: "a tracker in a commissioned forest names the curation, not wrap-up",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
+				Blocks: []IssueNode{
+					{
+						Issue: Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+						Blockers: []IssueNode{
+							{Issue: Issue{Number: 1, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}}},
+							node("other/repo", 3, "open"),
+						},
+					},
+				},
+			},
+			wantHolds: []CascadeHoldOff{{
+				Key:    Key{Repo: "o/r", Kind: KindIssue, Number: 2},
+				Issue:  &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+				Reason: "issue 2 is an open outcome tracker commissioned by ideation 1 and still blocked by other/repo#3; the sweep curates the forest",
+			}},
+		},
+		{
+			// A blocker the engine cannot read as closed holds the tracker as
+			// surely as an open one does: it is named, not dropped
+			// (§forgejo/decisions/unblock-cascade).
+			name: "a blocker in an unrecognised state still holds the tracker and is named",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue: Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+						Blockers: []IssueNode{
+							node("o/r", 1, "closed"),
+							node("o/r", 3, "blocked"),
+						},
+					},
+				},
+			},
+			wantHolds: []CascadeHoldOff{{
+				Key:    Key{Repo: "o/r", Kind: KindIssue, Number: 2},
+				Issue:  &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+				Reason: "issue 2 is an open outcome tracker still blocked by o/r#3; wrap-up held off",
 			}},
 		},
 		{
