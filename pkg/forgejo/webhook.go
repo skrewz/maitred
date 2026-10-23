@@ -257,17 +257,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 			// failure, never the path's default (§forgejo/webhook/re-
 			// fetch, §forgejo/decisions/actions,
 			// §forgejo/decisions/merge-gate).
-			connected, err := e.connectedIssues(owner, name, ev.Number)
-			if err != nil {
-				return ev, State{}, err
-			}
-			st.ConnectedIssues = connected
-			// A connected issue carrying agentic-sync-merge is a
-			// landing-set member: one more outbound hop reads the
-			// open sync issues it belongs to, so the approval path
-			// can emit the set without waiting for the sweep
-			// (§forgejo/decisions/sync-set).
-			if err := e.fetchSyncSets(&st); err != nil {
+			if err := e.fetchPRSetState(owner, name, ev.Number, &st); err != nil {
 				return ev, State{}, err
 			}
 			fallthrough
@@ -326,6 +316,26 @@ func (e *Engine) connectedIssues(owner, name string, number int) ([]ConnectedIss
 		connected = append(connected, ConnectedIssue{Issue: blocks[i], Blockers: blockers})
 	}
 	return connected, nil
+}
+
+// fetchPRSetState assembles the state the approval path's sync-set
+// hold-off and the merge gate read for a pull request: every non-PR
+// issue the PR blocks, each with its blockers, and the landing-set
+// membership of each connected issue carrying agentic-sync-merge — the
+// open sync issues it blocks. Both paths that can dispatch
+// merge-or-wait for a PR build this state here, the event's re-fetch
+// and the unblock cascade's PR leg, so the hold-off cannot see
+// membership on one and be blind to it on the other: a member of an
+// open set never merges on its own, whichever direction the approval
+// arrived from (§forgejo/webhook/re-fetch, §forgejo/decisions/sync-set,
+// §forgejo/decisions/unblock-cascade).
+func (e *Engine) fetchPRSetState(owner, name string, number int, st *State) error {
+	connected, err := e.connectedIssues(owner, name, number)
+	if err != nil {
+		return err
+	}
+	st.ConnectedIssues = connected
+	return e.fetchSyncSets(st)
 }
 
 // fetchSyncSets reads the membership edges of every connected issue
@@ -590,10 +600,14 @@ func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
 // the repository holding the PR, never the repository whose closure
 // rooted the cascade (§forgejo/webhook/repository-roles), and the
 // re-fetched PR state decides: only a decision of merge-or-wait
-// dispatches — a PR not standing at an approved head, or whose gate
-// still sees an open blocker on re-fetch, stays silent and the sweep
-// is the backstop (§forgejo/decisions/merge-gate). The PR key's own
-// watermark applies before dispatching.
+// dispatches — a PR not standing at an approved head, a PR whose gate
+// still sees an open blocker on re-fetch, and a PR whose connected
+// issue is a member of an open landing set all dispatch nothing, each
+// recorded in the decision log with the sweep as the backstop
+// (§forgejo/decisions/merge-gate, §forgejo/decisions/sync-set). The PR
+// key's own watermark applies before dispatching; the set's own
+// decision is not emitted from here — the walk follows the closed
+// node's edges only — and stays the sweep's row to make.
 func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 	ev := Event{Type: EventPRReviewed, Repo: k.Repo, Kind: KindPR, Number: k.Number, Sender: sender}
 	r, err := e.repoRoles(k.Repo)
@@ -621,8 +635,14 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 	if err != nil {
 		return err
 	}
-	connected, err := e.connectedIssues(owner, name, k.Number)
-	if err != nil {
+	// The cascade's PR leg decides on the same state the event path
+	// assembles — connected issues and their landing-set membership
+	// included. Without the membership hop the hold-off would read an
+	// empty SyncSets and a member of an open set would merge here, on
+	// the one path the labels table forbids it on
+	// (§forgejo/decisions/sync-set, §forgejo/decisions/unblock-cascade).
+	st := State{PR: pr, Reviews: reviews}
+	if err := e.fetchPRSetState(owner, name, k.Number, &st); err != nil {
 		return err
 	}
 	w, err := e.store.Load(k)
@@ -632,8 +652,16 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 	}
 	// Insurance against the re-fetched state, through the same pure
 	// decision and the same gate the event path takes.
-	d := Decide(ev, State{PR: pr, Reviews: reviews, ConnectedIssues: connected}, w)
+	d := Decide(ev, st, w)
 	if d.Action != ActionMergeOrWait {
+		// A fork of merge-or-wait is recorded like the sibling cascade
+		// dispatchers record theirs: this path has no backstop of its
+		// own and the decision log is the engine's only observability,
+		// so a member held off because it belongs to a landing set must
+		// leave a line naming why, not only a queue that stayed empty
+		// (§forgejo/decisions/unblock-cascade,
+		// §forgejo/observability/the-decision-log).
+		e.recordDecision(k, ev, st, d)
 		return nil
 	}
 	if err := e.dispatch(ev, State{PR: pr}, ActionMergeOrWait); err != nil {

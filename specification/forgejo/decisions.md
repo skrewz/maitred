@@ -438,6 +438,12 @@ cannot make cheaply: merge rights in every repository of the set,
 joint conflicts between individually-mergeable members, and the
 merge order the sync issue's body names.
 
+The hold-off sits on **every path that dispatches `merge-or-wait`** —
+the review event, the sweep's PR path, and the unblock cascade's PR leg
+alike — so a member's PR cannot be landed by whichever direction its
+approval arrived from; the cascade's leg therefore takes the same
+membership read the event's re-fetch takes
+(§forgejo/decisions/unblock-cascade).
 The approval hold-off fires on **set membership, not on the label
 alone**. A labelled member of no open set — the decomposer retired
 the set, or a membership edge went away — has no set whose decision
@@ -552,9 +558,19 @@ that removed the last blocker, exactly as a newly unblocked issue is
 dispatched with `implement`. A cascaded PR key pays the same admission,
 insurance, and watermark as an issue key: the
 re-fetch of the PR decides it, and only a decision of `merge-or-wait`
-dispatches — a PR not standing at an approved head stays silent and the
-sweep remains the backstop. The cascade dispatches nothing else for
-PRs.
+dispatches — a PR not standing at an approved head, or one whose
+connected issue is a member of an **open** landing set, dispatches
+nothing and the sweep remains the backstop. The PR leg assembles the
+state the merge gate and the sync-set hold-off read exactly as the
+event's re-fetch does — connected issues and their membership edges
+included — so membership cannot be visible on one path and invisible on
+the other: the cascade is the third way a PR is merged and the labels
+table's denial holds on it too (§forgejo/decisions/sync-set). A fork of
+`merge-or-wait` on this path is **recorded** in the decision log as the
+sibling cascade dispatchers record theirs, never swallowed: a hold-off
+with no backstop of its own must be diagnosable from the log
+(§forgejo/observability/the-decision-log). The cascade dispatches
+nothing else for PRs.
 
 The walk itself is label-blind: labelled nodes are visited and
 traversed, so graph walking stays independent of what is finally

@@ -279,7 +279,11 @@ For each decision event, the re-fetch assembles the state
   `agentic-sync-merge` is a landing-set member and grows one outbound
   hop — the open sync issues it blocks, its membership edges, so the
   approval path can emit the set without waiting for the sweep
-  (§forgejo/decisions/sync-set). For PR merged, the blocker graph
+  (§forgejo/decisions/sync-set). The unblock cascade's PR leg, the
+  third path that can dispatch `merge-or-wait`, assembles this same PR
+  state — connected issues and membership edges included — rather than
+  a reduced one, so the hold-off sees membership wherever a merge may
+  fire (§forgejo/decisions/unblock-cascade). For PR merged, the blocker graph
   rooted at the connected issue — the non-PR issue the PR blocks.
 
 The blocker graph is re-fetched to the depth the unblock cascade walks:

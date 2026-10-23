@@ -3051,6 +3051,91 @@ func TestHandler_IssueClosed_CascadeEmitsSyncSetCandidate(t *testing.T) {
 	}
 }
 
+// cascadePRSetFixtures: the cascade's PR leg inside a landing set.
+// Closing issue 7 unblocks the labelled member issue 10 — its only
+// remaining open blocker is its connected PR 9 — and issue 10 is a
+// member of the open sync issue 11 in the outcomes repository, whose
+// other member (issue 5) stands open without the member label, so the
+// set is not ready. The membership edge is blocks[10]: delete it and
+// the set reads as retired (§forgejo/decisions/sync-set,
+// §forgejo/decisions/unblock-cascade).
+func cascadePRSetFixtures(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store, *bytes.Buffer) {
+	t.Helper()
+	eng, api, q, store, log := cascadePRFixtures(t)
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+	member := api.issues[10]
+	// A member is opted into the set, never into merging on its own.
+	member.Labels = []string{LabelAgenticSyncMerge}
+	api.issues[5] = testIssue(5, "open") // open, unlabelled: a member awaiting a human
+	api.deps[11] = []Issue{*member, *api.issues[5]}
+	api.blocks[9] = []Issue{*member} // PR 9 delivers issue 10, not fixture member 4
+	api.blocks[10] = []Issue{*api.issues[11]}
+	return eng, api, q, store, log
+}
+
+// TestHandler_IssueClosed_CascadePRLegNeverMergesSetMember: the merge
+// the unblock cascade fires is the third path to merge-or-wait, and a
+// member of an open landing set must not be merged by it — closing the
+// last issue-side blocker of a labelled member whose set is not ready
+// dispatches nothing, records no PR watermark, and leaves the hold-off
+// in the decision log naming the set (§forgejo/decisions/sync-set,
+// §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadePRLegNeverMergesSetMember(t *testing.T) {
+	eng, _, q, store, log := cascadePRSetFixtures(t)
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none: an open set lands its member PR, not the cascade %+v", len(tasks), tasks)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w != nil {
+		t.Errorf("PR watermark = %+v, want none: the cascade's PR leg held off", w)
+	}
+	if reason := reasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "sync set") {
+		t.Errorf("cascade PR hold-off %q does not name the landing set it is waiting for", reason)
+	}
+}
+
+// TestHandler_IssueClosed_CascadePRLegMergesRetiredSetMember: the
+// other reading of the member label, pinned where it is reachable.
+// With the set retired — the decomposer deletes rather than closes, so
+// the membership edge is gone — there is no set whose decision to wait
+// for, and the cascade's PR leg merges the member's approved PR like
+// any other newly unblocked one (§forgejo/decisions/sync-set,
+// §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadePRLegMergesRetiredSetMember(t *testing.T) {
+	eng, api, q, store, _ := cascadePRSetFixtures(t)
+	delete(api.blocks, 10) // the set was retired: no membership edge left
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (merge-or-wait for the orphaned member's PR); all = %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=merge-or-wait repo=o/r kind=pr number=9") {
+		t.Errorf("prompt = %q, want merge-or-wait for o/r PR 9", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w == nil || w.Action != string(ActionMergeOrWait) || w.Revision != "sha-9" {
+		t.Errorf("PR watermark = %+v, want merge-or-wait at sha-9", w)
+	}
+}
+
 // TestHandler_Reconcile_SyncMemberReadsItsFirstOpenPR: the
 // one-delivery-per-member authoring contract — where a member
 // nonetheless stands with several open PRs the set reads it through
