@@ -841,12 +841,15 @@ func unblockCascade(root *IssueNode) ([]CascadeDispatch, []CascadeHoldOff) {
 			case "open":
 				// An open sync issue the walk finds is a grouping
 				// issue a member's outbound edge points at: emit it
-				// as a sync-set candidate whatever its readiness —
-				// the set's own re-fetched evaluation decides, and
-				// an unready one stays silent
+				// as a sync-set candidate when the graph in hand
+				// cannot show the set stalled on a member awaiting a
+				// human — the set's own re-fetched evaluation decides,
+				// and an unready one stays silent
 				// (§forgejo/decisions/sync-set).
 				if hasLabel(&b.Issue, LabelSync) {
-					emissions = append(emissions, CascadeDispatch{Key: k, Action: ActionSync})
+					if syncSetCouldBeReady(b.Blockers) {
+						emissions = append(emissions, CascadeDispatch{Key: k, Action: ActionSync})
+					}
 					continue
 				}
 				// An issue whose remaining open blockers are its
@@ -882,6 +885,37 @@ func unblockCascade(root *IssueNode) ([]CascadeDispatch, []CascadeHoldOff) {
 	}
 	walk(root)
 	return emissions, holds
+}
+
+// syncSetCouldBeReady is the cascade walk's cheap necessary condition
+// for a landing set. A set is blocked by construction, so the walk
+// would otherwise pay the whole set read — the grouping issue, its
+// dependency rows, and per open member its dependencies, its PR and
+// that PR's reviews — for a set that cannot be ready, on every
+// closure that cascades through any member while the set is authoring.
+// What the graph already holds rules out one such case exactly: an
+// open blocker carrying no agentic-sync-merge is a member awaiting a
+// human, and the predicate holds off on that fact alone, so emitting
+// would only buy an evaluation saying "not ready". The remaining
+// not-ready readings cannot be told from graph data — a member's
+// delivering PR hangs off the member, one hop deeper than the walk
+// goes — so they stay the set's own read to make, the re-check in the
+// dispatcher the authority and the sweep the backstop, unchanged
+// (§forgejo/decisions/sync-set, §forgejo/decisions/unblock-cascade).
+func syncSetCouldBeReady(blockers []IssueNode) bool {
+	for i := range blockers {
+		b := &blockers[i]
+		if b.Issue.State != "open" {
+			continue // landed, or finished by a human
+		}
+		if b.Issue.IsPull {
+			continue // a PR member: only the predicate can read its reviews
+		}
+		if !hasLabel(&b.Issue, LabelAgenticSyncMerge) {
+			return false // a member awaiting a human: the set cannot land
+		}
+	}
+	return true
 }
 
 // cascadeAction classifies a newly unblocked cascade issue at
@@ -1134,17 +1168,28 @@ func considerSyncIssue(issue *Issue, members []SyncMember, w *Watermark) Decisio
 }
 
 // syncSetRevision derives the set revision the sync dispatch's
-// watermark records: the members keyed by repository and number, each
-// at its issue revision and PR head sha, ordered by key so the API's
-// enumeration order cannot change the digest
-// (§forgejo/decisions/sync-set, §forgejo/state/watermark).
+// watermark records: what the predicate reads about each member — its
+// state, whether it carries the member label, and its delivering PR's
+// head sha, open and mergeable state, and approval at that head —
+// ordered by key so the API's enumeration order cannot change the
+// digest (§forgejo/decisions/sync-set, §forgejo/state/watermark).
+// The members' updated_at is deliberately absent: it records any edit
+// to any member — a comment, a title fix, an unrelated label toggle —
+// and a digest that moved with it would re-dispatch the landing
+// prompt on an unchanged predicate result, most noisily for a set
+// stalled on a member awaiting a human. Nothing is lost by narrowing
+// the digest: the sweep re-evaluates the set every interval whatever
+// it says, so a change that does move readiness still re-fires within
+// one interval, and one that does not stops re-firing at all.
 func syncSetRevision(members []SyncMember) string {
 	lines := make([]string, 0, len(members))
 	for i := range members {
 		m := &members[i]
-		line := fmt.Sprintf("%s#%d@%s", m.Issue.Repository, m.Issue.Number, issueRevision(&m.Issue))
+		line := fmt.Sprintf("%s#%d state=%s %s=%t", m.Issue.Repository, m.Issue.Number, m.Issue.State, LabelAgenticSyncMerge, hasLabel(&m.Issue, LabelAgenticSyncMerge))
 		if m.PR != nil {
-			line += "@" + m.PR.HeadSHA
+			latest := latestReview(m.Reviews)
+			approvedAtHead := latest != nil && latest.Event == ReviewApproved && latest.CommitID == m.PR.HeadSHA
+			line += fmt.Sprintf(" pr=%d open=%t mergeable=%t head=%s approved-at-head=%t", m.PR.Number, prOpen(m.PR), m.PR.Mergeable, m.PR.HeadSHA, approvedAtHead)
 		}
 		lines = append(lines, line)
 	}

@@ -1998,6 +1998,36 @@ func TestUnblockCascade(t *testing.T) {
 			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 11}, Action: ActionSync}},
 		},
 		{
+			// A set stalled on a member awaiting a human is not ready
+			// whatever its deliveries: the graph says so without a set
+			// read, and a candidate that can only hold off costs the
+			// whole set fetch for nothing
+			// (§forgejo/decisions/sync-set).
+			name: "a sync issue with an open member lacking the member label emits no candidate",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue:    Issue{Number: 11, State: "open", Repository: "o/r", Labels: []string{LabelSync}},
+						Blockers: []IssueNode{node("o/r", 1, "closed"), node("o/r", 3, "open")},
+					},
+				},
+			},
+		},
+		{
+			name: "a sync issue whose open members are all opted in emits the candidate",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue:    Issue{Number: 11, State: "open", Repository: "o/r", Labels: []string{LabelSync}},
+						Blockers: []IssueNode{node("o/r", 1, "closed"), {Issue: Issue{Number: 3, State: "open", Repository: "o/r", Labels: []string{LabelAgenticSyncMerge}}}},
+					},
+				},
+			},
+			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 11}, Action: ActionSync}},
+		},
+		{
 			name: "an issue with an open blocker is not unblocked",
 			root: &IssueNode{
 				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
@@ -2431,9 +2461,11 @@ func TestDecide_ForestTeardownRows(t *testing.T) {
 }
 
 // TestSyncSetRevision pins the set revision's properties: it depends
-// on every member's issue revision and PR head sha, never on the
-// order the members are enumerated in — so the sweep does not re-fire
-// at an unchanged set state, and any member moving re-fires
+// on what the sync predicate reads about every member — state, member
+// label, PR open and mergeable, approval at head — and never on the
+// order the members are enumerated in, so the sweep does not re-fire at
+// an unchanged set state, any member's readiness moving re-fires, and
+// an edit that cannot move readiness does not
 // (§forgejo/decisions/sync-set, §forgejo/state/watermark).
 func TestSyncSetRevision(t *testing.T) {
 	members := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
@@ -2450,8 +2482,26 @@ func TestSyncSetRevision(t *testing.T) {
 
 	edited := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	edited[1].Issue.UpdatedAt = testTime2
-	if syncSetRevision(members) == syncSetRevision(edited) {
-		t.Error("a member issue's activity must change the set revision")
+	if syncSetRevision(members) != syncSetRevision(edited) {
+		t.Error("an edit that cannot move readiness must not change the set revision: the digest records what the predicate reads, not the members' activity")
+	}
+
+	unlabelled := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
+	unlabelled[0].Issue.Labels = nil
+	if syncSetRevision(members) == syncSetRevision(unlabelled) {
+		t.Error("a member losing the member label must change the set revision")
+	}
+
+	staleApproval := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
+	staleApproval[0].Reviews = []Review{{Event: ReviewApproved, Author: "carol", CommitID: "sha-before-the-push", SubmittedAt: testTime}}
+	if syncSetRevision(members) == syncSetRevision(staleApproval) {
+		t.Error("a member PR no longer approved at head must change the set revision")
+	}
+
+	conflicted := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
+	conflicted[0].PR.Mergeable = false
+	if syncSetRevision(members) == syncSetRevision(conflicted) {
+		t.Error("a member PR that stopped being mergeable must change the set revision")
 	}
 
 	if syncSetRevision(nil) == syncSetRevision(members) {

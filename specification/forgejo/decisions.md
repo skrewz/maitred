@@ -422,14 +422,20 @@ The predicate is **one function** (`considerSyncIssue`), called from
 whichever direction the set state moved: from the reconciliation
 sweep, as the backstop for changes that carry no delivery; from the
 unblock cascade's walk of outbound edges, since a member's outbound
-edges already point at the sync issue it belongs to; and from the
-approval path, ahead of `merge-or-wait`, so the last approval that
+edges already point at the sync issue it belongs to — there the walk
+emits the grouping issue only when the dependency rows it already
+holds cannot show the set stalled on a member awaiting a human (one
+open without `agentic-sync-merge` is enough to know it is not ready,
+and the read it saves is the whole set: the grouping issue, its
+members, and per open member its PR and that PR's reviews); and from
+the approval path, ahead of `merge-or-wait`, so the last approval that
 completes a set triggers it without waiting for a sweep — there the
 candidate is emitted and the set's own re-fetch decides it, the same
 insurance shape the cascade keys pay. An empty set dispatches
 nothing: there is nothing to land. Emission is only ever a
 *candidate*: the dispatcher re-reads the set and enqueues nothing
-unless the row decides `sync`, and the sweep stays the backstop.
+unless the row decides `sync`, and the sweep stays the backstop for
+any set the walk held back.
 
 `sync` is a **kind claim**, like `ideation` and `outcome`, so one
 issue cannot make two of them. Where a grouping issue carries `sync`
@@ -474,10 +480,19 @@ through the first one, the same projection the unblock cascade
 uses; it does not gather reviews across deliveries.
 
 The dispatch's watermark is a **revision derived from the whole
-set** — the members keyed by repository and number, each at its issue
-revision and PR head sha — so the sweep does not re-fire at an
-unchanged set state, and any member moving re-fires
-(§forgejo/state/watermark). `sync` is admissible by the **outcomes
+set** — for each member, what the predicate reads about it: its
+state, whether it carries `agentic-sync-merge`, and its delivering
+PR's head sha, open and mergeable state, and approval at that head —
+so the sweep does not re-fire at an unchanged set state, and any
+member's readiness moving re-fires (§forgejo/state/watermark). The
+members' `updated_at` is **not** part of it: it records any edit to
+any member — a comment, a title fix, an unrelated label toggle — and
+a digest that moved with it would run the landing prompt again on an
+unchanged predicate, most noisily for a set stalled on a member
+awaiting a human. Narrowing costs nothing: the sweep re-evaluates the
+set every interval whatever the digest says, so a change that does
+move readiness still re-fires within one interval and one that does
+not stops re-firing at all. `sync` is admissible by the **outcomes
 role** of the repository holding the grouping issue, like `decompose`
 and `wrap-up` (§forgejo/webhook/repository-roles); evaluating a set
 reads PR state in enabled repositories and the sync issue's own state
@@ -589,9 +604,14 @@ The walk itself is label-blind: labelled nodes are visited and
 traversed, so graph walking stays independent of what is finally
 dispatched; labels are consulted only at emission — at emission the
 walk also emits an **open sync issue it visits** as a sync-set
-candidate, whatever its readiness: the grouping issue's own
-re-fetched evaluation decides, and an unready set stays silent
-(§forgejo/decisions/sync-set).
+candidate, gated only on what its dependency rows already show: an
+open blocker carrying no `agentic-sync-merge` is a member awaiting a
+human, which holds the set off whatever its deliveries, and such a
+set is not emitted at all (the grouping issue is a permanent
+neighbour of its members' forests while the set is authoring, and the
+read the candidate pays is the whole set). Any other open sync issue
+is emitted and its own re-fetched evaluation decides, an unready set
+staying silent (§forgejo/decisions/sync-set).
 
 ## Loop prevention
 

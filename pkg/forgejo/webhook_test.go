@@ -3049,6 +3049,13 @@ func TestHandler_IssueClosed_CascadeEmitsSyncSetCandidate(t *testing.T) {
 	if !strings.Contains(tasks[0].Prompt, "action=sync repo=o/outcomes kind=issue number=11") {
 		t.Errorf("prompt = %q, want the sync dispatch for o/outcomes issue 11", tasks[0].Prompt)
 	}
+	// The gate holds the set read back only where the graph shows the
+	// set cannot be ready: here its members are opted in, so the set
+	// is read and decided as before
+	// (§forgejo/decisions/sync-set).
+	if n := api.callCount("GetIssue:outcomes/11"); n == 0 {
+		t.Error("the set was never read: the walk's gate must not hold back a set whose members are all opted in")
+	}
 }
 
 // cascadePRSetFixtures: the cascade's PR leg inside a landing set.
@@ -3234,6 +3241,47 @@ func TestHandler_Reconcile_MislabelledGroupingIssueDispatchesNothing(t *testing.
 	}
 	if w != nil && w.Action == string(ActionWrapUp) {
 		t.Errorf("watermark = %+v, want none naming wrap-up: the grouping issue's set would never land", w)
+	}
+}
+
+// TestHandler_IssueClosed_CascadeSkipsSetStalledOnAHuman: a sync
+// issue is a permanent neighbour of its members' forests while the
+// set is authoring, so the walk must not pay the set read — the
+// grouping issue, its dependency rows, and per open member its
+// dependencies, PR and reviews — on every closure. An open member
+// without the member label is a member awaiting a human, which the
+// graph states for free: no candidate, no set read, and the sweep
+// stays the backstop (§forgejo/decisions/sync-set,
+// §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadeSkipsSetStalledOnAHuman(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+	api.issues[5] = testIssue(5, "open") // open, unlabelled: a member awaiting a human
+	api.deps[11] = []Issue{*api.issues[4], *api.issues[5]}
+	api.issues[7] = testIssue(7, "closed")
+	api.blocks[7] = []Issue{*api.issues[11]}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none: a set stalled on a human is not ready", len(tasks))
+	}
+	// The fake records each call as "<op>:<repo name>/<number>".
+	for _, op := range []string{"GetIssue:outcomes/11", "GetPullRequest:r/9", "ListPullRequestReviews:r/9"} {
+		if n := api.callCount(op); n != 0 {
+			t.Errorf("%s called %d time(s): a set the graph already shows stalled on a member awaiting a human must not be read", op, n)
+		}
+	}
+	w, err := store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("sync watermark = %+v, want none: nothing was dispatched", w)
 	}
 }
 
