@@ -31,6 +31,11 @@ const (
 	// HeaderEventType carries the fine-grained event type (e.g.
 	// "issues", "pull_request_sync").
 	HeaderEventType = "X-Forgejo-Event-Type"
+	// HeaderDelivery carries Forgejo's delivery id, the handle for the
+	// delivery's entry in Forgejo's recent-deliveries list. It is named
+	// in the log line a refusal leaves behind
+	// (§forgejo/webhook/the-route).
+	HeaderDelivery = "X-Forgejo-Delivery"
 )
 
 // maxWebhookBodySize caps the webhook body (mirrors the trigger
