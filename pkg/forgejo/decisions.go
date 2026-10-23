@@ -351,6 +351,26 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 	if issue == nil || issue.State != "open" {
 		return decideIssueOpened(e, s, w) // the same hold-offs as the event path
 	}
+	if hasLabel(issue, LabelSync) {
+		// The sync row is tested before the other kind rows. `sync`
+		// is a kind claim like `ideation` and `outcome`, and the sweep
+		// is a landing set's only backstop: letting label enumeration
+		// order decide which of two kind claims wins would run the
+		// wrong prompt against the grouping issue — wrap-up against a
+		// set that never lands, or the watermark-exempt decompose
+		// every interval. The conflict is named instead, the shape
+		// already chosen for a member carrying both merge opt-ins
+		// (§forgejo/decisions/sync-set).
+		if other := otherKindLabel(issue); other != "" {
+			return holdOff(fmt.Sprintf("issue %d is an open %s issue that also carries %s; two reserved kind labels claim the same issue and only the decomposer may retire one; nothing dispatched", issue.Number, LabelSync, other))
+		}
+		// The sweep is the backstop for landing sets: a set that
+		// changed through a delivery-less move (an edge edit, a
+		// human closing a member) is found here, evaluated under
+		// the set-revision guard like every other sync row
+		// (§forgejo/decisions/sync-set).
+		return considerSyncIssue(issue, s.SyncMembers, w)
+	}
 	if hasLabel(issue, LabelIdeation) {
 		if hasLabel(issue, LabelTeardownForest) {
 			// The teardown row wins over the root's row: a forest being
@@ -386,15 +406,20 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 		}
 		return dispatch(ActionWrapUp, fmt.Sprintf("issue %d is an open, fully unblocked %s tracker; the state calls for wrap-up regardless of revision %s", issue.Number, LabelOutcome, issueRevision(issue)))
 	}
-	if hasLabel(issue, LabelSync) {
-		// The sweep is the backstop for landing sets: a set that
-		// changed through a delivery-less move (an edge edit, a
-		// human closing a member) is found here, evaluated under
-		// the set-revision guard like every other sync row
-		// (§forgejo/decisions/sync-set).
-		return considerSyncIssue(issue, s.SyncMembers, w)
-	}
 	return decideIssueOpened(e, s, w)
+}
+
+// otherKindLabel returns the reserved kind label an issue carries
+// besides `sync` — `ideation` first, since decompose wins over
+// wrap-up wherever both apply — or "" when the issue claims exactly
+// one kind (§forgejo/decisions/sync-set).
+func otherKindLabel(issue *Issue) string {
+	for _, label := range []string{LabelIdeation, LabelOutcome} {
+		if hasLabel(issue, label) {
+			return label
+		}
+	}
+	return ""
 }
 
 // decideIssueOpened handles an issue that was opened (or the

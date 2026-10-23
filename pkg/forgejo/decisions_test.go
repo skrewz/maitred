@@ -78,6 +78,16 @@ func syncIssueFixture(number int) *Issue {
 	return issue
 }
 
+// syncIssueWithLabel returns an open issue carrying the sync label
+// alongside a second reserved kind label — a grouping issue the
+// decomposer misauthorised, since one issue cannot claim two kinds
+// (§forgejo/decisions/sync-set).
+func syncIssueWithLabel(number int, other string) *Issue {
+	issue := syncIssueFixture(number)
+	issue.Labels = append(issue.Labels, other)
+	return issue
+}
+
 // syncMemberFixture is one ready member of a landing set: an open
 // issue carrying agentic-sync-merge whose connected PR is mergeable
 // and approved at its head (§forgejo/decisions/sync-set).
@@ -885,6 +895,27 @@ func TestDecide(t *testing.T) {
 			name:  "reconcile issue carrying the sync label with no members holds off — an empty set has nothing to land",
 			event: issueEvent(EventReconcile),
 			state: State{Issue: syncIssueFixture(7)},
+		},
+		{
+			// The sweep is the set's only backstop, so the sync row
+			// is tested first: a second kind claim is authoring the
+			// engine names rather than resolves by label order
+			// (§forgejo/decisions/sync-set).
+			name:  "reconcile issue carrying sync alongside outcome holds off naming both kind labels",
+			event: issueEvent(EventReconcile),
+			state: State{
+				Issue:       syncIssueWithLabel(7, LabelOutcome),
+				SyncMembers: []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)},
+				Blockers:    []Issue{{Number: 4, State: "closed", Repository: "o/r"}, {Number: 5, State: "closed", Repository: "o/r"}},
+			},
+		},
+		{
+			name:  "reconcile issue carrying sync alongside ideation holds off naming both kind labels",
+			event: issueEvent(EventReconcile),
+			state: State{
+				Issue:    syncIssueWithLabel(7, LabelIdeation),
+				Blockers: []Issue{{Number: 4, State: "closed", Repository: "o/r"}},
+			},
 		},
 		{
 			name:       "reconcile sync issue with every member closed or approved dispatches sync",

@@ -3175,11 +3175,11 @@ func TestHandler_Reconcile_SyncMemberReadsItsFirstOpenPR(t *testing.T) {
 
 // TestHandler_IssueClosed_SyncCandidateOnMislabelledIssueDispatchesNothing:
 // a grouping issue misauthorised with the sync label alongside
-// outcome decides the sweep's outcome row in dispatchSyncSet's
-// re-check — an exempt branch that can dispatch something other
-// than sync. The sibling cascade guard holds here too: nothing is
-// enqueued and no watermark is recorded against sync, so the queue
-// and the decision log cannot disagree
+// outcome claims two kinds, and the sweep's row names that conflict
+// instead of letting label enumeration order pick a prompt — the
+// sweep being the set's only backstop. The sibling cascade guard
+// holds here too: nothing is enqueued and no watermark is recorded
+// against sync, so the queue and the decision log cannot disagree
 // (§forgejo/decisions/sync-set, §forgejo/decisions/unblock-cascade).
 func TestHandler_IssueClosed_SyncCandidateOnMislabelledIssueDispatchesNothing(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
@@ -3197,7 +3197,7 @@ func TestHandler_IssueClosed_SyncCandidateOnMislabelledIssueDispatchesNothing(t 
 		t.Fatalf("status = %d, want 204", rec.Code)
 	}
 	if tasks := q.all(); len(tasks) != 0 {
-		t.Errorf("got %d tasks, want none: a candidate that decides %s instead of %s enqueues nothing",
+		t.Errorf("got %d tasks, want none: a grouping issue claiming two kinds dispatches neither %s nor %s",
 			len(tasks), ActionWrapUp, ActionSync)
 	}
 	w, err := store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11})
@@ -3206,6 +3206,34 @@ func TestHandler_IssueClosed_SyncCandidateOnMislabelledIssueDispatchesNothing(t 
 	}
 	if w != nil {
 		t.Errorf("watermark = %+v, want none: a forked candidate must not mark sync done", w)
+	}
+}
+
+// TestHandler_Reconcile_MislabelledGroupingIssueDispatchesNothing:
+// the sweep is the set's only backstop, and the reproduction the
+// review describes is this row — a grouping issue carrying sync
+// alongside outcome must never take the outcome branch, whose
+// watermark would record wrap-up against a set that then never
+// lands. The kind conflict is named and nothing is dispatched
+// (§forgejo/decisions/sync-set, §forgejo/reconciliation).
+func TestHandler_Reconcile_MislabelledGroupingIssueDispatchesNothing(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+	api.issues[11].Labels = append(api.issues[11].Labels, LabelOutcome) // sync + outcome: authoring error
+	api.issues[4] = testIssue(4, "closed")                              // every member closed: the outcome branch would dispatch
+	api.deps[11] = []Issue{*api.issues[4], *api.issues[5]}
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none: the sync row is tested before the kind it conflicts with, not after it", len(tasks))
+	}
+	w, err := store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil && w.Action == string(ActionWrapUp) {
+		t.Errorf("watermark = %+v, want none naming wrap-up: the grouping issue's set would never land", w)
 	}
 }
 

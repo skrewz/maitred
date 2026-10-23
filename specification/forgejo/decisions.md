@@ -208,7 +208,7 @@ prompts:
 | reconcile — open `outcome` issue whose `ideation` blocker is **open** and carries the `teardown-forest` label | hold off, as any tracker with an open root does: the teardown order needs no row of its own, and the root's own edge is what keeps an emptied tracker from reading as finished (§forgejo/decisions/forest-teardown) |
 | reconcile — open `outcome` issue with open blockers, its `ideation` blocker open | hold off, naming the root — the forest is not yet commissioned, and the root's own row is the pulse: a forest is curated once per sweep |
 | reconcile — open `outcome` issue with open blockers and no `ideation` blocker | hold off, naming the absence — a tracker not gated by a root is not a forest's tracker |
-| reconcile — open issue carrying the `sync` label | `sync` when every member is closed or approved-at-head, mergeable, and opted in; otherwise a silent hold-off naming the members that are not ready (§forgejo/decisions/sync-set) |
+| reconcile — open issue carrying the `sync` label | `sync` when every member is closed or approved-at-head, mergeable, and opted in; otherwise a silent hold-off naming the members that are not ready — and a hold-off naming both reserved labels when the issue also carries `ideation` or `outcome`, two kind claims one row must not settle by label order (§forgejo/decisions/sync-set) |
 | reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, `reject-pr` when a connected issue is blocked by an open `ideation` issue and otherwise as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate) |
 
 The **reject-pr test precedes the review and rebase rows** on every path
@@ -427,7 +427,20 @@ approval path, ahead of `merge-or-wait`, so the last approval that
 completes a set triggers it without waiting for a sweep — there the
 candidate is emitted and the set's own re-fetch decides it, the same
 insurance shape the cascade keys pay. An empty set dispatches
-nothing: there is nothing to land.
+nothing: there is nothing to land. Emission is only ever a
+*candidate*: the dispatcher re-reads the set and enqueues nothing
+unless the row decides `sync`, and the sweep stays the backstop.
+
+`sync` is a **kind claim**, like `ideation` and `outcome`, so one
+issue cannot make two of them. Where a grouping issue carries `sync`
+alongside either of the others the sweep's row **names the conflict
+and dispatches nothing**, whatever the label order: the sweep is the
+set's only backstop, and a row that let the other kind branch decide
+first would run the wrap-up prompt against a set that then never
+lands, or the watermark-exempt decompose every interval. The shape is
+the one a member carrying both merge opt-ins already takes. The
+candidate path holds the same line, so no path dispatches a fork of
+what the row decided.
 
 The engine's hold-off is **silent**: a set that is not ready is not
 an event worth a comment, and an unready evaluation leaves nothing on
