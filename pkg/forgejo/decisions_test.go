@@ -518,6 +518,55 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionReReview,
 		},
 		{
+			// The trigger-review label is the explicit request for an
+			// agentic review (§forgejo/decisions/label-triggered-review).
+			name:       "PR synced carrying trigger-review without a review dispatches review",
+			event:      prEvent(EventPRSynced, "alice"),
+			state:      State{PR: labelledPR("abc", LabelTriggerReview)},
+			wantAction: ActionReview,
+		},
+		{
+			name:       "PR synced carrying trigger-review with a review dispatches re-review",
+			event:      prEvent(EventPRSynced, "alice"),
+			state:      State{PR: labelledPR("abc", LabelTriggerReview), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			wantAction: ActionReReview,
+		},
+		{
+			// The label is an explicit request, not the author's own
+			// push: the reviewing-author sender guard does not
+			// suppress a label-requested review
+			// (§forgejo/decisions/label-triggered-review).
+			name:       "PR synced carrying trigger-review pushed by the reviewing author dispatches re-review",
+			event:      prEvent(EventPRSynced, "carol"),
+			state:      State{PR: labelledPR("abc", LabelTriggerReview), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			wantAction: ActionReReview,
+		},
+		{
+			name:       "PR synced carrying a differently cased trigger-review label dispatches re-review",
+			event:      prEvent(EventPRSynced, "carol"),
+			state:      State{PR: labelledPR("abc", "Trigger-Review"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			wantAction: ActionReReview,
+		},
+		{
+			// Keyed to the label's presence at the current revision:
+			// the label merely present does not re-fire the review
+			// (§forgejo/decisions/label-triggered-review,
+			// §forgejo/decisions/loop-prevention).
+			name:      "PR synced carrying trigger-review already dispatched at the revision holds off",
+			event:     prEvent(EventPRSynced, "alice"),
+			state:     State{PR: labelledPR("abc", LabelTriggerReview), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			watermark: &Watermark{Action: string(ActionReReview), Revision: "abc"},
+		},
+		{
+			// The label requests a review of mergeable work; a
+			// conflicting PR is rebased first
+			// (§forgejo/decisions/label-triggered-review).
+			name:       "PR synced carrying trigger-review but not mergeable dispatches rebase",
+			event:      prEvent(EventPRSynced, "alice"),
+			state:      State{PR: labelledPRNotMergeable("abc", LabelTriggerReview)},
+			wantAction: ActionRebase,
+		},
+		{
 			name:       "PR review changes-requested dispatches fix-feedback",
 			event:      prEvent(EventPRReviewed, "carol"),
 			state:      State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
@@ -762,6 +811,16 @@ func TestDecide(t *testing.T) {
 				}},
 			},
 			wantAction: ActionRejectPR,
+		},
+		{
+			// The label overrides the trigger, not the review's
+			// content: a label-requested review that has landed and
+			// approves at head decides on under the merge policy
+			// (§forgejo/decisions/label-triggered-review).
+			name:       "reconcile PR carrying trigger-review standing at an approved review dispatches merge-or-wait",
+			event:      prEvent(EventReconcile, "alice"),
+			state:      State{PR: labelledPR("abc", LabelTriggerReview), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			wantAction: ActionMergeOrWait,
 		},
 		{
 			name:  "reconcile PR standing at an approved review whose connected issue is blocked by an open ideation issue dispatches reject-pr",
@@ -1305,6 +1364,22 @@ func TestEvent_KeyOf(t *testing.T) {
 func notMergeablePR(sha string) *PullRequest {
 	pr := openPR(sha)
 	pr.Mergeable = false
+	return pr
+}
+
+// labelledPR is an open mergeable PR carrying the given labels
+// (§forgejo/decisions/label-triggered-review).
+func labelledPR(sha string, labels ...string) *PullRequest {
+	pr := openPR(sha)
+	pr.Labels = labels
+	return pr
+}
+
+// labelledPRNotMergeable is an open PR carrying the given labels with
+// merge conflicts (§forgejo/decisions/label-triggered-review).
+func labelledPRNotMergeable(sha string, labels ...string) *PullRequest {
+	pr := notMergeablePR(sha)
+	pr.Labels = labels
 	return pr
 }
 
