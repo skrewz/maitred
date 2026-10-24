@@ -60,8 +60,8 @@ prompts:
 |---|---|
 | `implement` | the issue is open, unblocked (all its blockers closed), has no connected open PR, carries no reserved label, and is not authored by the configured decomposer identity — the issue was opened or became unblocked |
 | `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement), and it carries no reserved label |
-| `review` | a mergeable PR opened, or synced while it has no review |
-| `re-review` | a mergeable PR synced while it has a review |
+| `review` | a mergeable PR opened, or synced while it has no review, or an open mergeable PR carrying the `trigger-review` label while it has no review (§forgejo/decisions/label-triggered-review) |
+| `re-review` | a mergeable PR synced while it has a review, or an open mergeable PR carrying the `trigger-review` label while it has a review (§forgejo/decisions/label-triggered-review) |
 | `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review |
 | `merge-or-wait` | the PR's latest review approves **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's |
 | `rebase` | an open PR is not mergeable (conflicts) |
@@ -89,6 +89,8 @@ prompts:
 | PR synced (open, not mergeable) | `rebase` |
 | PR synced (open, mergeable, no review) | `review` |
 | PR synced (open, mergeable, has a review) | `re-review` |
+| PR carrying the `trigger-review` label (open, mergeable, no review) | `review` — explicit request (§forgejo/decisions/label-triggered-review) |
+| PR carrying the `trigger-review` label (open, mergeable, has a review) | `re-review` — explicit request (§forgejo/decisions/label-triggered-review) |
 | review submitted (a connected issue blocked by an open `ideation` issue) | `reject-pr` |
 | review submitted (latest review requests changes) | `fix-feedback` |
 | review submitted (latest review approves, no connected issue has an open blocker) | `merge-or-wait` |
@@ -220,6 +222,30 @@ PR whose latest
 review is anything else (e.g. dismissed), or whose latest review predates
 the current head, is reconciled as PR synced.
 
+## Label-triggered review
+
+The `trigger-review` label is the **explicit request for an agentic review**.
+When an open, mergeable pull request carries it, the decision dispatches a
+review for that revision regardless of the review state the transition table
+would otherwise produce: `review` when the PR has no review, `re-review` when
+it already does. The label is an *override of the trigger*, not of the review's
+content — the reviewing agent decides the outcome (approve, request changes,
+comment) and the merge policy applies unchanged (§forgejo/decisions/actions).
+
+The label restores the pre-engine affordance where a human, by labelling, asked
+for a review that the state transitions alone would not have raised. The
+dispatch is keyed to the label's presence at the current revision so it does
+not re-fire the review while the label is merely present
+(§forgejo/decisions/loop-prevention); removing and re-applying the label at a
+new revision is how an explicit re-ask is made. The reviewing-author sender
+guard does not suppress a label-requested review — the label is an explicit
+request, not the author's own push.
+
+`trigger-review` is **additive**: it never suppresses the state-driven
+`review` / `re-review` transitions, and it is distinct from the reserved labels
+(`ideation`, `outcome`, `human-task`), which gate work items rather than
+request reviews (§forgejo/decisions/transition-table).
+
 ## Merge gate
 
 `merge-or-wait` is dispatched **only when no connected issue of the PR
@@ -318,9 +344,11 @@ Four mechanisms, in this order:
 3. **Targeted per-transition sender guards**, only where an agent's
    *own* action would re-trigger the *same* action: a commit pushed by
    the PR's reviewing author (the author of its latest review) must
-   not re-review that same commit. Cross-persona triggering (a
-   reviewer's changes-requested leading to the implementer's fix) is
-   intended and unguarded.
+   not re-review that same commit. The guard yields to an explicit
+   request: a PR carrying the `trigger-review` label is reviewed
+   whatever its author pushed (§forgejo/decisions/label-triggered-review).
+   Cross-persona triggering (a reviewer's changes-requested leading to
+   the implementer's fix) is intended and unguarded.
 4. **Targeted authorship guards**, where an agent's *own* creation would
    otherwise re-trigger the *same* action: an issue authored by the configured
    decomposer identity is never an `implement` candidate on the event path or the
@@ -343,7 +371,9 @@ decides as reconcile (§forgejo/decisions/transition-table).
 PR itself (an issue carrying its **author**, the login of whoever opened
 it, §forgejo/client/operations); the issue's blockers (with their states)
 and its connected open PRs, for the `implement` and `reassess`
-conditions; the PR's reviews, for the review transitions; for PR opened,
+conditions; the PR's reviews, for the review transitions; the PR's labels,
+for the label-triggered review override
+(§forgejo/decisions/label-triggered-review); for PR opened,
 PR reviewed and the sweep's PR path, the issues the PR blocks and each
 issue's blockers, for the `reject-pr` test (§forgejo/decisions/actions)
 and for the merge gate (§forgejo/decisions/merge-gate), which reads the
