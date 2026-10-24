@@ -20,4 +20,11 @@ const (
 	// its blockers are closed
 	// (§forgejo/reconciliation/watermark-exemptions).
 	LabelOutcome = "outcome"
+	// LabelTriggerReview is the explicit request for an agentic
+	// review: an open, mergeable pull request carrying it is reviewed
+	// whatever its review state — the label overrides the trigger, not
+	// the review's content (§forgejo/decisions/label-triggered-review).
+	// Unlike the reserved names above it requests no work item; it
+	// asks for a review of one.
+	LabelTriggerReview = "trigger-review"
 )

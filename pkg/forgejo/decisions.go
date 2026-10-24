@@ -487,7 +487,14 @@ func decideRejectPR(pr *PullRequest, s State, w *Watermark) (Decision, bool) {
 // re-fetched PR is not mergeable, re-review when it was already
 // reviewed, review otherwise. A commit pushed by the PR's reviewing
 // author does not re-review the reviewer's own push
-// (§forgejo/decisions/loop-prevention).
+// (§forgejo/decisions/loop-prevention). A PR carrying the
+// trigger-review label is the explicit request for an agentic review:
+// the review is dispatched for the current revision whatever the
+// review state would otherwise produce — the reviewing-author sender
+// guard does not suppress it, since the label is a human request, not
+// the author's own push — while the revision-keyed watermark guard
+// keeps the label merely present from re-firing
+// (§forgejo/decisions/label-triggered-review).
 func decidePRSynced(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
 	if pr == nil {
@@ -505,6 +512,12 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 	action := ActionReview
 	if len(s.Reviews) > 0 {
 		action = ActionReReview
+	}
+	if carriesLabel(pr.Labels, LabelTriggerReview) {
+		if alreadyDispatched(w, action, pr.HeadSHA) {
+			return holdOff(fmt.Sprintf("%s already dispatched at revision %s", action, pr.HeadSHA))
+		}
+		return dispatch(action, fmt.Sprintf("PR %d carries the %s label: explicit request for a review at head %s", pr.Number, LabelTriggerReview, pr.HeadSHA))
 	}
 	if alreadyDispatched(w, action, pr.HeadSHA) {
 		return holdOff(fmt.Sprintf("%s already dispatched at revision %s", action, pr.HeadSHA))
@@ -822,7 +835,15 @@ func alreadyDispatched(w *Watermark, action Action, revision string) bool {
 // case-insensitively: a label created as "Ideation" must not silently
 // decide as implement (§forgejo/reconciliation/watermark-exemptions).
 func hasLabel(issue *Issue, label string) bool {
-	for _, l := range issue.Labels {
+	return carriesLabel(issue.Labels, label)
+}
+
+// carriesLabel reports whether the label list carries the label, matching
+// case-insensitively as hasLabel does — the same rule applies to the
+// labels on a pull request, so a label created as "Trigger-Review" must
+// not silently decide as no request (§forgejo/decisions/label-triggered-review).
+func carriesLabel(labels []string, label string) bool {
+	for _, l := range labels {
 		if strings.EqualFold(l, label) {
 			return true
 		}
