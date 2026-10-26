@@ -50,3 +50,7 @@ actions:
     prompt: "reject-pr {{.Repo}} {{.Kind}} {{.Number}}"
     persona: ui-test
     timeout: 1h
+  teardown-forest:
+    prompt: "teardown-forest {{.Repo}} {{.Kind}} {{.Number}}"
+    persona: ui-test
+    timeout: 1h

@@ -405,3 +405,23 @@ func TestAllActions(t *testing.T) {
 		}
 	}
 }
+
+// TestShippedSampleConfigIsValid pins the in-repo half of the coupling:
+// Validate requires a prompt for every action the binary knows, so the
+// sample config this repository ships must carry each one — a missing
+// block is not a failed test but a silently disabled engine in
+// `make test-ui` (§forgejo/config/validation, §forgejo/config/loading).
+func TestShippedSampleConfigIsValid(t *testing.T) {
+	cfg, err := LoadConfig(filepath.Join("..", "..", "config", "forgejoeng.yaml"))
+	if err != nil {
+		t.Fatalf("LoadConfig(config/forgejoeng.yaml): %v", err)
+	}
+	if len(cfg.Actions) != len(AllActions) {
+		t.Errorf("sample config carries %d actions, the binary knows %d", len(cfg.Actions), len(AllActions))
+	}
+	for _, a := range AllActions {
+		if _, ok := cfg.Actions[string(a)]; !ok {
+			t.Errorf("sample config has no %q block", a)
+		}
+	}
+}

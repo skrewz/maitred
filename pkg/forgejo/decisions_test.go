@@ -1876,33 +1876,105 @@ func TestDecide_ForestTeardownRows(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		event Event
-		state State
+		issue *Issue
 	}{
 		{
-			name:  "a closed root carrying the label holds off: closure commissioned the forest",
+			// Closing commissions the forest; no label un-happens it
+			// (§forgejo/decisions/commissioning).
+			name:  "a closed root carrying the label holds off",
 			event: issueEvent(EventIssueLabelsChanged),
-			state: State{Issue: closedIssue()},
+			issue: func() *Issue {
+				root := teardownRoot()
+				root.State = "closed"
+				return root
+			}(),
 		},
 		{
-			name:  "the label without ideation retires no work item",
+			// A modifier, not a kind label: it retires no work item.
+			name:  "the label without ideation holds off",
 			event: issueEvent(EventIssueLabelsChanged),
-			state: State{Issue: labelledIssue(LabelTeardownForest)},
+			issue: labelledIssue(LabelTeardownForest),
+		},
+		{
+			// Kind labels are named first: what an issue is outweighs
+			// what a label modifies (§forgejo/decisions/actions).
+			name:  "the label beside a kind label names the kind label",
+			event: issueEvent(EventIssueLabelsChanged),
+			issue: labelledIssue(LabelHumanTask, LabelTeardownForest),
 		},
 		{
 			name:  "a comment on a root under teardown is not a revision of intent",
 			event: issueEvent(EventIssueCommented),
-			state: State{Issue: teardownRoot()},
+			issue: teardownRoot(),
 		},
 	} {
-		if tc.name == "a closed root carrying the label holds off: closure commissioned the forest" {
-			closed := closedIssue()
-			closed.Labels = []string{LabelIdeation, LabelTeardownForest}
-			tc.state = State{Issue: closed}
-		}
 		t.Run(tc.name, func(t *testing.T) {
-			d := Decide(tc.event, tc.state, nil)
+			d := Decide(tc.event, State{Issue: tc.issue}, nil)
 			if d.Action != "" {
 				t.Errorf("action = %q, want the hold-off (%s)", d.Action, d.Reason)
+			}
+			if tc.name == "the label beside a kind label names the kind label" &&
+				!strings.Contains(d.Reason, LabelHumanTask) {
+				t.Errorf("reason = %q, want the kind label named first", d.Reason)
+			}
+		})
+	}
+}
+
+// TestDecide_TeardownProtectsTheTrackerThroughTheRootsOwnEdge pins where
+// the tracker's protection actually comes from: the order is pre-closure,
+// so while a teardown runs the root is open, and an open root is an open
+// blocker — which holds the tracker's `wrap-up` and curation rows off
+// without a rule of its own. The label reaching a *closed* root changes
+// nothing anywhere: a stale label must freeze neither the tracker's
+// wrap-up nor its curation (§forgejo/decisions/forest-teardown).
+func TestDecide_TeardownProtectsTheTrackerThroughTheRootsOwnEdge(t *testing.T) {
+	member := func(state string) Issue {
+		return Issue{Number: 11, State: state, Repository: "o/r"}
+	}
+	root := func(state string) Issue {
+		r := teardownRoot()
+		r.Number = 3
+		r.State = state
+		return *r
+	}
+	tracker := func() *Issue {
+		tr := trackerIssue()
+		return tr
+	}
+
+	for _, tc := range []struct {
+		name       string
+		blockers   []Issue
+		wantAction Action
+	}{
+		{
+			name:       "a labelled root still open holds the tracker's rows off",
+			blockers:   []Issue{root("open"), member("closed")},
+			wantAction: "",
+		},
+		{
+			name:       "deleting members cannot empty the tracker while the root is open",
+			blockers:   []Issue{root("open")},
+			wantAction: "",
+		},
+		{
+			name:       "a stale label on a closed root does not freeze wrap-up",
+			blockers:   []Issue{root("closed")},
+			wantAction: ActionWrapUp,
+		},
+		{
+			name:       "a stale label on a closed root does not freeze curation",
+			blockers:   []Issue{root("closed"), member("open")},
+			wantAction: ActionDecompose,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := tracker()
+			d := Decide(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: tr.Number},
+				State{Issue: tr, Blockers: tc.blockers}, nil)
+			if d.Action != tc.wantAction {
+				t.Errorf("action = %q, want %q (%s)", d.Action, tc.wantAction, d.Reason)
 			}
 		})
 	}
@@ -1935,36 +2007,5 @@ func TestDecide_TeardownRefiresOnTheSweepWhateverTheWatermark(t *testing.T) {
 	}
 	if strings.Contains(d.Reason, "already dispatched") {
 		t.Errorf("reason = %q, want the state fact, not a revision guard", d.Reason)
-	}
-}
-
-// TestDecide_TrackerUnderTeardownHoldsOff pins that a forest being
-// deleted is not a forest finished: its tracker dispatches neither
-// wrap-up nor decompose while the root carries the label, whatever the
-// blocker list looks like at that moment (§forgejo/decisions/forest-teardown).
-func TestDecide_TrackerUnderTeardownHoldsOff(t *testing.T) {
-	root := teardownRoot()
-	root.State = "closed"
-	root.Number = 3
-	blocking := Issue{Number: 11, State: "open", Repository: "o/r"}
-
-	for _, tc := range []struct {
-		name     string
-		blockers []Issue
-	}{
-		{"the forest still has open members", []Issue{*root, blocking}},
-		{"the members are already deleted, only the root remains", []Issue{*root}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tracker := trackerIssue()
-			d := Decide(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: tracker.Number},
-				State{Issue: tracker, Blockers: tc.blockers}, nil)
-			if d.Action != "" {
-				t.Errorf("action = %q, want the hold-off naming the root (%s)", d.Action, d.Reason)
-			}
-			if !strings.Contains(d.Reason, fmt.Sprintf("%d", root.Number)) {
-				t.Errorf("reason = %q, want the root's number named as the reason", d.Reason)
-			}
-		})
 	}
 }
