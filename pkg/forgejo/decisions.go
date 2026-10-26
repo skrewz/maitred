@@ -296,14 +296,6 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 		return dispatch(ActionDecompose, fmt.Sprintf("issue %d is an open %s issue; the state calls for decompose regardless of revision %s", issue.Number, LabelIdeation, issueRevision(issue)))
 	}
 	if hasLabel(issue, LabelOutcome) {
-		if gate := teardownGate(s.Blockers); gate != nil {
-			// A forest being taken apart is not a forest finished. The
-			// guard is needed because deleting members empties the
-			// tracker's blocker list, and an emptied tracker looks
-			// finished to the wrap-up row
-			// (§forgejo/decisions/forest-teardown).
-			return holdOff(fmt.Sprintf("issue %d is an open %s tracker whose %s root %d carries %s; the forest is being deleted, not finished", issue.Number, LabelOutcome, LabelIdeation, gate.Number, LabelTeardownForest))
-		}
 		if open := openBlockers(s.Blockers); len(open) > 0 {
 			// A commissioned forest stays under curation: closing the root removes
 			// it from the sweep's enumeration of open issues, so the tracker's
@@ -344,11 +336,11 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 	if hasLabel(issue, LabelIdeation) {
 		return decideDecompose(issue, w)
 	}
-	if hasLabel(issue, LabelTeardownForest) && !hasLabel(issue, LabelIdeation) {
-		return holdOffTeardownWithoutRoot(issue.Number)
-	}
 	if label := neverWorkItemLabel(issue.Labels); label != "" {
 		return holdOffNeverImplement(issue.Number, label)
+	}
+	if hasLabel(issue, LabelTeardownForest) {
+		return holdOffTeardownWithoutRoot(issue.Number)
 	}
 	if decomposerAuthored(issue, s.DecomposerIdentity) {
 		return holdOffDecomposerAuthored(issue.Number, issue.Author)
@@ -384,9 +376,6 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	if issue.State != "open" {
 		return holdOff(fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State))
 	}
-	if hasLabel(issue, LabelTeardownForest) && !hasLabel(issue, LabelIdeation) {
-		return holdOffTeardownWithoutRoot(issue.Number)
-	}
 	if hasLabel(issue, LabelIdeation) {
 		if e.Type == EventIssueCommented {
 			return holdOff(fmt.Sprintf("issue %d is an open %s root; a comment is not a revision of intent", issue.Number, LabelIdeation))
@@ -395,6 +384,9 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	}
 	if label := neverWorkItemLabel(issue.Labels); label != "" {
 		return holdOffNeverReassess(issue.Number, label)
+	}
+	if hasLabel(issue, LabelTeardownForest) {
+		return holdOffTeardownWithoutRoot(issue.Number)
 	}
 	if open := openBlockers(s.Blockers); len(open) > 0 {
 		return holdOff(fmt.Sprintf("issue %d is blocked by %s; not reassessing", issue.Number, blockerNames(open)))
@@ -440,8 +432,10 @@ func decideTeardown(issue *Issue, w *Watermark) Decision {
 
 // holdOffTeardownWithoutRoot names the misapplied order: the label
 // modifies the root row, so on an issue that is no root it retires
-// nothing and must not wake the implementer either
-// (§forgejo/decisions/forest-teardown).
+// nothing and must wake no work either. Kind labels are tested first:
+// `outcome` and `human-task` say what an issue *is*, and this says what
+// a label *modifies*, which is the weaker claim
+// (§forgejo/decisions/forest-teardown, §forgejo/decisions/actions).
 func holdOffTeardownWithoutRoot(number int) Decision {
 	return holdOff(fmt.Sprintf("issue %d carries %s without %s: the label modifies the root row and retires no work item", number, LabelTeardownForest, LabelIdeation))
 }

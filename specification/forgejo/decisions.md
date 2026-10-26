@@ -82,12 +82,19 @@ the root row, so a misapplied teardown reads in the decision log as a
 misapplied teardown rather than waking the implementer on the very
 ticket the human meant to retire.
 
-**The tracker while the forest goes.** A tracker whose root carries the
-label holds off, naming the root, on every row — `wrap-up` included —
-because a forest being deleted is not a forest finished. Deleting the
-members empties the tracker's blocker list, and an emptied tracker looks
-finished to the wrap-up row; the prompt deletes the tracker last for that
-reason, and the engine's hold-off is what stops the interim misreading.
+**The tracker needs no rule of its own.** Deleting members empties the
+tracker's blocker list, and an emptied tracker looks finished to the
+`wrap-up` row — so the protection matters, but it comes from the graph:
+the order is pre-closure, which means the root is *open* while a teardown
+runs, and an open root is an open blocker of its tracker. Both the
+tracker's rows already hold off on an open root
+(§forgejo/reconciliation/watermark-exemptions), and deleting every member
+cannot empty the list while that edge stands. A label that reaches a
+**closed** root therefore changes nothing anywhere — which is the point:
+a stale label must not freeze its tracker's `wrap-up` or its curation
+rows forever, naming a terminal state as though it were transient. If a
+commissioned forest must be retired, the human reopens the root or the
+label is removed; the label has no power past the gate.
 
 ## Actions
 
@@ -116,7 +123,7 @@ prompts:
 | issue opened (open, authored by the configured decomposer identity) | hold off — the reason names the authorship; only the unblock cascade unblocks it |
 | issue opened (blocked, or a connected open PR, or not open) | hold off |
 | issue opened / edited / labels changed (issue open, carries both the `ideation` and the `teardown-forest` label) | `teardown-forest` — the teardown row wins over the root's `decompose` row, so a forest under teardown is never re-commissioned while it is being deleted (§forgejo/decisions/forest-teardown) |
-| issue opened / edited / labels changed / comment (issue open, carries the `teardown-forest` label without `ideation`) | hold off, naming that the label modifies the root row and retires no work item (§forgejo/decisions/forest-teardown) |
+| issue opened / edited / labels changed / comment (issue open, carries the `teardown-forest` label without `ideation`) | hold off, naming that the label modifies the root row and retires no work item — a kind label carried alongside is named first, since what an issue *is* outweighs what a label *modifies* (§forgejo/decisions/forest-teardown) |
 | issue opened / edited / labels changed (issue open, carries the `ideation` label) | `decompose` — the label makes the root, whatever the repository, the title, and the author (the root row wins over the authorship row); attaching the label is the *first* trigger. The event path keeps the revision-keyed watermark guard; the sweep is watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | issue comment (issue open, carries the `ideation` label) | hold off — a comment is not a revision of intent; the reason says so |
 | issue opened / edited / labels changed / comment (issue carries the `outcome` or `human-task` label) | hold off, naming the label — the sweep is where `wrap-up` fires (§forgejo/reconciliation/watermark-exemptions) |
@@ -144,7 +151,7 @@ prompts:
 | reconcile — open issue with the `ideation` label | `decompose`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue, no open blockers | `wrap-up`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue with open blockers, its `ideation` blocker closed | `decompose`, revision notwithstanding — the forest is commissioned and unfinished, so curation continues (§forgejo/reconciliation/watermark-exemptions) |
-| reconcile — open `outcome` issue whose `ideation` blocker carries the `teardown-forest` label | hold off, naming the root — the forest is being deleted, not finished, so neither `wrap-up` nor `decompose` fires for its tracker (§forgejo/decisions/forest-teardown) |
+| reconcile — open `outcome` issue whose `ideation` blocker is **open** and carries the `teardown-forest` label | hold off, as any tracker with an open root does: the teardown order needs no row of its own, and the root's own edge is what keeps an emptied tracker from reading as finished (§forgejo/decisions/forest-teardown) |
 | reconcile — open `outcome` issue with open blockers, its `ideation` blocker open | hold off, naming the root — the forest is not yet commissioned, and the root's own row is the pulse: a forest is curated once per sweep |
 | reconcile — open `outcome` issue with open blockers and no `ideation` blocker | hold off, naming the absence — a tracker not gated by a root is not a forest's tracker |
 | reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, `reject-pr` when a connected issue is blocked by an open `ideation` issue and otherwise as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate) |
@@ -216,7 +223,9 @@ cascade included (§forgejo/decisions/unblock-cascade). The role model
 rule is insurance. The `teardown-forest` label is a **modifier of the root
 row**, not a kind label: it makes no issue a root, a tracker or a claim,
 and on an issue without `ideation` it holds off naming that it modifies
-the root row (§forgejo/decisions/forest-teardown).
+the root row. The kind labels are tested first, so an issue carrying
+`human-task` or `outcome` alongside it is described by what it *is*
+(§forgejo/decisions/forest-teardown).
 When an issue carries `ideation` alongside another
 reserved label, `decompose` wins — unless the issue also carries
 `teardown-forest`, in which case teardown wins: a root is decomposed before anything
