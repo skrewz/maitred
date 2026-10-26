@@ -2528,3 +2528,89 @@ func TestHandler_Decompose_NoPrompt_HoldsOffWithoutWatermark(t *testing.T) {
 		t.Errorf("watermark = %+v, want none: a dispatch that cannot fire must not mark itself done", w)
 	}
 }
+
+// --- Forest teardown (§forgejo/decisions/forest-teardown) --------------
+
+// teardownRootIssue returns an open root in the given repository carrying
+// both reserved labels (§forgejo/decisions/forest-teardown).
+func teardownRootIssue(repo string, number int) *Issue {
+	return &Issue{
+		Number: number, State: "open", UpdatedAt: testUpdatedAt,
+		Repository: repo, Labels: []string{LabelIdeation, LabelTeardownForest},
+	}
+}
+
+// TestHandler_TeardownEventPath_DispatchesTeardown: opening, editing or
+// labelling an open root that carries the teardown label dispatches
+// teardown-forest and records the watermark — the teardown row wins over
+// the root's decompose row (§forgejo/decisions/forest-teardown).
+func TestHandler_TeardownEventPath_DispatchesTeardown(t *testing.T) {
+	for _, typ := range []EventType{EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged} {
+		t.Run(string(typ), func(t *testing.T) {
+			eng, api, q, store := newOutcomesEngine(t)
+			api.issues[7] = teardownRootIssue("o/out", 7)
+
+			eng.HandleEvent(Event{Type: typ, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+			tasks := q.all()
+			if len(tasks) != 1 {
+				t.Fatalf("got %d tasks, want the one teardown dispatch: %v", len(tasks), tasks)
+			}
+			if !strings.Contains(tasks[0].Prompt, "action="+string(ActionTeardownForest)) {
+				t.Errorf("prompt = %q, want the teardown-forest action", tasks[0].Prompt)
+			}
+			w, err := store.Load(Key{Repo: "o/out", Kind: KindIssue, Number: 7})
+			if err != nil {
+				t.Fatalf("load watermark: %v", err)
+			}
+			if w == nil || w.Action != string(ActionTeardownForest) {
+				t.Errorf("watermark = %+v, want teardown-forest at the current revision", w)
+			}
+		})
+	}
+}
+
+// TestHandler_TeardownSweepRefiresWhileTheForestStands pins the sweep's
+// exemption at the engine: while the label stands on an open root the
+// sweep dispatches again, so a teardown that died half way through is
+// retried rather than remembered as done
+// (§forgejo/reconciliation/watermark-exemptions).
+func TestHandler_TeardownSweepRefiresWhileTheForestStands(t *testing.T) {
+	eng, api, q, _ := newOutcomesEngine(t)
+	api.issues[7] = teardownRootIssue("o/out", 7)
+
+	for i := 0; i < 2; i++ {
+		eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "maitred"})
+	}
+	tasks := q.all()
+	if len(tasks) != 2 {
+		t.Fatalf("got %d tasks across two sweeps, want 2: %v", len(tasks), tasks)
+	}
+	for _, task := range tasks {
+		if !strings.Contains(task.Prompt, "action="+string(ActionTeardownForest)) {
+			t.Errorf("prompt = %q, want the teardown-forest action", task.Prompt)
+		}
+	}
+}
+
+// TestHandler_TeardownOutsideTheOutcomesRole pins the role boundary: the
+// label on a root in a repository holding no outcomes role dispatches
+// nothing, because teardown is the decomposer's work and the decomposer
+// has no remit there (§forgejo/webhook/repository-roles).
+func TestHandler_TeardownOutsideTheOutcomesRole(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.issues[7] = teardownRootIssue("o/r", 7)
+
+	eng.HandleEvent(Event{Type: EventIssueLabelsChanged, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none outside the outcomes role: %v", len(tasks), tasks)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 7})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none: a hold-off marks nothing done", w)
+	}
+}

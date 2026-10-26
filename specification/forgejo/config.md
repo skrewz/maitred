@@ -12,7 +12,8 @@ exclusively canned prompts.
 ## Canned prompts
 
 The config maps each action — `implement`, `reassess`, `review`, `re-review`,
-`fix-feedback`, `merge-or-wait`, `rebase`, `decompose`, `wrap-up`, `reject-pr` — to:
+`fix-feedback`, `merge-or-wait`, `rebase`, `decompose`, `wrap-up`, `reject-pr`,
+`teardown-forest` — to:
 
 - a **prompt template** — the canned prompt: the hotelier task invocation
   (e.g. the `/issue-implementer`, `/pr-reviewer`, `/pr-feedback-fixer`

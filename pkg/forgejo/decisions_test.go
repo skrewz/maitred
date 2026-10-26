@@ -1,6 +1,7 @@
 package forgejo
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -126,20 +127,32 @@ func review(event, author string, at time.Time) Review {
 // config maps to canned prompts (§forgejo/decisions/actions).
 func TestActionNames(t *testing.T) {
 	want := map[Action]string{
-		ActionImplement:   "implement",
-		ActionReassess:    "reassess",
-		ActionReview:      "review",
-		ActionReReview:    "re-review",
-		ActionFixFeedback: "fix-feedback",
-		ActionMergeOrWait: "merge-or-wait",
-		ActionRebase:      "rebase",
-		ActionDecompose:   "decompose",
-		ActionWrapUp:      "wrap-up",
-		ActionRejectPR:    "reject-pr",
+		ActionImplement:      "implement",
+		ActionReassess:       "reassess",
+		ActionReview:         "review",
+		ActionReReview:       "re-review",
+		ActionFixFeedback:    "fix-feedback",
+		ActionMergeOrWait:    "merge-or-wait",
+		ActionRebase:         "rebase",
+		ActionDecompose:      "decompose",
+		ActionWrapUp:         "wrap-up",
+		ActionRejectPR:       "reject-pr",
+		ActionTeardownForest: "teardown-forest",
 	}
 	for action, name := range want {
 		if string(action) != name {
 			t.Errorf("action = %q, want %q", action, name)
+		}
+	}
+	// The map and AllActions are the same enum seen two ways: an action
+	// added to one and not the other is a name waiting to be wrong
+	// (§forgejo/decisions/actions).
+	if len(want) != len(AllActions) {
+		t.Fatalf("the name map holds %d actions, AllActions holds %d", len(want), len(AllActions))
+	}
+	for _, a := range AllActions {
+		if _, ok := want[a]; !ok {
+			t.Errorf("AllActions holds %q, which the name map does not name", a)
 		}
 	}
 }
@@ -1834,5 +1847,124 @@ func TestHoldOffActionInadmissibleNamesTheRole(t *testing.T) {
 		if got := holdOffActionInadmissible(tt.action, "o/r").Reason; got != tt.want {
 			t.Errorf("holdOffActionInadmissible(%q) reason = %q, want %q", tt.action, got, tt.want)
 		}
+	}
+}
+
+// teardownRoot returns an open ideation root carrying the reserved
+// teardown-forest label: the human has ordered the forest it commissioned
+// to be deleted (§forgejo/decisions/forest-teardown).
+func teardownRoot() *Issue {
+	root := ideationIssue()
+	root.Labels = append(root.Labels, LabelTeardownForest)
+	return root
+}
+
+// TestDecide_ForestTeardownRows pins the teardown rows: the label on an
+// open root dispatches teardown-forest where the root row would dispatch
+// decompose, it decides nothing without `ideation`, and it never fires on
+// a closed root (§forgejo/decisions/forest-teardown).
+func TestDecide_ForestTeardownRows(t *testing.T) {
+	for _, typ := range []EventType{EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged} {
+		e := issueEvent(typ)
+		d := Decide(e, State{Issue: teardownRoot()}, nil)
+		if d.Action != ActionTeardownForest {
+			t.Errorf("%s on a root carrying the label: action = %q, want %q (%s)",
+				typ, d.Action, ActionTeardownForest, d.Reason)
+		}
+	}
+
+	for _, tc := range []struct {
+		name  string
+		event Event
+		state State
+	}{
+		{
+			name:  "a closed root carrying the label holds off: closure commissioned the forest",
+			event: issueEvent(EventIssueLabelsChanged),
+			state: State{Issue: closedIssue()},
+		},
+		{
+			name:  "the label without ideation retires no work item",
+			event: issueEvent(EventIssueLabelsChanged),
+			state: State{Issue: labelledIssue(LabelTeardownForest)},
+		},
+		{
+			name:  "a comment on a root under teardown is not a revision of intent",
+			event: issueEvent(EventIssueCommented),
+			state: State{Issue: teardownRoot()},
+		},
+	} {
+		if tc.name == "a closed root carrying the label holds off: closure commissioned the forest" {
+			closed := closedIssue()
+			closed.Labels = []string{LabelIdeation, LabelTeardownForest}
+			tc.state = State{Issue: closed}
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			d := Decide(tc.event, tc.state, nil)
+			if d.Action != "" {
+				t.Errorf("action = %q, want the hold-off (%s)", d.Action, d.Reason)
+			}
+		})
+	}
+}
+
+// TestDecide_TeardownNamesTheLabelAndTheRoot states the reason: the
+// decision log must say which root is being retired and why the state
+// calls for it (§forgejo/decisions/forest-teardown).
+func TestDecide_TeardownNamesTheLabelAndTheRoot(t *testing.T) {
+	root := teardownRoot()
+	d := Decide(issueEvent(EventIssueLabelsChanged), State{Issue: root}, nil)
+	if !strings.Contains(d.Reason, LabelTeardownForest) || !strings.Contains(d.Reason, LabelIdeation) {
+		t.Errorf("reason = %q, want both reserved label names", d.Reason)
+	}
+	if !strings.Contains(d.Reason, fmt.Sprintf("%d", root.Number)) {
+		t.Errorf("reason = %q, want the root's number", d.Reason)
+	}
+}
+
+// TestDecide_TeardownRefiresOnTheSweepWhateverTheWatermark pins the
+// sweep's exemption: the trigger is the forest still standing, so a
+// teardown that died half way through re-fires until the graph is empty
+// (§forgejo/reconciliation/watermark-exemptions).
+func TestDecide_TeardownRefiresOnTheSweepWhateverTheWatermark(t *testing.T) {
+	root := teardownRoot()
+	w := &Watermark{Action: string(ActionTeardownForest), Revision: issueRevision(root)}
+	d := Decide(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: root.Number}, State{Issue: root}, w)
+	if d.Action != ActionTeardownForest {
+		t.Errorf("action = %q, want %q (%s)", d.Action, ActionTeardownForest, d.Reason)
+	}
+	if strings.Contains(d.Reason, "already dispatched") {
+		t.Errorf("reason = %q, want the state fact, not a revision guard", d.Reason)
+	}
+}
+
+// TestDecide_TrackerUnderTeardownHoldsOff pins that a forest being
+// deleted is not a forest finished: its tracker dispatches neither
+// wrap-up nor decompose while the root carries the label, whatever the
+// blocker list looks like at that moment (§forgejo/decisions/forest-teardown).
+func TestDecide_TrackerUnderTeardownHoldsOff(t *testing.T) {
+	root := teardownRoot()
+	root.State = "closed"
+	root.Number = 3
+	blocking := Issue{Number: 11, State: "open", Repository: "o/r"}
+
+	for _, tc := range []struct {
+		name     string
+		blockers []Issue
+	}{
+		{"the forest still has open members", []Issue{*root, blocking}},
+		{"the members are already deleted, only the root remains", []Issue{*root}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tracker := trackerIssue()
+			d := Decide(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: tracker.Number},
+				State{Issue: tracker, Blockers: tc.blockers}, nil)
+			if d.Action != "" {
+				t.Errorf("action = %q, want the hold-off naming the root (%s)", d.Action, d.Reason)
+			}
+			if !strings.Contains(d.Reason, fmt.Sprintf("%d", root.Number)) {
+				t.Errorf("reason = %q, want the root's number named as the reason", d.Reason)
+			}
+		})
 	}
 }

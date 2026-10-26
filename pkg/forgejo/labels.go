@@ -27,4 +27,25 @@ const (
 	// Unlike the reserved names above it requests no work item; it
 	// asks for a review of one.
 	LabelTriggerReview = "trigger-review"
+	// LabelTeardownForest orders the decomposer to delete the forest an
+	// open ideation root commissioned. It is a modifier of the root row,
+	// not a kind label: alone it makes no issue a root, a tracker or a
+	// claim, and retires no work item
+	// (§forgejo/decisions/forest-teardown).
+	LabelTeardownForest = "teardown-forest"
 )
+
+// teardownGate names the ideation blocker ordering its own forest
+// deleted — the root a tracker is gated by while that forest is being
+// taken apart. Its state is irrelevant: the order stands whether the
+// root is open (teardown fires) or closed (teardown does not, and the
+// tracker must not read as finished while members are being deleted)
+// (§forgejo/decisions/forest-teardown).
+func teardownGate(blockers []Issue) *Issue {
+	for i := range blockers {
+		if hasLabel(&blockers[i], LabelIdeation) && hasLabel(&blockers[i], LabelTeardownForest) {
+			return &blockers[i]
+		}
+	}
+	return nil
+}

@@ -51,6 +51,44 @@ every member startable (§forgejo/decisions/transition-table). The word
 and a blocker closing, and those gate different things — commissioning lifts the
 human's hold, unblocking says a blocker closed.
 
+## Forest teardown
+
+`teardown-forest` is the human's order to **un-make a forest**. It is a
+modifier of the root row and nothing else: an open `ideation` issue that
+also carries it dispatches `teardown-forest` where it would otherwise
+dispatch `decompose`, and the decomposer deletes the member issues and
+sets that root created, retracting the edges as it goes. The root itself
+is never deleted — it is the human's issue, and the human closes it once
+the teardown is reported.
+
+**Pre-closure only.** An `ideation` issue's closure *commissions* the
+forest (§forgejo/decisions/commissioning), and commissioning is one way.
+A closed root holds off on every row, teardown label included: the
+forest it made is history, its members may have landed, and no label
+retroactively un-happens a commission.
+
+**Idempotent by construction.** The trigger is a state relation — the
+label standing on an open root — so the sweep re-fires it until the
+forest is gone (§forgejo/reconciliation/watermark-exemptions), and a run
+that finds nothing left deletes nothing and says nothing. Re-running the
+teardown is therefore the recovery from a teardown that died half way
+through, which is why the engine re-fires rather than trusting one
+delivery.
+
+**What the label cannot reach.** On an issue carrying no `ideation`
+label the label decides nothing: it is no kind of work item and it
+retires no ticket. The decision holds off naming that the label modifies
+the root row, so a misapplied teardown reads in the decision log as a
+misapplied teardown rather than waking the implementer on the very
+ticket the human meant to retire.
+
+**The tracker while the forest goes.** A tracker whose root carries the
+label holds off, naming the root, on every row — `wrap-up` included —
+because a forest being deleted is not a forest finished. Deleting the
+members empties the tracker's blocker list, and an emptied tracker looks
+finished to the wrap-up row; the prompt deletes the tracker last for that
+reason, and the engine's hold-off is what stops the interim misreading.
+
 ## Actions
 
 The action names form the enum the engine config maps to canned
@@ -67,6 +105,7 @@ prompts:
 | `rebase` | an open PR is not mergeable (conflicts) |
 | `decompose` | an open issue carrying the `ideation` label was opened, edited, or had its labels changed; or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
+| `teardown-forest` | an open issue carrying the `ideation` label **also** carries the `teardown-forest` label: the human has ordered the forest that root commissioned to be deleted (§forgejo/decisions/forest-teardown); watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
 | `reject-pr` | a PR is connected to work that is not yet commissioned: a **connected issue** — any non-PR issue the PR blocks, every one being tested — is blocked by an **open** `ideation` issue; tested when a PR opens, when a review is submitted, and by the reconciliation sweep, ahead of every review, rebase, fix and merge decision; the prompt closes the PR, names the breach, and reports it |
 
 ## Transition table
@@ -76,6 +115,8 @@ prompts:
 | issue opened (open, all blockers closed, no connected PR) | `implement` |
 | issue opened (open, authored by the configured decomposer identity) | hold off — the reason names the authorship; only the unblock cascade unblocks it |
 | issue opened (blocked, or a connected open PR, or not open) | hold off |
+| issue opened / edited / labels changed (issue open, carries both the `ideation` and the `teardown-forest` label) | `teardown-forest` — the teardown row wins over the root's `decompose` row, so a forest under teardown is never re-commissioned while it is being deleted (§forgejo/decisions/forest-teardown) |
+| issue opened / edited / labels changed / comment (issue open, carries the `teardown-forest` label without `ideation`) | hold off, naming that the label modifies the root row and retires no work item (§forgejo/decisions/forest-teardown) |
 | issue opened / edited / labels changed (issue open, carries the `ideation` label) | `decompose` — the label makes the root, whatever the repository, the title, and the author (the root row wins over the authorship row); attaching the label is the *first* trigger. The event path keeps the revision-keyed watermark guard; the sweep is watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | issue comment (issue open, carries the `ideation` label) | hold off — a comment is not a revision of intent; the reason says so |
 | issue opened / edited / labels changed / comment (issue carries the `outcome` or `human-task` label) | hold off, naming the label — the sweep is where `wrap-up` fires (§forgejo/reconciliation/watermark-exemptions) |
@@ -99,9 +140,11 @@ prompts:
 | PR merged | unblock cascade (for the connected issue) |
 | PR closed without merging | hold off |
 | PR commented (open) | as reconcile — the sweep's logic: the re-fetched PR state decides the next action |
+| reconcile — open issue carrying both the `ideation` and the `teardown-forest` label | `teardown-forest`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open issue with the `ideation` label | `decompose`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue, no open blockers | `wrap-up`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue with open blockers, its `ideation` blocker closed | `decompose`, revision notwithstanding — the forest is commissioned and unfinished, so curation continues (§forgejo/reconciliation/watermark-exemptions) |
+| reconcile — open `outcome` issue whose `ideation` blocker carries the `teardown-forest` label | hold off, naming the root — the forest is being deleted, not finished, so neither `wrap-up` nor `decompose` fires for its tracker (§forgejo/decisions/forest-teardown) |
 | reconcile — open `outcome` issue with open blockers, its `ideation` blocker open | hold off, naming the root — the forest is not yet commissioned, and the root's own row is the pulse: a forest is curated once per sweep |
 | reconcile — open `outcome` issue with open blockers and no `ideation` blocker | hold off, naming the absence — a tracker not gated by a root is not a forest's tracker |
 | reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, `reject-pr` when a connected issue is blocked by an open `ideation` issue and otherwise as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate) |
@@ -170,8 +213,13 @@ label: the `human-task` label marks a ticket claimed by a human and is
 never an `implement` candidate anywhere in the engine, the unblock
 cascade included (§forgejo/decisions/unblock-cascade). The role model
 (§forgejo/webhook/repository-roles) is the load-bearing boundary; this
-rule is insurance. When an issue carries `ideation` alongside another
-reserved label, `decompose` wins: a root is decomposed before anything
+rule is insurance. The `teardown-forest` label is a **modifier of the root
+row**, not a kind label: it makes no issue a root, a tracker or a claim,
+and on an issue without `ideation` it holds off naming that it modifies
+the root row (§forgejo/decisions/forest-teardown).
+When an issue carries `ideation` alongside another
+reserved label, `decompose` wins — unless the issue also carries
+`teardown-forest`, in which case teardown wins: a root is decomposed before anything
 else is decided for it — a `human-task` claim on a root withholds
 `implement`, not `decompose`, since decomposition is precisely the work
 a human may have claimed on a root. The root row likewise wins over the

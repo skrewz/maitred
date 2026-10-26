@@ -119,7 +119,7 @@ name appears in the engine or its config:
 | role | topic | grants admissibility to |
 |---|---|---|
 | work-item source | `maitred-enabled` | `implement`, `reassess`, `review`, `re-review`, `rebase`, `fix-feedback`, `merge-or-wait`, `reject-pr` |
-| outcomes source | `maitred-outcomes-repo` | `decompose`, `wrap-up` |
+| outcomes source | `maitred-outcomes-repo` | `decompose`, `wrap-up`, `teardown-forest` |
 
 One organisation listing feeds every repository's roles
 (§forgejo/webhook/the-scope-cache, §forgejo/reconciliation/the-sweep); a

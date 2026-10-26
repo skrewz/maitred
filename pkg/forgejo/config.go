@@ -26,6 +26,7 @@ var AllActions = []Action{
 	ActionDecompose,
 	ActionWrapUp,
 	ActionRejectPR,
+	ActionTeardownForest,
 }
 
 // ConfigEnvVar is the environment variable that locates the engine

@@ -32,6 +32,13 @@ const (
 	// ActionRejectPR closes a PR opened against work that is not yet
 	// commissioned (§forgejo/decisions/actions).
 	ActionRejectPR Action = "reject-pr"
+	// ActionTeardownForest deletes the forest an open ideation root
+	// commissioned, on the human's order through the `teardown-forest`
+	// label (§forgejo/decisions/forest-teardown). Its trigger is a state
+	// relation like decompose's, so the sweep's row is watermark-exempt
+	// while the event path keeps the revision-keyed guard
+	// (§forgejo/reconciliation/watermark-exemptions).
+	ActionTeardownForest Action = "teardown-forest"
 )
 
 // The Forgejo review states the decision function reacts to
@@ -275,12 +282,28 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 		return decideIssueOpened(e, s, w) // the same hold-offs as the event path
 	}
 	if hasLabel(issue, LabelIdeation) {
+		if hasLabel(issue, LabelTeardownForest) {
+			// The teardown row wins over the root's row: a forest being
+			// deleted is never re-commissioned in the same breath
+			// (§forgejo/decisions/forest-teardown). The forest still
+			// standing is the state that calls for the deletion, so the
+			// sweep re-fires whatever the watermark holds.
+			return dispatch(ActionTeardownForest, fmt.Sprintf("issue %d is an open %s root carrying %s; the state calls for teardown regardless of revision %s", issue.Number, LabelIdeation, LabelTeardownForest, issueRevision(issue)))
+		}
 		// A root is decomposed even when a tracker's wrap-up would
 		// also apply: decompose wins over wrap-up
 		// (§forgejo/reconciliation/watermark-exemptions).
 		return dispatch(ActionDecompose, fmt.Sprintf("issue %d is an open %s issue; the state calls for decompose regardless of revision %s", issue.Number, LabelIdeation, issueRevision(issue)))
 	}
 	if hasLabel(issue, LabelOutcome) {
+		if gate := teardownGate(s.Blockers); gate != nil {
+			// A forest being taken apart is not a forest finished. The
+			// guard is needed because deleting members empties the
+			// tracker's blocker list, and an emptied tracker looks
+			// finished to the wrap-up row
+			// (§forgejo/decisions/forest-teardown).
+			return holdOff(fmt.Sprintf("issue %d is an open %s tracker whose %s root %d carries %s; the forest is being deleted, not finished", issue.Number, LabelOutcome, LabelIdeation, gate.Number, LabelTeardownForest))
+		}
 		if open := openBlockers(s.Blockers); len(open) > 0 {
 			// A commissioned forest stays under curation: closing the root removes
 			// it from the sweep's enumeration of open issues, so the tracker's
@@ -321,6 +344,9 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 	if hasLabel(issue, LabelIdeation) {
 		return decideDecompose(issue, w)
 	}
+	if hasLabel(issue, LabelTeardownForest) && !hasLabel(issue, LabelIdeation) {
+		return holdOffTeardownWithoutRoot(issue.Number)
+	}
 	if label := neverWorkItemLabel(issue.Labels); label != "" {
 		return holdOffNeverImplement(issue.Number, label)
 	}
@@ -358,6 +384,9 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	if issue.State != "open" {
 		return holdOff(fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State))
 	}
+	if hasLabel(issue, LabelTeardownForest) && !hasLabel(issue, LabelIdeation) {
+		return holdOffTeardownWithoutRoot(issue.Number)
+	}
 	if hasLabel(issue, LabelIdeation) {
 		if e.Type == EventIssueCommented {
 			return holdOff(fmt.Sprintf("issue %d is an open %s root; a comment is not a revision of intent", issue.Number, LabelIdeation))
@@ -386,11 +415,35 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 // cascade dispatches the forest members
 // (§forgejo/decisions/transition-table).
 func decideDecompose(issue *Issue, w *Watermark) Decision {
+	if hasLabel(issue, LabelTeardownForest) {
+		return decideTeardown(issue, w)
+	}
 	rev := issueRevision(issue)
 	if alreadyDispatched(w, ActionDecompose, rev) {
 		return holdOff(fmt.Sprintf("decompose already dispatched at revision %s", rev))
 	}
 	return dispatch(ActionDecompose, fmt.Sprintf("issue %d is an open %s root: the label makes the root", issue.Number, LabelIdeation))
+}
+
+// decideTeardown is the event path's teardown row: an open root carrying
+// the teardown label dispatches teardown-forest under the ordinary
+// revision-keyed watermark guard, the exemption being a property of the
+// sweep's row (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/decisions/forest-teardown).
+func decideTeardown(issue *Issue, w *Watermark) Decision {
+	rev := issueRevision(issue)
+	if alreadyDispatched(w, ActionTeardownForest, rev) {
+		return holdOff(fmt.Sprintf("teardown-forest already dispatched at revision %s", rev))
+	}
+	return dispatch(ActionTeardownForest, fmt.Sprintf("issue %d is an open %s root carrying %s: the forest it commissioned is to be deleted", issue.Number, LabelIdeation, LabelTeardownForest))
+}
+
+// holdOffTeardownWithoutRoot names the misapplied order: the label
+// modifies the root row, so on an issue that is no root it retires
+// nothing and must not wake the implementer either
+// (§forgejo/decisions/forest-teardown).
+func holdOffTeardownWithoutRoot(number int) Decision {
+	return holdOff(fmt.Sprintf("issue %d carries %s without %s: the label modifies the root row and retires no work item", number, LabelTeardownForest, LabelIdeation))
 }
 
 // decideIssueClosed runs the unblock cascade from the closed issue
@@ -898,8 +951,9 @@ var (
 		ActionRejectPR:    true,
 	}
 	outcomesActions = map[Action]bool{
-		ActionDecompose: true,
-		ActionWrapUp:    true,
+		ActionDecompose:      true,
+		ActionWrapUp:         true,
+		ActionTeardownForest: true,
 	}
 )
 
