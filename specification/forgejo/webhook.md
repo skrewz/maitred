@@ -231,6 +231,15 @@ For each decision event, the re-fetch assembles the state
   (§forgejo/decisions/transition-table); if the blockers read fails,
   the re-fetch fails — a hold-off naming the failure, never
   "no blockers".
+
+  An issue carrying both the `ideation` and the `teardown-forest` label
+  has its **downstream** edges read too — the issues it blocks — because
+  the teardown order is actionable only while the forest stands, and the
+  engine counts rather than asking an agent to discover it
+  (§forgejo/decisions/forest-teardown). That hop belongs to the teardown
+  rows alone: a root under no order performs no `IssueBlocks` call, so
+  the curation path costs what it always did. A failure of the hop fails
+  the re-fetch, as the blockers' does.
   For issue closed, the blocker graph rooted at the closed issue.
 - **PR events** — the PR itself, and its reviews, for the review
   transitions and for PR comments (which decide as reconcile). For PR

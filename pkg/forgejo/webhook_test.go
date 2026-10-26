@@ -2540,6 +2540,13 @@ func teardownRootIssue(repo string, number int) *Issue {
 	}
 }
 
+// forestMember is the issue a teardown root blocks: a standing forest,
+// which is what makes the teardown dispatchable at all
+// (§forgejo/decisions/forest-teardown).
+func forestMember(repo string, number int) Issue {
+	return Issue{Number: number, State: "open", Repository: repo}
+}
+
 // TestHandler_TeardownEventPath_DispatchesTeardown: opening, editing or
 // labelling an open root that carries the teardown label dispatches
 // teardown-forest and records the watermark — the teardown row wins over
@@ -2549,6 +2556,7 @@ func TestHandler_TeardownEventPath_DispatchesTeardown(t *testing.T) {
 		t.Run(string(typ), func(t *testing.T) {
 			eng, api, q, store := newOutcomesEngine(t)
 			api.issues[7] = teardownRootIssue("o/out", 7)
+			api.blocks[7] = []Issue{forestMember("o/out", 8)}
 
 			eng.HandleEvent(Event{Type: typ, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "alice"})
 
@@ -2578,6 +2586,7 @@ func TestHandler_TeardownEventPath_DispatchesTeardown(t *testing.T) {
 func TestHandler_TeardownSweepRefiresWhileTheForestStands(t *testing.T) {
 	eng, api, q, _ := newOutcomesEngine(t)
 	api.issues[7] = teardownRootIssue("o/out", 7)
+	api.blocks[7] = []Issue{forestMember("o/out", 8)}
 
 	for i := 0; i < 2; i++ {
 		eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "maitred"})
@@ -2600,6 +2609,7 @@ func TestHandler_TeardownSweepRefiresWhileTheForestStands(t *testing.T) {
 func TestHandler_TeardownOutsideTheOutcomesRole(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
 	api.issues[7] = teardownRootIssue("o/r", 7)
+	api.blocks[7] = []Issue{forestMember("o/r", 8)}
 
 	eng.HandleEvent(Event{Type: EventIssueLabelsChanged, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
 
@@ -2612,5 +2622,55 @@ func TestHandler_TeardownOutsideTheOutcomesRole(t *testing.T) {
 	}
 	if w != nil {
 		t.Errorf("watermark = %+v, want none: a hold-off marks nothing done", w)
+	}
+}
+
+// TestHandler_TeardownEmptyForestCostsNoAgentRun: the engine can see
+// whether the root blocks anything, so an empty forest dispatches no
+// agent at all — the re-firing exemption ends where the forest does, and
+// a label standing on a root that never had a forest costs nothing
+// (§forgejo/decisions/forest-teardown,
+// §forgejo/reconciliation/watermark-exemptions).
+func TestHandler_TeardownEmptyForestCostsNoAgentRun(t *testing.T) {
+	eng, api, q, store := newOutcomesEngine(t)
+	api.issues[7] = teardownRootIssue("o/out", 7)
+	api.blocks[7] = nil
+
+	for i := 0; i < 2; i++ {
+		eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "maitred"})
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none: an empty forest is not work: %v", len(tasks), tasks)
+	}
+	w, err := store.Load(Key{Repo: "o/out", Kind: KindIssue, Number: 7})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none: a hold-off marks nothing done", w)
+	}
+	if n := api.callCount("IssueBlocks:out/7"); n != 2 {
+		t.Errorf("IssueBlocks on the root called %d time(s), want one hop per sweep", n)
+	}
+}
+
+// TestHandler_RootPerformsNoForestHop pins the cost boundary: the forest
+// hop belongs to teardown alone. A root without the label decides from
+// its own state and blockers as before, so the emptiness test adds no
+// fetch to the curation path (§forgejo/webhook/re-fetch).
+func TestHandler_RootPerformsNoForestHop(t *testing.T) {
+	eng, api, q, _ := newOutcomesEngine(t)
+	api.issues[7] = &Issue{
+		Number: 7, State: "open", UpdatedAt: testUpdatedAt,
+		Repository: "o/out", Labels: []string{LabelIdeation},
+	}
+
+	eng.HandleEvent(Event{Type: EventIssueOpened, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 1 || !strings.Contains(tasks[0].Prompt, "action="+string(ActionDecompose)) {
+		t.Fatalf("want the one decompose dispatch, got %+v", tasks)
+	}
+	if n := api.callCount("IssueBlocks:out/7"); n != 0 {
+		t.Errorf("IssueBlocks on the root called %d time(s), want none for a root under no teardown order", n)
 	}
 }

@@ -191,6 +191,19 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 					st.ConnectedPRs = append(st.ConnectedPRs, pullRequestFromIssue(blockers[i]))
 				}
 			}
+			// A root under a teardown order is the one issue whose
+			// *downstream* edges are read, because the order is only
+			// actionable while the forest stands: whether the root blocks
+			// anything is the emptiness test, and asking an agent to
+			// discover it would be the waste the test exists to avoid
+			// (§forgejo/decisions/forest-teardown, §forgejo/webhook/re-fetch).
+			if hasLabel(issue, LabelIdeation) && hasLabel(issue, LabelTeardownForest) {
+				downstream, err := e.api.IssueBlocks(owner, name, ev.Number)
+				if err != nil {
+					return ev, State{}, err
+				}
+				st.Blocked = downstream
+			}
 		case EventIssueClosed:
 			root, err := e.graphNode(issue)
 			if err != nil {
