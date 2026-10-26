@@ -1853,6 +1853,13 @@ func TestHoldOffActionInadmissibleNamesTheRole(t *testing.T) {
 // teardownRoot returns an open ideation root carrying the reserved
 // teardown-forest label: the human has ordered the forest it commissioned
 // to be deleted (§forgejo/decisions/forest-teardown).
+// standingForest is the downstream edge that makes a root's forest
+// stand: the emptiness test the teardown rows read
+// (§forgejo/decisions/forest-teardown).
+func standingForest() []Issue {
+	return []Issue{{Number: 9, State: "open", Repository: "o/r"}}
+}
+
 func teardownRoot() *Issue {
 	root := ideationIssue()
 	root.Labels = append(root.Labels, LabelTeardownForest)
@@ -1866,7 +1873,7 @@ func teardownRoot() *Issue {
 func TestDecide_ForestTeardownRows(t *testing.T) {
 	for _, typ := range []EventType{EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged} {
 		e := issueEvent(typ)
-		d := Decide(e, State{Issue: teardownRoot()}, nil)
+		d := Decide(e, State{Issue: teardownRoot(), Blocked: standingForest()}, nil)
 		if d.Action != ActionTeardownForest {
 			t.Errorf("%s on a root carrying the label: action = %q, want %q (%s)",
 				typ, d.Action, ActionTeardownForest, d.Reason)
@@ -1985,7 +1992,7 @@ func TestDecide_TeardownProtectsTheTrackerThroughTheRootsOwnEdge(t *testing.T) {
 // calls for it (§forgejo/decisions/forest-teardown).
 func TestDecide_TeardownNamesTheLabelAndTheRoot(t *testing.T) {
 	root := teardownRoot()
-	d := Decide(issueEvent(EventIssueLabelsChanged), State{Issue: root}, nil)
+	d := Decide(issueEvent(EventIssueLabelsChanged), State{Issue: root, Blocked: standingForest()}, nil)
 	if !strings.Contains(d.Reason, LabelTeardownForest) || !strings.Contains(d.Reason, LabelIdeation) {
 		t.Errorf("reason = %q, want both reserved label names", d.Reason)
 	}
@@ -2001,11 +2008,65 @@ func TestDecide_TeardownNamesTheLabelAndTheRoot(t *testing.T) {
 func TestDecide_TeardownRefiresOnTheSweepWhateverTheWatermark(t *testing.T) {
 	root := teardownRoot()
 	w := &Watermark{Action: string(ActionTeardownForest), Revision: issueRevision(root)}
-	d := Decide(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: root.Number}, State{Issue: root}, w)
+	d := Decide(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: root.Number}, State{Issue: root, Blocked: standingForest()}, w)
 	if d.Action != ActionTeardownForest {
 		t.Errorf("action = %q, want %q (%s)", d.Action, ActionTeardownForest, d.Reason)
 	}
 	if strings.Contains(d.Reason, "already dispatched") {
 		t.Errorf("reason = %q, want the state fact, not a revision guard", d.Reason)
+	}
+}
+
+// TestDecide_TeardownDispatchesOnlyWhileTheForestStands pins the
+// emptiness test: the engine can see whether the root blocks anything,
+// so an empty forest — never decomposed, or already deleted — dispatches
+// nothing. The order still stands, so the hold-off names the state fact
+// rather than a revision, and any blocked issue, closed included, is a
+// forest worth an agent's report (§forgejo/decisions/forest-teardown).
+func TestDecide_TeardownDispatchesOnlyWhileTheForestStands(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		blocked    []Issue
+		wantAction Action
+	}{
+		{"the root blocks nothing: there is no forest to delete", nil, ""},
+		{
+			"a closed member is still a member, and a report is owed",
+			[]Issue{{Number: 9, State: "closed", Repository: "o/r"}},
+			ActionTeardownForest,
+		},
+		{
+			"an open member is the ordinary case",
+			[]Issue{{Number: 9, State: "open", Repository: "o/r"}},
+			ActionTeardownForest,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := teardownRoot()
+			d := Decide(issueEvent(EventIssueLabelsChanged), State{Issue: root, Blocked: tc.blocked}, nil)
+			if d.Action != tc.wantAction {
+				t.Errorf("action = %q, want %q (%s)", d.Action, tc.wantAction, d.Reason)
+			}
+			if tc.wantAction == "" && !strings.Contains(d.Reason, "forest") {
+				t.Errorf("reason = %q, want the state fact naming the empty forest", d.Reason)
+			}
+		})
+	}
+}
+
+// TestDecide_EmptyForestStopsTheTeardownRefiring is the exemption's
+// terminus: the sweep re-fires a teardown while the forest stands, and
+// stops the moment it does not — so a completed teardown costs no further
+// agent runs, and a label left standing on a root that never had a forest
+// costs none at all (§forgejo/reconciliation/watermark-exemptions).
+func TestDecide_EmptyForestStopsTheTeardownRefiring(t *testing.T) {
+	root := teardownRoot()
+	for i := 0; i < 2; i++ {
+		d := Decide(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: root.Number},
+			State{Issue: root, Blocked: nil}, nil)
+		if d.Action != "" {
+			t.Fatalf("sweep %d dispatched %q (%s), want nothing: an empty forest is not a state that calls for the action",
+				i+1, d.Action, d.Reason)
+		}
 	}
 }

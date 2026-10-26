@@ -85,7 +85,7 @@ while the prior task is still pending).
 |---|---|
 | `decompose` | the issue is open and carries the `ideation` label, or it is open, carries the `outcome` label, has an open blocker, and the `ideation` issue it is blocked by is closed |
 | `wrap-up` | the issue is open, carries the `outcome` label, and has no open blockers |
-| `teardown-forest` | the issue is open, carries the `ideation` label and carries the `teardown-forest` label — the forest still standing is the state that calls for the deletion, so a teardown that died half way through re-fires until the graph is empty (§forgejo/decisions/forest-teardown) |
+| `teardown-forest` | the issue is open, carries the `ideation` label, carries the `teardown-forest` label **and blocks at least one issue** — the forest still standing is the state that calls for the deletion, so a teardown that died half way through re-fires until the graph is empty, and stops the sweep the moment it is (§forgejo/decisions/forest-teardown) |
 
 `ideation` and `outcome` are reserved label names, not configuration.
 They match **case-insensitively**: a label name is a user-authored

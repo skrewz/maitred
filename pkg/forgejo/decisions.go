@@ -159,6 +159,11 @@ type State struct {
 	// CascadeRoot is the closed issue the unblock cascade walks from,
 	// for close events.
 	CascadeRoot *IssueNode
+	// Blocked is what the issue under consideration blocks: its
+	// downstream edges. Fetched only for a root under a teardown order,
+	// where it is the emptiness test — an issue blocking nothing has no
+	// forest to delete (§forgejo/decisions/forest-teardown).
+	Blocked []Issue
 }
 
 // ConnectedIssue is one non-PR issue a pull request blocks, with the
@@ -286,9 +291,13 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 			// The teardown row wins over the root's row: a forest being
 			// deleted is never re-commissioned in the same breath
 			// (§forgejo/decisions/forest-teardown). The forest still
-			// standing is the state that calls for the deletion, so the
-			// sweep re-fires whatever the watermark holds.
-			return dispatch(ActionTeardownForest, fmt.Sprintf("issue %d is an open %s root carrying %s; the state calls for teardown regardless of revision %s", issue.Number, LabelIdeation, LabelTeardownForest, issueRevision(issue)))
+			// standing is the state that calls for the deletion — which
+			// is also what ends the re-firing: once the root blocks
+			// nothing, the sweep stops asking.
+			if len(s.Blocked) == 0 {
+				return holdOff(fmt.Sprintf("issue %d is an open %s root carrying %s but blocking no issue: the state calls for no teardown", issue.Number, LabelIdeation, LabelTeardownForest))
+			}
+			return dispatch(ActionTeardownForest, fmt.Sprintf("issue %d is an open %s root carrying %s and still blocking %d issue(s); the state calls for teardown regardless of revision %s", issue.Number, LabelIdeation, LabelTeardownForest, len(s.Blocked), issueRevision(issue)))
 		}
 		// A root is decomposed even when a tracker's wrap-up would
 		// also apply: decompose wins over wrap-up
@@ -334,7 +343,7 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 		return holdOff(fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State))
 	}
 	if hasLabel(issue, LabelIdeation) {
-		return decideDecompose(issue, w)
+		return decideDecompose(e, issue, s, w)
 	}
 	if label := neverWorkItemLabel(issue.Labels); label != "" {
 		return holdOffNeverImplement(issue.Number, label)
@@ -380,7 +389,7 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 		if e.Type == EventIssueCommented {
 			return holdOff(fmt.Sprintf("issue %d is an open %s root; a comment is not a revision of intent", issue.Number, LabelIdeation))
 		}
-		return decideDecompose(issue, w)
+		return decideDecompose(e, issue, s, w)
 	}
 	if label := neverWorkItemLabel(issue.Labels); label != "" {
 		return holdOffNeverReassess(issue.Number, label)
@@ -406,9 +415,9 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 // upstream, because closing it commissions the forest and the unblock
 // cascade dispatches the forest members
 // (§forgejo/decisions/transition-table).
-func decideDecompose(issue *Issue, w *Watermark) Decision {
+func decideDecompose(e Event, issue *Issue, s State, w *Watermark) Decision {
 	if hasLabel(issue, LabelTeardownForest) {
-		return decideTeardown(issue, w)
+		return decideTeardown(issue, s, w)
 	}
 	rev := issueRevision(issue)
 	if alreadyDispatched(w, ActionDecompose, rev) {
@@ -422,7 +431,14 @@ func decideDecompose(issue *Issue, w *Watermark) Decision {
 // revision-keyed watermark guard, the exemption being a property of the
 // sweep's row (§forgejo/reconciliation/watermark-exemptions,
 // §forgejo/decisions/forest-teardown).
-func decideTeardown(issue *Issue, w *Watermark) Decision {
+func decideTeardown(issue *Issue, s State, w *Watermark) Decision {
+	// The engine can see whether there is anything to delete, so it does
+	// not ask for an agent to find out: an empty forest dispatches
+	// nothing, on the event path or the sweep, and the label standing
+	// over it decides no work (§forgejo/decisions/forest-teardown).
+	if len(s.Blocked) == 0 {
+		return holdOff(fmt.Sprintf("issue %d carries %s but blocks no issue: its forest is empty, so there is nothing to delete", issue.Number, LabelTeardownForest))
+	}
 	rev := issueRevision(issue)
 	if alreadyDispatched(w, ActionTeardownForest, rev) {
 		return holdOff(fmt.Sprintf("teardown-forest already dispatched at revision %s", rev))

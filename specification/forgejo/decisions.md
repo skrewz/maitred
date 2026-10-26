@@ -82,6 +82,35 @@ the root row, so a misapplied teardown reads in the decision log as a
 misapplied teardown rather than waking the implementer on the very
 ticket the human meant to retire.
 
+**One root names the forest, and only through the edges.** The dispatch
+carries a single issue, so the forest is the transitive closure of the
+recorded blocker edges out of that root and the issues blocked by its
+tracker. The repository names nothing — other roots share it; the labels
+name nothing — they are shared vocabulary, not a membership test; and the
+root's prose names nothing, however many numbers it cites. An issue that
+another root also blocks belongs to that forest: this order retracts the
+edge and leaves the issue, because deletion is the one act no cascade
+rehearses and no watermark can undo. The traversal rules live in the
+canned prompt (§forgejo/config/canned-prompts); the boundary belongs here
+so the contract the engine offers — one root, its edges, nothing inferred
+— is specified rather than implied.
+
+**The engine counts before it asks.** Whether a forest stands is not a
+matter of opinion: the root blocks issues, or it blocks none. A root
+carrying the order therefore has its **downstream** edges read on the
+re-fetch — one `IssueBlocks` hop, and only when both labels are present,
+so an ordinary root pays nothing — and a root blocking nothing dispatches
+no agent, naming the empty forest as the state fact. This is what ends
+the re-firing: the exemption asks again while the forest stands, and a
+forest an earlier run deleted, or one never made, stops the asking by
+itself. Without the count the label would summon a silent agent every
+sweep forever, which is the waste the test exists to avoid — and a root
+labelled before it was ever decomposed, the common case, would cost a run
+per sweep to report that there is nothing to report. The empty forest is
+not a defect and not a hold-off worth an agent; the closed member is
+neither, since a member that landed still owes the report the run makes
+for it.
+
 **The tracker needs no rule of its own.** Deleting members empties the
 tracker's blocker list, and an emptied tracker looks finished to the
 `wrap-up` row — so the protection matters, but it comes from the graph:
@@ -112,7 +141,7 @@ prompts:
 | `rebase` | an open PR is not mergeable (conflicts) |
 | `decompose` | an open issue carrying the `ideation` label was opened, edited, or had its labels changed; or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
-| `teardown-forest` | an open issue carrying the `ideation` label **also** carries the `teardown-forest` label: the human has ordered the forest that root commissioned to be deleted (§forgejo/decisions/forest-teardown); watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
+| `teardown-forest` | an open issue carrying the `ideation` label **also** carries the `teardown-forest` label, **and blocks at least one issue**: the human has ordered the forest that root commissioned to be deleted, and there is a forest to delete (§forgejo/decisions/forest-teardown); watermark-exempt on the sweep while the forest stands (§forgejo/reconciliation/watermark-exemptions) |
 | `reject-pr` | a PR is connected to work that is not yet commissioned: a **connected issue** — any non-PR issue the PR blocks, every one being tested — is blocked by an **open** `ideation` issue; tested when a PR opens, when a review is submitted, and by the reconciliation sweep, ahead of every review, rebase, fix and merge decision; the prompt closes the PR, names the breach, and reports it |
 
 ## Transition table
@@ -122,7 +151,8 @@ prompts:
 | issue opened (open, all blockers closed, no connected PR) | `implement` |
 | issue opened (open, authored by the configured decomposer identity) | hold off — the reason names the authorship; only the unblock cascade unblocks it |
 | issue opened (blocked, or a connected open PR, or not open) | hold off |
-| issue opened / edited / labels changed (issue open, carries both the `ideation` and the `teardown-forest` label) | `teardown-forest` — the teardown row wins over the root's `decompose` row, so a forest under teardown is never re-commissioned while it is being deleted (§forgejo/decisions/forest-teardown) |
+| issue opened / edited / labels changed (issue open, carries both the `ideation` and the `teardown-forest` label, blocks at least one issue) | `teardown-forest` — the teardown row wins over the root's `decompose` row, so a forest under teardown is never re-commissioned while it is being deleted (§forgejo/decisions/forest-teardown) |
+| issue opened / edited / labels changed (issue open, carries both labels, blocks no issue) | hold off, naming the empty forest — the engine can see there is nothing to delete, so no agent is asked to discover it (§forgejo/decisions/forest-teardown) |
 | issue opened / edited / labels changed / comment (issue open, carries the `teardown-forest` label without `ideation`) | hold off, naming that the label modifies the root row and retires no work item — a kind label carried alongside is named first, since what an issue *is* outweighs what a label *modifies* (§forgejo/decisions/forest-teardown) |
 | issue opened / edited / labels changed (issue open, carries the `ideation` label) | `decompose` — the label makes the root, whatever the repository, the title, and the author (the root row wins over the authorship row); attaching the label is the *first* trigger. The event path keeps the revision-keyed watermark guard; the sweep is watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | issue comment (issue open, carries the `ideation` label) | hold off — a comment is not a revision of intent; the reason says so |
@@ -147,7 +177,8 @@ prompts:
 | PR merged | unblock cascade (for the connected issue) |
 | PR closed without merging | hold off |
 | PR commented (open) | as reconcile — the sweep's logic: the re-fetched PR state decides the next action |
-| reconcile — open issue carrying both the `ideation` and the `teardown-forest` label | `teardown-forest`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
+| reconcile — open issue carrying both the `ideation` and the `teardown-forest` label, blocking at least one issue | `teardown-forest`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
+| reconcile — open issue carrying both labels, blocking nothing | hold off, naming the empty forest: the re-firing ends where the forest does (§forgejo/decisions/forest-teardown) |
 | reconcile — open issue with the `ideation` label | `decompose`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue, no open blockers | `wrap-up`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue with open blockers, its `ideation` blocker closed | `decompose`, revision notwithstanding — the forest is commissioned and unfinished, so curation continues (§forgejo/reconciliation/watermark-exemptions) |
