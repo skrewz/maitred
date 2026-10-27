@@ -167,7 +167,8 @@ func TestDecide(t *testing.T) {
 		state       State
 		watermark   *Watermark
 		wantAction  Action
-		wantCascade []Key
+		wantCascade []CascadeDispatch
+		wantHolds   []CascadeHoldOff
 	}{
 		{
 			name:       "issue opened dispatches implement",
@@ -320,12 +321,24 @@ func TestDecide(t *testing.T) {
 			name:        "issue closed runs the unblock cascade",
 			event:       issueEvent(EventIssueClosed),
 			state:       State{Issue: closedIssue(), CascadeRoot: cascadeFixture()},
-			wantCascade: []Key{{Repo: "o/r", Kind: KindIssue, Number: 2}},
+			wantCascade: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 2}, Action: ActionImplement}},
+		},
+		{
+			name:        "issue closed newly unblocks an outcome tracker: the cascade emits wrap-up, never implement",
+			event:       issueEvent(EventIssueClosed),
+			state:       State{Issue: closedIssue(), CascadeRoot: trackerCascadeFixture(false)},
+			wantCascade: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 2}, Action: ActionWrapUp}},
 		},
 		{
 			name:  "issue closed but open on re-fetch holds off without cascade",
 			event: issueEvent(EventIssueClosed),
 			state: State{Issue: openIssue(), CascadeRoot: cascadeFixture()},
+		},
+		{
+			name:      "issue closed leaves an outcome tracker blocked: the cascade records a hold-off naming the blockers",
+			event:     issueEvent(EventIssueClosed),
+			state:     State{Issue: closedIssue(), CascadeRoot: trackerCascadeFixture(true)},
+			wantHolds: []CascadeHoldOff{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 2}, Issue: &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}}, Reason: "issue 2 is an open outcome tracker still blocked by o/r#3; wrap-up held off"}},
 		},
 		{
 			name:       "PR opened dispatches review",
@@ -733,7 +746,7 @@ func TestDecide(t *testing.T) {
 			name:        "PR merged runs the unblock cascade",
 			event:       prEvent(EventPRMerged, "alice"),
 			state:       State{PR: mergedPR("abc"), CascadeRoot: cascadeFixture()},
-			wantCascade: []Key{{Repo: "o/r", Kind: KindIssue, Number: 2}},
+			wantCascade: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 2}, Action: ActionImplement}},
 		},
 		{
 			name:  "PR merged but not merged on re-fetch holds off without cascade",
@@ -1216,6 +1229,9 @@ func TestDecide(t *testing.T) {
 			if !reflect.DeepEqual(d.Cascade, tt.wantCascade) {
 				t.Errorf("Cascade = %v, want %v", d.Cascade, tt.wantCascade)
 			}
+			if !reflect.DeepEqual(d.CascadeHoldOffs, tt.wantHolds) {
+				t.Errorf("CascadeHoldOffs = %v, want %v", d.CascadeHoldOffs, tt.wantHolds)
+			}
 			if d.Reason == "" {
 				t.Error("Reason is empty; every decision carries a reason")
 			}
@@ -1357,6 +1373,69 @@ func TestAlreadyDispatched(t *testing.T) {
 	}
 }
 
+// TestCascadeActionFitsState pins the cascade dispatch's re-check of
+// its emission against the re-fetched issue: the state wins over the
+// graph data — implement is denied to any reserved label, wrap-up
+// only survives while the issue is an outcome tracker without
+// ideation (§forgejo/decisions/unblock-cascade).
+func TestCascadeActionFitsState(t *testing.T) {
+	tests := []struct {
+		name       string
+		action     Action
+		issue      *Issue
+		wantOK     bool
+		wantReason string
+	}{
+		{
+			name:   "implement fits an ordinary issue",
+			action: ActionImplement,
+			issue:  &Issue{Number: 2, State: "open", Repository: "o/r"},
+			wantOK: true,
+		},
+		{
+			name:       "implement is denied to a tracker that gained the outcome label",
+			action:     ActionImplement,
+			issue:      &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+			wantReason: "issue 2 carries the outcome label; never an implement candidate",
+		},
+		{
+			name:       "implement is denied to an ideation root",
+			action:     ActionImplement,
+			issue:      &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}},
+			wantReason: "issue 2 carries the ideation label; never an implement candidate",
+		},
+		{
+			name:   "wrap-up fits the tracker it was classified for",
+			action: ActionWrapUp,
+			issue:  &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+			wantOK: true,
+		},
+		{
+			name:       "wrap-up holds off when ideation arrived: decompose wins",
+			action:     ActionWrapUp,
+			issue:      &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelIdeation, LabelOutcome}},
+			wantReason: "issue 2 carries the ideation label; decompose wins over wrap-up",
+		},
+		{
+			name:       "wrap-up holds off when the outcome label is gone",
+			action:     ActionWrapUp,
+			issue:      &Issue{Number: 2, State: "open", Repository: "o/r"},
+			wantReason: "issue 2 no longer carries the outcome label; nothing to wrap up",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, ok := cascadeActionFitsState(tt.action, tt.issue)
+			if ok != tt.wantOK {
+				t.Fatalf("fitsState = %v (reason %q), want %v", ok, d.Reason, tt.wantOK)
+			}
+			if !tt.wantOK && d.Reason != tt.wantReason {
+				t.Errorf("reason = %q, want %q", d.Reason, tt.wantReason)
+			}
+		})
+	}
+}
+
 // TestEvent_KeyOf checks the watermark key derived from an event
 // (§forgejo/state/storage).
 func TestEvent_KeyOf(t *testing.T) {
@@ -1409,6 +1488,26 @@ func mergedPR(sha string) *PullRequest {
 	return pr
 }
 
+// trackerCascadeFixture is the tracker graph of the cascade's wrap-up
+// rows: the closed issue 1 blocks the open outcome tracker 2, whose
+// blockers are issue 1 (closed) and — when stillBlocked — issue 3
+// (open) (§forgejo/decisions/unblock-cascade).
+func trackerCascadeFixture(stillBlocked bool) *IssueNode {
+	blockers := []IssueNode{{Issue: Issue{Number: 1, State: "closed", Repository: "o/r"}}}
+	if stillBlocked {
+		blockers = append(blockers, IssueNode{Issue: Issue{Number: 3, State: "open", Repository: "o/r"}})
+	}
+	return &IssueNode{
+		Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+		Blocks: []IssueNode{
+			{
+				Issue:    Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+				Blockers: blockers,
+			},
+		},
+	}
+}
+
 // cascadeFixture is a small blocker graph: the closed issue 1 blocks the
 // open issue 2 (whose only blocker is issue 1) and the open issue 4
 // (which is also blocked by the still-open issue 3).
@@ -1448,9 +1547,10 @@ func TestUnblockCascade(t *testing.T) {
 	}
 
 	tests := []struct {
-		name string
-		root *IssueNode
-		want []Key
+		name      string
+		root      *IssueNode
+		want      []CascadeDispatch
+		wantHolds []CascadeHoldOff
 	}{
 		{
 			name: "nil root yields no cascade",
@@ -1470,7 +1570,151 @@ func TestUnblockCascade(t *testing.T) {
 					},
 				},
 			},
-			want: []Key{{Repo: "o/r", Kind: KindIssue, Number: 2}},
+			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 2}, Action: ActionImplement}},
+		},
+		{
+			// A tracker whose last blocker just closed is a tracker whose
+			// work is finished: the cascade emits wrap-up, never implement
+			// (§forgejo/decisions/unblock-cascade).
+			name: "a newly unblocked outcome tracker emits wrap-up",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue:    Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+						Blockers: []IssueNode{node("o/r", 1, "closed")},
+					},
+				},
+			},
+			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 2}, Action: ActionWrapUp}},
+		},
+		{
+			// decompose wins over wrap-up: an issue carrying both labels
+			// takes the implement emission, which the reserved-label
+			// insurance then holds off naming ideation
+			// (§forgejo/decisions/unblock-cascade).
+			name: "ideation outranks outcome in the cascade classification",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue:    Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelIdeation, LabelOutcome}},
+						Blockers: []IssueNode{node("o/r", 1, "closed")},
+					},
+				},
+			},
+			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 2}, Action: ActionImplement}},
+		},
+		{
+			// The still-blocked tracker is not silent: the hold-off names
+			// which blockers remain open (§forgejo/decisions/unblock-cascade).
+			name: "a still-blocked outcome tracker records a cascade hold-off naming its blockers",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue: Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+						Blockers: []IssueNode{
+							node("o/r", 1, "closed"),
+							node("other/repo", 3, "open"),
+						},
+					},
+				},
+			},
+			wantHolds: []CascadeHoldOff{{
+				Key:    Key{Repo: "o/r", Kind: KindIssue, Number: 2},
+				Issue:  &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+				Reason: "issue 2 is an open outcome tracker still blocked by other/repo#3; wrap-up held off",
+			}},
+		},
+		{
+			// A tracker's work is delivered by its members, never by a pull
+			// request of its own: the PR is emitted merge-or-wait and the
+			// tracker is named as still held — the walk is never silent for a
+			// tracker it does not emit for
+			// (§forgejo/decisions/unblock-cascade).
+			name: "a tracker held only by its connected open PR is named, not silent",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue: Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+						Blockers: []IssueNode{
+							node("o/r", 1, "closed"),
+							pullNode("o/r", 9, "open"),
+						},
+					},
+				},
+			},
+			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindPR, Number: 9}, Action: ActionMergeOrWait}},
+			wantHolds: []CascadeHoldOff{{
+				Key:    Key{Repo: "o/r", Kind: KindIssue, Number: 2},
+				Issue:  &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+				Reason: "issue 2 is an open outcome tracker still blocked by o/r#9; wrap-up held off",
+			}},
+		},
+		{
+			// #101 widened the commissioned forest to a tracker gated by a
+			// closed root one hop away: the sweep curates it, so the hold-off
+			// must not promise a wrap-up the state does not call for
+			// (§forgejo/reconciliation/watermark-exemptions).
+			name: "a tracker in a commissioned forest names the curation, not wrap-up",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
+				Blocks: []IssueNode{
+					{
+						Issue: Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+						Blockers: []IssueNode{
+							{Issue: Issue{Number: 1, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}}},
+							node("other/repo", 3, "open"),
+						},
+					},
+				},
+			},
+			wantHolds: []CascadeHoldOff{{
+				Key:    Key{Repo: "o/r", Kind: KindIssue, Number: 2},
+				Issue:  &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+				Reason: "issue 2 is an open outcome tracker commissioned by ideation 1 and still blocked by other/repo#3; the sweep curates the forest",
+			}},
+		},
+		{
+			// A blocker the engine cannot read as closed holds the tracker as
+			// surely as an open one does: it is named, not dropped
+			// (§forgejo/decisions/unblock-cascade).
+			name: "a blocker in an unrecognised state still holds the tracker and is named",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue: Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+						Blockers: []IssueNode{
+							node("o/r", 1, "closed"),
+							node("o/r", 3, "blocked"),
+						},
+					},
+				},
+			},
+			wantHolds: []CascadeHoldOff{{
+				Key:    Key{Repo: "o/r", Kind: KindIssue, Number: 2},
+				Issue:  &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
+				Reason: "issue 2 is an open outcome tracker still blocked by o/r#3; wrap-up held off",
+			}},
+		},
+		{
+			// Closing the tracker roots its own cascade: its members are
+			// closed, the walk cycles back to the visited root, and nothing
+			// is emitted — termination is tested, not assumed
+			// (§forgejo/decisions/unblock-cascade).
+			name: "a closed tracker cascades to nothing",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r", Labels: []string{LabelOutcome}},
+				Blocks: []IssueNode{
+					{
+						Issue:  Issue{Number: 2, State: "closed", Repository: "o/r"},
+						Blocks: []IssueNode{node("o/r", 1, "closed")},
+					},
+				},
+			},
 		},
 		{
 			name: "cross-repo blockers are followed",
@@ -1483,7 +1727,7 @@ func TestUnblockCascade(t *testing.T) {
 					},
 				},
 			},
-			want: []Key{{Repo: "other/repo", Kind: KindIssue, Number: 2}},
+			want: []CascadeDispatch{{Key: Key{Repo: "other/repo", Kind: KindIssue, Number: 2}, Action: ActionImplement}},
 		},
 		{
 			name: "the cascade is transitive through closed issues",
@@ -1501,7 +1745,7 @@ func TestUnblockCascade(t *testing.T) {
 					},
 				},
 			},
-			want: []Key{{Repo: "o/r", Kind: KindIssue, Number: 3}},
+			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 3}, Action: ActionImplement}},
 		},
 		{
 			name: "an issue with an open blocker is not unblocked",
@@ -1549,11 +1793,12 @@ func TestUnblockCascade(t *testing.T) {
 					},
 				},
 			},
-			want: []Key{{Repo: "o/r", Kind: KindIssue, Number: 4}},
+			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 4}, Action: ActionImplement}},
 		},
 		{
-			// The walk is label-blind: what is finally dispatched for a
-			// labelled member is the cascade dispatch's call
+			// The walk is label-blind: labels are consulted only at
+			// emission, and a human-task emission — classified implement —
+			// is held off by the reserved-label insurance at dispatch
 			// (§forgejo/decisions/unblock-cascade).
 			name: "a reserved label does not blind the walk",
 			root: &IssueNode{
@@ -1565,7 +1810,7 @@ func TestUnblockCascade(t *testing.T) {
 					},
 				},
 			},
-			want: []Key{{Repo: "o/r", Kind: KindIssue, Number: 2}},
+			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 2}, Action: ActionImplement}},
 		},
 		{
 			// A closed issue-side blocker unblocks the connected
@@ -1584,7 +1829,7 @@ func TestUnblockCascade(t *testing.T) {
 					},
 				},
 			},
-			want: []Key{{Repo: "o/r", Kind: KindPR, Number: 9}},
+			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindPR, Number: 9}, Action: ActionMergeOrWait}},
 		},
 		{
 			name: "a connected PR unblocked by two issues is unblocked once",
@@ -1607,7 +1852,7 @@ func TestUnblockCascade(t *testing.T) {
 					},
 				},
 			},
-			want: []Key{{Repo: "o/r", Kind: KindPR, Number: 9}},
+			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindPR, Number: 9}, Action: ActionMergeOrWait}},
 		},
 		{
 			name: "an issue still blocked on the issue side is not unblocked, connected PR included",
@@ -1639,7 +1884,7 @@ func TestUnblockCascade(t *testing.T) {
 					},
 				},
 			},
-			want: []Key{{Repo: "other/repo", Kind: KindPR, Number: 9}},
+			want: []CascadeDispatch{{Key: Key{Repo: "other/repo", Kind: KindPR, Number: 9}, Action: ActionMergeOrWait}},
 		},
 		{
 			name: "a cycle terminates",
@@ -1659,8 +1904,12 @@ func TestUnblockCascade(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := unblockCascade(tt.root); !reflect.DeepEqual(got, tt.want) {
+			got, gotHolds := unblockCascade(tt.root)
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("unblockCascade() = %v, want %v", got, tt.want)
+			}
+			if !reflect.DeepEqual(gotHolds, tt.wantHolds) {
+				t.Errorf("unblockCascade() hold-offs = %v, want %v", gotHolds, tt.wantHolds)
 			}
 		})
 	}
@@ -1752,7 +2001,7 @@ func TestDecide_CascadeUnblocksDecomposerAuthoredMember(t *testing.T) {
 		},
 	}
 	d := Decide(issueEvent(EventIssueClosed), State{Issue: closedIssue(), CascadeRoot: root, DecomposerIdentity: "decomposer"}, nil)
-	want := []Key{{Repo: "o/r", Kind: KindIssue, Number: 7}}
+	want := []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 7}, Action: ActionImplement}}
 	if !reflect.DeepEqual(d.Cascade, want) {
 		t.Errorf("cascade = %v, want %v (the cascade is not narrowed by authorship)", d.Cascade, want)
 	}

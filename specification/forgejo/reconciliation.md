@@ -102,8 +102,14 @@ dispatches `decompose` like the sweep row does, but under the ordinary
 revision-keyed watermark guard — the exemption, not the action, is what
 belongs to the sweep (§forgejo/decisions/transition-table). A comment
 on an open root holds off: it is not a revision of intent. For
-`wrap-up` the sweep stays the only firing row: an `outcome` tracker's
-activity on the event path is a hold-off naming the label.
+`wrap-up` the sweep stays the only exempt firing row: an `outcome`
+tracker's activity on the event path is a hold-off naming the label.
+The **unblock cascade** dispatches `wrap-up` too, when it newly
+unblocks an `outcome` tracker (§forgejo/decisions/unblock-cascade); a
+cascade dispatch is not exempt — it applies the ordinary revision-keyed
+guard for its own key, and the sweep stays the state-based backstop
+that re-fires the wrap-up at an unchanged revision when, say, a human
+deleted an edge and no delivery fired.
 
 All other actions — `implement`, `reassess`, `review`, `re-review`,
 `rebase`, `fix-feedback`, `merge-or-wait` — keep revision-keyed

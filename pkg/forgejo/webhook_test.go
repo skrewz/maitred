@@ -1421,11 +1421,80 @@ func TestHandler_IssueClosed_CascadeWatermarkHolds(t *testing.T) {
 	}
 }
 
-// TestHandler_IssueClosed_CascadeReservedLabelHoldsOff: the cascade
-// dispatches implement, and an issue carrying a reserved label is not
-// implemented — the sweep decides it
-// (§forgejo/reconciliation/watermark-exemptions).
-func TestHandler_IssueClosed_CascadeReservedLabelHoldsOff(t *testing.T) {
+// TestCascadeHoldOffReason_QualifiesByTheKeyRepositoryRoles: a cascade
+// hold-off is qualified by the roles of the repository holding its key,
+// so it never promises wrap-up where those roles exclude it — and never
+// names a role a failed listing merely failed to establish
+// (§forgejo/webhook/repository-roles, §forgejo/decisions/unblock-cascade).
+func TestCascadeHoldOffReason_QualifiesByTheKeyRepositoryRoles(t *testing.T) {
+	base := "issue 2 is an open outcome tracker still blocked by other/repo#3; wrap-up held off"
+	tests := []struct {
+		name    string
+		repo    string
+		repos   []Repository
+		listErr error
+		want    []string
+		deny    string
+	}{
+		{
+			name:  "the key repository admits wrap-up: nothing qualifies the reason",
+			repo:  "o/outcomes",
+			repos: []Repository{testRepo("o/r"), testRepoOutcomes("o/outcomes")},
+			deny:  "inadmissible",
+		},
+		{
+			name:  "the key repository holds only the work-item role: the action and its role are named",
+			repo:  "o/r",
+			repos: []Repository{testRepo("o/r")},
+			want:  []string{string(ActionWrapUp), maitredOutcomesTopic},
+		},
+		{
+			name: "the key repository holds no role: the exclusion is named",
+			repo: "o/off",
+			repos: []Repository{
+				testRepo("o/r"),
+				{Owner: "o", Name: "off", FullName: "o/off"},
+			},
+			want: []string{"holds no maitred role"},
+		},
+		{
+			name:    "a failed listing names the failure, never an exclusion",
+			repo:    "o/r",
+			listErr: errors.New("boom"),
+			want:    []string{"scope of repo o/r unknown", "boom"},
+			deny:    "holds no maitred role",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng, api, _, _ := newTestEngine(t)
+			api.repos = tt.repos
+			api.listReposErr = tt.listErr
+			got := eng.cascadeHoldOffReason(CascadeHoldOff{
+				Key:    Key{Repo: tt.repo, Kind: KindIssue, Number: 2},
+				Reason: base,
+			})
+			if !strings.HasPrefix(got, base) {
+				t.Errorf("reason %q does not start from the decision's own reason", got)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("reason %q does not name %q", got, want)
+				}
+			}
+			if tt.deny != "" && strings.Contains(got, tt.deny) {
+				t.Errorf("reason %q names %q, want it to stay silent on the roles", got, tt.deny)
+			}
+		})
+	}
+}
+
+// TestHandler_IssueClosed_CascadeWrapUpInadmissibleHoldsOff: the cascade
+// classifies an outcome tracker as wrap-up, and wrap-up is
+// inadmissible in a repository holding only the work-item role: the
+// hold-off names the action and the required role
+// (§forgejo/webhook/repository-roles, §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadeWrapUpInadmissibleHoldsOff(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
 	h := NewHandler(eng, "s3cret", nil)
 	api.issues[7] = testIssue(7, "closed")
@@ -1440,7 +1509,16 @@ func TestHandler_IssueClosed_CascadeReservedLabelHoldsOff(t *testing.T) {
 		t.Fatalf("status = %d, want 204", rec.Code)
 	}
 	if tasks := q.all(); len(tasks) != 0 {
-		t.Errorf("got %d tasks, want none (a labelled issue is decided by the sweep)", len(tasks))
+		t.Errorf("got %d tasks, want none (wrap-up is inadmissible in a work-item repository)", len(tasks))
+	}
+	d := decisionFor(t, eng, Key{Repo: "o/r", Kind: KindIssue, Number: 10})
+	if d.Dispatched {
+		t.Errorf("decision log records a dispatch of %q, want a hold-off", d.Action)
+	}
+	for _, want := range []string{string(ActionWrapUp), maitredOutcomesTopic} {
+		if !strings.Contains(d.Reason, want) {
+			t.Errorf("reason %q does not name %q", d.Reason, want)
+		}
 	}
 }
 
@@ -1522,6 +1600,271 @@ func TestHandler_CrossRepoCascade(t *testing.T) {
 	}
 	if !strings.Contains(tasks[0].Prompt, "repo=o/other kind=issue number=10") {
 		t.Errorf("prompt = %q, want implement for o/other issue 10", tasks[0].Prompt)
+	}
+}
+
+// decisionFor returns the recorded decision for one key
+// (§forgejo/observability/the-decision-log).
+func decisionFor(t *testing.T, eng *Engine, k Key) DecisionRecord {
+	t.Helper()
+	for _, tr := range eng.Tracked() {
+		if tr.Key == k {
+			return tr.Decision
+		}
+	}
+	t.Fatalf("no decision recorded for %s", k.String())
+	return DecisionRecord{}
+}
+
+// trackerFixtureCrossRepo returns an open outcome tracker in repo,
+// blocked only by the closed issue 7 of o/r
+// (§forgejo/decisions/unblock-cascade).
+func trackerFixtureCrossRepo(repo string) *Issue {
+	tracker := testIssue(10, "open")
+	tracker.Labels = append(tracker.Labels, LabelOutcome)
+	tracker.Repository = repo
+	tracker.HTMLURL = "https://forge.example.com/" + repo + "/issues/10"
+	return tracker
+}
+
+// TestHandler_IssueClosed_CascadeWrapUpAcrossRoleBoundary: a cascade
+// rooted at an issue in a work-item repository newly unblocks an
+// outcome tracker in an outcomes repository — the emission is
+// wrap-up, admissible where the key lives, and the tracker key's
+// watermark records wrap-up (§forgejo/decisions/unblock-cascade,
+// §forgejo/webhook/repository-roles).
+func TestHandler_IssueClosed_CascadeWrapUpAcrossRoleBoundary(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.repos = append(api.repos, testRepoOutcomes("o/outcomes"))
+	api.issues[7] = testIssue(7, "closed")
+	tracker := trackerFixtureCrossRepo("o/outcomes")
+	api.issues[10] = tracker
+	api.blocks[7] = []Issue{*tracker}
+	api.deps[10] = []Issue{*testIssue(7, "closed")}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (wrap-up for tracker 10)", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=wrap-up repo=o/outcomes kind=issue number=10") {
+		t.Errorf("prompt = %q, want the wrap-up dispatch for o/outcomes issue 10", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 10})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w == nil || w.Action != string(ActionWrapUp) {
+		t.Errorf("tracker watermark = %+v, want wrap-up", w)
+	}
+}
+
+// TestHandler_IssueClosed_CascadeWrapUpWatermarkHolds: the cascade's
+// wrap-up emission is guarded by the key's own revision-keyed
+// watermark — unlike the sweep's exempt row, a cascade does not
+// re-fire wrap-up at an already-dispatched revision
+// (§forgejo/reconciliation/watermark-exemptions).
+func TestHandler_IssueClosed_CascadeWrapUpWatermarkHolds(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.repos = append(api.repos, testRepoOutcomes("o/outcomes"))
+	api.issues[7] = testIssue(7, "closed")
+	tracker := trackerFixtureCrossRepo("o/outcomes")
+	api.issues[10] = tracker
+	api.blocks[7] = []Issue{*tracker}
+	api.deps[10] = []Issue{*testIssue(7, "closed")}
+	if err := store.Save(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 10},
+		Watermark{Action: string(ActionWrapUp), Revision: testUpdatedAt.UTC().Format(time.RFC3339)}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if n := len(q.all()); n != 0 {
+		t.Errorf("got %d tasks, want none (wrap-up already dispatched at the revision)", n)
+	}
+}
+
+// TestHandler_IssueClosed_CascadeBlockedTrackerNamesBlockers: closing
+// one of a tracker's blockers records a cascade hold-off naming the
+// blockers that remain open, and dispatches nothing. The record carries
+// the tracker's own state and revision — an unrelated close event must
+// not blank the tracker's dashboard row — and names that wrap-up is
+// inadmissible in a repository holding only the work-item role
+// (§forgejo/decisions/unblock-cascade, §forgejo/observability/the-decision-log,
+// §forgejo/webhook/repository-roles).
+func TestHandler_IssueClosed_CascadeBlockedTrackerNamesBlockers(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.issues[7] = testIssue(7, "closed")
+	api.issues[11] = testIssue(11, "open")
+	tracker := trackerFixtureCrossRepo("o/r")
+	api.issues[10] = tracker
+	api.blocks[7] = []Issue{*tracker}
+	api.deps[10] = []Issue{*testIssue(7, "closed"), *testIssue(11, "open")}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if n := len(q.all()); n != 0 {
+		t.Errorf("got %d tasks, want none (the tracker is still blocked)", n)
+	}
+	d := decisionFor(t, eng, Key{Repo: "o/r", Kind: KindIssue, Number: 10})
+	if d.Dispatched {
+		t.Fatalf("decision log records a dispatch of %q, want a hold-off", d.Action)
+	}
+	for _, want := range []string{LabelOutcome, "o/r#11"} {
+		if !strings.Contains(d.Reason, want) {
+			t.Errorf("reason %q does not name %q", d.Reason, want)
+		}
+	}
+	// The tracker's own state and revision ride the record: the hold-off
+	// must not downgrade the dashboard row of an object it did not decide
+	// (§forgejo/observability/the-dashboard-view).
+	if d.State != "open" {
+		t.Errorf("record state = %q, want open (the tracker's own state)", d.State)
+	}
+	if want := testUpdatedAt.UTC().Format(time.RFC3339); d.Revision != want {
+		t.Errorf("record revision = %q, want %s (the tracker's own revision)", d.Revision, want)
+	}
+	// o/r holds only the work-item role, so the record must not promise a
+	// wrap-up those roles exclude.
+	for _, want := range []string{string(ActionWrapUp), maitredOutcomesTopic} {
+		if !strings.Contains(d.Reason, want) {
+			t.Errorf("reason %q does not name the inadmissible %q", d.Reason, want)
+		}
+	}
+}
+
+// TestHandler_IssueClosed_CascadeBlockedTrackerAdmissibleReason: the same
+// hold-off for a tracker in an outcomes repository names only its open
+// blockers — the roles admit wrap-up there, so nothing qualifies the
+// reason (§forgejo/webhook/repository-roles, §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadeBlockedTrackerAdmissibleReason(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.repos = append(api.repos, testRepoOutcomes("o/outcomes"))
+	api.issues[7] = testIssue(7, "closed")
+	tracker := trackerFixtureCrossRepo("o/outcomes")
+	api.issues[10] = tracker
+	blocker := testIssue(11, "open")
+	blocker.Repository = "o/outcomes"
+	api.blocks[7] = []Issue{*tracker}
+	api.deps[10] = []Issue{*testIssue(7, "closed"), *blocker}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if n := len(q.all()); n != 0 {
+		t.Errorf("got %d tasks, want none (the tracker is still blocked)", n)
+	}
+	d := decisionFor(t, eng, Key{Repo: "o/outcomes", Kind: KindIssue, Number: 10})
+	if d.Dispatched {
+		t.Fatalf("decision log records a dispatch of %q, want a hold-off", d.Action)
+	}
+	if !strings.Contains(d.Reason, "o/outcomes#11") {
+		t.Errorf("reason %q does not name the open blocker o/outcomes#11", d.Reason)
+	}
+	if strings.Contains(d.Reason, "inadmissible") {
+		t.Errorf("reason %q qualifies an action the roles admit", d.Reason)
+	}
+}
+
+// TestHandler_ClosedTracker_CascadeEmitsNothing: closing the tracker
+// roots its own cascade — its members are closed, the walk cycles
+// back to the visited root, and nothing is emitted. Termination is
+// tested, not assumed (§forgejo/decisions/unblock-cascade).
+func TestHandler_ClosedTracker_CascadeEmitsNothing(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	tracker := trackerFixtureCrossRepo("o/r")
+	tracker.State = "closed"
+	api.issues[10] = tracker
+	api.issues[8] = testIssue(8, "closed")
+	api.blocks[10] = []Issue{*testIssue(8, "closed")}
+	api.blocks[8] = []Issue{*tracker}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 10, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if n := len(q.all()); n != 0 {
+		t.Errorf("got %d tasks, want none (a closed tracker cascades to nothing)", n)
+	}
+}
+
+// TestHandler_IssueClosed_CascadeTrackerNeverGetsImplement: a
+// tracker the graph mislabels (the outcome label arrived after the
+// graph walk) still never receives implement — the re-fetched state
+// wins and the reserved-label insurance holds the emission off
+// (§forgejo/decisions/transition-table, §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadeTrackerNeverGetsImplement(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.issues[7] = testIssue(7, "closed")
+	tracker := trackerFixtureCrossRepo("o/r")
+	api.issues[10] = tracker
+	// The graph node carries no labels: the walk classifies it as
+	// implement; the re-fetch says otherwise.
+	api.blocks[7] = []Issue{{Number: 10, State: "open", Repository: "o/r"}}
+	api.deps[10] = []Issue{*testIssue(7, "closed")}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if n := len(q.all()); n != 0 {
+		t.Errorf("got %d tasks, want none (implement is never dispatched for a tracker)", n)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 10})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none (nothing was dispatched)", w)
+	}
+	d := decisionFor(t, eng, Key{Repo: "o/r", Kind: KindIssue, Number: 10})
+	if !strings.Contains(d.Reason, LabelOutcome) {
+		t.Errorf("reason %q does not name the %s label", d.Reason, LabelOutcome)
+	}
+}
+
+// TestHandler_IssueClosed_CascadeWrapUpLabelGoneHoldsOff: a wrap-up
+// emission whose re-fetched issue no longer carries the outcome label
+// holds off saying so — the state wins over the graph data, and the
+// sweep decides the issue afresh (§forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadeWrapUpLabelGoneHoldsOff(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.repos = append(api.repos, testRepoOutcomes("o/outcomes"))
+	api.issues[7] = testIssue(7, "closed")
+	tracker := trackerFixtureCrossRepo("o/outcomes")
+	api.blocks[7] = []Issue{*tracker}
+	// The label was removed before the dispatch: the re-fetch reads a
+	// plain issue.
+	plain := testIssue(10, "open")
+	plain.Repository = "o/outcomes"
+	api.issues[10] = plain
+	api.deps[10] = []Issue{*testIssue(7, "closed")}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if n := len(q.all()); n != 0 {
+		t.Errorf("got %d tasks, want none (the state no longer calls for wrap-up)", n)
+	}
+	d := decisionFor(t, eng, Key{Repo: "o/outcomes", Kind: KindIssue, Number: 10})
+	if !strings.Contains(d.Reason, LabelOutcome) || !strings.Contains(d.Reason, "no longer carries") {
+		t.Errorf("reason %q does not state that the outcome label is gone", d.Reason)
 	}
 }
 

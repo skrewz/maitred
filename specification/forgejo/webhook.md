@@ -136,13 +136,21 @@ Two distinct rules consult the roles:
   the roles of the repository holding **the object under consideration** —
   the event's object on the event path and the sweep, the cascade key for
   the unblock cascade — never by the roles of the repository the event
-  arrived from. A cascade therefore crosses the role boundary: a closed
-  issue in an outcomes repository dispatches `implement` for a member in an
-  enabled repository. An action denied by this rule is a hold-off naming
-  the action, the repository, and the required role's topic; an action no
+  arrived from. A cascade therefore crosses the role boundary in both
+  directions: a closed issue in an outcomes repository dispatches
+  `implement` for a member in an enabled repository, and a cascade
+  rooted at an issue in a work-item repository dispatches `wrap-up`
+  for a newly unblocked tracker in an outcomes repository
+  (§forgejo/decisions/unblock-cascade). An action denied by this rule
+  is a hold-off naming the action, the repository, and the required
+  role's topic; an action no
   role admits (an unknown one) is a hold-off stating
   `action <a> is admitted by no maitred role` — never the wording of a
-  role that does not admit it.
+  role that does not admit it. A cascade **hold-off** that names an
+  action is qualified by the same test — the roles of the repository
+  holding its key, which the scope cache makes free — and where they
+  deny it the record says so in the same wording, so the decision log
+  never promises an action those roles exclude.
 
 Admissibility is applied **after** the re-fetch and `Decide`, not beside
 admission at step 3, and this shape is deliberate. Admissibility judges

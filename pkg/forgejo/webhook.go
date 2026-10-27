@@ -153,10 +153,22 @@ func (e *Engine) HandleEvent(ev Event) {
 				e.log.Error("save watermark", "key", key.String(), "error", err)
 			}
 		}
-		for _, ck := range d.Cascade {
-			if err := e.dispatchCascade(ck, ev.Sender); err != nil {
-				e.log.Error("cascade dispatch failed", "key", key.String(), "cascade", ck.String(), "error", err)
+		for _, cd := range d.Cascade {
+			if err := e.dispatchCascade(cd, ev.Sender); err != nil {
+				e.log.Error("cascade dispatch failed", "key", key.String(), "cascade", cd.Key.String(), "error", err)
 			}
+		}
+		for _, ch := range d.CascadeHoldOffs {
+			// A still-blocked tracker is not silent: the hold-off belongs
+			// to the decision log like any other decision, carries the
+			// tracker as the graph showed it (so its state and revision are
+			// its own), and is qualified by the roles of the repository
+			// holding the key, so it never promises an action those roles
+			// exclude (§forgejo/decisions/unblock-cascade,
+			// §forgejo/observability/the-decision-log,
+			// §forgejo/webhook/repository-roles).
+			cev := Event{Type: EventIssueOpened, Repo: ch.Key.Repo, Kind: ch.Key.Kind, Number: ch.Key.Number, Sender: ev.Sender}
+			e.recordDecision(ch.Key, cev, State{Issue: ch.Issue}, holdOff(e.cascadeHoldOffReason(ch)))
 		}
 	})
 }
@@ -386,16 +398,43 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	return nil
 }
 
-// dispatchCascade dispatches the unblock cascade for one key: a newly
-// unblocked issue is dispatched implement, a newly unblocked PR
-// merge-or-wait, each applying the key's own watermark first, so an
+// cascadeHoldOffReason qualifies a cascade hold-off with the roles of
+// the repository holding its key. An emission names the action and the
+// role it requires when the roles deny it; a hold-off must not promise
+// an action those roles exclude either, so where they deny wrap-up the
+// reason says so in the same wording — the hold-off helpers keep the
+// two paths saying the same thing. The scope cache makes the test free
+// (§forgejo/webhook/repository-roles, §forgejo/decisions/unblock-cascade).
+func (e *Engine) cascadeHoldOffReason(ch CascadeHoldOff) string {
+	r, err := e.repoRoles(ch.Key.Repo)
+	switch {
+	case err != nil:
+		return ch.Reason + "; " + holdOffScopeUnknown(ch.Key.Repo, err).Reason
+	case !r.any():
+		return ch.Reason + "; " + holdOffOutOfRemit(ch.Key.Repo).Reason
+	case !admissibleInRoles(ActionWrapUp, r):
+		return ch.Reason + "; " + holdOffActionInadmissible(ActionWrapUp, ch.Key.Repo).Reason
+	}
+	return ch.Reason // the roles admit wrap-up: nothing to qualify
+}
+
+// dispatchCascade dispatches the entry's action for one key of the
+// unblock cascade, applying the key's own watermark first, so an
 // already-dispatched (action, revision) is not re-dispatched
-// (§forgejo/decisions/unblock-cascade). Admissibility is judged by the
-// roles of the repository holding the key, never the repository whose
-// closure rooted the cascade (§forgejo/webhook/repository-roles). An
-// issue carrying a reserved label is never an implement candidate,
-// cascade included (§forgejo/decisions/transition-table).
-func (e *Engine) dispatchCascade(k Key, sender string) error {
+// (§forgejo/decisions/unblock-cascade). A newly unblocked PR key — whose
+// emission's action is merge-or-wait — is dispatched through
+// dispatchCascadePR. Admissibility is judged by the roles of the
+// repository holding the key, never the repository whose closure
+// rooted the cascade: implement requires the work-item role and
+// wrap-up the outcomes role, so a cascade rooted at a work-item
+// issue can emit wrap-up into an outcomes repository
+// (§forgejo/webhook/repository-roles). An issue carrying a reserved
+// label is never an implement candidate, cascade included
+// (§forgejo/decisions/transition-table); the re-fetched issue
+// re-checks the emission — the state wins over the graph data
+// (§forgejo/decisions/unblock-cascade).
+func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
+	k := cd.Key
 	if k.Kind == KindPR {
 		return e.dispatchCascadePR(k, sender)
 	}
@@ -414,9 +453,9 @@ func (e *Engine) dispatchCascade(k Key, sender string) error {
 		e.recordDecision(k, ev, State{}, held)
 		return nil
 	}
-	if !admissibleInRoles(ActionImplement, r) {
+	if !admissibleInRoles(cd.Action, r) {
 		ev := Event{Type: EventIssueOpened, Repo: k.Repo, Kind: k.Kind, Number: k.Number, Sender: sender}
-		e.recordDecision(k, ev, State{}, holdOffActionInadmissible(ActionImplement, k.Repo))
+		e.recordDecision(k, ev, State{}, holdOffActionInadmissible(cd.Action, k.Repo))
 		return nil
 	}
 	owner, name := splitRepo(k.Repo)
@@ -427,9 +466,9 @@ func (e *Engine) dispatchCascade(k Key, sender string) error {
 	if issue.State != "open" {
 		return nil // closed in the meantime: nothing to dispatch
 	}
-	if label := neverWorkItemLabel(issue.Labels); label != "" {
+	if d, ok := cascadeActionFitsState(cd.Action, issue); !ok {
 		ev := Event{Type: EventIssueOpened, Repo: k.Repo, Kind: k.Kind, Number: k.Number, Sender: sender}
-		e.recordDecision(k, ev, State{Issue: issue}, holdOffNeverImplement(k.Number, label))
+		e.recordDecision(k, ev, State{Issue: issue}, d)
 		return nil
 	}
 	w, err := e.store.Load(k)
@@ -438,14 +477,14 @@ func (e *Engine) dispatchCascade(k Key, sender string) error {
 		w = nil
 	}
 	rev := issueRevision(issue)
-	if alreadyDispatched(w, ActionImplement, rev) {
+	if alreadyDispatched(w, cd.Action, rev) {
 		return nil
 	}
 	ev := Event{Type: EventIssueOpened, Repo: k.Repo, Kind: KindIssue, Number: k.Number, Sender: sender}
-	if err := e.dispatch(ev, State{Issue: issue}, ActionImplement); err != nil {
+	if err := e.dispatch(ev, State{Issue: issue}, cd.Action); err != nil {
 		return err
 	}
-	return e.store.Save(k, Watermark{Action: string(ActionImplement), Revision: rev})
+	return e.store.Save(k, Watermark{Action: string(cd.Action), Revision: rev})
 }
 
 // dispatchCascadePR dispatches the unblock cascade for a newly unblocked PR

@@ -21,7 +21,11 @@ A **Decision** is either a **dispatch** — a named action for the
 event's own object — or a **hold-off**; both carry a human-readable
 **reason** (it is logged with every decision). A close event's
 decision additionally carries the **unblock cascade**: the issues now
-unblocked, each warranting a dispatch of `implement`.
+unblocked, each warranting a dispatch of `implement` — or of `wrap-up`
+when the newly unblocked issue carries the `outcome` label
+(§forgejo/decisions/unblock-cascade) — plus the cascade hold-offs: an
+open tracker the walk finds still blocked, its reason naming the
+blockers that remain open.
 
 When the event and the re-fetched state disagree (out-of-order or
 stale delivery), the **state wins**: a transition whose preconditions
@@ -148,7 +152,7 @@ prompts:
 
 | Action | Dispatched when |
 |---|---|
-| `implement` | the issue is open, unblocked (all its blockers closed), has no connected open PR, carries no reserved label, and is not authored by the configured decomposer identity — the issue was opened or became unblocked |
+| `implement` | the issue is open, unblocked (all its blockers closed), has no connected open PR, carries no reserved label, and is not authored by the configured decomposer identity — the issue was opened or became unblocked, and is not an `outcome` tracker (one that becomes unblocked is a `wrap-up` candidate) |
 | `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement), and it carries no reserved label |
 | `review` | a mergeable PR opened, or synced while it has no review, or an open mergeable PR carrying the `trigger-review` label while it has no review (§forgejo/decisions/label-triggered-review) |
 | `re-review` | a mergeable PR synced while it has a review, or an open mergeable PR carrying the `trigger-review` label while it has a review (§forgejo/decisions/label-triggered-review) |
@@ -156,7 +160,7 @@ prompts:
 | `merge-or-wait` | the PR's latest review approves **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's |
 | `rebase` | an open PR is not mergeable (conflicts) |
 | `decompose` | an open issue carrying the `ideation` label was opened, edited, or had its labels changed; or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
-| `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
+| `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions); or the unblock cascade newly unblocks an open issue carrying the `outcome` label (§forgejo/decisions/unblock-cascade) |
 | `teardown-forest` | an open issue carrying the `ideation` label **also** carries the `teardown-forest` label, **and blocks at least one issue**: the human has ordered the forest that root commissioned to be deleted, and there is a forest to delete (§forgejo/decisions/forest-teardown); watermark-exempt on the sweep while the forest stands (§forgejo/reconciliation/watermark-exemptions) |
 | `reject-pr` | a PR is connected to work that is not yet commissioned: a **connected issue** — any non-PR issue the PR blocks, every one being tested — is blocked by an **open** `ideation` issue; tested when a PR opens, when a review is submitted, and by the reconciliation sweep, ahead of every review, rebase, fix and merge decision; the prompt closes the PR, names the breach, and reports it |
 
@@ -248,7 +252,10 @@ any connected issue all decide as before.
 
 The "latest review" is the PR's most recently submitted review. An
 issue that *became unblocked* is dispatched `implement` through the
-unblock cascade, under the same conditions as an opened issue.
+unblock cascade, under the same conditions as an opened issue — except
+that a newly unblocked issue carrying the `outcome` label is a
+`wrap-up` candidate instead: its work is the sum of its members, and
+wrapping up, not implementing, is what finishes it.
 
 **Reserved labels.** An issue carrying the `ideation`, `outcome`, or
 `human-task` label is **never** an `implement` or `reassess` candidate:
@@ -390,24 +397,61 @@ cannot fire — it never blocks more than the graph states.
 On closure — an issue closed, or a PR merged whose connected issue
 auto-closes — the decision follows the blocker graph from the closed
 issue, including **cross-repo** blockers (each node carries its own
-repository), and adds one `implement` dispatch per issue that is now
-unblocked: open, with **all** its blockers closed.
+repository), and adds one dispatch per issue that is now unblocked:
+open, with **all** its blockers closed — `implement`, or `wrap-up`
+when the issue carries the `outcome` label: a tracker whose last
+blocker just closed is a tracker whose work is finished. An issue
+carrying both `ideation` and `outcome` is not a `wrap-up` candidate
+(`decompose` wins over `wrap-up`); it takes the `implement` dispatch
+and the reserved-label hold-off naming `ideation`.
 
 The cascade is **transitive**: a blocked issue that is itself closed
 cascades onward to the issues it blocks (A→B→C). It **terminates**
 without double-dispatching: each issue is visited once. The engine
 applies each cascaded key's own watermark before dispatching, so an
 already-dispatched `(action, revision)` is not re-dispatched. A
-cascaded key carrying a reserved label holds off, naming the label:
-the cascade dispatches `implement`, and a labelled issue is decided by
-the sweep (§forgejo/reconciliation/watermark-exemptions).
+cascaded key carrying `ideation` or `human-task` holds off, naming the
+label: it is decided by the sweep
+(§forgejo/reconciliation/watermark-exemptions); a key carrying
+`outcome` dispatches `wrap-up`.
 
-The cascade dispatches `implement`: an issue newly unblocked but
-carrying a reserved label (`ideation`, `outcome`, `human-task` — see
-§forgejo/decisions/transition-table) is held off, naming the label,
-instead of dispatched. Each cascaded key's admissibility is judged by
-the roles of the repository **holding the key**, never the repository
-whose closure rooted the cascade (§forgejo/webhook/repository-roles).
+A newly unblocked `outcome` tracker dispatches `wrap-up`, never
+`implement`: a tracker is never an implement candidate anywhere in
+the engine, the cascade included (§forgejo/decisions/transition-table).
+Each cascaded key's admissibility is judged by the roles of the
+repository **holding the key**, never the repository whose closure
+rooted the cascade (§forgejo/webhook/repository-roles) — which is how
+a cascade rooted at an issue in a work-item repository can emit
+`wrap-up` into an outcomes repository: the cascaded action is judged
+against the roles of the repository holding the tracker, whatever
+rooted the walk. The dispatch re-checks the action against the
+re-fetched issue — the state wins over the graph data: an `implement`
+key carrying any reserved label holds off, naming the label; a
+`wrap-up` key whose issue no longer carries `outcome`, or now carries
+`ideation`, holds off saying so. Either way the sweep decides the
+issue afresh.
+
+A still-blocked open tracker the walk visits is **not silent**: the
+cascade records a hold-off for its key naming which blockers remain
+open (each as `repo#number`), so closing one of several blockers logs
+why `wrap-up` did not fire. A blocker **holds** the tracker unless its
+state is `closed`: a state the engine does not recognise holds as
+surely as `open` does, and is named rather than passed over in silence.
+This holds for every way the walk can visit a tracker without emitting
+for it — including a tracker whose remaining open blockers are only its
+connected open PRs: those PRs are emitted `merge-or-wait` as for any
+other issue, and the tracker itself is named as still held, by a
+blocker whose own merge is what will dispatch its `wrap-up`. The
+hold-off carries the tracker as the graph showed it, so the decision
+log entry records the state and revision it was made at instead of
+blanking them (§forgejo/observability/the-decision-log,
+§forgejo/observability/the-dashboard-view) — an unrelated close event
+must not downgrade a tracker's dashboard row. Where the tracker's
+`ideation` root is **closed** the forest is commissioned and unfinished,
+so the hold-off says the sweep curates it
+(§forgejo/reconciliation/watermark-exemptions) rather than promising a
+`wrap-up` the state does not call for. An unlabelled issue found still
+blocked stays silent — the walk merely passes through.
 
 An issue whose remaining open blockers are **its connected open PRs**
 is not an implement candidate — the work exists as a PR, and the
@@ -426,7 +470,7 @@ PRs.
 
 The walk itself is label-blind: labelled nodes are visited and
 traversed, so graph walking stays independent of what is finally
-dispatched.
+dispatched; labels are consulted only at emission.
 
 ## Loop prevention
 
