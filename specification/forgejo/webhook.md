@@ -256,6 +256,9 @@ For each decision event, the re-fetch assembles the state
   (§forgejo/decisions/sync-set). Where a member stands with several
   open PRs the first is read, the unblock cascade's projection; the
   one-delivery-per-member contract is the decomposer's to keep
+  (§forgejo/decisions/sync-set). A blocking issue that is itself a pull
+  request has no delivering PR to hop to: its own state and reviews are
+  the read, the PR being its own delivery
   (§forgejo/decisions/sync-set).
   For issue closed, the blocker graph rooted at the closed issue.
 - **PR events** — the PR itself, and its reviews, for the review

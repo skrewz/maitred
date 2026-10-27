@@ -112,17 +112,20 @@ that re-fires the wrap-up at an unchanged revision when, say, a human
 deleted an edge and no delivery fired.
 
 The sweep's `sync` row is **not exempt**: a landing set's watermark is
-a revision **derived from the whole set** — per member, the state the
-sync predicate reads: its own state, the member label's presence, and
-its delivering PR's head sha, open and mergeable state, and approval
-at that head — so the sweep does not re-fire at an unchanged set
-state, and any member's readiness moving re-fires. The members'
-`updated_at` is not part of the digest, so editing a member without
-moving its readiness does not re-run the landing prompt
-(§forgejo/decisions/sync-set). The row is the backstop for set changes
-that carry no delivery — an edge edit, a human closing a member: the
-candidate not fired by any event is caught within one reconcile
-interval.
+a revision **derived from the whole set** — the grouping issue's own
+revision, and per member the state the sync predicate reads: its own
+state, the member label's presence, and its delivering PR's head sha,
+open and mergeable state, and approval at that head — so the sweep
+does not re-fire at an unchanged set state, and any member's readiness
+moving re-fires. The members' `updated_at` is not part of the digest,
+so editing a member without moving its readiness does not re-run the
+landing prompt; the grouping issue's revision is, because its body
+names the merge order the landing run was told to honour, and a ready
+set whose run reported an error is otherwise a fixed point the
+backstop cannot fire on (§forgejo/decisions/sync-set). The row is the
+backstop for set changes that carry no delivery — an edge edit, a human
+closing a member, a human restating the order: the candidate not fired
+by any event is caught within one reconcile interval.
 
 All other actions — `implement`, `reassess`, `review`, `re-review`,
 `rebase`, `fix-feedback`, `merge-or-wait` — keep revision-keyed

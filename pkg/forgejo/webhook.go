@@ -372,16 +372,39 @@ func (e *Engine) fetchSyncSets(st *State) error {
 // dependency rows (the PR is a blocker of the issue it delivers), the
 // same projection the unblock cascade uses; where a member has
 // several open PRs the first is read (§forgejo/decisions/sync-set).
+//
+// A pull request that blocks the grouping issue **directly** is a
+// member whose delivery is itself. It is read through its own state
+// rather than dropped: nothing in the vocabulary forbids the edge, and
+// a predicate that never saw the row would dispatch a set whose
+// unmerged delivery the graph had put in front of it. The test the
+// row is held to is the one the predicate already asks of a member's
+// delivering PR — open, mergeable, approved at head, opted in
+// (§forgejo/decisions/sync-set).
 func (e *Engine) syncMembers(blockers []Issue) ([]SyncMember, error) {
 	var members []SyncMember
 	for i := range blockers {
 		b := blockers[i]
-		if b.IsPull {
-			continue // a set groups issues; a direct PR member is a graph error
-		}
 		m := SyncMember{Issue: b}
+		owner, name := splitRepo(b.Repository)
+		if b.IsPull {
+			if b.State == "open" {
+				pr, err := e.api.GetPullRequest(owner, name, b.Number)
+				if err != nil {
+					return nil, err
+				}
+				if prOpen(pr) {
+					reviews, err := e.api.ListPullRequestReviews(owner, name, b.Number)
+					if err != nil {
+						return nil, err
+					}
+					m.PR, m.Reviews = pr, reviews
+				}
+			}
+			members = append(members, m)
+			continue
+		}
 		if b.State == "open" {
-			owner, name := splitRepo(b.Repository)
 			deps, err := e.api.IssueDependencies(owner, name, b.Number)
 			if err != nil {
 				return nil, err
@@ -746,7 +769,7 @@ func (e *Engine) dispatchSyncSet(cd CascadeDispatch, sender string) error {
 	if err := e.dispatch(ev, st, ActionSync); err != nil {
 		return err
 	}
-	return e.store.Save(k, Watermark{Action: string(ActionSync), Revision: syncSetRevision(members)})
+	return e.store.Save(k, Watermark{Action: string(ActionSync), Revision: syncSetRevision(issue, members)})
 }
 
 // revisionFor is the revision a dispatch's watermark records: the PR
@@ -763,7 +786,7 @@ func revisionFor(ev Event, st State) string {
 	// re-fetch that shares the field from silently re-typing a PR
 	// row's watermark (§forgejo/decisions/sync-set).
 	if ev.Kind == KindIssue && st.Issue != nil && hasLabel(st.Issue, LabelSync) && len(st.SyncMembers) > 0 {
-		return syncSetRevision(st.SyncMembers)
+		return syncSetRevision(st.Issue, st.SyncMembers)
 	}
 	if ev.Kind == KindPR && st.PR != nil {
 		return st.PR.HeadSHA

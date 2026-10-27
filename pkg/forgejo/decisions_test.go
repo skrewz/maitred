@@ -119,6 +119,36 @@ func closedSyncMemberFixture(number int) SyncMember {
 	}}
 }
 
+// prMemberFixture is a member of a landing set that blocks the
+// grouping issue directly as a pull request: the PR is its own
+// delivery, so the predicate holds it to the same test it asks of a
+// member's delivering PR (§forgejo/decisions/sync-set).
+func prMemberFixture(number int, mergeable bool, optedIn bool) SyncMember {
+	m := SyncMember{Issue: Issue{
+		Number:     number,
+		State:      "open",
+		IsPull:     true,
+		Repository: "o/r",
+		UpdatedAt:  testTime,
+	}}
+	if optedIn {
+		m.Issue.Labels = []string{LabelAgenticSyncMerge}
+	}
+	m.PR = openPR("sha-" + strconv.Itoa(number))
+	m.PR.Mergeable = mergeable
+	m.Reviews = []Review{{Event: ReviewApproved, Author: "carol", CommitID: m.PR.HeadSHA, SubmittedAt: testTime}}
+	return m
+}
+
+// closedPRMemberFixture is a direct PR member whose delivery landed:
+// merged, which is ready whatever its labels
+// (§forgejo/decisions/sync-set).
+func closedPRMemberFixture(number int) SyncMember {
+	m := prMemberFixture(number, true, true)
+	m.Issue.State = "closed"
+	return m
+}
+
 // syncMemberConnected builds the connected issue of a PR under test
 // when it is a member of a landing set: it carries agentic-sync-merge
 // and points at the open sync issue it belongs to
@@ -924,6 +954,32 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionSync,
 		},
 		{
+			// A pull request blocking the grouping issue directly is a
+			// member the graph put in front of the set: the predicate
+			// reads its own state rather than deciding past it
+			// (§forgejo/decisions/sync-set).
+			name:       "reconcile sync issue whose direct PR member is approved at head dispatches sync",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{prMemberFixture(9, true, true), closedSyncMemberFixture(5)}},
+			wantAction: ActionSync,
+		},
+		{
+			name:       "reconcile sync issue whose direct PR member has landed dispatches sync",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{closedPRMemberFixture(9), closedSyncMemberFixture(5)}},
+			wantAction: ActionSync,
+		},
+		{
+			name:  "reconcile sync issue whose direct PR member is not mergeable holds off",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{prMemberFixture(9, false, true), closedSyncMemberFixture(5)}},
+		},
+		{
+			name:  "reconcile sync issue whose direct PR member carries no opt-in holds off",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{prMemberFixture(9, true, false), closedSyncMemberFixture(5)}},
+		},
+		{
 			name:  "reconcile sync issue with an unlabelled open member holds off — the member awaits a human",
 			event: issueEvent(EventReconcile),
 			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{
@@ -959,7 +1015,7 @@ func TestDecide(t *testing.T) {
 			name:  "reconcile sync issue already dispatched at the set revision holds off",
 			event: issueEvent(EventReconcile),
 			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}},
-			watermark: &Watermark{Action: string(ActionSync), Revision: syncSetRevision([]SyncMember{
+			watermark: &Watermark{Action: string(ActionSync), Revision: syncSetRevision(syncIssueFixture(7), []SyncMember{
 				closedSyncMemberFixture(5), syncMemberFixture(4, 40),
 			})},
 		},
@@ -967,7 +1023,7 @@ func TestDecide(t *testing.T) {
 			name:       "reconcile sync issue whose set state moved re-dispatches over the watermark",
 			event:      issueEvent(EventReconcile),
 			state:      State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{syncMemberFixture(4, 40), syncMemberFixture(5, 50)}},
-			watermark:  &Watermark{Action: string(ActionSync), Revision: syncSetRevision([]SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)})},
+			watermark:  &Watermark{Action: string(ActionSync), Revision: syncSetRevision(syncIssueFixture(7), []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)})},
 			wantAction: ActionSync,
 		},
 		{
@@ -2468,44 +2524,56 @@ func TestDecide_ForestTeardownRows(t *testing.T) {
 // an edit that cannot move readiness does not
 // (§forgejo/decisions/sync-set, §forgejo/state/watermark).
 func TestSyncSetRevision(t *testing.T) {
+	setIssue := syncIssueFixture(7)
 	members := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	reversed := []SyncMember{closedSyncMemberFixture(5), syncMemberFixture(4, 40)}
-	if syncSetRevision(members) != syncSetRevision(reversed) {
+	if syncSetRevision(setIssue, members) != syncSetRevision(setIssue, reversed) {
 		t.Error("set revision must not depend on member order")
 	}
 
 	pushed := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	pushed[0].PR.HeadSHA = "sha-new"
-	if syncSetRevision(members) == syncSetRevision(pushed) {
+	if syncSetRevision(setIssue, members) == syncSetRevision(setIssue, pushed) {
 		t.Error("a member PR head moving must change the set revision")
 	}
 
 	edited := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	edited[1].Issue.UpdatedAt = testTime2
-	if syncSetRevision(members) != syncSetRevision(edited) {
+	if syncSetRevision(setIssue, members) != syncSetRevision(setIssue, edited) {
 		t.Error("an edit that cannot move readiness must not change the set revision: the digest records what the predicate reads, not the members' activity")
 	}
 
 	unlabelled := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	unlabelled[0].Issue.Labels = nil
-	if syncSetRevision(members) == syncSetRevision(unlabelled) {
+	if syncSetRevision(setIssue, members) == syncSetRevision(setIssue, unlabelled) {
 		t.Error("a member losing the member label must change the set revision")
 	}
 
 	staleApproval := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	staleApproval[0].Reviews = []Review{{Event: ReviewApproved, Author: "carol", CommitID: "sha-before-the-push", SubmittedAt: testTime}}
-	if syncSetRevision(members) == syncSetRevision(staleApproval) {
+	if syncSetRevision(setIssue, members) == syncSetRevision(setIssue, staleApproval) {
 		t.Error("a member PR no longer approved at head must change the set revision")
 	}
 
 	conflicted := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	conflicted[0].PR.Mergeable = false
-	if syncSetRevision(members) == syncSetRevision(conflicted) {
+	if syncSetRevision(setIssue, members) == syncSetRevision(setIssue, conflicted) {
 		t.Error("a member PR that stopped being mergeable must change the set revision")
 	}
 
-	if syncSetRevision(nil) == syncSetRevision(members) {
+	if syncSetRevision(setIssue, nil) == syncSetRevision(setIssue, members) {
 		t.Error("an empty set must not share a revision with a populated one")
+	}
+
+	// The grouping issue's own revision is in the digest: a ready set
+	// whose landing run reported an error is re-dispatched when the
+	// body — the order the prompt must honour — is restated, which is
+	// the human's only lever on such a report
+	// (§forgejo/decisions/sync-set, §forgejo/reconciliation/watermark-exemptions).
+	restated := syncIssueFixture(7)
+	restated.UpdatedAt = testTime2
+	if syncSetRevision(setIssue, members) == syncSetRevision(restated, members) {
+		t.Error("restating the grouping issue must change the set revision: a ready set that never landed must not be a fixed point")
 	}
 }
 

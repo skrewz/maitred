@@ -909,7 +909,11 @@ func syncSetCouldBeReady(blockers []IssueNode) bool {
 			continue // landed, or finished by a human
 		}
 		if b.Issue.IsPull {
-			continue // a PR member: only the predicate can read its reviews
+			// A PR row is a member whose delivery is itself: whether it
+			// stands approved at head, mergeable and opted in is a fact
+			// the graph does not carry, so the predicate's read of the
+			// PR decides it (§forgejo/decisions/sync-set).
+			continue
 		}
 		if !hasLabel(&b.Issue, LabelAgenticSyncMerge) {
 			return false // a member awaiting a human: the set cannot land
@@ -1128,8 +1132,11 @@ func syncMemberSetHoldOff(pr *PullRequest, s State) (Decision, bool) {
 // on re-fetch. An open issue carrying the sync label dispatches sync
 // once every blocking issue is closed — landed, or finished by a
 // human — or stands with its delivering PR approved at head and
-// mergeable while carrying agentic-sync-merge. The dispatch is
-// recorded against a revision derived from the whole set, so the
+// mergeable while carrying agentic-sync-merge. A pull request that
+// blocks the grouping issue directly is such a blocking issue too, and
+// is held to that same test through its own state: the set does not
+// land past a delivery the graph places in front of it. The dispatch
+// is recorded against a revision derived from the whole set, so the
 // sweep does not re-fire at an unchanged set state
 // (§forgejo/decisions/sync-set).
 func considerSyncIssue(issue *Issue, members []SyncMember, w *Watermark) Decision {
@@ -1143,14 +1150,24 @@ func considerSyncIssue(issue *Issue, members []SyncMember, w *Watermark) Decisio
 			continue // a closed member's work has landed, or a human finished it
 		}
 		ref := fmt.Sprintf("%s#%d", m.Issue.Repository, m.Issue.Number)
+		if m.Issue.IsPull {
+			ref = fmt.Sprintf("%s PR #%d", m.Issue.Repository, m.Issue.Number)
+		}
 		switch {
 		case !hasLabel(&m.Issue, LabelAgenticSyncMerge):
 			notReady = append(notReady, fmt.Sprintf("%s is open without the %s label: a member awaiting a human must be closed before the set lands", ref, LabelAgenticSyncMerge))
 		case m.PR == nil || !prOpen(m.PR) || !m.PR.Mergeable:
-			notReady = append(notReady, fmt.Sprintf("%s has no mergeable open PR", ref))
+			if m.Issue.IsPull {
+				// A PR member is its own delivery: what is not ready is
+				// the PR itself, not some PR hanging off an issue
+				// (§forgejo/decisions/sync-set).
+				notReady = append(notReady, fmt.Sprintf("%s is not an open, mergeable pull request", ref))
+			} else {
+				notReady = append(notReady, fmt.Sprintf("%s has no mergeable open PR", ref))
+			}
 		default:
 			if latest := latestReview(m.Reviews); latest == nil || latest.Event != ReviewApproved || latest.CommitID != m.PR.HeadSHA {
-				notReady = append(notReady, fmt.Sprintf("%s's PR %d is not approved at head %s", ref, m.PR.Number, m.PR.HeadSHA))
+				notReady = append(notReady, fmt.Sprintf("%s is not approved at head %s", ref, m.PR.HeadSHA))
 			}
 		}
 	}
@@ -1160,7 +1177,7 @@ func considerSyncIssue(issue *Issue, members []SyncMember, w *Watermark) Decisio
 		// (§forgejo/decisions/sync-set, §forgejo/observability/the-decision-log).
 		return holdOff(fmt.Sprintf("sync issue %d held off: %s", issue.Number, strings.Join(notReady, "; ")))
 	}
-	rev := syncSetRevision(members)
+	rev := syncSetRevision(issue, members)
 	if alreadyDispatched(w, ActionSync, rev) {
 		return holdOff(fmt.Sprintf("sync already dispatched at set revision %s", rev))
 	}
@@ -1172,7 +1189,8 @@ func considerSyncIssue(issue *Issue, members []SyncMember, w *Watermark) Decisio
 // state, whether it carries the member label, and its delivering PR's
 // head sha, open and mergeable state, and approval at that head —
 // ordered by key so the API's enumeration order cannot change the
-// digest (§forgejo/decisions/sync-set, §forgejo/state/watermark).
+// digest, plus the grouping issue's own revision
+// (§forgejo/decisions/sync-set, §forgejo/state/watermark).
 // The members' updated_at is deliberately absent: it records any edit
 // to any member — a comment, a title fix, an unrelated label toggle —
 // and a digest that moved with it would re-dispatch the landing
@@ -1181,8 +1199,21 @@ func considerSyncIssue(issue *Issue, members []SyncMember, w *Watermark) Decisio
 // the digest: the sweep re-evaluates the set every interval whatever
 // it says, so a change that does move readiness still re-fires within
 // one interval, and one that does not stops re-firing at all.
-func syncSetRevision(members []SyncMember) string {
-	lines := make([]string, 0, len(members))
+//
+// The grouping issue's revision is in the digest precisely because the
+// object under consideration is not that noise: it is the set, whose
+// body names the order the landing prompt must honour. A ready set
+// whose landing run reported an error — a joint conflict between
+// individually-mergeable members, a repository the agent cannot merge
+// in — is otherwise a fixed point of the digest: every later sweep
+// reads the same readiness, finds the watermark already there, and
+// dispatches nothing. Restating the order on the grouping issue is the
+// human's lever on that report, and the row §reconciliation calls the
+// set's backstop has to be able to answer it
+// (§forgejo/reconciliation/watermark-exemptions).
+func syncSetRevision(issue *Issue, members []SyncMember) string {
+	lines := make([]string, 0, len(members)+1)
+	lines = append(lines, fmt.Sprintf("set %s#%d revision=%s", issue.Repository, issue.Number, issueRevision(issue)))
 	for i := range members {
 		m := &members[i]
 		line := fmt.Sprintf("%s#%d state=%s %s=%t", m.Issue.Repository, m.Issue.Number, m.Issue.State, LabelAgenticSyncMerge, hasLabel(&m.Issue, LabelAgenticSyncMerge))

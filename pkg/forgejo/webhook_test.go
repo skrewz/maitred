@@ -3025,6 +3025,48 @@ func TestHandler_Reconcile_SyncIssueDispatchesTheSet(t *testing.T) {
 	}
 }
 
+// TestHandler_Reconcile_SyncIssueReadsItsDirectPRMember: a pull request
+// that blocks the grouping issue directly is a member of the set. While
+// it is not opted in the sweep dispatches nothing — the engine does not
+// land a set past an unmerged delivery the graph placed in front of it —
+// and once the PR is opted in, approved at head and mergeable the same
+// sweep dispatches (§forgejo/decisions/sync-set).
+func TestHandler_Reconcile_SyncIssueReadsItsDirectPRMember(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+	prAsIssue := testIssue(9, "open")
+	prAsIssue.IsPull = true
+	prAsIssue.Labels = nil // opted out: the set cannot land past it
+	api.deps[11] = []Issue{*testIssue(5, "closed"), *prAsIssue}
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none: an open PR member without the opt-in holds the set off", len(tasks))
+	}
+	w, err := store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("sync watermark = %+v, want none: nothing was dispatched", w)
+	}
+	if n := api.callCount("GetPullRequest:r/9"); n == 0 {
+		t.Error("the direct PR member's state was never read: the predicate must see the row the graph put in front of it")
+	}
+
+	prAsIssue.Labels = []string{LabelAgenticSyncMerge}
+	api.deps[11] = []Issue{*testIssue(5, "closed"), *prAsIssue}
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want the sync dispatch once the PR member is opted in", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=sync repo=o/outcomes kind=issue number=11") {
+		t.Errorf("prompt = %q, want the sync dispatch for o/outcomes issue 11", tasks[0].Prompt)
+	}
+}
+
 // TestHandler_IssueClosed_CascadeEmitsSyncSetCandidate: closing a
 // member routes its outbound edge into the grouping issue — the
 // cascade emits the sync-set candidate and the set's evaluation

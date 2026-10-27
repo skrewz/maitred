@@ -163,7 +163,7 @@ prompts:
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions); or the unblock cascade newly unblocks an open issue carrying the `outcome` label (§forgejo/decisions/unblock-cascade) |
 | `teardown-forest` | an open issue carrying the `ideation` label **also** carries the `teardown-forest` label, **and blocks at least one issue**: the human has ordered the forest that root commissioned to be deleted, and there is a forest to delete (§forgejo/decisions/forest-teardown); watermark-exempt on the sweep while the forest stands (§forgejo/reconciliation/watermark-exemptions) |
 | `reject-pr` | a PR is connected to work that is not yet commissioned: a **connected issue** — any non-PR issue the PR blocks, every one being tested — is blocked by an **open** `ideation` issue; tested when a PR opens, when a review is submitted, and by the reconciliation sweep, ahead of every review, rebase, fix and merge decision; the prompt closes the PR, names the breach, and reports it |
-| `sync` | an open issue carrying the `sync` label — a **landing set**: changes that must land together — has every blocking issue either closed or standing with its delivering PR approved at head and mergeable while carrying `agentic-sync-merge`; dispatched from the reconciliation sweep, from the unblock cascade's sync-set candidate, and from the approval path's emission re-checked on re-fetch; the watermark is a revision derived from the whole set (§forgejo/decisions/sync-set) |
+| `sync` | an open issue carrying the `sync` label — a **landing set**: changes that must land together — has every blocking issue either closed or standing with its delivering PR approved at head and mergeable while carrying `agentic-sync-merge` (a blocking issue that is itself a pull request is held to that test through its own state); dispatched from the reconciliation sweep, from the unblock cascade's sync-set candidate, and from the approval path's emission re-checked on re-fetch; the watermark is a revision derived from the whole set (§forgejo/decisions/sync-set) |
 
 ## Transition table
 
@@ -479,20 +479,40 @@ nonetheless stands with several open PRs, the engine reads it
 through the first one, the same projection the unblock cascade
 uses; it does not gather reviews across deliveries.
 
+A pull request that blocks the grouping issue **directly** is a
+blocking issue too, and the predicate reads it: the row is a member
+whose delivery is itself, held to the same test — open, mergeable,
+approved at that head, carrying `agentic-sync-merge` — with its own
+state and reviews fetched in place of a delivering PR's. Dropping the
+row would be the one set shape where the engine dispatches a landing
+past an unmerged delivery rather than naming what stands in the set's
+way, which is the stance every other authoring error takes. A merged
+PR there is ready, as a closed member is.
+
 The dispatch's watermark is a **revision derived from the whole
-set** — for each member, what the predicate reads about it: its
-state, whether it carries `agentic-sync-merge`, and its delivering
-PR's head sha, open and mergeable state, and approval at that head —
-so the sweep does not re-fire at an unchanged set state, and any
-member's readiness moving re-fires (§forgejo/state/watermark). The
-members' `updated_at` is **not** part of it: it records any edit to
+set** — the grouping issue's own revision, and for each member what
+the predicate reads about it: its state, whether it carries
+`agentic-sync-merge`, and its delivering PR's head sha, open and
+mergeable state, and approval at that head — so the sweep does not
+re-fire at an unchanged set state, and any member's readiness moving
+re-fires (§forgejo/state/watermark). The members' `updated_at` is
+**not** part of it: it records any edit to
 any member — a comment, a title fix, an unrelated label toggle — and
 a digest that moved with it would run the landing prompt again on an
 unchanged predicate, most noisily for a set stalled on a member
 awaiting a human. Narrowing costs nothing: the sweep re-evaluates the
 set every interval whatever the digest says, so a change that does
 move readiness still re-fires within one interval and one that does
-not stops re-firing at all. `sync` is admissible by the **outcomes
+not stops re-firing at all. The grouping issue **is** part of it, on
+the other side of the same argument: the object that digest describes
+is the set, whose body names the order the landing prompt must
+honour. Without it a ready set whose landing run reported an error — a
+joint conflict, a repository the agent cannot merge in — would be a
+fixed point of the digest, and the row this section calls the set's
+backstop could never re-fire the state it had just confirmed;
+restating the order on the grouping issue is the human's lever on such
+a report (§forgejo/reconciliation/watermark-exemptions). `sync` is
+admissible by the **outcomes
 role** of the repository holding the grouping issue, like `decompose`
 and `wrap-up` (§forgejo/webhook/repository-roles); evaluating a set
 reads PR state in enabled repositories and the sync issue's own state
