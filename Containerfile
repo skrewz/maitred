@@ -38,8 +38,11 @@ USER maitred
 
 EXPOSE 9090 9091
 
+# The probe must target the same dirs the CMD below passes: config is
+# mounted at /etc/maitred, not under WORKDIR, so `--health` with no
+# flags would probe defaults the image does not ship and stay dark.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD /usr/local/bin/maitred --health || exit 1
+    CMD /usr/local/bin/maitred --health --trigger-dir /etc/maitred/triggers.d --data-dir /var/lib/maitred || exit 1
 
 ENTRYPOINT ["/usr/local/bin/maitred"]
 CMD ["--trigger-dir", "/etc/maitred/triggers.d", "--data-dir", "/var/lib/maitred"]
