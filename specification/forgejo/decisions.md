@@ -125,6 +125,22 @@ rows forever, naming a terminal state as though it were transient. If a
 commissioned forest must be retired, the human reopens the root or the
 label is removed; the label has no power past the gate.
 
+**Deletion is a right the engine does not hold, and cannot check.** Deleting an
+issue is not the same right as creating one: a forge grants it to owners, and to
+collaborators holding admin on that repository, and to nobody else. Here that grant
+is held **per repository, by allowlist** — an account with admin across the
+organisation is a wider risk than a forest left standing, and no unit-scoped
+permission expresses "admin, but only for issues". So the permission is a fact about
+the *dispatched identity*, not about the decision, and the engine neither holds nor
+can probe it: it has no write access of any kind. The canned prompt therefore proves
+the right **before it creates** (§forgejo/config/canned-prompts) — one read of every
+repository a create would land in, and the whole commission refused if any one of
+them withholds it — so the refusal surfaces while the forest is still an idea rather
+than after six members exist in a repository the persona cannot empty. A teardown
+that is refused anyway reports the repositories that refused it, changes nothing, and
+is asked again next sweep, because a standing forest is an instruction and the engine
+has no way to tell a refusal that will pass tomorrow from one that never will.
+
 ## Actions
 
 The action names form the enum the engine config maps to canned
