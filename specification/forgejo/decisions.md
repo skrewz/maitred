@@ -195,7 +195,7 @@ prompts:
 | review submitted (latest review requests changes) | `fix-feedback` |
 | review submitted (latest review approves, no connected issue has an open blocker) | `merge-or-wait` |
 | review submitted (latest review approves, a connected issue has an open blocker) | hold off — the reason names the open blockers (§forgejo/decisions/merge-gate) |
-| review submitted (latest review approves, a connected issue carries `agentic-sync-merge`) | hold off, naming the sync set — the member never merges on its own; the member's open sync sets are emitted for a `sync` dispatch against their grouping issues. A member of **no open set** — its set retired — decides on through the merge gate, its label stale rather than a gate; a member also carrying `agentic-auto-merge` holds off naming both labels, whatever sets exist (§forgejo/decisions/sync-set) |
+| review submitted (latest review approves, a connected issue carries `agentic-sync-merge`, or the PR itself stands in an open grouping issue's blockers) | hold off, naming the sync set — the member never merges on its own; the member's open sync sets are emitted for a `sync` dispatch against their grouping issues. A member of **no open set** — its set retired — decides on through the merge gate, its label stale rather than a gate; a member also carrying `agentic-auto-merge` holds off naming both labels, whatever sets exist (§forgejo/decisions/sync-set) |
 | review submitted (latest review is anything else) | hold off |
 | PR merged | unblock cascade (for the connected issue) |
 | PR closed without merging | hold off |
@@ -487,10 +487,20 @@ state and reviews fetched in place of a delivering PR's. Dropping the
 row would be the one set shape where the engine dispatches a landing
 past an unmerged delivery rather than naming what stands in the set's
 way, which is the stance every other authoring error takes. A merged
-PR there is ready, as a closed member is.
+PR there is ready, as a closed member is. The hold-off reads the same
+edge: the assembly records the set a PR stands in as that PR's own
+membership, so a direct member's approval holds off like any other
+and emits its set, whichever of the merge-dispatching paths it
+arrived on. Nothing is fetched for it — the edge is already in the
+grouping issue's dependency rows the merge gate read — and a grouping
+issue the PR does not itself block holds nothing over it, so the
+presence of a `sync` issue among the connected issues is not by
+itself a gate (§forgejo/webhook/re-fetch). A **closed** grouping issue
+is no gate either: the set landed or was retired, and with no set
+whose decision to wait for the merge gate decides on.
 
 The dispatch's watermark is a **revision derived from the whole
-set** — the grouping issue's own revision, and for each member what
+set** — the grouping issue's body, and for each member what
 the predicate reads about it: its state, whether it carries
 `agentic-sync-merge`, and its delivering PR's head sha, open and
 mergeable state, and approval at that head — so the sweep does not
@@ -503,14 +513,19 @@ unchanged predicate, most noisily for a set stalled on a member
 awaiting a human. Narrowing costs nothing: the sweep re-evaluates the
 set every interval whatever the digest says, so a change that does
 move readiness still re-fires within one interval and one that does
-not stops re-firing at all. The grouping issue **is** part of it, on
-the other side of the same argument: the object that digest describes
-is the set, whose body names the order the landing prompt must
-honour. Without it a ready set whose landing run reported an error — a
-joint conflict, a repository the agent cannot merge in — would be a
-fixed point of the digest, and the row this section calls the set's
-backstop could never re-fire the state it had just confirmed;
-restating the order on the grouping issue is the human's lever on such
+not stops re-firing at all. The grouping issue's **body** is part of
+it, on the other side of the same argument: the object that digest
+describes is the set, whose body names the order the landing prompt
+must honour. Its `updated_at` is not, for the reason that argued the
+members off — in Forgejo it moves on a comment, a title fix or an
+unrelated label toggle, and a ready set whose run reported an error
+would otherwise re-run its landing prompt on every touch of the
+grouping issue: merge attempts, and a re-report of a condition the
+last run already diagnosed. Without the body in the digest that ready
+set — a joint conflict, a repository the agent cannot merge in — would
+be a fixed point, and the row this section calls the set's backstop
+could never re-fire the state it had just confirmed; restating the
+order on the grouping issue is the human's lever on such
 a report (§forgejo/reconciliation/watermark-exemptions). `sync` is
 admissible by the **outcomes
 role** of the repository holding the grouping issue, like `decompose`

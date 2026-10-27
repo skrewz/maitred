@@ -165,6 +165,14 @@ type State struct {
 	// predicate's input, fetched when the issue under consideration
 	// carries the sync label (§forgejo/decisions/sync-set).
 	SyncMembers []SyncMember
+	// SyncSets are the open sync issues the pull request under
+	// consideration blocks **directly**: the shape whose predicate side
+	// reads the PR as a member whose delivery is itself. Read on the
+	// paths that assemble PR state for the merge gate, from the
+	// grouping issue's own dependency rows — the edge is already in the
+	// graph the assembly holds, so the read costs nothing
+	// (§forgejo/decisions/sync-set, §forgejo/webhook/re-fetch).
+	SyncSets []Issue
 	// DecomposerIdentity is the configured login of the identity that
 	// performs decomposition (§forgejo/config/decomposer-identity). It is
 	// a declared configuration input the engine passes verbatim from its
@@ -1066,9 +1074,11 @@ func openBlockers(blockers []Issue) []Issue {
 
 // syncMemberSetHoldOff is the approval path's sync-set hold-off,
 // consulted by every path about to dispatch merge-or-wait, ahead of
-// the merge gate: when any connected issue of the PR is a member of
-// an open landing set, landing is the set's decision, not the
-// individual PR's — merge-or-wait must never merge it. The hold-off
+// the merge gate: when the PR is a member of an open landing set —
+// through a connected issue carrying agentic-sync-merge, or because it
+// blocks a grouping issue **directly** and is its own delivery —
+// landing is the set's decision, not the individual PR's, and
+// merge-or-wait must never merge it. The hold-off
 // is silent (an unready set is not an event worth a comment) and
 // emits the members' open sync sets as sync dispatches against the
 // grouping issues, so the last approval that completes a set
@@ -1083,9 +1093,27 @@ func openBlockers(blockers []Issue) []Issue {
 // gate and ok is false, letting the caller's merge gate decide on.
 // ok is likewise false when no connected issue is a member at all.
 func syncMemberSetHoldOff(pr *PullRequest, s State) (Decision, bool) {
-	var members, dualLabelled []string
+	var members, dualLabelled, directSets []string
 	var emissions []CascadeDispatch
 	seen := map[Key]bool{}
+	emit := func(set *Issue) {
+		k := issueKey(set)
+		if seen[k] {
+			return // one emission per grouping issue, even from several members
+		}
+		seen[k] = true
+		emissions = append(emissions, CascadeDispatch{Key: k, Action: ActionSync})
+	}
+	// The PR's own membership: it stands in a grouping issue's blockers,
+	// so the row is the member and its delivery is itself — the shape the
+	// predicate already reads, held off here on the same terms
+	// (§forgejo/decisions/sync-set).
+	direct := len(s.SyncSets) > 0
+	for i := range s.SyncSets {
+		set := &s.SyncSets[i]
+		directSets = append(directSets, fmt.Sprintf("%s#%d", set.Repository, set.Number))
+		emit(set)
+	}
 	for i := range s.ConnectedIssues {
 		c := &s.ConnectedIssues[i]
 		if !hasLabel(&c.Issue, LabelAgenticSyncMerge) {
@@ -1097,16 +1125,10 @@ func syncMemberSetHoldOff(pr *PullRequest, s State) (Decision, bool) {
 			dualLabelled = append(dualLabelled, ref)
 		}
 		for j := range c.SyncSets {
-			set := &c.SyncSets[j]
-			k := issueKey(set)
-			if seen[k] {
-				continue // one emission per grouping issue, even from several members
-			}
-			seen[k] = true
-			emissions = append(emissions, CascadeDispatch{Key: k, Action: ActionSync})
+			emit(&c.SyncSets[j])
 		}
 	}
-	if len(members) == 0 {
+	if len(members) == 0 && !direct {
 		return Decision{}, false
 	}
 	if len(emissions) == 0 && len(dualLabelled) == 0 {
@@ -1118,8 +1140,21 @@ func syncMemberSetHoldOff(pr *PullRequest, s State) (Decision, bool) {
 		return Decision{}, false
 	}
 	reason := fmt.Sprintf("PR %d stands at an approved review, but its connected issue %s is a member of a sync set; landing is the set's decision, not the PR's", pr.Number, strings.Join(members, ", "))
+	if direct {
+		who := fmt.Sprintf("it is a direct member of the open sync set grouped by %s", strings.Join(directSets, ", "))
+		if len(members) > 0 {
+			reason = fmt.Sprintf("PR %d stands at an approved review, but its connected issue %s is a member of a sync set and %s; landing is the set's decision, not the PR's", pr.Number, strings.Join(members, ", "), who)
+		} else {
+			reason = fmt.Sprintf("PR %d stands at an approved review, but %s; landing is the set's decision, not the PR's", pr.Number, who)
+		}
+	}
 	if len(dualLabelled) > 0 {
 		reason = fmt.Sprintf("PR %d stands at an approved review, but its connected issue %s carries both %s and %s; a member is opted into the set, never into merging on its own — the double label is an authoring error the decomposer must retire", pr.Number, strings.Join(dualLabelled, ", "), LabelAgenticSyncMerge, LabelAgenticAutoMerge)
+	} else if direct && carriesLabel(pr.Labels, LabelAgenticAutoMerge) {
+		// A direct member's opt-ins sit on the PR itself: the connected
+		// issue carries the kind label alone, so this is the only place
+		// the double label can be named (§forgejo/decisions/sync-set).
+		reason = fmt.Sprintf("PR %d stands at an approved review, but it is a direct member of the sync set grouped by %s and carries both %s and %s; a member is opted into the set, never into merging on its own — the double label is an authoring error the decomposer must retire", pr.Number, strings.Join(directSets, ", "), LabelAgenticSyncMerge, LabelAgenticAutoMerge)
 	}
 	d := holdOff(reason)
 	d.Cascade = emissions
@@ -1189,8 +1224,8 @@ func considerSyncIssue(issue *Issue, members []SyncMember, w *Watermark) Decisio
 // state, whether it carries the member label, and its delivering PR's
 // head sha, open and mergeable state, and approval at that head —
 // ordered by key so the API's enumeration order cannot change the
-// digest, plus the grouping issue's own revision
-// (§forgejo/decisions/sync-set, §forgejo/state/watermark).
+// digest, plus the grouping issue's **body** (§forgejo/decisions/sync-set,
+// §forgejo/state/watermark).
 // The members' updated_at is deliberately absent: it records any edit
 // to any member — a comment, a title fix, an unrelated label toggle —
 // and a digest that moved with it would re-dispatch the landing
@@ -1200,7 +1235,7 @@ func considerSyncIssue(issue *Issue, members []SyncMember, w *Watermark) Decisio
 // it says, so a change that does move readiness still re-fires within
 // one interval, and one that does not stops re-firing at all.
 //
-// The grouping issue's revision is in the digest precisely because the
+// The grouping issue's body is in the digest precisely because the
 // object under consideration is not that noise: it is the set, whose
 // body names the order the landing prompt must honour. A ready set
 // whose landing run reported an error — a joint conflict between
@@ -1210,10 +1245,14 @@ func considerSyncIssue(issue *Issue, members []SyncMember, w *Watermark) Decisio
 // dispatches nothing. Restating the order on the grouping issue is the
 // human's lever on that report, and the row §reconciliation calls the
 // set's backstop has to be able to answer it
-// (§forgejo/reconciliation/watermark-exemptions).
+// (§forgejo/reconciliation/watermark-exemptions). The digest takes the
+// body itself and not the grouping issue's updated_at, which moves on a
+// comment, a title fix or an unrelated label toggle: for the members the
+// same narrowing was argued as "activity is not readiness", and the
+// lever this section names is a restatement, not a touch.
 func syncSetRevision(issue *Issue, members []SyncMember) string {
 	lines := make([]string, 0, len(members)+1)
-	lines = append(lines, fmt.Sprintf("set %s#%d revision=%s", issue.Repository, issue.Number, issueRevision(issue)))
+	lines = append(lines, fmt.Sprintf("set %s#%d body=%s", issue.Repository, issue.Number, bodyRevision(issue)))
 	for i := range members {
 		m := &members[i]
 		line := fmt.Sprintf("%s#%d state=%s %s=%t", m.Issue.Repository, m.Issue.Number, m.Issue.State, LabelAgenticSyncMerge, hasLabel(&m.Issue, LabelAgenticSyncMerge))
@@ -1288,6 +1327,15 @@ func latestReview(reviews []Review) *Review {
 // RFC 3339 (§forgejo/state/watermark).
 func issueRevision(issue *Issue) string {
 	return issue.UpdatedAt.UTC().Format(time.RFC3339)
+}
+
+// bodyRevision is the grouping issue's body as the set revision digests
+// it: the text the landing prompt must honour, not the moment it was
+// last touched — a comment or a label toggle moves updated_at and says
+// nothing about the order (§forgejo/decisions/sync-set).
+func bodyRevision(issue *Issue) string {
+	sum := sha256.Sum256([]byte(issue.Body))
+	return hex.EncodeToString(sum[:])
 }
 
 // alreadyDispatched reports whether the watermark already records

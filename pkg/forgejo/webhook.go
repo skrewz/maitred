@@ -321,10 +321,11 @@ func (e *Engine) connectedIssues(owner, name string, number int) ([]ConnectedIss
 // fetchPRSetState assembles the state the approval path's sync-set
 // hold-off and the merge gate read for a pull request: every non-PR
 // issue the PR blocks, each with its blockers, and the landing-set
-// membership of each connected issue carrying agentic-sync-merge — the
-// open sync issues it blocks. Both paths that can dispatch
-// merge-or-wait for a PR build this state here, the event's re-fetch
-// and the unblock cascade's PR leg, so the hold-off cannot see
+// membership — the open sync issues it belongs to, read through a
+// connected member's membership edges or, where the PR stands in a
+// grouping issue's own blockers, through that edge. Both paths that can
+// dispatch merge-or-wait for a PR build this state here, the event's
+// re-fetch and the unblock cascade's PR leg, so the hold-off cannot see
 // membership on one and be blind to it on the other: a member of an
 // open set never merges on its own, whichever direction the approval
 // arrived from (§forgejo/webhook/re-fetch, §forgejo/decisions/sync-set,
@@ -335,34 +336,58 @@ func (e *Engine) fetchPRSetState(owner, name string, number int, st *State) erro
 		return err
 	}
 	st.ConnectedIssues = connected
-	return e.fetchSyncSets(st)
+	return e.fetchSyncSets(owner, name, number, st)
 }
 
-// fetchSyncSets reads the membership edges of every connected issue
-// that is a landing-set member (it carries agentic-sync-merge): the
-// open sync issues it blocks. The hop is taken only for members, so
-// the ordinary PR path costs what it always did
-// (§forgejo/webhook/re-fetch, §forgejo/decisions/sync-set).
-func (e *Engine) fetchSyncSets(st *State) error {
+// fetchSyncSets reads the landing-set membership of the pull request in
+// st, from the connected issues the assembly already holds. Two edges
+// make a PR a member. A connected issue carrying agentic-sync-merge is
+// the ordinary one: the hop to the open sync issues it blocks is taken
+// only for members, so the ordinary PR path costs what it always did. A
+// connected issue carrying `sync` whose blockers include this PR is the
+// direct one — the shape §decisions/sync-set reads as a member whose
+// delivery is itself — and it needs no read at all: the edge is already
+// in the dependency rows the merge gate fetched, and a predicate that
+// sees the row while the approval path stays blind to it would land a
+// set's delivery through merge-or-wait, which is the outcome the labels
+// table forbids (§forgejo/webhook/re-fetch, §forgejo/decisions/sync-set).
+func (e *Engine) fetchSyncSets(owner, name string, number int, st *State) error {
+	prRepo := owner + "/" + name
 	for i := range st.ConnectedIssues {
 		c := &st.ConnectedIssues[i]
-		if !hasLabel(&c.Issue, LabelAgenticSyncMerge) {
+		if hasLabel(&c.Issue, LabelAgenticSyncMerge) {
+			co, cn := splitRepo(c.Issue.Repository)
+			blocks, err := e.api.IssueBlocks(co, cn, c.Issue.Number)
+			if err != nil {
+				return err
+			}
+			for j := range blocks {
+				b := blocks[j]
+				if b.IsPull || b.State != "open" || !hasLabel(&b, LabelSync) {
+					continue // only open grouping issues are membership edges
+				}
+				c.SyncSets = append(c.SyncSets, b)
+			}
 			continue
 		}
-		owner, name := splitRepo(c.Issue.Repository)
-		blocks, err := e.api.IssueBlocks(owner, name, c.Issue.Number)
-		if err != nil {
-			return err
-		}
-		for j := range blocks {
-			b := blocks[j]
-			if b.IsPull || b.State != "open" || !hasLabel(&b, LabelSync) {
-				continue // only open grouping issues are membership edges
-			}
-			c.SyncSets = append(c.SyncSets, b)
+		if c.Issue.State == "open" && hasLabel(&c.Issue, LabelSync) && blocksPull(c.Blockers, prRepo, number) {
+			st.SyncSets = append(st.SyncSets, c.Issue)
 		}
 	}
 	return nil
+}
+
+// blocksPull reports whether the blocker rows include the pull request
+// under consideration — the entry that makes it a member of the issue
+// whose blockers are being read (§forgejo/decisions/sync-set).
+func blocksPull(blockers []Issue, repo string, number int) bool {
+	for i := range blockers {
+		b := &blockers[i]
+		if b.IsPull && b.State == "open" && b.Number == number && b.Repository == repo {
+			return true
+		}
+	}
+	return false
 }
 
 // syncMembers projects the blocking issues of a sync issue onto the

@@ -3369,6 +3369,138 @@ func TestHandler_Sync_NoPrompt_HoldsOffWithoutWatermark(t *testing.T) {
 	}
 }
 
+// directPRSetFixtures wires the shape whose predicate side syncMembers
+// reads: the pull request blocks the grouping issue **directly**, so the
+// PR is a member whose delivery is itself — the set's last open blocker,
+// opted in, mergeable and approved at head, beside a closed member 5
+// (§forgejo/decisions/sync-set).
+func directPRSetFixtures(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store, *bytes.Buffer) {
+	t.Helper()
+	api := newFakeAPI()
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	var log bytes.Buffer
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewJSONHandler(&log, nil)))
+	api.repos = syncOutcomesRepos()
+
+	syncIssue := testIssue(11, "open")
+	syncIssue.Labels = []string{LabelSync}
+	syncIssue.Repository = "o/outcomes"
+	closedMember := testIssue(5, "closed")
+	pr := testPR(9, "open", true)
+	pr.Labels = []string{LabelAgenticSyncMerge}
+	prAsIssue := testIssue(9, "open")
+	prAsIssue.IsPull = true
+	prAsIssue.Labels = []string{LabelAgenticSyncMerge}
+	api.issues[11] = syncIssue
+	api.issues[5] = closedMember
+	api.pulls[9] = pr
+	api.reviews[9] = []Review{{Event: ReviewApproved, Author: "bob", CommitID: pr.HeadSHA, SubmittedAt: testUpdatedAt}}
+	api.blocks[9] = []Issue{*syncIssue} // the PR blocks the grouping issue itself
+	api.deps[11] = []Issue{*closedMember, *prAsIssue}
+	return eng, api, q, store, &log
+}
+
+// TestHandler_PRReviewed_DirectPRMemberHoldsOffAndDispatchesTheSet: the
+// membership the row reads has to be visible to the approval side too.
+// A pull request blocking a grouping issue directly is a member whose
+// delivery is itself, so its approval never merges it: merge-or-wait is
+// the outcome the labels table forbids, and the set's own decision lands
+// the delivery instead (§forgejo/decisions/sync-set).
+func TestHandler_PRReviewed_DirectPRMemberHoldsOffAndDispatchesTheSet(t *testing.T) {
+	eng, _, q, store, log := directPRSetFixtures(t)
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want the one sync dispatch for 11 (the member PR must not merge): %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=sync repo=o/outcomes kind=issue number=11") {
+		t.Errorf("prompt = %q, want the sync dispatch for o/outcomes issue 11", tasks[0].Prompt)
+	}
+	if strings.Contains(tasks[0].Prompt, string(ActionMergeOrWait)) {
+		t.Errorf("prompt = %q, want no merge-or-wait: a landing-set delivery is the set's to land", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("PR watermark = %+v, want none: the approval held off", w)
+	}
+	if reason := reasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "sync set") {
+		t.Errorf("approval hold-off %q does not name the landing set it is waiting for", reason)
+	}
+}
+
+// TestHandler_PRReviewed_DirectPRMemberOfUnreadySetDispatchesNothing:
+// the hold-off is the same whatever the set's readiness — an unready set
+// must not have its member merged underneath it, and nothing dispatches
+// until the set stands ready (§forgejo/decisions/sync-set).
+func TestHandler_PRReviewed_DirectPRMemberOfUnreadySetDispatchesNothing(t *testing.T) {
+	eng, api, q, store, log := directPRSetFixtures(t)
+	stray := testIssue(12, "open") // open, unlabelled: a member awaiting a human
+	api.issues[12] = stray
+	api.deps[11] = append(api.deps[11], *stray)
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Errorf("got %d tasks, want none: an unready set dispatches nothing and merges nothing %+v", len(tasks), tasks)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("PR watermark = %+v, want none: the approval held off", w)
+	}
+	if reason := reasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "sync set") {
+		t.Errorf("approval hold-off %q does not name the landing set it is waiting for", reason)
+	}
+}
+
+// TestHandler_PRReviewed_DirectPRMemberOfRetiredSetMerges: the other
+// reading of the direct edge, pinned beside it. With the grouping issue
+// closed — the set landed or retired — there is no set whose decision to
+// wait for, and the approval decides on through the merge gate like any
+// other PR (§forgejo/decisions/sync-set).
+func TestHandler_PRReviewed_DirectPRMemberOfRetiredSetMerges(t *testing.T) {
+	eng, api, q, store, _ := directPRSetFixtures(t)
+	api.issues[11].State = "closed"
+	api.blocks[9] = []Issue{*api.issues[11]}
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (merge-or-wait for the retired member's PR); all = %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=merge-or-wait repo=o/r kind=pr number=9") {
+		t.Errorf("prompt = %q, want merge-or-wait for o/r PR 9", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w == nil || w.Action != string(ActionMergeOrWait) || w.Revision != "sha-9" {
+		t.Errorf("PR watermark = %+v, want merge-or-wait at sha-9", w)
+	}
+}
+
 // --- Forest teardown (§forgejo/decisions/forest-teardown) --------------
 
 // teardownRootIssue returns an open root in the given repository carrying
