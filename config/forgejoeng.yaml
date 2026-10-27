@@ -54,3 +54,7 @@ actions:
     prompt: "teardown-forest {{.Repo}} {{.Kind}} {{.Number}}"
     persona: ui-test
     timeout: 1h
+  sync:
+    prompt: "sync {{.Repo}} {{.Kind}} {{.Number}}"
+    persona: ui-test
+    timeout: 1h

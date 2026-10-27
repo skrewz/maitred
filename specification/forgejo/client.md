@@ -33,6 +33,12 @@ non-null `pull_request` object. The re-fetch uses this to tell connected PRs
 apart from connected issues among blockers and blocks
 (§forgejo/webhook/re-fetch).
 
+Issue responses also report the issue's **body** (`body`). One seat reads
+it: the landing set's revision digests the grouping issue's body, the
+field that names the order its members must land in, so a restatement of
+the order moves the digest while a comment or a label toggle does not
+(§forgejo/decisions/sync-set).
+
 The operations are exposed behind an **interface** so the decision function,
 webhook handler, and reconciliation sweep can be tested against a fake.
 

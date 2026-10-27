@@ -157,12 +157,13 @@ prompts:
 | `review` | a mergeable PR opened, or synced while it has no review, or an open mergeable PR carrying the `trigger-review` label while it has no review (§forgejo/decisions/label-triggered-review) |
 | `re-review` | a mergeable PR synced while it has a review, or an open mergeable PR carrying the `trigger-review` label while it has a review (§forgejo/decisions/label-triggered-review) |
 | `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review |
-| `merge-or-wait` | the PR's latest review approves **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's |
+| `merge-or-wait` | the PR's latest review approves **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's; never for a PR whose connected issue is a member of an open sync set — landing is the set's decision (§forgejo/decisions/sync-set); a labelled member of no open set — its set retired — reads as stale authoring, not a gate, and the merge gate decides on (§forgejo/decisions/sync-set) |
 | `rebase` | an open PR is not mergeable (conflicts) |
 | `decompose` | an open issue carrying the `ideation` label was opened, edited, or had its labels changed; or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions); or the unblock cascade newly unblocks an open issue carrying the `outcome` label (§forgejo/decisions/unblock-cascade) |
 | `teardown-forest` | an open issue carrying the `ideation` label **also** carries the `teardown-forest` label, **and blocks at least one issue**: the human has ordered the forest that root commissioned to be deleted, and there is a forest to delete (§forgejo/decisions/forest-teardown); watermark-exempt on the sweep while the forest stands (§forgejo/reconciliation/watermark-exemptions) |
 | `reject-pr` | a PR is connected to work that is not yet commissioned: a **connected issue** — any non-PR issue the PR blocks, every one being tested — is blocked by an **open** `ideation` issue; tested when a PR opens, when a review is submitted, and by the reconciliation sweep, ahead of every review, rebase, fix and merge decision; the prompt closes the PR, names the breach, and reports it |
+| `sync` | an open issue carrying the `sync` label — a **landing set**: changes that must land together — has every blocking issue either closed or standing with its delivering PR approved at head and mergeable while carrying `agentic-sync-merge` (a blocking issue that is itself a pull request is held to that test through its own state); dispatched from the reconciliation sweep, from the unblock cascade's sync-set candidate, and from the approval path's emission re-checked on re-fetch; the watermark is a revision derived from the whole set (§forgejo/decisions/sync-set) |
 
 ## Transition table
 
@@ -177,6 +178,7 @@ prompts:
 | issue opened / edited / labels changed (issue open, carries the `ideation` label) | `decompose` — the label makes the root, whatever the repository, the title, and the author (the root row wins over the authorship row); attaching the label is the *first* trigger. The event path keeps the revision-keyed watermark guard; the sweep is watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | issue comment (issue open, carries the `ideation` label) | hold off — a comment is not a revision of intent; the reason says so |
 | issue opened / edited / labels changed / comment (issue carries the `outcome` or `human-task` label) | hold off, naming the label — the sweep is where `wrap-up` fires (§forgejo/reconciliation/watermark-exemptions) |
+| issue opened / edited / labels changed / comment (issue carries the `sync` label) | hold off, naming the label — the sweep is where a landing set's `sync` fires (§forgejo/reconciliation/watermark-exemptions, §forgejo/decisions/sync-set) |
 | issue edited / labels changed / feedback comment (issue open, all blockers closed) | `reassess` |
 | issue edited / labels changed / feedback comment (issue open, an open blocker) | hold off — the reason names the open blockers |
 | issue edited / labels changed / feedback comment (issue not open) | hold off |
@@ -193,6 +195,7 @@ prompts:
 | review submitted (latest review requests changes) | `fix-feedback` |
 | review submitted (latest review approves, no connected issue has an open blocker) | `merge-or-wait` |
 | review submitted (latest review approves, a connected issue has an open blocker) | hold off — the reason names the open blockers (§forgejo/decisions/merge-gate) |
+| review submitted (latest review approves, a connected issue carries `agentic-sync-merge`, or the PR itself stands in an open grouping issue's blockers) | hold off, naming the sync set — the member never merges on its own; the member's open sync sets are emitted for a `sync` dispatch against their grouping issues. A member of **no open set** — its set retired — decides on through the merge gate, its label stale rather than a gate; a member also carrying `agentic-auto-merge` holds off naming both labels, whatever sets exist (§forgejo/decisions/sync-set) |
 | review submitted (latest review is anything else) | hold off |
 | PR merged | unblock cascade (for the connected issue) |
 | PR closed without merging | hold off |
@@ -205,6 +208,7 @@ prompts:
 | reconcile — open `outcome` issue whose `ideation` blocker is **open** and carries the `teardown-forest` label | hold off, as any tracker with an open root does: the teardown order needs no row of its own, and the root's own edge is what keeps an emptied tracker from reading as finished (§forgejo/decisions/forest-teardown) |
 | reconcile — open `outcome` issue with open blockers, its `ideation` blocker open | hold off, naming the root — the forest is not yet commissioned, and the root's own row is the pulse: a forest is curated once per sweep |
 | reconcile — open `outcome` issue with open blockers and no `ideation` blocker | hold off, naming the absence — a tracker not gated by a root is not a forest's tracker |
+| reconcile — open issue carrying the `sync` label | `sync` when every member is closed or approved-at-head, mergeable, and opted in; otherwise a silent hold-off naming the members that are not ready — and a hold-off naming both reserved labels when the issue also carries `ideation` or `outcome`, two kind claims one row must not settle by label order (§forgejo/decisions/sync-set) |
 | reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, `reject-pr` when a connected issue is blocked by an open `ideation` issue and otherwise as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate) |
 
 The **reject-pr test precedes the review and rebase rows** on every path
@@ -392,6 +396,159 @@ recording half lives outside the decision function (the workflow the
 cross-repo targets included); until that record exists the gate
 cannot fire — it never blocks more than the graph states.
 
+## Sync set
+
+A **sync issue** — an open issue carrying the reserved `sync` label —
+groups changes that must land together: its blocking issues are the
+members of a **landing set**, and the engine dispatches `sync` against
+the grouping issue when every member is closed, or stands with its
+delivering PR approved at head and mergeable while carrying
+`agentic-sync-merge`. No new relation is needed: `blocks` keeps its
+one meaning — *you cannot proceed while this is open* — and standing
+on a sync issue, proceeding means landing the set. The sync issue is
+therefore blocked by construction, and the predicate is the unblock
+cascade's, read off a different object.
+
+Three reserved labels, each with a distinct job — Go constants, as
+the topics are; none appears in engine config:
+
+| Label | Sits on | Meaning |
+|---|---|---|
+| `sync` | the grouping issue | this issue is a sync issue, a kind like `ideation` and `outcome`: never a work item |
+| `agentic-sync-merge` | a member | its PR may land automatically as part of the set, and is never merged by `merge-or-wait` on its own |
+| `agentic-auto-merge` | a work item | unchanged: may merge on its own once approved and unblocked; the merge prompt's policy, not the decision function's |
+
+The predicate is **one function** (`considerSyncIssue`), called from
+whichever direction the set state moved: from the reconciliation
+sweep, as the backstop for changes that carry no delivery; from the
+unblock cascade's walk of outbound edges, since a member's outbound
+edges already point at the sync issue it belongs to — there the walk
+emits the grouping issue only when the dependency rows it already
+holds cannot show the set stalled on a member awaiting a human (one
+open without `agentic-sync-merge` is enough to know it is not ready,
+and the read it saves is the whole set: the grouping issue, its
+members, and per open member its PR and that PR's reviews); and from
+the approval path, ahead of `merge-or-wait`, so the last approval that
+completes a set triggers it without waiting for a sweep — there the
+candidate is emitted and the set's own re-fetch decides it, the same
+insurance shape the cascade keys pay. An empty set dispatches
+nothing: there is nothing to land. Emission is only ever a
+*candidate*: the dispatcher re-reads the set and enqueues nothing
+unless the row decides `sync`, and the sweep stays the backstop for
+any set the walk held back.
+
+`sync` is a **kind claim**, like `ideation` and `outcome`, so one
+issue cannot make two of them. Where a grouping issue carries `sync`
+alongside either of the others the sweep's row **names the conflict
+and dispatches nothing**, whatever the label order: the sweep is the
+set's only backstop, and a row that let the other kind branch decide
+first would run the wrap-up prompt against a set that then never
+lands, or the watermark-exempt decompose every interval. The shape is
+the one a member carrying both merge opt-ins already takes. The
+candidate path holds the same line, so no path dispatches a fork of
+what the row decided.
+
+The engine's hold-off is **silent**: a set that is not ready is not
+an event worth a comment, and an unready evaluation leaves nothing on
+the wire — one line in the decision log naming the members that are
+not ready (§forgejo/observability/the-decision-log). Once dispatched,
+the landing prompt's agent holds the remaining checks the engine
+cannot make cheaply: merge rights in every repository of the set,
+joint conflicts between individually-mergeable members, and the
+merge order the sync issue's body names.
+
+The hold-off sits on **every path that dispatches `merge-or-wait`** —
+the review event, the sweep's PR path, and the unblock cascade's PR leg
+alike — so a member's PR cannot be landed by whichever direction its
+approval arrived from; the cascade's leg therefore takes the same
+membership read the event's re-fetch takes
+(§forgejo/decisions/unblock-cascade).
+The approval hold-off fires on **set membership, not on the label
+alone**. A labelled member of no open set — the decomposer retired
+the set, or a membership edge went away — has no set whose decision
+to wait for, and a silent hold-off would strand its approved,
+mergeable PR with no backstop; such a stale label is no gate, and
+the merge gate decides on as if the member carried no set label. A
+member carrying `agentic-auto-merge` alongside `agentic-sync-merge`
+is the error state the hold-off exists to contain: it holds off
+whatever sets exist, the reason naming both labels.
+
+A member delivers its change through **one** open pull request —
+the authoring contract the decomposer keeps. Where a member
+nonetheless stands with several open PRs, the engine reads it
+through the first one, the same projection the unblock cascade
+uses; it does not gather reviews across deliveries.
+
+A pull request that blocks the grouping issue **directly** is a
+blocking issue too, and the predicate reads it: the row is a member
+whose delivery is itself, held to the same test — open, mergeable,
+approved at that head, carrying `agentic-sync-merge` — with its own
+state and reviews fetched in place of a delivering PR's. Dropping the
+row would be the one set shape where the engine dispatches a landing
+past an unmerged delivery rather than naming what stands in the set's
+way, which is the stance every other authoring error takes. A merged
+PR there is ready, as a closed member is. The hold-off reads the same
+edge: the assembly records the set a PR stands in as that PR's own
+membership, so a direct member's approval holds off like any other
+and emits its set, whichever of the merge-dispatching paths it
+arrived on. Nothing is fetched for it — the edge is already in the
+grouping issue's dependency rows the merge gate read — and a grouping
+issue the PR does not itself block holds nothing over it, so the
+presence of a `sync` issue among the connected issues is not by
+itself a gate (§forgejo/webhook/re-fetch). A **closed** grouping issue
+is no gate either: the set landed or was retired, and with no set
+whose decision to wait for the merge gate decides on.
+
+The dispatch's watermark is a **revision derived from the whole
+set** — the grouping issue's body, and for each member what
+the predicate reads about it: its state, whether it carries
+`agentic-sync-merge`, and its delivering PR's head sha, open and
+mergeable state, and approval at that head — so the sweep does not
+re-fire at an unchanged set state, and any member's readiness moving
+re-fires (§forgejo/state/watermark). The members' `updated_at` is
+**not** part of it: it records any edit to
+any member — a comment, a title fix, an unrelated label toggle — and
+a digest that moved with it would run the landing prompt again on an
+unchanged predicate, most noisily for a set stalled on a member
+awaiting a human. Narrowing costs nothing: the sweep re-evaluates the
+set every interval whatever the digest says, so a change that does
+move readiness still re-fires within one interval and one that does
+not stops re-firing at all. The grouping issue's **body** is part of
+it, on the other side of the same argument: the object that digest
+describes is the set, whose body names the order the landing prompt
+must honour. Its `updated_at` is not, for the reason that argued the
+members off — in Forgejo it moves on a comment, a title fix or an
+unrelated label toggle, and a ready set whose run reported an error
+would otherwise re-run its landing prompt on every touch of the
+grouping issue: merge attempts, and a re-report of a condition the
+last run already diagnosed. Without the body in the digest that ready
+set — a joint conflict, a repository the agent cannot merge in — would
+be a fixed point, and the row this section calls the set's backstop
+could never re-fire the state it had just confirmed; restating the
+order on the grouping issue is the human's lever on such
+a report (§forgejo/reconciliation/watermark-exemptions). `sync` is
+admissible by the **outcomes
+role** of the repository holding the grouping issue, like `decompose`
+and `wrap-up` (§forgejo/webhook/repository-roles); evaluating a set
+reads PR state in enabled repositories and the sync issue's own state
+in the outcomes one — reads cross edges, but no decision is ever
+emitted for an out-of-scope repository.
+
+**Authorship belongs to the decomposer**, not the engine: the agent
+that curates the forest creates a sync issue when it derives members
+that are not deployable alone, retires one whose members have become
+independently deployable (delete, never close), and keeps the member
+list, the `blocks` edges, and the stated merge order honest. The
+engine never creates, edits, or deletes a sync issue; it only
+evaluates and dispatches. A member carrying `agentic-auto-merge` when
+it joins a set has the label removed by the decomposer — a member
+with both labels is the error state the approval hold-off exists to
+contain: it is never merged by `merge-or-wait`; landing is the set's
+decision, and the hold-off names the condition by both label names.
+Retiring a set therefore includes removing `agentic-sync-merge` from
+its former members: the label is only ever a gate while an open set
+stands behind it.
+
 ## Unblock cascade
 
 On closure — an issue closed, or a PR merged whose connected issue
@@ -464,13 +621,32 @@ that removed the last blocker, exactly as a newly unblocked issue is
 dispatched with `implement`. A cascaded PR key pays the same admission,
 insurance, and watermark as an issue key: the
 re-fetch of the PR decides it, and only a decision of `merge-or-wait`
-dispatches — a PR not standing at an approved head stays silent and the
-sweep remains the backstop. The cascade dispatches nothing else for
-PRs.
+dispatches — a PR not standing at an approved head, or one whose
+connected issue is a member of an **open** landing set, dispatches
+nothing and the sweep remains the backstop. The PR leg assembles the
+state the merge gate and the sync-set hold-off read exactly as the
+event's re-fetch does — connected issues and their membership edges
+included — so membership cannot be visible on one path and invisible on
+the other: the cascade is the third way a PR is merged and the labels
+table's denial holds on it too (§forgejo/decisions/sync-set). A fork of
+`merge-or-wait` on this path is **recorded** in the decision log as the
+sibling cascade dispatchers record theirs, never swallowed: a hold-off
+with no backstop of its own must be diagnosable from the log
+(§forgejo/observability/the-decision-log). The cascade dispatches
+nothing else for PRs.
 
 The walk itself is label-blind: labelled nodes are visited and
 traversed, so graph walking stays independent of what is finally
-dispatched; labels are consulted only at emission.
+dispatched; labels are consulted only at emission — at emission the
+walk also emits an **open sync issue it visits** as a sync-set
+candidate, gated only on what its dependency rows already show: an
+open blocker carrying no `agentic-sync-merge` is a member awaiting a
+human, which holds the set off whatever its deliveries, and such a
+set is not emitted at all (the grouping issue is a permanent
+neighbour of its members' forests while the set is authoring, and the
+read the candidate pays is the whole set). Any other open sync issue
+is emitted and its own re-fetched evaluation decides, an unready set
+staying silent (§forgejo/decisions/sync-set).
 
 ## Loop prevention
 
@@ -528,6 +704,11 @@ and for the merge gate (§forgejo/decisions/merge-gate), which reads the
 same rows on the PR reviewed event and the sweep's synthetic PR event;
 and, for close events, the blocker-graph root — the closed issue — with
 each node carrying the issues it blocks and the issues that block it.
+For a sync issue under the sweep's gaze, the state carries the
+blocking issues as **set members**, each with its delivering PR and
+that PR's reviews; for a PR whose connected issue is a member, the
+membership edges — the open sync issues that issue blocks
+(§forgejo/decisions/sync-set).
 
 Carried on the state is the one **declared configuration input** the
 function consults: the configured **decomposer identity**

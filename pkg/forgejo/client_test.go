@@ -58,6 +58,7 @@ func issueJSON(number int, repoFullName string) map[string]any {
 		"title":      "issue " + strconv.Itoa(number),
 		"state":      "open",
 		"labels":     []map[string]any{{"name": "agentic-auto-merge"}},
+		"body":       "body of issue " + strconv.Itoa(number),
 		"updated_at": "2026-09-16T13:25:18Z",
 		"html_url":   "https://forge.example.com/" + repoFullName + "/issues/" + strconv.Itoa(number),
 		"repository": map[string]any{"full_name": repoFullName},
@@ -175,6 +176,7 @@ func TestListOpenIssues(t *testing.T) {
 		Title:      "issue 48",
 		State:      "open",
 		Labels:     []string{"agentic-auto-merge"},
+		Body:       "body of issue 48",
 		UpdatedAt:  time.Date(2026, 9, 16, 13, 25, 18, 0, time.UTC),
 		HTMLURL:    "https://forge.example.com/acme/maitred/issues/48",
 		Repository: "acme/maitred",
@@ -235,6 +237,12 @@ func TestGetIssue(t *testing.T) {
 	}
 	if issue.Number != 48 || issue.State != "open" || issue.Repository != "acme/maitred" {
 		t.Errorf("issue = %+v, want number 48, state open, repo acme/maitred", *issue)
+	}
+	// The body is carried: the landing set's revision digests the
+	// grouping issue's text, which is where the merge order lives
+	// (§forgejo/decisions/sync-set).
+	if issue.Body != "body of issue 48" {
+		t.Errorf("body = %q, want the issue's text", issue.Body)
 	}
 }
 

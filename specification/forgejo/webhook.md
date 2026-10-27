@@ -119,7 +119,7 @@ name appears in the engine or its config:
 | role | topic | grants admissibility to |
 |---|---|---|
 | work-item source | `maitred-enabled` | `implement`, `reassess`, `review`, `re-review`, `rebase`, `fix-feedback`, `merge-or-wait`, `reject-pr` |
-| outcomes source | `maitred-outcomes-repo` | `decompose`, `wrap-up`, `teardown-forest` |
+| outcomes source | `maitred-outcomes-repo` | `decompose`, `wrap-up`, `teardown-forest`, `sync` |
 
 One organisation listing feeds every repository's roles
 (§forgejo/webhook/the-scope-cache, §forgejo/reconciliation/the-sweep); a
@@ -245,9 +245,21 @@ For each decision event, the re-fetch assembles the state
   the teardown order is actionable only while the forest stands, and the
   engine counts rather than asking an agent to discover it
   (§forgejo/decisions/forest-teardown). That hop belongs to the teardown
-  rows alone: a root under no order performs no `IssueBlocks` call, so
-  the curation path costs what it always did. A failure of the hop fails
-  the re-fetch, as the blockers' does.
+  rows alone: a root under no order performs no `IssueBlocks` call, so the
+  curation path costs what it always did. A failure of the hop fails the
+  re-fetch, as the blockers' does.
+
+  On the sweep's synthetic current-state event, an issue carrying the
+  reserved `sync` label grows one hop further: each blocking issue — a
+  member of the landing set — is fetched with its delivering PR and
+  that PR's reviews, the state the sync predicate reads
+  (§forgejo/decisions/sync-set). Where a member stands with several
+  open PRs the first is read, the unblock cascade's projection; the
+  one-delivery-per-member contract is the decomposer's to keep
+  (§forgejo/decisions/sync-set). A blocking issue that is itself a pull
+  request has no delivering PR to hop to: its own state and reviews are
+  the read, the PR being its own delivery
+  (§forgejo/decisions/sync-set).
   For issue closed, the blocker graph rooted at the closed issue.
 - **PR events** — the PR itself, and its reviews, for the review
   transitions and for PR comments (which decide as reconcile). For PR
@@ -266,7 +278,22 @@ For each decision event, the re-fetch assembles the state
   hop is performed wherever the tests apply; the PR synced event grows no
   such read — the push path decides without them, dispatches no merge,
   and the next review submission, PR comment or sweep applies them
-  (§forgejo/decisions/transition-table). For PR merged, the blocker graph
+  (§forgejo/decisions/transition-table). A connected issue carrying
+  `agentic-sync-merge` is a landing-set member and grows one outbound
+  hop — the open sync issues it blocks, its membership edges, so the
+  approval path can emit the set without waiting for the sweep
+  (§forgejo/decisions/sync-set). A connected issue carrying `sync`
+  whose own blockers include the PR under consideration is the
+  **direct** membership: the PR is that set's member and its own delivery, so the
+  assembly records the grouping issue as the PR's membership from the
+  dependency rows it already read — no hop, no extra call — and the
+  hold-off fires on it as on any other, so the predicate and the
+  approval path read one shape the same way
+  (§forgejo/decisions/sync-set). The unblock cascade's PR leg, the
+  third path that can dispatch `merge-or-wait`, assembles this same PR
+  state — connected issues and membership edges included — rather than
+  a reduced one, so the hold-off sees membership wherever a merge may
+  fire (§forgejo/decisions/unblock-cascade). For PR merged, the blocker graph
   rooted at the connected issue — the non-PR issue the PR blocks.
 
 The blocker graph is re-fetched to the depth the unblock cascade walks:

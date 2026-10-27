@@ -47,7 +47,7 @@ func testIssue(number int, state string) *Issue {
 		Number:     number,
 		Title:      "issue " + strconv.Itoa(number),
 		State:      state,
-		Labels:     []string{"agentic-auto-merge"},
+		Labels:     []string{LabelAgenticAutoMerge},
 		UpdatedAt:  testUpdatedAt,
 		HTMLURL:    "https://forge.example.com/o/r/issues/" + strconv.Itoa(number),
 		Repository: "o/r",
@@ -2869,6 +2869,635 @@ func TestHandler_Decompose_NoPrompt_HoldsOffWithoutWatermark(t *testing.T) {
 	}
 	if w != nil {
 		t.Errorf("watermark = %+v, want none: a dispatch that cannot fire must not mark itself done", w)
+	}
+}
+
+// --- Sync set: landing a group of changes together (#99) ---
+
+// syncSetFixtures wires a minimal landing set into the fake API:
+// member 4 (o/r, agentic-sync-merge) delivered by PR 9, member 5
+// closed, grouped by sync issue 11 in the outcomes repository
+// o/outcomes (§forgejo/decisions/sync-set).
+func syncSetFixtures(api *fakeAPI) {
+	member := testIssue(4, "open")
+	member.Labels = append(member.Labels, LabelAgenticSyncMerge)
+	closedMember := testIssue(5, "closed")
+	syncIssue := testIssue(11, "open")
+	syncIssue.Labels = append(syncIssue.Labels, LabelSync)
+	syncIssue.Repository = "o/outcomes"
+	pr := testPR(9, "open", true)
+	prAsIssue := testIssue(9, "open")
+	prAsIssue.IsPull = true
+	api.issues[4] = member
+	api.issues[5] = closedMember
+	api.issues[11] = syncIssue
+	api.pulls[9] = pr
+	api.reviews[9] = []Review{{Event: ReviewApproved, Author: "bob", CommitID: pr.HeadSHA, SubmittedAt: testUpdatedAt}}
+	api.blocks[9] = []Issue{*member}
+	api.blocks[4] = []Issue{*syncIssue}
+	api.deps[4] = []Issue{*prAsIssue}
+	api.deps[5] = nil
+	api.deps[11] = []Issue{*member, *closedMember}
+}
+
+func syncOutcomesRepos() []Repository {
+	return []Repository{testRepo("o/r"), testRepoOutcomes("o/outcomes")}
+}
+
+// TestHandler_PRReviewed_SyncMemberHoldsOffAndDispatchesTheSet: the
+// final approval in a set never merges the member PR; it dispatches
+// sync against the grouping issue without waiting for a sweep, and a
+// second delivery at an unchanged set state is suppressed by the
+// watermark (§forgejo/decisions/sync-set).
+func TestHandler_PRReviewed_SyncMemberHoldsOffAndDispatchesTheSet(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+
+	req := signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved"))
+	rec := serve(t, h, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (sync for 11; the member PR must not merge)", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=sync repo=o/outcomes kind=issue number=11") {
+		t.Errorf("prompt = %q, want the sync dispatch for o/outcomes issue 11", tasks[0].Prompt)
+	}
+	prKey := Key{Repo: "o/r", Kind: KindPR, Number: 9}
+	w, err := store.Load(prKey)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("PR watermark = %+v, want none: the approval held off", w)
+	}
+	syncKey := Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11}
+	w, err = store.Load(syncKey)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w == nil || w.Action != string(ActionSync) || w.Revision == "" {
+		t.Fatalf("sync watermark = %+v, want sync at the set revision", w)
+	}
+
+	// The same approval delivered again: the set state is unchanged,
+	// the watermark suppresses the second dispatch.
+	serve(t, h, req)
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Errorf("got %d tasks after the repeat delivery, want 1 (watermark suppression)", len(tasks))
+	}
+}
+
+// TestHandler_PRReviewed_SyncSetNotReadyStaysSilent: a set with any
+// member not ready dispatches nothing and comments nowhere — an
+// unlabelled open member stalls the set (§forgejo/decisions/sync-set).
+func TestHandler_PRReviewed_SyncSetNotReadyStaysSilent(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+	stray := testIssue(5, "open")
+	stray.Labels = nil // an unlabelled member is a member awaiting a human
+	api.issues[5] = stray
+	member := api.issues[4]
+	api.deps[11] = []Issue{*member, *stray}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Errorf("got %d tasks, want none: an unready set dispatches nothing", len(tasks))
+	}
+	w, err := store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("sync watermark = %+v, want none: nothing was dispatched", w)
+	}
+}
+
+// TestHandler_Reconcile_SyncIssueDispatchesTheSet: the sweep is the
+// backstop — reconciling an open sync issue whose members are all
+// closed or approved-and-opted-in dispatches sync, recorded against
+// the set revision; a second sweep at the unchanged set state is
+// suppressed (§forgejo/decisions/sync-set, §forgejo/reconciliation).
+func TestHandler_Reconcile_SyncIssueDispatchesTheSet(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (sync for the sweep's sync issue)", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=sync repo=o/outcomes kind=issue number=11") {
+		t.Errorf("prompt = %q, want the sync dispatch for o/outcomes issue 11", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w == nil || w.Action != string(ActionSync) {
+		t.Fatalf("sync watermark = %+v, want sync", w)
+	}
+	if w.Revision == issueRevision(api.issues[11]) {
+		t.Error("sync watermark must record the set revision, not the grouping issue's own revision")
+	}
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Errorf("got %d tasks after the second sweep, want 1 (unchanged set state)", len(tasks))
+	}
+
+	// A member PR moving changes the set revision: the sweep re-fires.
+	api.pulls[9].HeadSHA = "sha-9-v2"
+	api.reviews[9] = []Review{{Event: ReviewApproved, Author: "bob", CommitID: "sha-9-v2", SubmittedAt: testUpdatedAt}}
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 2 {
+		t.Errorf("got %d tasks after the set state moved, want 2 (the set revision re-fires the dispatch)", len(tasks))
+	}
+}
+
+// TestHandler_Reconcile_SyncIssueReadsItsDirectPRMember: a pull request
+// that blocks the grouping issue directly is a member of the set. While
+// it is not opted in the sweep dispatches nothing — the engine does not
+// land a set past an unmerged delivery the graph placed in front of it —
+// and once the PR is opted in, approved at head and mergeable the same
+// sweep dispatches (§forgejo/decisions/sync-set).
+func TestHandler_Reconcile_SyncIssueReadsItsDirectPRMember(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+	prAsIssue := testIssue(9, "open")
+	prAsIssue.IsPull = true
+	prAsIssue.Labels = nil // opted out: the set cannot land past it
+	api.deps[11] = []Issue{*testIssue(5, "closed"), *prAsIssue}
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none: an open PR member without the opt-in holds the set off", len(tasks))
+	}
+	w, err := store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("sync watermark = %+v, want none: nothing was dispatched", w)
+	}
+	if n := api.callCount("GetPullRequest:r/9"); n == 0 {
+		t.Error("the direct PR member's state was never read: the predicate must see the row the graph put in front of it")
+	}
+
+	prAsIssue.Labels = []string{LabelAgenticSyncMerge}
+	api.deps[11] = []Issue{*testIssue(5, "closed"), *prAsIssue}
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want the sync dispatch once the PR member is opted in", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=sync repo=o/outcomes kind=issue number=11") {
+		t.Errorf("prompt = %q, want the sync dispatch for o/outcomes issue 11", tasks[0].Prompt)
+	}
+}
+
+// TestHandler_IssueClosed_CascadeEmitsSyncSetCandidate: closing a
+// member routes its outbound edge into the grouping issue — the
+// cascade emits the sync-set candidate and the set's evaluation
+// dispatches (§forgejo/decisions/sync-set,
+// §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadeEmitsSyncSetCandidate(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+	api.issues[7] = testIssue(7, "closed")
+	api.blocks[7] = []Issue{*api.issues[11]}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (the sync-set candidate from the walk)", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=sync repo=o/outcomes kind=issue number=11") {
+		t.Errorf("prompt = %q, want the sync dispatch for o/outcomes issue 11", tasks[0].Prompt)
+	}
+	// The gate holds the set read back only where the graph shows the
+	// set cannot be ready: here its members are opted in, so the set
+	// is read and decided as before
+	// (§forgejo/decisions/sync-set).
+	if n := api.callCount("GetIssue:outcomes/11"); n == 0 {
+		t.Error("the set was never read: the walk's gate must not hold back a set whose members are all opted in")
+	}
+}
+
+// cascadePRSetFixtures: the cascade's PR leg inside a landing set.
+// Closing issue 7 unblocks the labelled member issue 10 — its only
+// remaining open blocker is its connected PR 9 — and issue 10 is a
+// member of the open sync issue 11 in the outcomes repository, whose
+// other member (issue 5) stands open without the member label, so the
+// set is not ready. The membership edge is blocks[10]: delete it and
+// the set reads as retired (§forgejo/decisions/sync-set,
+// §forgejo/decisions/unblock-cascade).
+func cascadePRSetFixtures(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store, *bytes.Buffer) {
+	t.Helper()
+	eng, api, q, store, log := cascadePRFixtures(t)
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+	member := api.issues[10]
+	// A member is opted into the set, never into merging on its own.
+	member.Labels = []string{LabelAgenticSyncMerge}
+	api.issues[5] = testIssue(5, "open") // open, unlabelled: a member awaiting a human
+	api.deps[11] = []Issue{*member, *api.issues[5]}
+	api.blocks[9] = []Issue{*member} // PR 9 delivers issue 10, not fixture member 4
+	api.blocks[10] = []Issue{*api.issues[11]}
+	return eng, api, q, store, log
+}
+
+// TestHandler_IssueClosed_CascadePRLegNeverMergesSetMember: the merge
+// the unblock cascade fires is the third path to merge-or-wait, and a
+// member of an open landing set must not be merged by it — closing the
+// last issue-side blocker of a labelled member whose set is not ready
+// dispatches nothing, records no PR watermark, and leaves the hold-off
+// in the decision log naming the set (§forgejo/decisions/sync-set,
+// §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadePRLegNeverMergesSetMember(t *testing.T) {
+	eng, _, q, store, log := cascadePRSetFixtures(t)
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none: an open set lands its member PR, not the cascade %+v", len(tasks), tasks)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w != nil {
+		t.Errorf("PR watermark = %+v, want none: the cascade's PR leg held off", w)
+	}
+	if reason := reasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "sync set") {
+		t.Errorf("cascade PR hold-off %q does not name the landing set it is waiting for", reason)
+	}
+}
+
+// TestHandler_IssueClosed_CascadePRLegMergesRetiredSetMember: the
+// other reading of the member label, pinned where it is reachable.
+// With the set retired — the decomposer deletes rather than closes, so
+// the membership edge is gone — there is no set whose decision to wait
+// for, and the cascade's PR leg merges the member's approved PR like
+// any other newly unblocked one (§forgejo/decisions/sync-set,
+// §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadePRLegMergesRetiredSetMember(t *testing.T) {
+	eng, api, q, store, _ := cascadePRSetFixtures(t)
+	delete(api.blocks, 10) // the set was retired: no membership edge left
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (merge-or-wait for the orphaned member's PR); all = %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=merge-or-wait repo=o/r kind=pr number=9") {
+		t.Errorf("prompt = %q, want merge-or-wait for o/r PR 9", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w == nil || w.Action != string(ActionMergeOrWait) || w.Revision != "sha-9" {
+		t.Errorf("PR watermark = %+v, want merge-or-wait at sha-9", w)
+	}
+}
+
+// TestHandler_Reconcile_SyncMemberReadsItsFirstOpenPR: the
+// one-delivery-per-member authoring contract — where a member
+// nonetheless stands with several open PRs the set reads it through
+// the first one, the unblock cascade's projection, and the second
+// does not hold the set
+// (§forgejo/decisions/sync-set, §forgejo/webhook/re-fetch).
+func TestHandler_Reconcile_SyncMemberReadsItsFirstOpenPR(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+	member := api.issues[4]
+	second := testPR(12, "open", true)
+	secondAsIssue := testIssue(12, "open")
+	secondAsIssue.IsPull = true
+	api.pulls[12] = second // open and mergeable, but no reviews at all
+	api.blocks[12] = []Issue{*member}
+	firstAsIssue := testIssue(9, "open")
+	firstAsIssue.IsPull = true
+	api.deps[4] = []Issue{*firstAsIssue, *secondAsIssue}
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1: the member is ready through its first open PR", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=sync repo=o/outcomes kind=issue number=11") {
+		t.Errorf("prompt = %q, want the sync dispatch for o/outcomes issue 11", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w == nil || w.Action != string(ActionSync) {
+		t.Errorf("sync watermark = %+v, want sync at the set revision", w)
+	}
+}
+
+// TestHandler_IssueClosed_SyncCandidateOnMislabelledIssueDispatchesNothing:
+// a grouping issue misauthorised with the sync label alongside
+// outcome claims two kinds, and the sweep's row names that conflict
+// instead of letting label enumeration order pick a prompt — the
+// sweep being the set's only backstop. The sibling cascade guard
+// holds here too: nothing is enqueued and no watermark is recorded
+// against sync, so the queue and the decision log cannot disagree
+// (§forgejo/decisions/sync-set, §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_SyncCandidateOnMislabelledIssueDispatchesNothing(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+	api.issues[11].Labels = append(api.issues[11].Labels, LabelOutcome) // sync + outcome: authoring error
+	api.issues[4] = testIssue(4, "closed")                              // fully unblocked: the outcome branch dispatches
+	api.deps[11] = []Issue{*api.issues[4], *api.issues[5]}
+	api.issues[7] = testIssue(7, "closed")
+	api.blocks[7] = []Issue{*api.issues[11]}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Errorf("got %d tasks, want none: a grouping issue claiming two kinds dispatches neither %s nor %s",
+			len(tasks), ActionWrapUp, ActionSync)
+	}
+	w, err := store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none: a forked candidate must not mark sync done", w)
+	}
+}
+
+// TestHandler_Reconcile_MislabelledGroupingIssueDispatchesNothing:
+// the sweep is the set's only backstop, and the reproduction the
+// review describes is this row — a grouping issue carrying sync
+// alongside outcome must never take the outcome branch, whose
+// watermark would record wrap-up against a set that then never
+// lands. The kind conflict is named and nothing is dispatched
+// (§forgejo/decisions/sync-set, §forgejo/reconciliation).
+func TestHandler_Reconcile_MislabelledGroupingIssueDispatchesNothing(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+	api.issues[11].Labels = append(api.issues[11].Labels, LabelOutcome) // sync + outcome: authoring error
+	api.issues[4] = testIssue(4, "closed")                              // every member closed: the outcome branch would dispatch
+	api.deps[11] = []Issue{*api.issues[4], *api.issues[5]}
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none: the sync row is tested before the kind it conflicts with, not after it", len(tasks))
+	}
+	w, err := store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil && w.Action == string(ActionWrapUp) {
+		t.Errorf("watermark = %+v, want none naming wrap-up: the grouping issue's set would never land", w)
+	}
+}
+
+// TestHandler_IssueClosed_CascadeSkipsSetStalledOnAHuman: a sync
+// issue is a permanent neighbour of its members' forests while the
+// set is authoring, so the walk must not pay the set read — the
+// grouping issue, its dependency rows, and per open member its
+// dependencies, PR and reviews — on every closure. An open member
+// without the member label is a member awaiting a human, which the
+// graph states for free: no candidate, no set read, and the sweep
+// stays the backstop (§forgejo/decisions/sync-set,
+// §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadeSkipsSetStalledOnAHuman(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+	api.issues[5] = testIssue(5, "open") // open, unlabelled: a member awaiting a human
+	api.deps[11] = []Issue{*api.issues[4], *api.issues[5]}
+	api.issues[7] = testIssue(7, "closed")
+	api.blocks[7] = []Issue{*api.issues[11]}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none: a set stalled on a human is not ready", len(tasks))
+	}
+	// The fake records each call as "<op>:<repo name>/<number>".
+	for _, op := range []string{"GetIssue:outcomes/11", "GetPullRequest:r/9", "ListPullRequestReviews:r/9"} {
+		if n := api.callCount(op); n != 0 {
+			t.Errorf("%s called %d time(s): a set the graph already shows stalled on a member awaiting a human must not be read", op, n)
+		}
+	}
+	w, err := store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("sync watermark = %+v, want none: nothing was dispatched", w)
+	}
+}
+
+// TestHandler_Reconcile_SyncIssueInadmissibleWithoutOutcomesRole: a
+// sync issue in a repository holding no outcomes role is not
+// dispatched — sync is admissible by the outcomes role of the
+// repository holding the grouping issue alone
+// (§forgejo/webhook/repository-roles).
+func TestHandler_Reconcile_SyncIssueInadmissibleWithoutOutcomesRole(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	syncSetFixtures(api)
+	api.issues[11].Repository = "o/r" // a work-item repository, no outcomes role
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: 11, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Errorf("got %d tasks, want none: sync is inadmissible without the outcomes role", len(tasks))
+	}
+}
+
+// TestHandler_Sync_NoPrompt_HoldsOffWithoutWatermark: with no canned
+// prompt configured for sync the action cannot fire, and the failure
+// says so: nothing is enqueued and no watermark is recorded, so the
+// sweep retries — the activation shape decompose already takes
+// (§forgejo/config/canned-prompts, §forgejo/webhook/the-pipeline).
+func TestHandler_Sync_NoPrompt_HoldsOffWithoutWatermark(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	cfg := testConfig()
+	delete(cfg.Actions, string(ActionSync))
+	eng.cfg = cfg
+	api.repos = syncOutcomesRepos()
+	syncSetFixtures(api)
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks with no sync prompt configured, want none", len(tasks))
+	}
+	w, err := store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none: a dispatch that cannot fire must not mark itself done", w)
+	}
+}
+
+// directPRSetFixtures wires the shape whose predicate side syncMembers
+// reads: the pull request blocks the grouping issue **directly**, so the
+// PR is a member whose delivery is itself — the set's last open blocker,
+// opted in, mergeable and approved at head, beside a closed member 5
+// (§forgejo/decisions/sync-set).
+func directPRSetFixtures(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store, *bytes.Buffer) {
+	t.Helper()
+	api := newFakeAPI()
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	var log bytes.Buffer
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewJSONHandler(&log, nil)))
+	api.repos = syncOutcomesRepos()
+
+	syncIssue := testIssue(11, "open")
+	syncIssue.Labels = []string{LabelSync}
+	syncIssue.Repository = "o/outcomes"
+	closedMember := testIssue(5, "closed")
+	pr := testPR(9, "open", true)
+	pr.Labels = []string{LabelAgenticSyncMerge}
+	prAsIssue := testIssue(9, "open")
+	prAsIssue.IsPull = true
+	prAsIssue.Labels = []string{LabelAgenticSyncMerge}
+	api.issues[11] = syncIssue
+	api.issues[5] = closedMember
+	api.pulls[9] = pr
+	api.reviews[9] = []Review{{Event: ReviewApproved, Author: "bob", CommitID: pr.HeadSHA, SubmittedAt: testUpdatedAt}}
+	api.blocks[9] = []Issue{*syncIssue} // the PR blocks the grouping issue itself
+	api.deps[11] = []Issue{*closedMember, *prAsIssue}
+	return eng, api, q, store, &log
+}
+
+// TestHandler_PRReviewed_DirectPRMemberHoldsOffAndDispatchesTheSet: the
+// membership the row reads has to be visible to the approval side too.
+// A pull request blocking a grouping issue directly is a member whose
+// delivery is itself, so its approval never merges it: merge-or-wait is
+// the outcome the labels table forbids, and the set's own decision lands
+// the delivery instead (§forgejo/decisions/sync-set).
+func TestHandler_PRReviewed_DirectPRMemberHoldsOffAndDispatchesTheSet(t *testing.T) {
+	eng, _, q, store, log := directPRSetFixtures(t)
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want the one sync dispatch for 11 (the member PR must not merge): %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=sync repo=o/outcomes kind=issue number=11") {
+		t.Errorf("prompt = %q, want the sync dispatch for o/outcomes issue 11", tasks[0].Prompt)
+	}
+	if strings.Contains(tasks[0].Prompt, string(ActionMergeOrWait)) {
+		t.Errorf("prompt = %q, want no merge-or-wait: a landing-set delivery is the set's to land", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("PR watermark = %+v, want none: the approval held off", w)
+	}
+	if reason := reasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "sync set") {
+		t.Errorf("approval hold-off %q does not name the landing set it is waiting for", reason)
+	}
+}
+
+// TestHandler_PRReviewed_DirectPRMemberOfUnreadySetDispatchesNothing:
+// the hold-off is the same whatever the set's readiness — an unready set
+// must not have its member merged underneath it, and nothing dispatches
+// until the set stands ready (§forgejo/decisions/sync-set).
+func TestHandler_PRReviewed_DirectPRMemberOfUnreadySetDispatchesNothing(t *testing.T) {
+	eng, api, q, store, log := directPRSetFixtures(t)
+	stray := testIssue(12, "open") // open, unlabelled: a member awaiting a human
+	api.issues[12] = stray
+	api.deps[11] = append(api.deps[11], *stray)
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Errorf("got %d tasks, want none: an unready set dispatches nothing and merges nothing %+v", len(tasks), tasks)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("PR watermark = %+v, want none: the approval held off", w)
+	}
+	if reason := reasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "sync set") {
+		t.Errorf("approval hold-off %q does not name the landing set it is waiting for", reason)
+	}
+}
+
+// TestHandler_PRReviewed_DirectPRMemberOfRetiredSetMerges: the other
+// reading of the direct edge, pinned beside it. With the grouping issue
+// closed — the set landed or retired — there is no set whose decision to
+// wait for, and the approval decides on through the merge gate like any
+// other PR (§forgejo/decisions/sync-set).
+func TestHandler_PRReviewed_DirectPRMemberOfRetiredSetMerges(t *testing.T) {
+	eng, api, q, store, _ := directPRSetFixtures(t)
+	api.issues[11].State = "closed"
+	api.blocks[9] = []Issue{*api.issues[11]}
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (merge-or-wait for the retired member's PR); all = %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=merge-or-wait repo=o/r kind=pr number=9") {
+		t.Errorf("prompt = %q, want merge-or-wait for o/r PR 9", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w == nil || w.Action != string(ActionMergeOrWait) || w.Revision != "sha-9" {
+		t.Errorf("PR watermark = %+v, want merge-or-wait at sha-9", w)
 	}
 }
 

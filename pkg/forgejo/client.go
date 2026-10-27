@@ -51,6 +51,14 @@ type Issue struct {
 	// only fact about a forest member that is true at the instant of its
 	// creation (§forgejo/decisions/loop-prevention).
 	Author string
+	// Body is the issue's text. The engine reads it at one seat: the
+	// landing set's revision digests the grouping issue's body, because
+	// that is the field naming the order the set must land in, and a
+	// restatement of it is the human's lever on a landing run that
+	// reported a conflict (§forgejo/decisions/sync-set). It is whatever
+	// the endpoint reported: the issue's own read carries the full text,
+	// the dependency and blocks listings carry theirs.
+	Body string
 	// UpdatedAt is the issue's last update time; it serves as the issue's
 	// activity revision for the watermark (§forgejo/client/operations).
 	UpdatedAt time.Time
@@ -394,6 +402,7 @@ type wireRepository struct {
 type wireIssue struct {
 	Number    int         `json:"number"`
 	Title     string      `json:"title"`
+	Body      string      `json:"body"`
 	State     string      `json:"state"`
 	Labels    []wireLabel `json:"labels"`
 	User      wireUser    `json:"user"` // the issue's author (§forgejo/decisions/loop-prevention)
@@ -446,6 +455,7 @@ func toIssue(w wireIssue) Issue {
 	issue := Issue{
 		Number:    w.Number,
 		Title:     w.Title,
+		Body:      w.Body,
 		State:     w.State,
 		Labels:    labelNames(w.Labels),
 		Author:    w.User.Login,

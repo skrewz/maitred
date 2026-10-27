@@ -3,6 +3,7 @@ package forgejo
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,155 @@ func ideationIssue() *Issue {
 	issue := openIssue()
 	issue.Labels = append(issue.Labels, LabelIdeation)
 	return issue
+}
+
+// syncIssueFixture returns an open issue carrying the reserved sync
+// label: a grouping issue whose members must land together
+// (§forgejo/decisions/sync-set).
+func syncIssueFixture(number int) *Issue {
+	issue := openIssue()
+	issue.Number = number
+	issue.Labels = append(issue.Labels, LabelSync)
+	return issue
+}
+
+// syncIssueWithLabel returns an open issue carrying the sync label
+// alongside a second reserved kind label — a grouping issue the
+// decomposer misauthorised, since one issue cannot claim two kinds
+// (§forgejo/decisions/sync-set).
+func syncIssueWithLabel(number int, other string) *Issue {
+	issue := syncIssueFixture(number)
+	issue.Labels = append(issue.Labels, other)
+	return issue
+}
+
+// syncMemberFixture is one ready member of a landing set: an open
+// issue carrying agentic-sync-merge whose connected PR is mergeable
+// and approved at its head (§forgejo/decisions/sync-set).
+func syncMemberFixture(number, prNumber int) SyncMember {
+	m := SyncMember{
+		Issue: Issue{
+			Number:     number,
+			State:      "open",
+			Repository: "o/r",
+			Labels:     []string{LabelAgenticSyncMerge},
+			UpdatedAt:  testTime,
+		},
+	}
+	m.PR = openPR("sha-" + strconv.Itoa(prNumber))
+	m.PR.Number = prNumber
+	m.Reviews = []Review{{Event: ReviewApproved, Author: "carol", CommitID: m.PR.HeadSHA, SubmittedAt: testTime}}
+	return m
+}
+
+// closedSyncMemberFixture is a member whose work has landed: closed,
+// which makes it ready whatever its labels (§forgejo/decisions/sync-set).
+func closedSyncMemberFixture(number int) SyncMember {
+	return SyncMember{Issue: Issue{
+		Number:     number,
+		State:      "closed",
+		Repository: "o/r",
+		Labels:     []string{LabelAgenticSyncMerge},
+		UpdatedAt:  testTime,
+	}}
+}
+
+// prMemberFixture is a member of a landing set that blocks the
+// grouping issue directly as a pull request: the PR is its own
+// delivery, so the predicate holds it to the same test it asks of a
+// member's delivering PR (§forgejo/decisions/sync-set).
+func prMemberFixture(number int, mergeable bool, optedIn bool) SyncMember {
+	m := SyncMember{Issue: Issue{
+		Number:     number,
+		State:      "open",
+		IsPull:     true,
+		Repository: "o/r",
+		UpdatedAt:  testTime,
+	}}
+	if optedIn {
+		m.Issue.Labels = []string{LabelAgenticSyncMerge}
+	}
+	m.PR = openPR("sha-" + strconv.Itoa(number))
+	m.PR.Mergeable = mergeable
+	m.Reviews = []Review{{Event: ReviewApproved, Author: "carol", CommitID: m.PR.HeadSHA, SubmittedAt: testTime}}
+	return m
+}
+
+// closedPRMemberFixture is a direct PR member whose delivery landed:
+// merged, which is ready whatever its labels
+// (§forgejo/decisions/sync-set).
+func closedPRMemberFixture(number int) SyncMember {
+	m := prMemberFixture(number, true, true)
+	m.Issue.State = "closed"
+	return m
+}
+
+// directPRMemberConnected builds the graph a pull request sees when it
+// blocks a grouping issue **directly**: the connected issue is the
+// grouping issue itself — it carries `sync`, not the member label — and
+// the PR under test stands in its blockers, which is what makes the row
+// a member whose delivery is itself. The sets column is the membership
+// the PR's own assembly records from that edge
+// (§forgejo/decisions/sync-set, §forgejo/webhook/re-fetch).
+func directPRMemberConnected(syncNumber int, withPRInBlockers bool) ConnectedIssue {
+	set := syncIssueFixture(syncNumber)
+	set.Repository = "o/outcomes"
+	c := ConnectedIssue{
+		Issue:    *set,
+		Blockers: []Issue{{Number: 5, State: "closed", Repository: "o/r"}},
+	}
+	if withPRInBlockers {
+		c.Blockers = append(c.Blockers, gateBlockerPR("o/r", 9, "open"))
+	}
+	return c
+}
+
+// directPRMemberState is the state of a pull request that is itself a
+// member of an open landing set: the grouping issue among its connected
+// issues, and the set the assembly read off it
+// (§forgejo/decisions/sync-set).
+func directPRMemberState(pr *PullRequest, syncNumber int) State {
+	set := syncIssueFixture(syncNumber)
+	set.Repository = "o/outcomes"
+	return State{
+		PR:              pr,
+		Reviews:         []Review{review("APPROVED", "carol", testTime)},
+		ConnectedIssues: []ConnectedIssue{directPRMemberConnected(syncNumber, true)},
+		SyncSets:        []Issue{*set},
+	}
+}
+
+// syncMemberConnected builds the connected issue of a PR under test
+// when it is a member of a landing set: it carries agentic-sync-merge
+// and points at the open sync issue it belongs to
+// (§forgejo/decisions/sync-set).
+func syncMemberConnected(number, syncNumber int) ConnectedIssue {
+	c := connectedIssueOf(number, gateBlockerPR("o/r", 9, "open"))
+	c.Issue.Labels = []string{LabelAgenticSyncMerge}
+	set := syncIssueFixture(syncNumber)
+	c.SyncSets = []Issue{*set}
+	return c
+}
+
+// syncMemberWithoutSets is the connected issue of a PR under test
+// whose membership is gone: it carries agentic-sync-merge but stands
+// in no open set — the decomposer retired it, deleting rather than
+// closing — so the stale label is no gate
+// (§forgejo/decisions/sync-set).
+func syncMemberWithoutSets(number int) ConnectedIssue {
+	c := syncMemberConnected(number, 11)
+	c.SyncSets = nil
+	return c
+}
+
+// dualLabelledSyncMember is the connected issue of a PR under test
+// carrying both merge opt-ins with no open set behind them: the
+// authoring error the approval hold-off contains
+// (§forgejo/decisions/sync-set).
+func dualLabelledSyncMember(number int) ConnectedIssue {
+	c := syncMemberWithoutSets(number)
+	c.Issue.Labels = append(c.Issue.Labels, LabelAgenticAutoMerge)
+	return c
 }
 
 // connectedIssue is the non-PR issue a PR under test blocks — the
@@ -138,6 +288,7 @@ func TestActionNames(t *testing.T) {
 		ActionWrapUp:         "wrap-up",
 		ActionRejectPR:       "reject-pr",
 		ActionTeardownForest: "teardown-forest",
+		ActionSync:           "sync",
 	}
 	for action, name := range want {
 		if string(action) != name {
@@ -741,6 +892,179 @@ func TestDecide(t *testing.T) {
 				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "open"))},
 			},
 			wantAction: ActionReview,
+		},
+		// The sync set: a member PR's approval never merges on its
+		// own — landing is the set's decision — and the approval
+		// emits the set it belongs to for evaluation
+		// (§forgejo/decisions/sync-set).
+		{
+			name:  "PR review approved on a sync-set member PR holds off and emits its sync set",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberConnected(7, 11)},
+			},
+			wantCascade: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 11}, Action: ActionSync}},
+		},
+		{
+			name:  "reconcile PR approved at head on a sync-set member holds off and emits its sync set",
+			event: prEvent(EventReconcile, "maitred"),
+			state: State{
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberConnected(7, 11)},
+			},
+			wantCascade: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 11}, Action: ActionSync}},
+		},
+		{
+			name:  "PR review changes-requested on a sync-set member still dispatches fix-feedback",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:              openPR("abc"),
+				Reviews:         []Review{review(ReviewChangesRequested, "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberConnected(7, 11)},
+			},
+			wantAction: ActionFixFeedback,
+		},
+		{
+			name:  "PR review approved on a member of no open sync set dispatches merge-or-wait — a retired set is no gate",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberWithoutSets(7)},
+			},
+			wantAction: ActionMergeOrWait,
+		},
+		{
+			name:  "reconcile PR approved at head on a member of no open sync set dispatches merge-or-wait",
+			event: prEvent(EventReconcile, "maitred"),
+			state: State{
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberWithoutSets(7)},
+			},
+			wantAction: ActionMergeOrWait,
+		},
+		{
+			name:  "PR review approved on a member carrying both merge opt-ins holds off with no open set — the error state is contained",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{dualLabelledSyncMember(7)},
+			},
+		},
+		{
+			name:  "reconcile issue carrying the sync label with no members holds off — an empty set has nothing to land",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: syncIssueFixture(7)},
+		},
+		{
+			// The sweep is the set's only backstop, so the sync row
+			// is tested first: a second kind claim is authoring the
+			// engine names rather than resolves by label order
+			// (§forgejo/decisions/sync-set).
+			name:  "reconcile issue carrying sync alongside outcome holds off naming both kind labels",
+			event: issueEvent(EventReconcile),
+			state: State{
+				Issue:       syncIssueWithLabel(7, LabelOutcome),
+				SyncMembers: []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)},
+				Blockers:    []Issue{{Number: 4, State: "closed", Repository: "o/r"}, {Number: 5, State: "closed", Repository: "o/r"}},
+			},
+		},
+		{
+			name:  "reconcile issue carrying sync alongside ideation holds off naming both kind labels",
+			event: issueEvent(EventReconcile),
+			state: State{
+				Issue:    syncIssueWithLabel(7, LabelIdeation),
+				Blockers: []Issue{{Number: 4, State: "closed", Repository: "o/r"}},
+			},
+		},
+		{
+			name:       "reconcile sync issue with every member closed or approved dispatches sync",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}},
+			wantAction: ActionSync,
+		},
+		{
+			// A pull request blocking the grouping issue directly is a
+			// member the graph put in front of the set: the predicate
+			// reads its own state rather than deciding past it
+			// (§forgejo/decisions/sync-set).
+			name:       "reconcile sync issue whose direct PR member is approved at head dispatches sync",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{prMemberFixture(9, true, true), closedSyncMemberFixture(5)}},
+			wantAction: ActionSync,
+		},
+		{
+			name:       "reconcile sync issue whose direct PR member has landed dispatches sync",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{closedPRMemberFixture(9), closedSyncMemberFixture(5)}},
+			wantAction: ActionSync,
+		},
+		{
+			name:  "reconcile sync issue whose direct PR member is not mergeable holds off",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{prMemberFixture(9, false, true), closedSyncMemberFixture(5)}},
+		},
+		{
+			name:  "reconcile sync issue whose direct PR member carries no opt-in holds off",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{prMemberFixture(9, true, false), closedSyncMemberFixture(5)}},
+		},
+		{
+			name:  "reconcile sync issue with an unlabelled open member holds off — the member awaits a human",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{
+				syncMemberFixture(4, 40),
+				{Issue: Issue{Number: 5, State: "open", Repository: "o/r", UpdatedAt: testTime}},
+			}},
+		},
+		{
+			name:  "reconcile sync issue with a member whose PR is not approved at head holds off",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{
+				syncMemberFixture(4, 40),
+				func() SyncMember {
+					m := syncMemberFixture(5, 50)
+					m.Reviews = []Review{{Event: ReviewChangesRequested, Author: "carol", CommitID: m.PR.HeadSHA, SubmittedAt: testTime}}
+					return m
+				}(),
+			}},
+		},
+		{
+			name:  "reconcile sync issue with a member whose PR has merge conflicts holds off",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{
+				func() SyncMember {
+					m := syncMemberFixture(4, 40)
+					m.PR.Mergeable = false
+					return m
+				}(),
+				closedSyncMemberFixture(5),
+			}},
+		},
+		{
+			name:  "reconcile sync issue already dispatched at the set revision holds off",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}},
+			watermark: &Watermark{Action: string(ActionSync), Revision: syncSetRevision(syncIssueFixture(7), []SyncMember{
+				closedSyncMemberFixture(5), syncMemberFixture(4, 40),
+			})},
+		},
+		{
+			name:       "reconcile sync issue whose set state moved re-dispatches over the watermark",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{syncMemberFixture(4, 40), syncMemberFixture(5, 50)}},
+			watermark:  &Watermark{Action: string(ActionSync), Revision: syncSetRevision(syncIssueFixture(7), []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)})},
+			wantAction: ActionSync,
+		},
+		{
+			name:  "issue opened carrying the sync label holds off — never an implement candidate",
+			event: issueEvent(EventIssueOpened),
+			state: State{Issue: syncIssueFixture(7)},
 		},
 		{
 			name:        "PR merged runs the unblock cascade",
@@ -1748,6 +2072,53 @@ func TestUnblockCascade(t *testing.T) {
 			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 3}, Action: ActionImplement}},
 		},
 		{
+			// A member's outbound edges point at the sync issue it
+			// belongs to: the walk emits it as a sync candidate,
+			// whatever its readiness — the set's own evaluation
+			// decides (§forgejo/decisions/sync-set).
+			name: "a closed issue blocking a sync issue emits the sync-set candidate, not implement",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue:    Issue{Number: 11, State: "open", Repository: "o/r", Labels: []string{LabelSync}},
+						Blockers: []IssueNode{node("o/r", 1, "closed")},
+					},
+				},
+			},
+			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 11}, Action: ActionSync}},
+		},
+		{
+			// A set stalled on a member awaiting a human is not ready
+			// whatever its deliveries: the graph says so without a set
+			// read, and a candidate that can only hold off costs the
+			// whole set fetch for nothing
+			// (§forgejo/decisions/sync-set).
+			name: "a sync issue with an open member lacking the member label emits no candidate",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue:    Issue{Number: 11, State: "open", Repository: "o/r", Labels: []string{LabelSync}},
+						Blockers: []IssueNode{node("o/r", 1, "closed"), node("o/r", 3, "open")},
+					},
+				},
+			},
+		},
+		{
+			name: "a sync issue whose open members are all opted in emits the candidate",
+			root: &IssueNode{
+				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
+				Blocks: []IssueNode{
+					{
+						Issue:    Issue{Number: 11, State: "open", Repository: "o/r", Labels: []string{LabelSync}},
+						Blockers: []IssueNode{node("o/r", 1, "closed"), {Issue: Issue{Number: 3, State: "open", Repository: "o/r", Labels: []string{LabelAgenticSyncMerge}}}},
+					},
+				},
+			},
+			want: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 11}, Action: ActionSync}},
+		},
+		{
 			name: "an issue with an open blocker is not unblocked",
 			root: &IssueNode{
 				Issue: Issue{Number: 1, State: "closed", Repository: "o/r"},
@@ -2066,6 +2437,8 @@ func TestAdmissibleInRoles(t *testing.T) {
 		{Action("wrap-up"), workItem, false},
 		{ActionImplement, both, true},
 		{Action("wrap-up"), both, true},
+		{ActionSync, outcomes, true},
+		{ActionSync, workItem, false},
 		{Action("frobnicate"), both, false},
 		{Action("frobnicate"), roles{}, false},
 		{ActionImplement, roles{}, false},
@@ -2090,6 +2463,7 @@ func TestHoldOffActionInadmissibleNamesTheRole(t *testing.T) {
 		{ActionImplement, "action implement is inadmissible for repo o/r: requires the maitred-enabled role"},
 		{ActionReview, "action review is inadmissible for repo o/r: requires the maitred-enabled role"},
 		{Action("wrap-up"), "action wrap-up is inadmissible for repo o/r: requires the maitred-outcomes-repo role"},
+		{ActionSync, "action sync is inadmissible for repo o/r: requires the maitred-outcomes-repo role"},
 		{Action("frobnicate"), "action frobnicate is admitted by no maitred role"},
 	}
 	for _, tt := range tests {
@@ -2174,6 +2548,195 @@ func TestDecide_ForestTeardownRows(t *testing.T) {
 				t.Errorf("reason = %q, want the kind label named first", d.Reason)
 			}
 		})
+	}
+}
+
+// TestSyncSetRevision pins the set revision's properties: it depends
+// on what the sync predicate reads about every member — state, member
+// label, PR open and mergeable, approval at head — and never on the
+// order the members are enumerated in, so the sweep does not re-fire at
+// an unchanged set state, any member's readiness moving re-fires, and
+// an edit that cannot move readiness does not
+// (§forgejo/decisions/sync-set, §forgejo/state/watermark).
+func TestSyncSetRevision(t *testing.T) {
+	setIssue := syncIssueFixture(7)
+	members := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
+	reversed := []SyncMember{closedSyncMemberFixture(5), syncMemberFixture(4, 40)}
+	if syncSetRevision(setIssue, members) != syncSetRevision(setIssue, reversed) {
+		t.Error("set revision must not depend on member order")
+	}
+
+	pushed := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
+	pushed[0].PR.HeadSHA = "sha-new"
+	if syncSetRevision(setIssue, members) == syncSetRevision(setIssue, pushed) {
+		t.Error("a member PR head moving must change the set revision")
+	}
+
+	edited := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
+	edited[1].Issue.UpdatedAt = testTime2
+	if syncSetRevision(setIssue, members) != syncSetRevision(setIssue, edited) {
+		t.Error("an edit that cannot move readiness must not change the set revision: the digest records what the predicate reads, not the members' activity")
+	}
+
+	unlabelled := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
+	unlabelled[0].Issue.Labels = nil
+	if syncSetRevision(setIssue, members) == syncSetRevision(setIssue, unlabelled) {
+		t.Error("a member losing the member label must change the set revision")
+	}
+
+	staleApproval := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
+	staleApproval[0].Reviews = []Review{{Event: ReviewApproved, Author: "carol", CommitID: "sha-before-the-push", SubmittedAt: testTime}}
+	if syncSetRevision(setIssue, members) == syncSetRevision(setIssue, staleApproval) {
+		t.Error("a member PR no longer approved at head must change the set revision")
+	}
+
+	conflicted := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
+	conflicted[0].PR.Mergeable = false
+	if syncSetRevision(setIssue, members) == syncSetRevision(setIssue, conflicted) {
+		t.Error("a member PR that stopped being mergeable must change the set revision")
+	}
+
+	if syncSetRevision(setIssue, nil) == syncSetRevision(setIssue, members) {
+		t.Error("an empty set must not share a revision with a populated one")
+	}
+
+	// The grouping issue's **body** is in the digest: a ready set whose
+	// landing run reported an error is re-dispatched when the body — the
+	// order the prompt must honour — is restated, which is the human's
+	// only lever on such a report
+	// (§forgejo/decisions/sync-set, §forgejo/reconciliation/watermark-exemptions).
+	restated := syncIssueFixture(7)
+	restated.Body = "Land 4, then 5."
+	if syncSetRevision(setIssue, members) == syncSetRevision(restated, members) {
+		t.Error("restating the grouping issue's body must change the set revision: a ready set that never landed must not be a fixed point")
+	}
+	// The grouping issue's activity is not: its updated_at moves on a
+	// comment, a title fix, or an unrelated label toggle, and the
+	// members were narrowed off exactly that signal — the lever is the
+	// restatement, not the touch (§forgejo/decisions/sync-set).
+	touched := syncIssueFixture(7)
+	touched.UpdatedAt = testTime2
+	if syncSetRevision(setIssue, members) != syncSetRevision(touched, members) {
+		t.Error("a touch of the grouping issue that restates nothing must not change the set revision: the landing prompt would re-run on activity")
+	}
+}
+
+// TestDecide_SyncSetApprovalHoldOffNamesTheSet pins the approval
+// path's hold-off reason: the PR stands approved but its connected
+// issue is a set member — landing is the set's decision, not the
+// PR's (§forgejo/decisions/sync-set).
+func TestDecide_SyncSetApprovalHoldOffNamesTheSet(t *testing.T) {
+	tests := []struct {
+		name  string
+		event Event
+		state State
+	}{
+		{
+			name:  "review event",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberConnected(7, 11)},
+			},
+		},
+		{
+			name:  "sweep PR path standing at an approved head",
+			event: prEvent(EventReconcile, "maitred"),
+			state: State{
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberConnected(7, 11)},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := Decide(tt.event, tt.state, nil)
+			if d.Action != "" || !d.HoldOff() {
+				t.Fatalf("decision = %+v, want a hold-off dispatching nothing", d)
+			}
+			if !strings.Contains(d.Reason, "sync set") || !strings.Contains(d.Reason, "o/r#7") {
+				t.Errorf("hold-off reason = %q, want it to name the sync set and the member o/r#7", d.Reason)
+			}
+		})
+	}
+}
+
+// TestDecide_SyncSetApprovalHoldOffDirectPRMember pins the approval
+// hold-off on the shape whose predicate side reads the row: a pull
+// request blocking a grouping issue directly is a member whose delivery
+// is itself, so its approval never merges it — the set's decision lands
+// it, and the set is emitted from the hold-off whatever path the
+// approval arrived on. The connected issue carries `sync`, not the
+// member label, so this is the one membership the approval side cannot
+// read off a connected issue's labels (§forgejo/decisions/sync-set).
+func TestDecide_SyncSetApprovalHoldOffDirectPRMember(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		event Event
+		state State
+	}{
+		{
+			name:  "review event",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: directPRMemberState(openPR("abc"), 11),
+		},
+		{
+			name:  "sweep PR path standing at an approved head",
+			event: prEvent(EventReconcile, "maitred"),
+			state: directPRMemberState(openPR("abc"), 11),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := Decide(tc.event, tc.state, nil)
+			if d.Action != "" || !d.HoldOff() {
+				t.Fatalf("decision = %+v, want a hold-off dispatching nothing", d)
+			}
+			if !strings.Contains(d.Reason, "sync set") || !strings.Contains(d.Reason, "o/outcomes#11") {
+				t.Errorf("hold-off reason = %q, want it to name the sync set and the grouping issue o/outcomes#11", d.Reason)
+			}
+			want := CascadeDispatch{
+				Key:    Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11},
+				Action: ActionSync,
+			}
+			if len(d.Cascade) != 1 || d.Cascade[0] != want {
+				t.Errorf("cascade = %+v, want the set emitted: %+v", d.Cascade, want)
+			}
+		})
+	}
+}
+
+// TestDecide_SyncSetApprovalHoldOffDirectPRMemberDualLabel: a direct PR
+// member carrying both merge opt-ins is the same authoring error the
+// member issue's dual label is, and the PR's own labels are the only
+// place it can be named from on this path — the connected issue carries
+// the kind label alone (§forgejo/decisions/sync-set).
+func TestDecide_SyncSetApprovalHoldOffDirectPRMemberDualLabel(t *testing.T) {
+	pr := openPR("abc")
+	pr.Labels = []string{LabelAgenticSyncMerge, LabelAgenticAutoMerge}
+	d := Decide(prEvent(EventPRReviewed, "carol"), directPRMemberState(pr, 11), nil)
+	if d.Action != "" || !d.HoldOff() {
+		t.Fatalf("decision = %+v, want a hold-off dispatching nothing", d)
+	}
+	if !strings.Contains(d.Reason, LabelAgenticSyncMerge) || !strings.Contains(d.Reason, LabelAgenticAutoMerge) {
+		t.Errorf("hold-off reason = %q, want both opt-ins named", d.Reason)
+	}
+}
+
+// TestDecide_SyncSetApprovalDirectMembershipNeedsThePRsOwnEdge pins the
+// gate's condition: it is the PR's own entry in the grouping issue's
+// blockers that makes it a member, not the presence of a sync issue
+// among the connected issues. A grouping issue the PR does not block
+// holds nothing over it, so the merge gate decides on
+// (§forgejo/decisions/sync-set).
+func TestDecide_SyncSetApprovalDirectMembershipNeedsThePRsOwnEdge(t *testing.T) {
+	state := directPRMemberState(openPR("abc"), 11)
+	state.ConnectedIssues = []ConnectedIssue{directPRMemberConnected(11, false)}
+	state.SyncSets = nil
+	d := Decide(prEvent(EventPRReviewed, "carol"), state, nil)
+	if d.Action != ActionMergeOrWait {
+		t.Errorf("action = %q, want %q (%s)", d.Action, ActionMergeOrWait, d.Reason)
 	}
 }
 
@@ -2318,4 +2881,37 @@ func TestDecide_EmptyForestStopsTheTeardownRefiring(t *testing.T) {
 				i+1, d.Action, d.Reason)
 		}
 	}
+}
+
+// TestDecide_SyncSetMemberEdgeCaseReasons: the hold-off reasons for
+// the two readings of the member label that decide alone — the
+// double opt-in names both labels; the member of no open set is not
+// held off at all, the merge gate deciding on
+// (§forgejo/decisions/sync-set).
+func TestDecide_SyncSetMemberEdgeCaseReasons(t *testing.T) {
+	t.Run("dual-labelled member names both labels", func(t *testing.T) {
+		d := Decide(prEvent(EventPRReviewed, "carol"), State{
+			PR:              openPR("abc"),
+			Reviews:         []Review{review("APPROVED", "carol", testTime)},
+			ConnectedIssues: []ConnectedIssue{dualLabelledSyncMember(7)},
+		}, nil)
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want a hold-off", d)
+		}
+		for _, want := range []string{LabelAgenticSyncMerge, LabelAgenticAutoMerge, "o/r#7"} {
+			if !strings.Contains(d.Reason, want) {
+				t.Errorf("hold-off reason = %q, want it to name %q", d.Reason, want)
+			}
+		}
+	})
+	t.Run("member of no open set is not held off", func(t *testing.T) {
+		d := Decide(prEvent(EventPRReviewed, "carol"), State{
+			PR:              openPR("abc"),
+			Reviews:         []Review{review("APPROVED", "carol", testTime)},
+			ConnectedIssues: []ConnectedIssue{syncMemberWithoutSets(7)},
+		}, nil)
+		if d.Action != ActionMergeOrWait {
+			t.Errorf("decision = %+v, want merge-or-wait: a stale member label is no gate", d)
+		}
+	})
 }
