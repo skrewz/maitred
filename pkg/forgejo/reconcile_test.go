@@ -16,6 +16,10 @@ func testRepo(fullName string) Repository {
 		FullName: fullName,
 		Owner:    owner,
 		Topics:   []string{"maitred-enabled"},
+		// The fixture repositories have the pull requests unit on, so
+		// the sweep exercises the pull-request listing unless a test
+		// restates the unit (§forgejo/reconciliation/the-sweep).
+		HasPullRequests: true,
 	}
 }
 
@@ -277,6 +281,65 @@ func TestReconcile_SkipsPullsListedAsIssues(t *testing.T) {
 	}
 	if !strings.Contains(tasks[0].Prompt, "action=review") {
 		t.Errorf("prompt = %q, want the review action", tasks[0].Prompt)
+	}
+}
+
+// TestReconcile_SkipsPullsWhenUnitDisabled: a repository whose pull
+// requests unit is off is never asked for its pull requests — the sweep
+// reads the unit from the repository listing it already made — so the
+// sweep logs no error and produces no pull-request decisions for it
+// (§forgejo/reconciliation/the-sweep). A repository that refuses pull
+// requests cannot hold one, so the listing is not a read that failed.
+func TestReconcile_SkipsPullsWhenUnitDisabled(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	off := testRepo("o/forests")
+	off.HasPullRequests = false
+	api.repos = []Repository{testRepo("o/r"), off}
+	issue := &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/forests"}
+	api.issues[7] = issue
+	api.openIssues["forests"] = []Issue{*issue}
+	// A pull request that cannot exist in the unit-less repository, if
+	// the sweep were to ask for it.
+	api.openPulls["forests"] = []PullRequest{{Number: 3, State: "open", Mergeable: true, HeadSHA: "sha-3"}}
+	api.pulls[3] = &PullRequest{Number: 3, State: "open", Mergeable: true, HeadSHA: "sha-3"}
+
+	eng.Reconcile()
+
+	if n := api.callCount("ListOpenPullRequests:forests"); n != 0 {
+		t.Errorf("ListOpenPullRequests on the unit-less repo called %d times, want 0", n)
+	}
+	if n := api.callCount("GetIssue:forests/7"); n != 1 {
+		t.Errorf("the unit-less repo's issue decided %d times, want 1 (issues are still read)", n)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("expected only the issue's task, got %d: %v", len(tasks), tasks)
+	}
+	if strings.Contains(tasks[0].Prompt, "action=review") {
+		t.Errorf("a pull-request decision was made for a repository with the unit off: %q", tasks[0].Prompt)
+	}
+}
+
+// TestReconcile_PRListingErrorStillFailsWhenUnitEnabled: the unit check
+// is a skip, not an exception carved out of the error path — where the
+// repository has the pull requests unit, a failing pull-request listing
+// (a 404 from a renamed or deleted repository included) is still an
+// error, logged and carried on from, never read as "none"
+// (§forgejo/reconciliation/failure-handling, §forgejo/client/errors).
+func TestReconcile_PRListingErrorStillFailsWhenUnitEnabled(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	api.repos = []Repository{testRepo("o/bad"), testRepo("o/good")}
+	api.listPullsErr["bad"] = &APIError{StatusCode: 404, Message: "The target couldn't be found."}
+	api.openPulls["good"] = []PullRequest{{Number: 1, State: "open", Mergeable: true, HeadSHA: "sha-1"}}
+	api.pulls[1] = &PullRequest{Number: 1, State: "open", Mergeable: true, HeadSHA: "sha-1"}
+
+	eng.Reconcile()
+
+	if n := api.callCount("ListOpenPullRequests:bad"); n != 1 {
+		t.Errorf("ListOpenPullRequests on the unit-enabled repo called %d times, want 1 (the error path is unchanged)", n)
+	}
+	if len(q.all()) != 1 {
+		t.Fatalf("expected the good repo's pull request dispatched, got %d tasks", len(q.all()))
 	}
 }
 

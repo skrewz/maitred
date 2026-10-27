@@ -86,12 +86,18 @@ func TestListOrgRepositories(t *testing.T) {
 				"owner":    map[string]any{"login": "acme"},
 				"html_url": "https://forge.example.com/acme/maitred",
 				"topics":   []string{"maitred-enabled", "engine"},
+				// The repository units the listing reports; the sweep uses
+				// the pull-requests unit to decide whether to list pulls at
+				// all (§forgejo/reconciliation/the-sweep).
+				"has_pull_requests": true,
+				"has_issues":        true,
 			},
 			{
 				"id": 2, "name": "other", "full_name": "acme/other",
-				"owner":    map[string]any{"login": "acme"},
-				"html_url": "https://forge.example.com/acme/other",
-				"topics":   []string{},
+				"owner":             map[string]any{"login": "acme"},
+				"html_url":          "https://forge.example.com/acme/other",
+				"topics":            []string{},
+				"has_pull_requests": false,
 			},
 		})
 	})
@@ -112,11 +118,15 @@ func TestListOrgRepositories(t *testing.T) {
 	}
 	want := Repository{
 		ID: 1, Name: "maitred", FullName: "acme/maitred", Owner: "acme",
-		HTMLURL: "https://forge.example.com/acme/maitred",
-		Topics:  []string{"maitred-enabled", "engine"},
+		HTMLURL:         "https://forge.example.com/acme/maitred",
+		Topics:          []string{"maitred-enabled", "engine"},
+		HasPullRequests: true,
 	}
 	if !reflect.DeepEqual(repos[0], want) {
 		t.Errorf("repos[0] = %+v, want %+v", repos[0], want)
+	}
+	if repos[1].HasPullRequests {
+		t.Errorf("repos[1].HasPullRequests = true, want false (the unit is off)")
 	}
 }
 
