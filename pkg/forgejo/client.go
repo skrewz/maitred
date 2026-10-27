@@ -35,6 +35,12 @@ type Repository struct {
 	// Topics are the repository's topic tags; the engine uses them to
 	// derive the repository's roles (§forgejo/webhook/repository-roles).
 	Topics []string
+	// HasPullRequests reports whether the repository has the pull
+	// requests unit on (the listing's has_pull_requests field). A
+	// repository with the unit off refuses the pull request endpoints
+	// outright, so the sweep skips their listing rather than reading
+	// the refusal as a failed read (§forgejo/reconciliation/the-sweep).
+	HasPullRequests bool
 }
 
 // Issue is a Forgejo issue, slimmed to the fields the engine needs
@@ -397,6 +403,9 @@ type wireRepository struct {
 	Owner    wireUser `json:"owner"`
 	HTMLURL  string   `json:"html_url"`
 	Topics   []string `json:"topics"`
+	// HasPullRequests is the repository's pull requests unit
+	// (has_pull_requests); see Repository.HasPullRequests.
+	HasPullRequests bool `json:"has_pull_requests"`
 }
 
 type wireIssue struct {
@@ -448,6 +457,8 @@ func toRepository(w wireRepository) Repository {
 		Owner:    w.Owner.Login,
 		HTMLURL:  w.HTMLURL,
 		Topics:   w.Topics,
+		// The repository units the sweep consults (§forgejo/reconciliation/the-sweep).
+		HasPullRequests: w.HasPullRequests,
 	}
 }
 

@@ -16,10 +16,11 @@ const maitredOutcomesTopic = "maitred-outcomes-repo"
 // (§forgejo/reconciliation/the-sweep): it enumerates the org's
 // repositories holding at least one role — the union of the
 // work-item and outcomes role sets — lists their open issues and pull
-// requests, and feeds each a synthetic reconcile event through the same
-// pipeline as the event path — re-fetch, decide, dispatch, watermark,
-// serialised on the watermark store's per-key lock. A sweep that starts
-// while another is in flight is skipped
+// requests (a repository whose pull requests unit is off is not asked
+// for pull requests at all), and feeds each a synthetic reconcile event
+// through the same pipeline as the event path — re-fetch, decide,
+// dispatch, watermark, serialised on the watermark store's per-key lock.
+// A sweep that starts while another is in flight is skipped
 // (§forgejo/reconciliation/scheduling).
 func (e *Engine) Reconcile() {
 	if !e.sweeping.CompareAndSwap(false, true) {
@@ -54,6 +55,17 @@ func (e *Engine) Reconcile() {
 				}
 				e.HandleEvent(Event{Type: EventReconcile, Repo: repo.FullName, Kind: KindIssue, Number: issues[j].Number})
 			}
+		}
+		// A repository with the pull requests unit off refuses the pull
+		// request endpoint outright (it answers 404) and cannot hold a
+		// pull request, so the sweep does not ask it: the refusal is an
+		// ordinary state, not a failed read
+		// (§forgejo/reconciliation/the-sweep). The unit comes from the
+		// listing the sweep already made; the client keeps reporting a
+		// 404 as an error, so a renamed or deleted repository — whose
+		// unit is on — still fails loudly (§forgejo/client/errors).
+		if !repo.HasPullRequests {
+			continue
 		}
 		pulls, err := e.api.ListOpenPullRequests(repo.Owner, repo.Name)
 		if err != nil {

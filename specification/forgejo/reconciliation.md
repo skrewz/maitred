@@ -27,7 +27,15 @@ created while the engine was down.
    open issues and all open pull requests
    (§forgejo/client/operations). The issue list includes pull requests
    (Forgejo represents them as issues); the sweep skips the ones marked
-   as pull requests — the pull request list covers them.
+   as pull requests — the pull request list covers them. The repository
+   listing of step 1 reports each repository's units, so the sweep knows
+   — **before** asking — whether a repository has the pull requests
+   unit; where the unit is **off** the sweep does not list its pull
+   requests at all: such a repository refuses the endpoint with a `404`
+   and can hold no pull request, so asking would turn an ordinary state
+   into an error line and no pull-request decision can come of it
+   (§forgejo/client/operations). Issues are still listed and decided as
+   usual.
 3. **Decide and dispatch.** For each listed object, feed the synthetic
    `reconcile` event (§forgejo/decisions/inputs) through the **same
    pipeline as the event path** (§forgejo/webhook/the-pipeline):
@@ -50,9 +58,13 @@ another is in flight is skipped.
 A failure enumerating the org's repositories ends the sweep (it is
 logged). A failure listing one repository's issues or pull requests is
 logged, and the sweep continues with the repository's remaining list and
-the remaining repositories. Per-object failures follow the event path's
-hold-off semantics (§forgejo/webhook/the-pipeline). A sweep never
-aborts the engine.
+the remaining repositories. A repository whose pull requests unit is off
+is **not** such a failure: its pull request listing is never attempted
+(§forgejo/reconciliation/the-sweep), while a failing pull request
+listing where the unit is on — a `404` from a renamed or deleted
+repository included — stays an error (§forgejo/client/errors). Per-object
+failures follow the event path's hold-off semantics
+(§forgejo/webhook/the-pipeline). A sweep never aborts the engine.
 
 ## Idempotency
 

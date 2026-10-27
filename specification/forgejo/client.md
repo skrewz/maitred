@@ -12,7 +12,7 @@ authenticated with a bearer token:
 
 | Operation | What the engine does with it |
 |---|---|
-| list an org's repositories (with `topics`) | derive each repository's roles (§forgejo/webhook/repository-roles) |
+| list an org's repositories (with `topics`, and the repository's units) | derive each repository's roles (§forgejo/webhook/repository-roles) and whether it has the pull requests unit (§forgejo/reconciliation/the-sweep) |
 | list open issues in a repo | event filtering and reconciliation enumeration |
 | list open pull requests in a repo | event filtering and reconciliation enumeration |
 | get a single issue (state, labels, author, `updated_at`, `html_url`) | authoritative issue state |
@@ -38,6 +38,16 @@ it: the landing set's revision digests the grouping issue's body, the
 field that names the order its members must land in, so a restatement of
 the order moves the digest while a comment or a label toggle does not
 (§forgejo/decisions/sync-set).
+
+The repository listing also reports **whether the repository has the
+pull requests unit** (`has_pull_requests`). A repository with the unit
+off refuses the pull request endpoints outright — the listing of its
+pull requests answers `404` — and can hold no pull request, so the sweep
+skips that listing where the unit is off
+(§forgejo/reconciliation/the-sweep). The client deliberately does **not**
+map a `404` to an empty listing: the general mapping would also swallow
+the refusal that deserves an error — a renamed or deleted repository —
+so where the unit is on a `404` stays an error.
 
 The operations are exposed behind an **interface** so the decision function,
 webhook handler, and reconciliation sweep can be tested against a fake.
