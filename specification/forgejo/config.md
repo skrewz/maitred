@@ -22,6 +22,55 @@ The config maps each action — `implement`, `reassess`, `review`, `re-review`,
   `s-autonomics-implementer`, `s-autonomics-reviewer`),
 - a **timeout** — how long the task may run.
 
+Pi expands a prompt template only when the dispatched message **starts
+with `/<template-name>`** — the first byte must be the slash. A prompt
+that opens with bare words travels to the agent verbatim: the persona's
+canned prompt is never invoked and its parameter values are never
+filled, which is how a `decompose` dispatch once reached the decomposer
+with no issue URL at all. Every prompt template therefore begins with
+the slash invocation and passes the object of the dispatch as its
+argument — `.IssueURL` for the issue-path actions, `.PRURL` for the
+PR-path ones. Text the config must state besides the URL (the fan-out
+cap below, for instance) rides along as further arguments, **quoted**.
+Pi tokenises an invocation's arguments on whitespace, respecting quotes
+only, and a template body renders just the placeholders it names, so
+unquoted text arrives as a scatter of positional arguments a template
+that reads `$1` for the URL never renders — the extra text would vanish
+as quietly as a missing slash does. One pair of double quotes makes the
+sentence one argument.
+
+The template name is part of the contract. The persona's Pi prompt
+directory must hold a template of that name, because Pi falls back to
+passing the message verbatim when no template matches: a typo or a
+missing command reproduces the silent no-expansion failure above, with no
+error anywhere. This repository pins the names the deployment is expected
+to follow; where a deployment uses others, it records them with the
+config it deploys (§forgejo/config/loading).
+
+| Action | Canned prompt |
+|---|---|
+| `implement` | `/issue-implementer` |
+| `reassess` | `/issue-reassess` |
+| `review` | `/pr-reviewer` |
+| `re-review` | `/pr-reviewer`, with `"re-review"` as a further argument |
+| `fix-feedback` | `/pr-feedback-fixer` |
+| `merge-or-wait` | `/pr-merger` |
+| `rebase` | `/pr-rebase` |
+| `decompose` | `/issue-decomposer` |
+| `wrap-up` | `/issue-wrapper` |
+| `reject-pr` | `/pr-rejector` |
+| `teardown-forest` | `/forest-teardown` |
+| `sync` | `/set-lander` |
+
+A prompt that asks for a URL the state cannot fill is a dispatch with no
+object: the invocation would read `/issue-implementer ` and Pi reports
+nothing over a command with no parameters. The engine therefore fails
+such a dispatch at dispatch time rather than enqueueing it
+(§forgejo/webhook/the-pipeline) — loud where a mis-set state would
+otherwise be silent. It is a dispatch-time rule, not a load-time one: it
+catches the state that carries no object without ever refusing to start
+over a config that has yet to be rewritten (§forgejo/config/validation).
+
 The `decompose` prompt template is held to one content requirement: it
 must **name the fan-out cap** — at most 20 tickets per forest — and
 require the agent to **cite the cap when refusing** to fan out further

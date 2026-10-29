@@ -160,6 +160,25 @@ func (f *fakeAPI) callCount(prefix string) int {
 	return n
 }
 
+// withIssueURL fills the html_url a test left blank. The real API always
+// carries one, and the engine refuses a dispatch whose prompt would name
+// no object (§forgejo/config/canned-prompts), so the fakes answer the way
+// Forgejo does.
+func withIssueURL(owner, repo string, i Issue) Issue {
+	if i.HTMLURL == "" {
+		i.HTMLURL = "https://forge.example.com/" + owner + "/" + repo + "/issues/" + strconv.Itoa(i.Number)
+	}
+	return i
+}
+
+// withPullURL fills the html_url a test left blank on a pull request.
+func withPullURL(owner, repo string, pr PullRequest) PullRequest {
+	if pr.HTMLURL == "" {
+		pr.HTMLURL = "https://forge.example.com/" + owner + "/" + repo + "/pulls/" + strconv.Itoa(pr.Number)
+	}
+	return pr
+}
+
 func (f *fakeAPI) GetIssue(owner, repo string, number int) (*Issue, error) {
 	f.record("GetIssue:" + repo + "/" + strconv.Itoa(number))
 	if f.getIssueEntered != nil {
@@ -179,7 +198,8 @@ func (f *fakeAPI) GetIssue(owner, repo string, number int) (*Issue, error) {
 	if !ok {
 		return nil, &APIError{StatusCode: http.StatusNotFound, Message: "issue not found"}
 	}
-	return issue, nil
+	filled := withIssueURL(owner, repo, *issue)
+	return &filled, nil
 }
 
 func (f *fakeAPI) GetPullRequest(owner, repo string, number int) (*PullRequest, error) {
@@ -194,7 +214,8 @@ func (f *fakeAPI) GetPullRequest(owner, repo string, number int) (*PullRequest, 
 	if !ok {
 		return nil, &APIError{StatusCode: http.StatusNotFound, Message: "pull request not found"}
 	}
-	return pr, nil
+	filled := withPullURL(owner, repo, *pr)
+	return &filled, nil
 }
 
 func (f *fakeAPI) ListOrgRepositories(org string) ([]Repository, error) {
@@ -226,7 +247,11 @@ func (f *fakeAPI) ListOpenIssues(owner, repo string) ([]Issue, error) {
 	if err, ok := f.listIssuesErr[repo]; ok {
 		return nil, err
 	}
-	return f.openIssues[repo], nil
+	out := make([]Issue, 0, len(f.openIssues[repo]))
+	for _, i := range f.openIssues[repo] {
+		out = append(out, withIssueURL(owner, repo, i))
+	}
+	return out, nil
 }
 
 func (f *fakeAPI) ListOpenPullRequests(owner, repo string) ([]PullRequest, error) {
@@ -237,7 +262,11 @@ func (f *fakeAPI) ListOpenPullRequests(owner, repo string) ([]PullRequest, error
 	if err, ok := f.listPullsErr[repo]; ok {
 		return nil, err
 	}
-	return f.openPulls[repo], nil
+	out := make([]PullRequest, 0, len(f.openPulls[repo]))
+	for _, pr := range f.openPulls[repo] {
+		out = append(out, withPullURL(owner, repo, pr))
+	}
+	return out, nil
 }
 
 func (f *fakeAPI) ListPullRequestReviews(owner, repo string, number int) ([]Review, error) {
@@ -1361,6 +1390,97 @@ func TestDispatch_DedupKeyDistinctRepos(t *testing.T) {
 	}
 	if tasks[0].DedupKey == tasks[1].DedupKey {
 		t.Errorf("dedup keys = %q for both a-b/c and a/b-c, want distinct", tasks[0].DedupKey)
+	}
+}
+
+// TestDispatch_WithoutURLArgument: a canned prompt that asks for a URL the
+// state cannot fill renders as a command naming no object — "/issue-
+// implementer " — and Pi reports nothing over one, so the persona would
+// simply start without its parameter (#121). The dispatch fails loudly
+// instead and enqueues nothing (§forgejo/config/canned-prompts,
+// §forgejo/webhook/the-pipeline).
+func TestDispatch_WithoutURLArgument(t *testing.T) {
+	issuePrompt := PromptConfig{Prompt: "/issue-implementer {{.IssueURL}}", Persona: "implementer", Timeout: time.Hour}
+	prPrompt := PromptConfig{Prompt: "/pr-reviewer {{.PRURL}}", Persona: "reviewer", Timeout: time.Hour}
+
+	cases := []struct {
+		name       string
+		prompt     PromptConfig
+		ev         Event
+		st         State
+		action     Action
+		wantErr    bool
+		wantSuffix string
+	}{
+		{
+			name:       "issue path with its issue",
+			prompt:     issuePrompt,
+			ev:         Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"},
+			st:         State{Issue: testIssue(7, "open")},
+			action:     ActionImplement,
+			wantSuffix: "https://forge.example.com/o/r/issues/7",
+		},
+		{
+			name:   "issue path with no issue",
+			prompt: issuePrompt,
+			ev:     Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"},
+			st:     State{},
+			action: ActionImplement, wantErr: true,
+		},
+		{
+			name:       "PR path with its pull request",
+			prompt:     prPrompt,
+			ev:         Event{Type: EventPRSynced, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "alice"},
+			st:         State{PR: testPR(9, "open", true)},
+			action:     ActionReview,
+			wantSuffix: "https://forge.example.com/o/r/pulls/9",
+		},
+		{
+			name:   "PR path with no pull request",
+			prompt: prPrompt,
+			ev:     Event{Type: EventPRSynced, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "alice"},
+			st:     State{},
+			action: ActionReview, wantErr: true,
+		},
+		{
+			// A prompt that asks for no URL is the deployment's choice;
+			// the guard only refuses prompts that ask and get nothing.
+			name:   "prompt naming no URL",
+			prompt: PromptConfig{Prompt: "/housekeeping {{.Repo}}", Persona: "sweeper", Timeout: time.Hour},
+			ev:     Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"},
+			st:     State{},
+			action: ActionImplement,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, _, q, _ := newTestEngine(t)
+			eng.cfg.Actions[string(tc.action)] = tc.prompt
+			err := eng.dispatch(tc.ev, tc.st, tc.action)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("dispatch succeeded, want it to refuse an invocation with no object")
+				}
+				if len(q.all()) != 0 {
+					t.Errorf("dispatch enqueued %d task(s) despite naming no object", len(q.all()))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("dispatch: %v", err)
+			}
+			tasks := q.all()
+			if len(tasks) != 1 {
+				t.Fatalf("got %d tasks, want 1", len(tasks))
+			}
+			if tc.wantSuffix == "" {
+				return
+			}
+			if !strings.HasSuffix(tasks[0].Prompt, tc.wantSuffix) {
+				t.Errorf("prompt = %q, want the invocation with its URL", tasks[0].Prompt)
+			}
+		})
 	}
 }
 
@@ -3509,6 +3629,7 @@ func teardownRootIssue(repo string, number int) *Issue {
 	return &Issue{
 		Number: number, State: "open", UpdatedAt: testUpdatedAt,
 		Repository: repo, Labels: []string{LabelIdeation, LabelTeardownForest},
+		HTMLURL: "https://forge.example.com/" + repo + "/issues/" + strconv.Itoa(number),
 	}
 }
 
@@ -3635,6 +3756,7 @@ func TestHandler_RootPerformsNoForestHop(t *testing.T) {
 	api.issues[7] = &Issue{
 		Number: 7, State: "open", UpdatedAt: testUpdatedAt,
 		Repository: "o/out", Labels: []string{LabelIdeation},
+		HTMLURL: "https://forge.example.com/o/out/issues/7",
 	}
 
 	eng.HandleEvent(Event{Type: EventIssueOpened, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "alice"})

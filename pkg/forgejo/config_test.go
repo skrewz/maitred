@@ -3,6 +3,7 @@ package forgejo
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -427,5 +428,126 @@ func TestShippedSampleConfigIsValid(t *testing.T) {
 		if _, ok := cfg.Actions[string(a)]; !ok {
 			t.Errorf("sample config has no %q block", a)
 		}
+	}
+}
+
+// cannedPromptInvocation is the shape §forgejo/config/canned-prompts
+// pins: a slash invocation, the URL placeholder as its argument, then
+// any further arguments. A regexp rather than a Contains — a prompt that
+// merely mentions the placeholder, before the command or with a URL of
+// the wrong dispatch kind, must not pass.
+var cannedPromptInvocation = regexp.MustCompile(`^/[a-z0-9-]+ \{\{\.(?:IssueURL|PRURL)\}\}(?P<args> .*)?$`)
+
+// quotedSpan is one quoted argument of an invocation. Pi tokenises
+// arguments on whitespace, respecting quotes only, so any further text
+// has to sit inside a pair of them (§forgejo/config/canned-prompts).
+var quotedSpan = regexp.MustCompile(`"[^"]*"`)
+
+// TestShippedSampleConfigPromptsInvokeCannedPrompts pins the shape the
+// canned prompts must keep: Pi expands a prompt template only when the
+// dispatched message starts with "/<template-name>" (pi's prompt-template
+// docs), so a prompt whose first byte is not "/" travels to the persona
+// verbatim — the canned prompt is never invoked and its parameter value,
+// the issue or pull request URL, never arrives. Dispatching a bare
+// "decompose owner/repo issue 7" is how an outcome-decomposer run began
+// with no issue URL at all. Every sample prompt therefore starts with a
+// slash invocation and carries the URL its dispatch kind fills —
+// .IssueURL for the issue-path actions, .PRURL for the PR-path ones
+// (§forgejo/config/canned-prompts, §forgejo/decisions/actions).
+//
+// Any further text the config must state rides quoted: the template body
+// renders only the placeholders it names, so an unquoted sentence arrives
+// as loose positional arguments a template reading $1 alone discards.
+func TestShippedSampleConfigPromptsInvokeCannedPrompts(t *testing.T) {
+	cfg, err := LoadConfig(filepath.Join("..", "..", "config", "forgejoeng.yaml"))
+	if err != nil {
+		t.Fatalf("LoadConfig(config/forgejoeng.yaml): %v", err)
+	}
+
+	// The URL placeholder each action's dispatch fills: the decision
+	// table's issue-path rows are implement, reassess, decompose,
+	// wrap-up, teardown-forest, and sync; the rest dispatch on a pull
+	// request (§forgejo/decisions/transition-table).
+	issuePath := map[Action]bool{
+		ActionImplement:      true,
+		ActionReassess:       true,
+		ActionDecompose:      true,
+		ActionWrapUp:         true,
+		ActionTeardownForest: true,
+		ActionSync:           true,
+	}
+
+	// The canned prompt each action invokes. The names are the
+	// convention §forgejo/config/canned-prompts pins, so the sample, the
+	// spec and the deployment stay on one page: when no template of that
+	// name exists the message travels verbatim and nothing expands —
+	// the failure #121 reported, and silent.
+	command := map[Action]string{
+		ActionImplement:      "issue-implementer",
+		ActionReassess:       "issue-reassess",
+		ActionReview:         "pr-reviewer",
+		ActionReReview:       "pr-reviewer",
+		ActionFixFeedback:    "pr-feedback-fixer",
+		ActionMergeOrWait:    "pr-merger",
+		ActionRebase:         "pr-rebase",
+		ActionDecompose:      "issue-decomposer",
+		ActionWrapUp:         "issue-wrapper",
+		ActionRejectPR:       "pr-rejector",
+		ActionTeardownForest: "forest-teardown",
+		ActionSync:           "set-lander",
+	}
+
+	for _, a := range AllActions {
+		pc, ok := cfg.Actions[string(a)]
+		if !ok {
+			t.Fatalf("sample config has no %q block", a)
+		}
+		rest := cannedPromptInvocation.FindStringSubmatch(pc.Prompt)
+		if rest == nil {
+			t.Errorf("action %q: prompt %q is not a slash invocation with a URL placeholder as its argument — Pi would send it verbatim and the canned prompt would never be invoked", a, pc.Prompt)
+			continue
+		}
+		want := "{{.PRURL}}"
+		if issuePath[a] {
+			want = "{{.IssueURL}}"
+		}
+		if !strings.Contains(pc.Prompt, want) {
+			t.Errorf("action %q: prompt %q carries no %s — the dispatch would name no object for the agent to act on", a, pc.Prompt, want)
+		}
+		if head := "/" + command[a] + " "; !strings.HasPrefix(pc.Prompt, head) {
+			t.Errorf("action %q: prompt %q does not invoke %s — the spec pins that name, and an unmatched command reaches the persona unexpanded", a, pc.Prompt, head)
+		}
+		// Text beyond the command and its URL argument must be quoted,
+		// or it reaches the persona as loose positional arguments the
+		// template may well never render (§forgejo/config/canned-prompts).
+		if bare := strings.TrimSpace(quotedSpan.ReplaceAllString(rest[cannedPromptInvocation.SubexpIndex("args")], "")); bare != "" {
+			t.Errorf("action %q: prompt %q passes %s unquoted — Pi splits arguments on whitespace, so the template would see a scatter of positionals instead of one sentence", a, pc.Prompt, bare)
+		}
+	}
+
+	// A re-review has to say so in text the template can render: an
+	// unquoted marker splits into two positionals a template reading only
+	// $1 drops, leaving a re-review indistinguishable from a first review.
+	reReview := cfg.Actions[string(ActionReReview)].Prompt
+	if !strings.Contains(reReview, `"re-review"`) {
+		t.Errorf("re-review prompt %q does not pass the marker as one quoted argument", reReview)
+	}
+
+	// The decompose template is held to naming the fan-out cap
+	// (§forgejo/config/canned-prompts): the agent must be told the
+	// number and told to cite it when refusing — told, that is, in text
+	// that survives the argument tokenisation.
+	decompose := cfg.Actions[string(ActionDecompose)].Prompt
+	if !strings.Contains(decompose, "20") || !strings.Contains(strings.ToLower(decompose), "cap") {
+		t.Errorf("decompose prompt %q does not name the fan-out cap", decompose)
+	}
+	quoted := false
+	for _, span := range quotedSpan.FindAllString(decompose, -1) {
+		if strings.Contains(span, "20") && strings.Contains(strings.ToLower(span), "cap") {
+			quoted = true
+		}
+	}
+	if !quoted {
+		t.Errorf("decompose prompt %q states the fan-out cap outside quotes, where Pi's argument splitting can drop it", decompose)
 	}
 }
