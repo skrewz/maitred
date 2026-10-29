@@ -429,3 +429,59 @@ func TestShippedSampleConfigIsValid(t *testing.T) {
 		}
 	}
 }
+
+// TestShippedSampleConfigPromptsInvokeCannedPrompts pins the shape the
+// canned prompts must keep: Pi expands a prompt template only when the
+// dispatched message starts with "/<template-name>" (pi's prompt-template
+// docs), so a prompt whose first byte is not "/" travels to the persona
+// verbatim — the canned prompt is never invoked and its parameter value,
+// the issue or pull request URL, never arrives. Dispatching a bare
+// "decompose owner/repo issue 7" is how an outcome-decomposer run began
+// with no issue URL at all. Every sample prompt therefore starts with a
+// slash invocation and carries the URL its dispatch kind fills —
+// .IssueURL for the issue-path actions, .PRURL for the PR-path ones
+// (§forgejo/config/canned-prompts, §forgejo/decisions/actions).
+func TestShippedSampleConfigPromptsInvokeCannedPrompts(t *testing.T) {
+	cfg, err := LoadConfig(filepath.Join("..", "..", "config", "forgejoeng.yaml"))
+	if err != nil {
+		t.Fatalf("LoadConfig(config/forgejoeng.yaml): %v", err)
+	}
+
+	// The URL placeholder each action's dispatch fills: the decision
+	// table's issue-path rows are implement, reassess, decompose,
+	// wrap-up, teardown-forest, and sync; the rest dispatch on a pull
+	// request (§forgejo/decisions/transition-table).
+	issuePath := map[Action]bool{
+		ActionImplement:      true,
+		ActionReassess:       true,
+		ActionDecompose:      true,
+		ActionWrapUp:         true,
+		ActionTeardownForest: true,
+		ActionSync:           true,
+	}
+
+	for _, a := range AllActions {
+		pc, ok := cfg.Actions[string(a)]
+		if !ok {
+			t.Fatalf("sample config has no %q block", a)
+		}
+		if !strings.HasPrefix(pc.Prompt, "/") {
+			t.Errorf("action %q: prompt %q does not start with '/' — Pi sends it verbatim and the canned prompt is never invoked", a, pc.Prompt)
+		}
+		want := "{{.PRURL}}"
+		if issuePath[a] {
+			want = "{{.IssueURL}}"
+		}
+		if !strings.Contains(pc.Prompt, want) {
+			t.Errorf("action %q: prompt %q carries no %s — the dispatch would name no object for the agent to act on", a, pc.Prompt, want)
+		}
+	}
+
+	// The decompose template is held to naming the fan-out cap
+	// (§forgejo/config/canned-prompts): the agent must be told the
+	// number and told to cite it when refusing.
+	decompose := cfg.Actions[string(ActionDecompose)].Prompt
+	if !strings.Contains(decompose, "20") || !strings.Contains(strings.ToLower(decompose), "cap") {
+		t.Errorf("decompose prompt %q does not name the fan-out cap", decompose)
+	}
+}

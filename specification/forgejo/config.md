@@ -22,6 +22,17 @@ The config maps each action — `implement`, `reassess`, `review`, `re-review`,
   `s-autonomics-implementer`, `s-autonomics-reviewer`),
 - a **timeout** — how long the task may run.
 
+Pi expands a prompt template only when the dispatched message **starts
+with `/<template-name>`** — the first byte must be the slash. A prompt
+that opens with bare words travels to the agent verbatim: the persona's
+canned prompt is never invoked and its parameter values are never
+filled, which is how a `decompose` dispatch once reached the decomposer
+with no issue URL at all. Every prompt template therefore begins with
+the slash invocation and passes the object of the dispatch as its
+argument — `.IssueURL` for the issue-path actions, `.PRURL` for the
+PR-path ones. Text the config must state besides the URL (the fan-out
+cap below, for instance) rides along as further arguments.
+
 The `decompose` prompt template is held to one content requirement: it
 must **name the fan-out cap** — at most 20 tickets per forest — and
 require the agent to **cite the cap when refusing** to fan out further

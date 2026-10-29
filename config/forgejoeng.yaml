@@ -9,52 +9,62 @@ reconcile_interval: 1h
 # (§forgejo/config/decomposer-identity). Unset, the hold-off is inert.
 decomposer_identity: decomposer
 
+# Every prompt invokes the persona's Pi canned prompt: Pi expands a
+# prompt template only when the dispatched message starts with
+# "/<template-name>", so a prompt without the leading slash travels to
+# the agent verbatim — the canned prompt never runs and its parameter
+# value (the issue or pull request URL) never arrives. Each prompt
+# therefore begins with the slash invocation and passes the URL the
+# dispatch kind fills (§forgejo/config/canned-prompts).
 actions:
   implement:
-    prompt: "implement {{.Repo}} {{.Kind}} {{.Number}}"
+    prompt: "/issue-implementer {{.IssueURL}}"
     persona: ui-test
     timeout: 1h
   reassess:
-    prompt: "reassess {{.Repo}} {{.Kind}} {{.Number}}"
+    prompt: "/issue-reassess {{.IssueURL}}"
     persona: ui-test
     timeout: 1h
   review:
-    prompt: "review {{.Repo}} {{.Kind}} {{.Number}}"
+    prompt: "/pr-reviewer {{.PRURL}}"
     persona: ui-test
     timeout: 1h
   re-review:
-    prompt: "re-review {{.Repo}} {{.Kind}} {{.Number}}"
+    prompt: "/pr-reviewer {{.PRURL}} (re-review)"
     persona: ui-test
     timeout: 1h
   fix-feedback:
-    prompt: "fix-feedback {{.Repo}} {{.Kind}} {{.Number}}"
+    prompt: "/pr-feedback-fixer {{.PRURL}}"
     persona: ui-test
     timeout: 1h
   merge-or-wait:
-    prompt: "merge-or-wait {{.Repo}} {{.Kind}} {{.Number}}"
+    prompt: "/pr-merger {{.PRURL}}"
     persona: ui-test
     timeout: 1h
   rebase:
-    prompt: "rebase {{.Repo}} {{.Kind}} {{.Number}}"
+    prompt: "/pr-rebase {{.PRURL}}"
     persona: ui-test
     timeout: 1h
   decompose:
-    prompt: "decompose {{.Repo}} {{.Kind}} {{.Number}}: the fan-out cap is 20 tickets per forest — cite this cap when refusing"
+    # The spec holds this template to naming the fan-out cap and
+    # requiring the agent to cite it when refusing
+    # (§forgejo/config/canned-prompts).
+    prompt: "/issue-decomposer {{.IssueURL}} (the fan-out cap is 20 tickets per forest — cite this cap when refusing)"
     persona: ui-test
     timeout: 1h
   wrap-up:
-    prompt: "wrap-up {{.Repo}} {{.Kind}} {{.Number}}"
+    prompt: "/issue-wrapper {{.IssueURL}}"
     persona: ui-test
     timeout: 1h
   reject-pr:
-    prompt: "reject-pr {{.Repo}} {{.Kind}} {{.Number}}"
+    prompt: "/pr-rejector {{.PRURL}}"
     persona: ui-test
     timeout: 1h
   teardown-forest:
-    prompt: "teardown-forest {{.Repo}} {{.Kind}} {{.Number}}"
+    prompt: "/forest-teardown {{.IssueURL}}"
     persona: ui-test
     timeout: 1h
   sync:
-    prompt: "sync {{.Repo}} {{.Kind}} {{.Number}}"
+    prompt: "/set-lander {{.IssueURL}}"
     persona: ui-test
     timeout: 1h
