@@ -109,7 +109,7 @@ func TestHTTPAdapter_AddTask_FailsOnBadStatus(t *testing.T) {
 	}
 }
 
-func TestHTTPAdapter_AddTask_InjectsTrackingID(t *testing.T) {
+func TestHTTPAdapter_AddTask_PassesPromptThroughUnmodified(t *testing.T) {
 	var receivedBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		buf := make([]byte, 4096)
@@ -136,12 +136,17 @@ func TestHTTPAdapter_AddTask_InjectsTrackingID(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify tracking ID was injected into the prompt
-	if !strings.Contains(receivedBody, "task-1") {
-		t.Error("expected task ID in request body")
+	// The prompt must reach the queue verbatim: no tracking ID annotation,
+	// and no task ID anywhere in the default body (the remote system
+	// generates its own; the ID lives in maitred's task log).
+	if !strings.Contains(receivedBody, `"research something"`) {
+		t.Errorf("expected prompt verbatim in request body, got %s", receivedBody)
 	}
-	if !strings.Contains(receivedBody, "internal maître d' tracking ID") {
-		t.Error("expected tracking ID annotation in prompt")
+	if strings.Contains(receivedBody, "tracking ID") {
+		t.Errorf("expected no tracking ID annotation in prompt, got %s", receivedBody)
+	}
+	if strings.Contains(receivedBody, "task-1") {
+		t.Errorf("expected no task ID in default request body, got %s", receivedBody)
 	}
 }
 
@@ -328,7 +333,7 @@ func TestHTTPAdapter_AddTask_EmptyPrompt(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Even with empty prompt, tracking ID should not be appended
+	// No tracking ID annotation is ever appended to the prompt.
 	if strings.Contains(receivedBody, "internal maître d' tracking ID") {
 		t.Error("expected no tracking ID annotation for empty prompt")
 	}

@@ -33,7 +33,7 @@ HTTP queue system.
   template as `.Payload`.
 - **Queue dispatch.** Tasks are dispatched through the `TaskQueueProvider`
   interface: an HTTP queue adapter (optional mTLS, optional custom task
-  template, internal tracking ID appended to the prompt) or, without a queue
+  template; the prompt is passed through verbatim) or, without a queue
   config, an in-memory queue. Tasks carry a prompt, capability tags, a timeout,
   an optional persona, and an optional dedup key — a queue system with
   de-duplication may squelch a submission whose key matches a still-pending
