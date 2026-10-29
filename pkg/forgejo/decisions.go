@@ -471,7 +471,7 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 		return holdOffNeverImplement(issue.Number, label)
 	}
 	if label := transientHoldOffLabel(issue.Labels); label != "" {
-		return holdOffForestSeeding(issue.Number)
+		return holdOffForestSeeding(issue.Number, label)
 	}
 	if hasLabel(issue, LabelTeardownForest) {
 		return holdOffTeardownWithoutRoot(issue.Number)
@@ -520,7 +520,7 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 		return holdOffNeverReassess(issue.Number, label)
 	}
 	if label := transientHoldOffLabel(issue.Labels); label != "" {
-		return holdOffForestSeeding(issue.Number)
+		return holdOffForestSeeding(issue.Number, label)
 	}
 	if hasLabel(issue, LabelTeardownForest) {
 		return holdOffTeardownWithoutRoot(issue.Number)
@@ -1026,7 +1026,7 @@ func cascadeActionFitsState(action Action, issue *Issue) (Decision, bool) {
 		return holdOffNeverImplement(issue.Number, label), false
 	}
 	if label := transientHoldOffLabel(issue.Labels); label != "" {
-		return holdOffForestSeeding(issue.Number), false
+		return holdOffForestSeeding(issue.Number, label), false
 	}
 	return Decision{}, true
 }
@@ -1509,10 +1509,11 @@ func holdOffNeverReassess(number int, label string) Decision {
 // neither implement nor reassess may dispatch until the decomposer
 // removes the label. The reason names the seeding lifecycle, not a
 // never- claim: the hold-off is a window the decomposer opens and
-// closes, not a property of the issue (§forgejo/decisions/transition-table,
-// s-git/maitred#125).
-func holdOffForestSeeding(number int) Decision {
-	return holdOff(fmt.Sprintf("issue %d carries %s; forest is seeding, not yet gated", number, LabelForestSeeding))
+// closes, not a property of the issue. The reason names the label that
+// was hit, so the two stay tied together as the list grows
+// (§forgejo/decisions/transition-table, s-git/maitred#125).
+func holdOffForestSeeding(number int, label string) Decision {
+	return holdOff(fmt.Sprintf("issue %d carries %s; forest is seeding, not yet gated", number, label))
 }
 
 // decomposerAuthored reports whether the issue was opened by the
