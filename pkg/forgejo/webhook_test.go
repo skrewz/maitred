@@ -160,27 +160,9 @@ func (f *fakeAPI) callCount(prefix string) int {
 	return n
 }
 
-// fixtureIssueURL fills the html_url a test left blank. The real API
-// always carries one, and the engine refuses a dispatch whose prompt
-// would then name no object (§forgejo/config/canned-prompts), so the
-// fakes answer the way Forgejo does.
-func fixtureIssueURL(owner, repo string, i Issue) Issue {
-	if i.HTMLURL == "" {
-		i.HTMLURL = "https://forge.example.com/" + owner + "/" + repo + "/issues/" + strconv.Itoa(i.Number)
-	}
-	return i
-}
-
-func fixturePullURL(owner, repo string, pr PullRequest) PullRequest {
-	if pr.HTMLURL == "" {
-		pr.HTMLURL = "https://forge.example.com/" + owner + "/" + repo + "/pulls/" + strconv.Itoa(pr.Number)
-	}
-	return pr
-}
-
 // withIssueURL fills the html_url a test left blank. The real API always
 // carries one, and the engine refuses a dispatch whose prompt would name
-// no object (§forgejo/config/canned-prompts), so the fake answers the way
+// no object (§forgejo/config/canned-prompts), so the fakes answer the way
 // Forgejo does.
 func withIssueURL(owner, repo string, i Issue) Issue {
 	if i.HTMLURL == "" {
