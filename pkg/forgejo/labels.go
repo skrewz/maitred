@@ -51,4 +51,15 @@ const (
 	// opt-ins, which the approval hold-off contains
 	// (§forgejo/decisions/sync-set).
 	LabelAgenticAutoMerge = "agentic-auto-merge"
+	// LabelForestSeeding is the transient hold-off on a newborn forest
+	// member: the decomposer attaches it atomically at the member's
+	// creation, wires the member's blocking edges, then removes it.
+	// While it is present the issue holds off from implement and
+	// reassess on every path, so no event can dispatch work before the
+	// forest's gate exists. It is not a kind label — the member IS a
+	// work item and will need reassess once commissioned, which an
+	// authorship hold-off would disable permanently; the label names
+	// only the seeding window (§forgejo/decisions/transition-table,
+	// s-git/maitred#125).
+	LabelForestSeeding = "forest-seeding"
 )
