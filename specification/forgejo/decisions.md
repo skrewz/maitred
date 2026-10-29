@@ -178,6 +178,7 @@ prompts:
 | issue opened / edited / labels changed (issue open, carries the `ideation` label) | `decompose` — the label makes the root, whatever the repository, the title, and the author (the root row wins over the authorship row); attaching the label is the *first* trigger. The event path keeps the revision-keyed watermark guard; the sweep is watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | issue comment (issue open, carries the `ideation` label) | hold off — a comment is not a revision of intent; the reason says so |
 | issue opened / edited / labels changed / comment (issue carries the `outcome` or `human-task` label) | hold off, naming the label — the sweep is where `wrap-up` fires (§forgejo/reconciliation/watermark-exemptions) |
+| issue opened / edited / labels changed / comment (issue open, carries the `forest-seeding` label) | hold off, naming the seeding window — a newborn forest member is dispatchable neither for `implement` nor for `reassess` until its blocking edges are wired and the decomposer removes the label (§forgejo/decisions/transition-table, §forgejo/decisions/commissioning) |
 | issue opened / edited / labels changed / comment (issue carries the `sync` label) | hold off, naming the label — the sweep is where a landing set's `sync` fires (§forgejo/reconciliation/watermark-exemptions, §forgejo/decisions/sync-set) |
 | issue edited / labels changed / feedback comment (issue open, all blockers closed) | `reassess` |
 | issue edited / labels changed / feedback comment (issue open, an open blocker) | hold off — the reason names the open blockers |
@@ -278,8 +279,31 @@ label: the `human-task` label marks a ticket claimed by a human and is
 never an `implement` candidate anywhere in the engine, the unblock
 cascade included (§forgejo/decisions/unblock-cascade). The role model
 (§forgejo/webhook/repository-roles) is the load-bearing boundary; this
-rule is insurance. The `teardown-forest` label is a **modifier of the root
-row**, not a kind label: it makes no issue a root, a tracker or a claim,
+rule is insurance.
+
+The `forest-seeding` label is a **transient hold-off**, not a kind
+claim and not a claim of *never*: the decomposer attaches it atomically
+at a newborn forest member's creation, wires the member's blocking
+edges, then removes it, and while it stands the member holds off from
+`implement` and `reassess` on every path — the opened and activity
+rows, the sweep, and the unblock cascade — so no event can dispatch
+work past a forest gate that does not yet exist. The label is therefore
+recognised by a **hold-off-label check separate from the
+never-work-item taxonomy**, called alongside it wherever that taxonomy
+is consulted: the two lists carry different semantics for future
+labels — *never work item* is permanent taxonomy, *hold off* a
+transient gate the decomposer opens and closes. The member WILL need
+`reassess` once commissioned, which is why the authorship hold-off is
+not used. The kind labels and `human-task` are tested first — what an
+issue *is* outweighs the window it happens to be seeding in — and
+`teardown-forest` after the transient gate. The hold-off reason names
+the window — `issue N carries forest-seeding; forest is seeding, not
+yet gated` — and the label's lifecycle belongs to the decomposer, the
+engine only observing it (§forgejo/decisions/commissioning,
+s-git/maitred#125).
+
+The `teardown-forest` label is a **modifier of the root row**, not a
+kind label: it makes no issue a root, a tracker or a claim,
 and on an issue without `ideation` it holds off naming that it modifies
 the root row. The kind labels are tested first, so an issue carrying
 `human-task` or `outcome` alongside it is described by what it *is*
@@ -567,10 +591,16 @@ cascades onward to the issues it blocks (A→B→C). It **terminates**
 without double-dispatching: each issue is visited once. The engine
 applies each cascaded key's own watermark before dispatching, so an
 already-dispatched `(action, revision)` is not re-dispatched. A
-cascaded key carrying `ideation` or `human-task` holds off, naming the
-label: it is decided by the sweep
+cascaded key carrying `ideation` or `human-task` holds off, naming
+the label: it is decided by the sweep
 (§forgejo/reconciliation/watermark-exemptions); a key carrying
-`outcome` dispatches `wrap-up`.
+`forest-seeding` holds off, naming the seeding window — and the sweep
+is *not* a backstop for such a member, because the authorship guard
+holds decomposer-authored issues off there too
+(§forgejo/decisions/loop-prevention); it is decided when the seeding
+window ends — the label removal is itself a `labels-changed` delivery,
+which the activity row turns into `reassess` once the member is
+unblocked; a key carrying `outcome` dispatches `wrap-up`.
 
 A newly unblocked `outcome` tracker dispatches `wrap-up`, never
 `implement`: a tracker is never an implement candidate anywhere in

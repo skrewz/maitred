@@ -354,6 +354,19 @@ func TestDecide(t *testing.T) {
 			state: State{Issue: labelledIssue(LabelHumanTask)},
 		},
 		{
+			// The seeding hold-off: a forest member created by the
+			// decomposer is not dispatchable until its blocking edges
+			// are wired and the label is removed (#125).
+			name:  "issue opened carrying forest-seeding holds off",
+			event: issueEvent(EventIssueOpened),
+			state: State{Issue: labelledIssue(LabelForestSeeding)},
+		},
+		{
+			name:  "reconciled issue carrying forest-seeding holds off",
+			event: issueEvent(EventReconcile),
+			state: State{Issue: labelledIssue(LabelForestSeeding)},
+		},
+		{
 			// The ideation branch is evaluated before the connected-PR
 			// check: a root is decomposed whatever else hangs off it.
 			name:       "an open ideation root with a connected open PR dispatches decompose",
@@ -461,6 +474,11 @@ func TestDecide(t *testing.T) {
 			name:  "issue commented carrying human-task holds off",
 			event: issueEvent(EventIssueCommented),
 			state: State{Issue: labelledIssue(LabelHumanTask)},
+		},
+		{
+			name:  "issue labels changed carrying forest-seeding holds off — reassess is denied during seeding",
+			event: issueEvent(EventIssueLabelsChanged),
+			state: State{Issue: labelledIssue(LabelForestSeeding)},
 		},
 		{
 			name:       "issue edited carrying an ordinary label dispatches reassess",
@@ -1729,6 +1747,12 @@ func TestCascadeActionFitsState(t *testing.T) {
 			wantReason: "issue 2 carries the ideation label; never an implement candidate",
 		},
 		{
+			name:       "implement is denied to a newborn forest member carrying forest-seeding",
+			action:     ActionImplement,
+			issue:      &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelForestSeeding}},
+			wantReason: "issue 2 carries forest-seeding; forest is seeding, not yet gated",
+		},
+		{
 			name:   "wrap-up fits the tracker it was classified for",
 			action: ActionWrapUp,
 			issue:  &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
@@ -2318,6 +2342,73 @@ func TestDecide_ReservedLabelHoldOffsNameTheLabel(t *testing.T) {
 			label := tt.state.Issue.Labels[0]
 			if !strings.Contains(d.Reason, label) || !strings.Contains(d.Reason, tt.wantReason) {
 				t.Errorf("hold-off reason = %q, want it to name %q and %q", d.Reason, label, tt.wantReason)
+			}
+		})
+	}
+}
+
+// TestDecide_ForestSeedingHoldOff pins the seeding-window hold-off: an
+// issue carrying the transient forest-seeding label holds off on every
+// path — opened, activity, and the sweep — with a reason naming the
+// seeding window rather than a never- claim, and the kind and claim
+// labels are still named first when carried alongside
+// (§forgejo/decisions/transition-table, s-git/maitred#125).
+func TestDecide_ForestSeedingHoldOff(t *testing.T) {
+	tests := []struct {
+		name       string
+		event      Event
+		state      State
+		wantReason string
+	}{
+		{
+			name:       "opened: implement denied while seeding",
+			event:      issueEvent(EventIssueOpened),
+			state:      State{Issue: labelledIssue(LabelForestSeeding)},
+			wantReason: "issue 7 carries forest-seeding; forest is seeding, not yet gated",
+		},
+		{
+			name:       "activity: reassess denied while seeding",
+			event:      issueEvent(EventIssueLabelsChanged),
+			state:      State{Issue: labelledIssue(LabelForestSeeding)},
+			wantReason: "issue 7 carries forest-seeding; forest is seeding, not yet gated",
+		},
+		{
+			name:       "sweep: the reconcile fall-through holds off too",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: labelledIssue(LabelForestSeeding)},
+			wantReason: "issue 7 carries forest-seeding; forest is seeding, not yet gated",
+		},
+		{
+			// The seeding label matches case-insensitively, as every
+			// reserved name does.
+			name:       "a label created as Forest-Seeding holds off too",
+			event:      issueEvent(EventIssueOpened),
+			state:      State{Issue: labelledIssue("Forest-Seeding")},
+			wantReason: "issue 7 carries forest-seeding; forest is seeding, not yet gated",
+		},
+		{
+			// A transient hold-off does not outrank what an issue *is*:
+			// the kind or claim label is named first.
+			name:       "outcome carried alongside forest-seeding is named first",
+			event:      issueEvent(EventIssueCommented),
+			state:      State{Issue: labelledIssue(LabelForestSeeding, LabelOutcome)},
+			wantReason: "issue 7 carries the outcome label; never a reassess candidate",
+		},
+		{
+			name:       "human-task carried alongside forest-seeding is named first",
+			event:      issueEvent(EventIssueOpened),
+			state:      State{Issue: labelledIssue(LabelForestSeeding, LabelHumanTask)},
+			wantReason: "issue 7 carries the human-task label; never an implement candidate",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := Decide(tt.event, tt.state, nil)
+			if !d.HoldOff() {
+				t.Fatalf("decision = %+v, want a hold-off", d)
+			}
+			if d.Reason != tt.wantReason {
+				t.Errorf("hold-off reason = %q, want %q", d.Reason, tt.wantReason)
 			}
 		})
 	}

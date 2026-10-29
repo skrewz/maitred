@@ -66,9 +66,10 @@ const LabelHumanTask = "human-task"
 
 // neverWorkItemLabel returns the issue label that denies the
 // implement and reassess actions, or "" when the issue may be an
-// implement or reassess candidate. Label names match
-// case-insensitively, and ideation is reported first: the
-// decompose-wins precedence applies to the hold-off reason too
+// implement or reassess candidate. The list is a permanent taxonomy:
+// each name says what the issue *is* — a root, a tracker, a grouping
+// issue, a human claim — not what it is *not yet*. A transient gate
+// is recognised by transientHoldOffLabel instead
 // (§forgejo/decisions/transition-table,
 // §forgejo/reconciliation/watermark-exemptions).
 func neverWorkItemLabel(labels []string) string {
@@ -78,6 +79,21 @@ func neverWorkItemLabel(labels []string) string {
 	}
 	if hasLabel(issue, LabelHumanTask) {
 		return LabelHumanTask
+	}
+	return ""
+}
+
+// transientHoldOffLabel returns the label whose presence holds the
+// issue off from implement and reassess *until the label is removed*,
+// as opposed to neverWorkItemLabel's permanent taxonomy of kind
+// claims: the decomposer opens the gate and closes it, and once the
+// label is gone the issue is an ordinary work item on every path
+// (§forgejo/decisions/transition-table, s-git/maitred#125). Like
+// hasLabel, names match case-insensitively.
+func transientHoldOffLabel(labels []string) string {
+	issue := &Issue{Labels: labels}
+	if hasLabel(issue, LabelForestSeeding) {
+		return LabelForestSeeding
 	}
 	return ""
 }
@@ -454,6 +470,9 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 	if label := neverWorkItemLabel(issue.Labels); label != "" {
 		return holdOffNeverImplement(issue.Number, label)
 	}
+	if label := transientHoldOffLabel(issue.Labels); label != "" {
+		return holdOffForestSeeding(issue.Number, label)
+	}
 	if hasLabel(issue, LabelTeardownForest) {
 		return holdOffTeardownWithoutRoot(issue.Number)
 	}
@@ -499,6 +518,9 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	}
 	if label := neverWorkItemLabel(issue.Labels); label != "" {
 		return holdOffNeverReassess(issue.Number, label)
+	}
+	if label := transientHoldOffLabel(issue.Labels); label != "" {
+		return holdOffForestSeeding(issue.Number, label)
 	}
 	if hasLabel(issue, LabelTeardownForest) {
 		return holdOffTeardownWithoutRoot(issue.Number)
@@ -984,10 +1006,12 @@ func trackerStillBlocked(issue *Issue, blockers []IssueNode) (CascadeHoldOff, bo
 // cascadeActionFitsState re-checks a cascade emission against the
 // re-fetched issue — the state wins over the graph data. An implement
 // emission is covered by the reserved-label insurance: a tracker is
-// never an implement candidate, the cascade included. A wrap-up
-// emission demands the issue still be an outcome tracker without
-// ideation; otherwise the sweep decides the issue afresh
-// (§forgejo/decisions/unblock-cascade).
+// never an implement candidate, the cascade included, and a newborn
+// forest member carries its transient gate into the walk, which
+// holds off there too (§forgejo/decisions/unblock-cascade,
+// s-git/maitred#125). A wrap-up emission demands the issue still be
+// an outcome tracker without ideation; otherwise the sweep decides
+// the issue afresh (§forgejo/decisions/unblock-cascade).
 func cascadeActionFitsState(action Action, issue *Issue) (Decision, bool) {
 	if action == ActionWrapUp {
 		switch {
@@ -1000,6 +1024,9 @@ func cascadeActionFitsState(action Action, issue *Issue) (Decision, bool) {
 	}
 	if label := neverWorkItemLabel(issue.Labels); label != "" {
 		return holdOffNeverImplement(issue.Number, label), false
+	}
+	if label := transientHoldOffLabel(issue.Labels); label != "" {
+		return holdOffForestSeeding(issue.Number, label), false
 	}
 	return Decision{}, true
 }
@@ -1467,13 +1494,26 @@ func holdOffActionInadmissible(a Action, repo string) Decision {
 }
 
 // holdOffNeverImplement and holdOffNeverReassess are the reserved-label
-// insurance hold-offs (§forgejo/decisions/transition-table).
+// insurance hold-offs: the permanent taxonomy, where the label says
+// what the issue *is* (§forgejo/decisions/transition-table).
 func holdOffNeverImplement(number int, label string) Decision {
 	return holdOff(fmt.Sprintf("issue %d carries the %s label; never an implement candidate", number, label))
 }
 
 func holdOffNeverReassess(number int, label string) Decision {
 	return holdOff(fmt.Sprintf("issue %d carries the %s label; never a reassess candidate", number, label))
+}
+
+// holdOffForestSeeding names the transient gate: the member exists,
+// but the forest's gate — its blocking edges — is not yet wired, so
+// neither implement nor reassess may dispatch until the decomposer
+// removes the label. The reason names the seeding lifecycle, not a
+// never- claim: the hold-off is a window the decomposer opens and
+// closes, not a property of the issue. The reason names the label that
+// was hit, so the two stay tied together as the list grows
+// (§forgejo/decisions/transition-table, s-git/maitred#125).
+func holdOffForestSeeding(number int, label string) Decision {
+	return holdOff(fmt.Sprintf("issue %d carries %s; forest is seeding, not yet gated", number, label))
 }
 
 // decomposerAuthored reports whether the issue was opened by the
