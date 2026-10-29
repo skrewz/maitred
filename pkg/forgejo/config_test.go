@@ -477,6 +477,26 @@ func TestShippedSampleConfigPromptsInvokeCannedPrompts(t *testing.T) {
 		ActionSync:           true,
 	}
 
+	// The canned prompt each action invokes. The names are the
+	// convention §forgejo/config/canned-prompts pins, so the sample, the
+	// spec and the deployment stay on one page: when no template of that
+	// name exists the message travels verbatim and nothing expands —
+	// the failure #121 reported, and silent.
+	command := map[Action]string{
+		ActionImplement:      "issue-implementer",
+		ActionReassess:       "issue-reassess",
+		ActionReview:         "pr-reviewer",
+		ActionReReview:       "pr-reviewer",
+		ActionFixFeedback:    "pr-feedback-fixer",
+		ActionMergeOrWait:    "pr-merger",
+		ActionRebase:         "pr-rebase",
+		ActionDecompose:      "issue-decomposer",
+		ActionWrapUp:         "issue-wrapper",
+		ActionRejectPR:       "pr-rejector",
+		ActionTeardownForest: "forest-teardown",
+		ActionSync:           "set-lander",
+	}
+
 	for _, a := range AllActions {
 		pc, ok := cfg.Actions[string(a)]
 		if !ok {
@@ -494,12 +514,23 @@ func TestShippedSampleConfigPromptsInvokeCannedPrompts(t *testing.T) {
 		if !strings.Contains(pc.Prompt, want) {
 			t.Errorf("action %q: prompt %q carries no %s — the dispatch would name no object for the agent to act on", a, pc.Prompt, want)
 		}
+		if head := "/" + command[a] + " "; !strings.HasPrefix(pc.Prompt, head) {
+			t.Errorf("action %q: prompt %q does not invoke %s — the spec pins that name, and an unmatched command reaches the persona unexpanded", a, pc.Prompt, head)
+		}
 		// Text beyond the command and its URL argument must be quoted,
 		// or it reaches the persona as loose positional arguments the
 		// template may well never render (§forgejo/config/canned-prompts).
 		if bare := strings.TrimSpace(quotedSpan.ReplaceAllString(rest[cannedPromptInvocation.SubexpIndex("args")], "")); bare != "" {
 			t.Errorf("action %q: prompt %q passes %s unquoted — Pi splits arguments on whitespace, so the template would see a scatter of positionals instead of one sentence", a, pc.Prompt, bare)
 		}
+	}
+
+	// A re-review has to say so in text the template can render: an
+	// unquoted marker splits into two positionals a template reading only
+	// $1 drops, leaving a re-review indistinguishable from a first review.
+	reReview := cfg.Actions[string(ActionReReview)].Prompt
+	if !strings.Contains(reReview, `"re-review"`) {
+		t.Errorf("re-review prompt %q does not pass the marker as one quoted argument", reReview)
 	}
 
 	// The decompose template is held to naming the fan-out cap

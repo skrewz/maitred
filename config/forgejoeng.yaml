@@ -15,7 +15,10 @@ decomposer_identity: decomposer
 # the agent verbatim — the canned prompt never runs and its parameter
 # value (the issue or pull request URL) never arrives. Each prompt
 # therefore begins with the slash invocation and passes the URL the
-# dispatch kind fills (§forgejo/config/canned-prompts).
+# dispatch kind fills (§forgejo/config/canned-prompts). The command names
+# are the convention §forgejo/config/canned-prompts pins: the persona's Pi
+# prompt directory must hold a template of that name, or Pi passes the
+# message verbatim and nothing expands.
 actions:
   implement:
     prompt: "/issue-implementer {{.IssueURL}}"

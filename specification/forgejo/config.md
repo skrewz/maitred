@@ -39,6 +39,29 @@ that reads `$1` for the URL never renders — the extra text would vanish
 as quietly as a missing slash does. One pair of double quotes makes the
 sentence one argument.
 
+The template name is part of the contract. The persona's Pi prompt
+directory must hold a template of that name, because Pi falls back to
+passing the message verbatim when no template matches: a typo or a
+missing command reproduces the silent no-expansion failure above, with no
+error anywhere. This repository pins the names the deployment is expected
+to follow; where a deployment uses others, it records them with the
+config it deploys (§forgejo/config/loading).
+
+| Action | Canned prompt |
+|---|---|
+| `implement` | `/issue-implementer` |
+| `reassess` | `/issue-reassess` |
+| `review` | `/pr-reviewer` |
+| `re-review` | `/pr-reviewer`, with `"re-review"` as a further argument |
+| `fix-feedback` | `/pr-feedback-fixer` |
+| `merge-or-wait` | `/pr-merger` |
+| `rebase` | `/pr-rebase` |
+| `decompose` | `/issue-decomposer` |
+| `wrap-up` | `/issue-wrapper` |
+| `reject-pr` | `/pr-rejector` |
+| `teardown-forest` | `/forest-teardown` |
+| `sync` | `/set-lander` |
+
 The `decompose` prompt template is held to one content requirement: it
 must **name the fan-out cap** — at most 20 tickets per forest — and
 require the agent to **cite the cap when refusing** to fan out further
