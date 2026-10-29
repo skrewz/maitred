@@ -62,6 +62,15 @@ config it deploys (§forgejo/config/loading).
 | `teardown-forest` | `/forest-teardown` |
 | `sync` | `/set-lander` |
 
+A prompt that asks for a URL the state cannot fill is a dispatch with no
+object: the invocation would read `/issue-implementer ` and Pi reports
+nothing over a command with no parameters. The engine therefore fails
+such a dispatch at dispatch time rather than enqueueing it
+(§forgejo/webhook/the-pipeline) — loud where a mis-set state would
+otherwise be silent. It is a dispatch-time rule, not a load-time one: it
+catches the state that carries no object without ever refusing to start
+over a config that has yet to be rewritten (§forgejo/config/validation).
+
 The `decompose` prompt template is held to one content requirement: it
 must **name the fan-out cap** — at most 20 tickets per forest — and
 require the agent to **cite the cap when refusing** to fan out further

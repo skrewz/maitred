@@ -500,6 +500,38 @@ func (e *Engine) fillNode(issue *Issue, visited map[Key]bool) (*IssueNode, error
 	return node, nil
 }
 
+// urlArguments counts the URL placeholders a prompt template references
+// and how many of them this dispatch fills. The count is textual on
+// purpose: what matters is whether the prompt asks for a URL at all and
+// whether any arrived — not which action asked, which would make the
+// engine duplicate the decision table's kinds
+// (§forgejo/decisions/transition-table).
+//
+// A prompt that asks for a URL and receives none renders as a command
+// with no argument: the persona is handed "/issue-implementer " and Pi
+// raises nothing over it, which is the silent half of #121. Failing the
+// dispatch is the loud alternative, and unlike a load-time rule it costs
+// no deployment whose config is not yet fixed (§forgejo/config/canned-prompts).
+func urlArguments(prompt string, p Placeholders) (referenced, filled int) {
+	for _, u := range []struct {
+		field string
+		value string
+	}{
+		{".IssueURL", p.IssueURL},
+		{".PRURL", p.PRURL},
+	} {
+		// Matched on the field name rather than one spelling of the
+		// reference, so "{{ .IssueURL }}" counts as readily as "{{.IssueURL}}".
+		if strings.Contains(prompt, u.field) {
+			referenced++
+			if u.value != "" {
+				filled++
+			}
+		}
+	}
+	return referenced, filled
+}
+
 // dispatch fills the action's canned prompt and enqueues the task, with
 // the dedup key of the dispatch identity — the key's repo, kind, and
 // number, the action, and the revision — so a queue system with
@@ -530,6 +562,9 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	prompt, err := pc.Render(p)
 	if err != nil {
 		return err
+	}
+	if referenced, filled := urlArguments(pc.Prompt, p); referenced > 0 && filled == 0 {
+		return fmt.Errorf("dispatch %s for %s: the canned prompt references a URL placeholder but the state carries no URL — refusing to enqueue an invocation that names no object", action, ev.KeyOf())
 	}
 	rev := revisionFor(ev, st)
 	task := &queue.Task{
