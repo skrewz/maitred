@@ -31,7 +31,13 @@ with no issue URL at all. Every prompt template therefore begins with
 the slash invocation and passes the object of the dispatch as its
 argument — `.IssueURL` for the issue-path actions, `.PRURL` for the
 PR-path ones. Text the config must state besides the URL (the fan-out
-cap below, for instance) rides along as further arguments.
+cap below, for instance) rides along as further arguments, **quoted**.
+Pi tokenises an invocation's arguments on whitespace, respecting quotes
+only, and a template body renders just the placeholders it names, so
+unquoted text arrives as a scatter of positional arguments a template
+that reads `$1` for the URL never renders — the extra text would vanish
+as quietly as a missing slash does. One pair of double quotes makes the
+sentence one argument.
 
 The `decompose` prompt template is held to one content requirement: it
 must **name the fan-out cap** — at most 20 tickets per forest — and

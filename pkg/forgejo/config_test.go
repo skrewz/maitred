@@ -3,6 +3,7 @@ package forgejo
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -430,6 +431,18 @@ func TestShippedSampleConfigIsValid(t *testing.T) {
 	}
 }
 
+// cannedPromptInvocation is the shape §forgejo/config/canned-prompts
+// pins: a slash invocation, the URL placeholder as its argument, then
+// any further arguments. A regexp rather than a Contains — a prompt that
+// merely mentions the placeholder, before the command or with a URL of
+// the wrong dispatch kind, must not pass.
+var cannedPromptInvocation = regexp.MustCompile(`^/[a-z0-9-]+ \{\{\.(?:IssueURL|PRURL)\}\}(?P<args> .*)?$`)
+
+// quotedSpan is one quoted argument of an invocation. Pi tokenises
+// arguments on whitespace, respecting quotes only, so any further text
+// has to sit inside a pair of them (§forgejo/config/canned-prompts).
+var quotedSpan = regexp.MustCompile(`"[^"]*"`)
+
 // TestShippedSampleConfigPromptsInvokeCannedPrompts pins the shape the
 // canned prompts must keep: Pi expands a prompt template only when the
 // dispatched message starts with "/<template-name>" (pi's prompt-template
@@ -441,6 +454,10 @@ func TestShippedSampleConfigIsValid(t *testing.T) {
 // slash invocation and carries the URL its dispatch kind fills —
 // .IssueURL for the issue-path actions, .PRURL for the PR-path ones
 // (§forgejo/config/canned-prompts, §forgejo/decisions/actions).
+//
+// Any further text the config must state rides quoted: the template body
+// renders only the placeholders it names, so an unquoted sentence arrives
+// as loose positional arguments a template reading $1 alone discards.
 func TestShippedSampleConfigPromptsInvokeCannedPrompts(t *testing.T) {
 	cfg, err := LoadConfig(filepath.Join("..", "..", "config", "forgejoeng.yaml"))
 	if err != nil {
@@ -465,8 +482,10 @@ func TestShippedSampleConfigPromptsInvokeCannedPrompts(t *testing.T) {
 		if !ok {
 			t.Fatalf("sample config has no %q block", a)
 		}
-		if !strings.HasPrefix(pc.Prompt, "/") {
-			t.Errorf("action %q: prompt %q does not start with '/' — Pi sends it verbatim and the canned prompt is never invoked", a, pc.Prompt)
+		rest := cannedPromptInvocation.FindStringSubmatch(pc.Prompt)
+		if rest == nil {
+			t.Errorf("action %q: prompt %q is not a slash invocation with a URL placeholder as its argument — Pi would send it verbatim and the canned prompt would never be invoked", a, pc.Prompt)
+			continue
 		}
 		want := "{{.PRURL}}"
 		if issuePath[a] {
@@ -475,13 +494,29 @@ func TestShippedSampleConfigPromptsInvokeCannedPrompts(t *testing.T) {
 		if !strings.Contains(pc.Prompt, want) {
 			t.Errorf("action %q: prompt %q carries no %s — the dispatch would name no object for the agent to act on", a, pc.Prompt, want)
 		}
+		// Text beyond the command and its URL argument must be quoted,
+		// or it reaches the persona as loose positional arguments the
+		// template may well never render (§forgejo/config/canned-prompts).
+		if bare := strings.TrimSpace(quotedSpan.ReplaceAllString(rest[cannedPromptInvocation.SubexpIndex("args")], "")); bare != "" {
+			t.Errorf("action %q: prompt %q passes %s unquoted — Pi splits arguments on whitespace, so the template would see a scatter of positionals instead of one sentence", a, pc.Prompt, bare)
+		}
 	}
 
 	// The decompose template is held to naming the fan-out cap
 	// (§forgejo/config/canned-prompts): the agent must be told the
-	// number and told to cite it when refusing.
+	// number and told to cite it when refusing — told, that is, in text
+	// that survives the argument tokenisation.
 	decompose := cfg.Actions[string(ActionDecompose)].Prompt
 	if !strings.Contains(decompose, "20") || !strings.Contains(strings.ToLower(decompose), "cap") {
 		t.Errorf("decompose prompt %q does not name the fan-out cap", decompose)
+	}
+	quoted := false
+	for _, span := range quotedSpan.FindAllString(decompose, -1) {
+		if strings.Contains(span, "20") && strings.Contains(strings.ToLower(span), "cap") {
+			quoted = true
+		}
+	}
+	if !quoted {
+		t.Errorf("decompose prompt %q states the fan-out cap outside quotes, where Pi's argument splitting can drop it", decompose)
 	}
 }

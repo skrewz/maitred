@@ -30,7 +30,7 @@ actions:
     persona: ui-test
     timeout: 1h
   re-review:
-    prompt: "/pr-reviewer {{.PRURL}} (re-review)"
+    prompt: '/pr-reviewer {{.PRURL}} "re-review"'
     persona: ui-test
     timeout: 1h
   fix-feedback:
@@ -48,8 +48,11 @@ actions:
   decompose:
     # The spec holds this template to naming the fan-out cap and
     # requiring the agent to cite it when refusing
-    # (§forgejo/config/canned-prompts).
-    prompt: "/issue-decomposer {{.IssueURL}} (the fan-out cap is 20 tickets per forest — cite this cap when refusing)"
+    # (§forgejo/config/canned-prompts). Pi splits an invocation's
+    # arguments on whitespace, so the text rides quoted — unquoted it
+    # arrives as a dozen positional arguments a template reading only
+    # $1 never renders.
+    prompt: '/issue-decomposer {{.IssueURL}} "the fan-out cap is 20 tickets per forest — cite this cap when refusing"'
     persona: ui-test
     timeout: 1h
   wrap-up:
