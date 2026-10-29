@@ -156,11 +156,12 @@ func NewHTTPAdapter(cfg AdapterConfig, logger *log.Logger) (*HTTPAdapter, error)
 // It renders the task template with the task's fields and POSTs the
 // resulting JSON to the configured endpoint.
 func (a *HTTPAdapter) AddTask(task *Task) error {
-	// Inject internal tracking ID into the prompt
-	prompt := task.Prompt
-	if prompt != "" {
-		prompt = prompt + "\n(internal maître d' tracking ID: " + task.ID + ")"
-	}
+	// The prompt is passed through verbatim. The task ID is not injected
+	// into the prompt text: prompt-template expansion in the downstream
+	// agent consumes the whole message (so an appended suffix would be
+	// silently discarded and could pollute positional-argument parsing).
+	// The task ID remains available in maitred's task log and in the
+	// structured payload's ID field.
 
 	// Render the task template
 	var buf bytes.Buffer
@@ -173,7 +174,7 @@ func (a *HTTPAdapter) AddTask(task *Task) error {
 		DedupKey string
 	}{
 		ID:       task.ID,
-		Prompt:   prompt,
+		Prompt:   task.Prompt,
 		Tags:     task.Tags,
 		Timeout:  task.Timeout,
 		Persona:  task.Persona,

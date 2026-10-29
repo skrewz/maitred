@@ -188,16 +188,19 @@ task_template: |
 ```
 
 The default template omits the `id` field — the remote system is expected
-to generate its own. The adapter injects an internal tracking ID into the
-end of the prompt (`\n(internal maître d' tracking ID: <id>)`), enabling
-reverse-tracing of tasks across systems.
+to generate its own. The adapter passes the prompt through verbatim; the
+task ID is deliberately not appended to the prompt text (a trailing
+suffix would be discarded by prompt-template expansion in the downstream
+agent, and could be mis-parsed as a positional argument). For tracing,
+the task ID is logged on every dispatch and remains available to custom
+templates via `.ID`.
 
 **Task template variables** (available in `task_template`):
 
 | Variable | Type | Description |
 |----------|------|-------------|
 | `.ID` | `string` | Internal task ID (UUID) |
-| `.Prompt` | `string` | Evaluated prompt (with tracking ID appended) |
+| `.Prompt` | `string` | Evaluated prompt (passed through verbatim) |
 | `.Tags` | `[]string` | Capability tags from the trigger definition |
 | `.Timeout` | `int` | Task timeout in seconds (0 = unlimited) |
 | `.Persona` | `string` | Persona name (empty unless the dispatch sets one) |
