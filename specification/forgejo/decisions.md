@@ -65,6 +65,19 @@ sets that root created, retracting the edges as it goes. The root itself
 is never deleted — it is the human's issue, and the human closes it once
 the teardown is reported.
 
+**A switch, not a message.** The label states what to do *now*; it
+carries no history and no verdict on the idea, and both of its
+transitions are ordinary events on the same root. **Adding** it orders
+the teardown; **removing** it leaves an open `ideation` root, which is
+the root row, which dispatches `decompose`
+(§forgejo/decisions/transition-table). A human flips it often and
+cheaply — an empty teardown is a run that deletes nothing, a rebuilt
+forest is one curation run, and either can be reversed with the same two
+clicks — so the engine draws no inference from the direction a label
+moved, and offers no hold-off waiting for prose to explain what the
+label already states. The two rows never fight: teardown wins while the
+label stands and the root row resumes the moment it does not.
+
 **Pre-closure only.** An `ideation` issue's closure *commissions* the
 forest (§forgejo/decisions/commissioning), and commissioning is one way.
 A closed root holds off on every row, teardown label included: the
@@ -175,7 +188,7 @@ prompts:
 | issue opened / edited / labels changed (issue open, carries both the `ideation` and the `teardown-forest` label, blocks at least one issue) | `teardown-forest` — the teardown row wins over the root's `decompose` row, so a forest under teardown is never re-commissioned while it is being deleted (§forgejo/decisions/forest-teardown) |
 | issue opened / edited / labels changed (issue open, carries both labels, blocks no issue) | hold off, naming the empty forest — the engine can see there is nothing to delete, so no agent is asked to discover it (§forgejo/decisions/forest-teardown) |
 | issue opened / edited / labels changed / comment (issue open, carries the `teardown-forest` label without `ideation`) | hold off, naming that the label modifies the root row and retires no work item — a kind label carried alongside is named first, since what an issue *is* outweighs what a label *modifies* (§forgejo/decisions/forest-teardown) |
-| issue opened / edited / labels changed (issue open, carries the `ideation` label) | `decompose` — the label makes the root, whatever the repository, the title, and the author (the root row wins over the authorship row); attaching the label is the *first* trigger. The event path keeps the revision-keyed watermark guard; the sweep is watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
+| issue opened / edited / labels changed (issue open, carries the `ideation` label, and — for the labels-changed event — no longer carries `teardown-forest`) | `decompose` — the label makes the root, whatever the repository, the title, and the author (the root row wins over the authorship row); attaching the label is the *first* trigger. The event path keeps the revision-keyed watermark guard; the sweep is watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | issue comment (issue open, carries the `ideation` label) | hold off — a comment is not a revision of intent; the reason says so |
 | issue opened / edited / labels changed / comment (issue carries the `outcome` or `human-task` label) | hold off, naming the label — the sweep is where `wrap-up` fires (§forgejo/reconciliation/watermark-exemptions) |
 | issue opened / edited / labels changed / comment (issue open, carries the `forest-seeding` label) | hold off, naming the seeding window — a newborn forest member is dispatchable neither for `implement` nor for `reassess` until its blocking edges are wired and the decomposer removes the label (§forgejo/decisions/transition-table, §forgejo/decisions/commissioning) |
