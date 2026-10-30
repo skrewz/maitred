@@ -2920,6 +2920,36 @@ func TestDecide_TeardownRefiresOnTheSweepWhateverTheWatermark(t *testing.T) {
 	}
 }
 
+// TestDecide_TeardownLabelRemovalIsTheRootRowResuming pins the
+// switch's other transition: an open ideation root that no longer
+// carries teardown-forest is the root row, not a third state needing
+// explanation. It dispatches decompose arriving as a labels-changed
+// event and as a sweep row, the reason names the root, and a watermark
+// already holding a teardown-forest key for the revision stops neither:
+// the label states what to do now and carries no history
+// (§forgejo/decisions/forest-teardown, §forgejo/decisions/transition-table).
+func TestDecide_TeardownLabelRemovalIsTheRootRowResuming(t *testing.T) {
+	root := ideationIssue()
+	w := &Watermark{Action: string(ActionTeardownForest), Revision: issueRevision(root)}
+	for _, tc := range []struct {
+		name  string
+		event Event
+	}{
+		{"a labels-changed event dropping the label is the root row", issueEvent(EventIssueLabelsChanged)},
+		{"the sweep row resumes whatever the watermark holds", Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: root.Number}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := Decide(tc.event, State{Issue: root, Blocked: standingForest()}, w)
+			if d.Action != ActionDecompose {
+				t.Errorf("action = %q, want %q (%s)", d.Action, ActionDecompose, d.Reason)
+			}
+			if !strings.Contains(d.Reason, fmt.Sprintf("%d", root.Number)) {
+				t.Errorf("reason = %q, want the root named by number", d.Reason)
+			}
+		})
+	}
+}
+
 // TestDecide_TeardownDispatchesOnlyWhileTheForestStands pins the
 // emptiness test: the engine can see whether the root blocks anything,
 // so an empty forest — never decomposed, or already deleted — dispatches
