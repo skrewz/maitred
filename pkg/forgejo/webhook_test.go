@@ -2748,18 +2748,14 @@ func TestHandler_IssueClosed_CascadePROutOfRemit(t *testing.T) {
 	}
 }
 
-// TestHandler_IssueOpened_DecomposerAuthoredHoldsOff: a forest member
-// the decomposer authored reaches the engine before its blocker edge is
-// attached, so the re-fetch sees no blockers — the authorship rule is
-// what keeps the engine from dispatching implement for work that is not
-// yet commissioned. The hold-off is recorded in the decision log naming
-// the authorship and records no watermark
-// (§forgejo/decisions/loop-prevention,
-// §forgejo/observability/the-decision-log).
-func TestHandler_IssueOpened_DecomposerAuthoredHoldsOff(t *testing.T) {
-	var log bytes.Buffer
-	eng, api, q, store := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log, nil)))
-	eng.cfg.DecomposerIdentity = "decomposer"
+// TestHandler_IssueOpened_DecomposerAuthoredImplements: an open,
+// unblocked issue authored by the decomposer, carrying no
+// forest-seeding label and no connected PR, is an implement candidate
+// on the opened path like any other work item: authorship is no gate —
+// the seeding label is (s-git/maitred#135,
+// §forgejo/decisions/transition-table).
+func TestHandler_IssueOpened_DecomposerAuthoredImplements(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
 	member := testIssue(7, "open")
 	member.Author = "decomposer"
 	api.issues[7] = member
@@ -2768,13 +2764,47 @@ func TestHandler_IssueOpened_DecomposerAuthoredHoldsOff(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", rec.Code)
 	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks for an unblocked decomposer-authored member, want 1 (implement)", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=implement") {
+		t.Errorf("prompt = %q, want the implement action", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 7})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w == nil {
+		t.Errorf("watermark = nil, want the dispatched implement revision")
+	}
+}
+
+// TestHandler_IssueOpened_ForestSeedingHoldsOff: the companion of the
+// gate — a newborn member the decomposer authored, still carrying
+// forest-seeding, holds off while its blocking edges are being wired:
+// the re-fetch sees no blockers yet, and the label — not the author —
+// keeps implement from dispatching vacuously
+// (§forgejo/decisions/transition-table, s-git/maitred#125).
+func TestHandler_IssueOpened_ForestSeedingHoldsOff(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, q, store := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log, nil)))
+	member := testIssue(7, "open")
+	member.Author = "decomposer"
+	member.Labels = []string{LabelForestSeeding}
+	api.issues[7] = member
+
+	rec := serve(t, NewHandler(eng, "s3cret", nil), signedRequest(t, "s3cret", "issues", "opened", issuePayload("o/r", 7, "opened")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
 	if tasks := q.all(); len(tasks) != 0 {
-		t.Fatalf("got %d tasks for a decomposer-authored issue, want none", len(tasks))
+		t.Fatalf("got %d tasks for a forest-seeding member, want none", len(tasks))
 	}
 	entry := findEntry(t, parseLogLines(t, log.Bytes()), "decision")
 	reason, _ := entry["reason"].(string)
-	if !strings.Contains(reason, "authored by the decomposer") || !strings.Contains(reason, "decomposer") {
-		t.Errorf("hold-off reason = %q, want it to name the authorship", reason)
+	if !strings.Contains(reason, "forest-seeding") {
+		t.Errorf("hold-off reason = %q, want it to name the seeding window", reason)
 	}
 	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 7})
 	if err != nil {
@@ -2787,11 +2817,10 @@ func TestHandler_IssueOpened_DecomposerAuthoredHoldsOff(t *testing.T) {
 
 // TestHandler_IssueOpened_OtherAuthorImplements: an issue authored by
 // anyone else, with no blockers and no connected PR, is an implement
-// candidate as before, identity configured or not
-// (§forgejo/decisions/loop-prevention).
+// candidate as before; authorship is not read at all
+// (§forgejo/decisions/transition-table, s-git/maitred#135).
 func TestHandler_IssueOpened_OtherAuthorImplements(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
-	eng.cfg.DecomposerIdentity = "decomposer"
 	member := testIssue(7, "open")
 	member.Author = "alice"
 	api.issues[7] = member
@@ -2809,33 +2838,13 @@ func TestHandler_IssueOpened_OtherAuthorImplements(t *testing.T) {
 	}
 }
 
-// TestHandler_IssueOpened_AuthorshipRuleInertWithoutIdentity: with no
-// decomposer identity configured the rule is inert and a
-// decomposer-named author is an implement candidate as any other
-// (§forgejo/config/decomposer-identity, §forgejo/decisions/loop-prevention).
-func TestHandler_IssueOpened_AuthorshipRuleInertWithoutIdentity(t *testing.T) {
-	eng, api, q, _ := newTestEngine(t)
-	member := testIssue(7, "open")
-	member.Author = "decomposer"
-	api.issues[7] = member
-
-	rec := serve(t, NewHandler(eng, "s3cret", nil), signedRequest(t, "s3cret", "issues", "opened", issuePayload("o/r", 7, "opened")))
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204", rec.Code)
-	}
-	if tasks := q.all(); len(tasks) != 1 {
-		t.Fatalf("got %d tasks, want 1 (the rule is inert with no identity configured)", len(tasks))
-	}
-}
-
 // TestHandler_IssueClosed_CascadeUnblocksDecomposerAuthoredMember: the
-// cascade path is not narrowed by the authorship rule — the ideation
+// cascade is un-narrowed, not widened — the ideation
 // ticket closing dispatches implement for the member the decomposer
-// authored (§forgejo/decisions/loop-prevention,
+// authored (§forgejo/decisions/transition-table,
 // §forgejo/decisions/unblock-cascade).
 func TestHandler_IssueClosed_CascadeUnblocksDecomposerAuthoredMember(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
-	eng.cfg.DecomposerIdentity = "decomposer"
 	// Issue 7 (the ideation ticket, closed) blocks issue 10 (the member,
 	// authored by the decomposer); 10's only blocker is 7.
 	api.issues[7] = testIssue(7, "closed")

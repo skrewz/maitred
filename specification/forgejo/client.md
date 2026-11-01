@@ -22,10 +22,11 @@ authenticated with a bearer token:
 | list a pull request's reviews (event + author + commit) | the review transitions |
 
 Issue responses also report **who opened the issue** (`user.login`): the
-author is the fact the authorship rule compares against, because it is the
-only fact about a forest member that is true at the instant it is created
-(§forgejo/decisions/loop-prevention). A response without a `user` object
-yields an empty author, which matches no configured identity.
+author is carried on the issue model and read by nothing in the engine
+— no decision compares it against any identity, since the authorship
+guard was retired in favour of the `forest-seeding` hold-off
+(§forgejo/decisions/transition-table, s-git/maitred#135). A response
+without a `user` object yields an empty author.
 
 Issue responses also report **whether the issue is a pull request** —
 Forgejo represents pull requests as issues, and the API marks them with a

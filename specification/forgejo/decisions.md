@@ -165,7 +165,7 @@ prompts:
 
 | Action | Dispatched when |
 |---|---|
-| `implement` | the issue is open, unblocked (all its blockers closed), has no connected open PR, carries no reserved label, and is not authored by the configured decomposer identity — the issue was opened or became unblocked, and is not an `outcome` tracker (one that becomes unblocked is a `wrap-up` candidate) |
+| `implement` | the issue is open, unblocked (all its blockers closed), has no connected open PR, carries no reserved label and does not carry `forest-seeding`, and is not an `outcome` tracker (one that becomes unblocked is a `wrap-up` candidate) — the issue was opened, became unblocked, or was reconciled into that state (§forgejo/decisions/loop-prevention, §forgejo/decisions/commissioning) |
 | `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement), and it carries no reserved label |
 | `review` | a mergeable PR opened, or synced while it has no review, or an open mergeable PR carrying the `trigger-review` label while it has no review (§forgejo/decisions/label-triggered-review) |
 | `re-review` | a mergeable PR synced while it has a review, or an open mergeable PR carrying the `trigger-review` label while it has a review (§forgejo/decisions/label-triggered-review) |
@@ -183,12 +183,11 @@ prompts:
 | When (event + re-fetched state) | Decision |
 |---|---|
 | issue opened (open, all blockers closed, no connected PR) | `implement` |
-| issue opened (open, authored by the configured decomposer identity) | hold off — the reason names the authorship; only the unblock cascade unblocks it |
 | issue opened (blocked, or a connected open PR, or not open) | hold off |
 | issue opened / edited / labels changed (issue open, carries both the `ideation` and the `teardown-forest` label, blocks at least one issue) | `teardown-forest` — the teardown row wins over the root's `decompose` row, so a forest under teardown is never re-commissioned while it is being deleted (§forgejo/decisions/forest-teardown) |
 | issue opened / edited / labels changed (issue open, carries both labels, blocks no issue) | hold off, naming the empty forest — the engine can see there is nothing to delete, so no agent is asked to discover it (§forgejo/decisions/forest-teardown) |
 | issue opened / edited / labels changed / comment (issue open, carries the `teardown-forest` label without `ideation`) | hold off, naming that the label modifies the root row and retires no work item — a kind label carried alongside is named first, since what an issue *is* outweighs what a label *modifies* (§forgejo/decisions/forest-teardown) |
-| issue opened / edited / labels changed (issue open, carries the `ideation` label, and — for the labels-changed event — no longer carries `teardown-forest`) | `decompose` — the label makes the root, whatever the repository, the title, and the author (the root row wins over the authorship row); attaching the label is the *first* trigger. The event path keeps the revision-keyed watermark guard; the sweep is watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
+| issue opened / edited / labels changed (issue open, carries the `ideation` label, and — for the labels-changed event — no longer carries `teardown-forest`) | `decompose` — the label makes the root, whatever the repository and the title; attaching the label is the *first* trigger. The event path keeps the revision-keyed watermark guard; the sweep is watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | issue comment (issue open, carries the `ideation` label) | hold off — a comment is not a revision of intent; the reason says so |
 | issue opened / edited / labels changed / comment (issue carries the `outcome` or `human-task` label) | hold off, naming the label — the sweep is where `wrap-up` fires (§forgejo/reconciliation/watermark-exemptions) |
 | issue opened / edited / labels changed / comment (issue open, carries the `forest-seeding` label) | hold off, naming the seeding window — a newborn forest member is dispatchable neither for `implement` nor for `reassess` until its blocking edges are wired and the decomposer removes the label (§forgejo/decisions/transition-table, §forgejo/decisions/commissioning) |
@@ -306,8 +305,9 @@ never-work-item taxonomy**, called alongside it wherever that taxonomy
 is consulted: the two lists carry different semantics for future
 labels — *never work item* is permanent taxonomy, *hold off* a
 transient gate the decomposer opens and closes. The member WILL need
-`reassess` once commissioned, which is why the authorship hold-off is
-not used. The kind labels and `human-task` are tested first — what an
+`reassess` once commissioned, which is why the gate is a label the
+decomposer opens and closes rather than the authorship hold-off the
+engine once read (s-git/maitred#135). The kind labels and `human-task` are tested first — what an
 issue *is* outweighs the window it happens to be seeding in — and
 `teardown-forest` after the transient gate. The hold-off reason names
 the window — `issue N carries forest-seeding; forest is seeding, not
@@ -326,9 +326,7 @@ reserved label, `decompose` wins — unless the issue also carries
 `teardown-forest`, in which case teardown wins: a root is decomposed before anything
 else is decided for it — a `human-task` claim on a root withholds
 `implement`, not `decompose`, since decomposition is precisely the work
-a human may have claimed on a root. The root row likewise wins over the
-authorship hold-off: a root authored by the configured decomposer
-identity is still decomposed.
+a human may have claimed on a root.
 
 Activity on a **blocked** issue — an edit, a label change, a comment on
 an issue with an open blocker — has nothing to reassess: the work is
@@ -339,26 +337,7 @@ in any order: labelling a blocked issue wakes no implementer. When the
 issue becomes unblocked, the cascade — not the activity — dispatches
 `implement`.
 
-**Authorship of a forest member.** An issue whose author is the configured
-decomposer identity (§forgejo/config/decomposer-identity) is **never** an
-`implement` candidate on the event path or on the reconciliation sweep (which
-decides as issue opened): the decision holds off and the reason names the
-authorship. The rule exists because `issues:opened` arrives the instant the
-decomposer creates a member, while the edge blocking it on its ideation ticket is
-attached afterwards and emits no delivery — so the re-fetch sees zero blockers and
-`implement` would be vacuously correct for work that has not been commissioned.
-Authorship is the only fact about a member that is true at the instant of its
-creation, and the identity is the operator's declaration rather than an inference;
-the engine cannot forge it, because the identities it dispatches cannot edit an
-issue's author. The comparison is **exact** — no case folding, no substring
-matching — the same shape as the reviewing-author sender guard
-(§forgejo/decisions/loop-prevention). With no identity configured the rule is
-inert (§forgejo/config/decomposer-identity). The rule denies `implement`
-candidacy only: it does not deny `reassess`, which the open-blocker rule above
-governs. The **unblock cascade is not narrowed**: a decomposer-authored member
-still dispatches `implement` when the cascade finds it newly unblocked —
-the ideation ticket's closure is that member's last issue-side blocker, and
-the cascade is what dispatches it.
+**Seeding, not authorship, gates a forest member.** A forest member's authorship is not a gate: an open, unblocked member with no connected open PR and no `forest-seeding` label is an `implement` candidate on every path — the opened row, the unblock cascade and the reconciliation sweep alike. The window in which `implement` would be vacuously correct is the creation race, and it is closed by the label, not by the author: the decomposer attaches `forest-seeding` atomically as it creates the member, wires the member's blocking edges, then removes the label (§forgejo/decisions/transition-table, §forgejo/decisions/commissioning). Authorship is the operator's declaration of *who made* the issue, and what an issue *is* — a work item awaiting its gate — is not a property of who opened it; the engine therefore reads the label and never the identity. The corollary is the sweep's role: because the sweep decides as issue opened, it is the backstop for a member whose unblocking delivery was lost, was never delivered, or was dispatched at a revision that cannot recur (§forgejo/reconciliation/the-sweep, §forgejo/decisions/unblock-cascade, s-git/maitred#135). The cascade is un-narrowed, not widened: the closure that removes a member's last issue-side blocker dispatches `implement` as before, whether that blocker is the ideation ticket or a work-order issue.
 
 A PR's **last activity is a review** when its latest review is a
 changes-requested, approved, or comment review submitted against the PR's
@@ -608,12 +587,15 @@ cascaded key carrying `ideation` or `human-task` holds off, naming
 the label: it is decided by the sweep
 (§forgejo/reconciliation/watermark-exemptions); a key carrying
 `forest-seeding` holds off, naming the seeding window — and the sweep
-is *not* a backstop for such a member, because the authorship guard
-holds decomposer-authored issues off there too
-(§forgejo/decisions/loop-prevention); it is decided when the seeding
-window ends — the label removal is itself a `labels-changed` delivery,
-which the activity row turns into `reassess` once the member is
-unblocked; a key carrying `outcome` dispatches `wrap-up`.
+*is* a backstop for such a member: once the label is gone an unblocked
+member is dispatched by the sweep's row like any other work item,
+which is what recovers a member whose seeding-window or unblock
+delivery was lost (§forgejo/decisions/transition-table,
+§forgejo/decisions/commissioning, s-git/maitred#135); it is decided
+when the seeding window ends — the label removal is itself a
+`labels-changed` delivery, which the activity row turns into
+`reassess` once the member is unblocked; a key carrying `outcome`
+dispatches `wrap-up`.
 
 A newly unblocked `outcome` tracker dispatches `wrap-up`, never
 `implement`: a tracker is never an implement candidate anywhere in
@@ -724,13 +706,18 @@ Four mechanisms, in this order:
    whatever its author pushed (§forgejo/decisions/label-triggered-review).
    Cross-persona triggering (a reviewer's changes-requested leading to
    the implementer's fix) is intended and unguarded.
-4. **Targeted authorship guards**, where an agent's *own* creation would
-   otherwise re-trigger the *same* action: an issue authored by the configured
-   decomposer identity is never an `implement` candidate on the event path or the
-   sweep, because the creation delivery is new to the key and no watermark can
-   show that the work is not yet commissioned. The guard is by the issue's
-   **author**, not the delivery's **sender**, and the cascade that unblocks the
-   member is unguarded (§forgejo/decisions/transition-table).
+4. **The seeding hold-off**, where a delivery that is new to a key
+   would otherwise dispatch work that is not yet commissioned: the
+   decomposer attaches `forest-seeding` atomically as it creates a
+   forest member, wires its blocking edges, and removes the label, and
+   while the label stands the issue holds off from `implement` and
+   `reassess` on every path (§forgejo/decisions/transition-table, and
+   s-git/maitred#135, which retired the authorship guard that used to
+   sit here). No authorship guard is needed. An author may not be the
+   subject of the action the author's own creation would trigger, but
+   cross-persona triggering (a reviewer's changes-requested leading to
+   the implementer's fix, a decomposer's member reaching the
+   implementer once gated) is intended and unguarded.
 
 ## Inputs
 
@@ -761,11 +748,11 @@ that PR's reviews; for a PR whose connected issue is a member, the
 membership edges — the open sync issues that issue blocks
 (§forgejo/decisions/sync-set).
 
-Carried on the state is the one **declared configuration input** the
-function consults: the configured **decomposer identity**
-(§forgejo/config/decomposer-identity), which the engine passes verbatim
-rather than inferring. It is empty when the key is unset, in which case
-the authorship rule is inert.
+The function consults **no declared configuration input**: state alone
+decides every row. The configured **decomposer identity**
+(§forgejo/config/decomposer-identity) remains loadable and names the
+account that composes forests, but the decision path never reads it —
+authorship gates nothing (s-git/maitred#135).
 
 **Watermark** — the last dispatch for the object's key
 (§forgejo/state/watermark), or none.

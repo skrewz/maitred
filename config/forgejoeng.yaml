@@ -5,8 +5,9 @@
 # (§forgejo/config/loading).
 org: o
 reconcile_interval: 1h
-# Optional: the identity authorship decisions hold off on
-# (§forgejo/config/decomposer-identity). Unset, the hold-off is inert.
+# Optional: the identity that composes forests — names the author of
+# forest members; no decision reads it as a gate
+# (§forgejo/config/decomposer-identity, s-git/maitred#135).
 decomposer_identity: decomposer
 
 # Every prompt invokes the persona's Pi canned prompt: Pi expands a

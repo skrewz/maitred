@@ -159,8 +159,8 @@ actions:
 }
 
 // TestLoadConfigDecomposerIdentityAbsent pins that the decomposer
-// identity is optional: with no key configured the config loads and the
-// authorship hold-off input is empty (§forgejo/config/decomposer-identity,
+// identity is optional: with no key configured the config loads and
+// the identity is empty (§forgejo/config/decomposer-identity,
 // §forgejo/config/validation).
 func TestLoadConfigDecomposerIdentityAbsent(t *testing.T) {
 	dir := t.TempDir()

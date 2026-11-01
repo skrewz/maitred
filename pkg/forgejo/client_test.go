@@ -297,8 +297,9 @@ func TestGetIssue_NotPull(t *testing.T) {
 }
 
 // TestGetIssue_Author pins that the issue's author is read from the
-// API's "user" object: authorship is the fact the decomposer-authorship
-// hold-off compares against (§forgejo/decisions/loop-prevention).
+// API's "user" object: the author is reported for reporting purposes;
+// authorship gates nothing (§forgejo/decisions/transition-table,
+// s-git/maitred#135).
 func TestGetIssue_Author(t *testing.T) {
 	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		issue := issueJSON(48, "acme/maitred")

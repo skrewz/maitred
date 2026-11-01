@@ -585,14 +585,14 @@ func TestReconcile_VisitsBothRoleSets(t *testing.T) {
 	}
 }
 
-// TestReconcile_DecomposerAuthoredIssueHoldsOff: the sweep is covered by
-// the authorship rule — an open member the decomposer authored whose
-// blocker edge has not arrived is not dispatched by the sweep; the
-// cascade unblocks it (§forgejo/decisions/loop-prevention,
-// §forgejo/reconciliation/the-sweep).
-func TestReconcile_DecomposerAuthoredIssueHoldsOff(t *testing.T) {
+// TestReconcile_DecomposerAuthoredIssueDispatches: the sweep is the
+// cascade's backstop — an open, unblocked member the decomposer
+// authored, carrying no forest-seeding label, is dispatched by the
+// sweep like any other work item: authorship is not a gate, the
+// seeding label is (s-git/maitred#135,
+// §forgejo/decisions/transition-table, §forgejo/reconciliation/the-sweep).
+func TestReconcile_DecomposerAuthoredIssueDispatches(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
-	eng.cfg.DecomposerIdentity = "decomposer"
 	api.repos = []Repository{testRepo("o/r")}
 	member := &Issue{Number: 7, State: "open", Author: "decomposer", UpdatedAt: testUpdatedAt, Repository: "o/r"}
 	api.issues[7] = member
@@ -600,8 +600,37 @@ func TestReconcile_DecomposerAuthoredIssueHoldsOff(t *testing.T) {
 
 	eng.Reconcile()
 
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d sweep tasks for an unblocked decomposer-authored member, want 1 (implement)", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=implement") {
+		t.Errorf("prompt = %q, want the implement action", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 7})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w == nil {
+		t.Errorf("watermark = nil, want the dispatched implement revision")
+	}
+}
+
+// TestReconcile_ForestSeedingMemberHoldsOff: the companion of the
+// sweep's backstop — while the seeding label stands the member holds
+// off from the sweep too: the label, not the author, is the gate
+// (§forgejo/decisions/transition-table, s-git/maitred#125).
+func TestReconcile_ForestSeedingMemberHoldsOff(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.repos = []Repository{testRepo("o/r")}
+	member := &Issue{Number: 7, State: "open", Author: "decomposer", UpdatedAt: testUpdatedAt, Repository: "o/r", Labels: []string{LabelForestSeeding}}
+	api.issues[7] = member
+	api.openIssues["r"] = []Issue{*member}
+
+	eng.Reconcile()
+
 	if tasks := q.all(); len(tasks) != 0 {
-		t.Fatalf("got %d sweep tasks for a decomposer-authored issue, want none", len(tasks))
+		t.Fatalf("got %d sweep tasks for a forest-seeding member, want none", len(tasks))
 	}
 	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 7})
 	if err != nil {
@@ -613,12 +642,11 @@ func TestReconcile_DecomposerAuthoredIssueHoldsOff(t *testing.T) {
 }
 
 // TestReconcile_OtherAuthorIssueDispatches: the sweep still dispatches
-// an unblocked issue authored by anyone else with the identity
-// configured (§forgejo/decisions/loop-prevention,
+// an unblocked issue authored by anyone else; authorship is read by
+// nothing at all (§forgejo/decisions/loop-prevention,
 // §forgejo/reconciliation/the-sweep).
 func TestReconcile_OtherAuthorIssueDispatches(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
-	eng.cfg.DecomposerIdentity = "decomposer"
 	api.repos = []Repository{testRepo("o/r")}
 	issue := &Issue{Number: 7, State: "open", Author: "alice", UpdatedAt: testUpdatedAt, Repository: "o/r"}
 	api.issues[7] = issue
