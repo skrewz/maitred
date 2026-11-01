@@ -92,12 +92,13 @@ the author of forest members:
 
 | Key | Required | Value |
 |---|---|---|
-| `decomposer_identity` | no | the login of the decomposer account, compared exactly (no fuzzy matching) |
+| `decomposer_identity` | no | the login of the decomposer account; no decision compares it — the `forest-seeding` label gates a member (§forgejo/decisions/transition-table, s-git/maitred#135) |
 
 The key is **optional**: an unset optional key is never a load error
 (§forgejo/config/validation). The key grants no privilege and admits
-nothing by itself — it names the account that composes forests and is
-read for authorship reporting only; no decision reads it as a gate:
+nothing by itself — it names the account that composes forests; the
+engine retains it as the operator's declaration of who composes forests
+and reads it nowhere else. No decision compares it:
 what gates a forest member is the `forest-seeding` hold-off
 (§forgejo/decisions/transition-table, s-git/maitred#135). In a
 directory merge, files that set the key must agree, exactly as with the

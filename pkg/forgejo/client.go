@@ -53,8 +53,9 @@ type Issue struct {
 	// Labels are the issue's label names.
 	Labels []string
 	// Author is the login of the user who opened the issue. It is
-	// reported, not compared: authorship gates nothing — the
-	// forest-seeding label gates a forest member
+	// carried on the model and read by nothing in the engine:
+	// authorship gates nothing — the forest-seeding label gates a
+	// forest member
 	// (§forgejo/decisions/transition-table, s-git/maitred#135).
 	Author string
 	// Body is the issue's text. The engine reads it at one seat: the

@@ -22,8 +22,8 @@ authenticated with a bearer token:
 | list a pull request's reviews (event + author + commit) | the review transitions |
 
 Issue responses also report **who opened the issue** (`user.login`): the
-author is reported and carried on the issue model for reporting — the
-engine no longer compares it against any identity, since the authorship
+author is carried on the issue model and read by nothing in the engine
+— no decision compares it against any identity, since the authorship
 guard was retired in favour of the `forest-seeding` hold-off
 (§forgejo/decisions/transition-table, s-git/maitred#135). A response
 without a `user` object yields an empty author.
