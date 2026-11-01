@@ -185,7 +185,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		if err != nil {
 			return ev, State{}, err
 		}
-		st := State{Issue: issue, DecomposerIdentity: e.cfg.DecomposerIdentity}
+		st := State{Issue: issue}
 		switch ev.Type {
 		case EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged,
 			EventIssueCommented, EventReconcile:
@@ -805,7 +805,7 @@ func (e *Engine) dispatchSyncSet(cd CascadeDispatch, sender string) error {
 		e.log.Warn("load watermark (continuing without)", "key", k.String(), "error", err)
 		w = nil
 	}
-	st := State{Issue: issue, Blockers: blockers, SyncMembers: members, DecomposerIdentity: e.cfg.DecomposerIdentity}
+	st := State{Issue: issue, Blockers: blockers, SyncMembers: members}
 	d := Decide(ev, st, w)
 	if !d.Dispatched {
 		// Unready, or already dispatched at this set state: silent on

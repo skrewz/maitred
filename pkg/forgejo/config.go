@@ -60,10 +60,11 @@ type Config struct {
 	// (§forgejo/reconciliation/scheduling).
 	ReconcileInterval time.Duration `yaml:"reconcile_interval"`
 	// DecomposerIdentity names the Forgejo identity that performs
-	// decomposition — the persona the engine holds off on, and the author
-	// of forest members (§forgejo/config/decomposer-identity). Optional:
-	// unset, the authorship hold-off is inert and this is never a load
-	// error.
+	// decomposition — the author of forest members
+	// (§forgejo/config/decomposer-identity). Optional: the identity is
+	// read for authorship reporting, never as a decision gate — the
+	// forest-seeding label gates a member, not its author
+	// (s-git/maitred#135). Unset is never a load error.
 	DecomposerIdentity string `yaml:"decomposer_identity"`
 	// Actions maps each action the decision function references to its
 	// canned prompt.

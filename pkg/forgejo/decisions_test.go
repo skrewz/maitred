@@ -37,7 +37,7 @@ func closedIssue() *Issue {
 }
 
 // authoredIssue is an open issue authored by the given login
-// (§forgejo/decisions/loop-prevention).
+// (§forgejo/decisions/transition-table).
 func authoredIssue(author string) *Issue {
 	issue := openIssue()
 	issue.Author = author
@@ -375,41 +375,46 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionDecompose,
 		},
 		{
-			name:  "issue opened authored by the decomposer holds off",
-			event: issueEvent(EventIssueOpened),
-			state: State{Issue: authoredIssue("decomposer"), DecomposerIdentity: "decomposer"},
-		},
-		{
-			name:       "issue opened authored by anyone else dispatches implement",
-			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: authoredIssue("alice"), DecomposerIdentity: "decomposer"},
-			wantAction: ActionImplement,
-		},
-		{
-			name:       "issue opened authored by the decomposer with the identity unset dispatches implement",
+			// Authorship is no gate (s-git/maitred#135): a seed-less,
+			// unblocked member the decomposer authored is an ordinary
+			// work item on the opened path and on the sweep alike.
+			name:       "issue opened authored by the decomposer dispatches implement",
 			event:      issueEvent(EventIssueOpened),
 			state:      State{Issue: authoredIssue("decomposer")},
 			wantAction: ActionImplement,
 		},
 		{
-			name:       "issue opened authored by a differently cased login dispatches implement",
+			name:       "issue opened authored by anyone else dispatches implement",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: authoredIssue("Decomposer"), DecomposerIdentity: "decomposer"},
+			state:      State{Issue: authoredIssue("alice")},
 			wantAction: ActionImplement,
 		},
 		{
-			name:  "issue opened authored by the decomposer with closed blockers holds off",
-			event: issueEvent(EventIssueOpened),
-			state: State{
-				Issue:              authoredIssue("decomposer"),
-				Blockers:           []Issue{{Number: 3, State: "closed", Repository: "o/r"}},
-				DecomposerIdentity: "decomposer",
-			},
+			// The seeding hold-off is the gate, whatever the author:
+			// the differently cased login is no longer a distinction
+			// the engine reads at all.
+			name:       "issue opened authored by a differently cased login dispatches implement",
+			event:      issueEvent(EventIssueOpened),
+			state:      State{Issue: authoredIssue("Decomposer")},
+			wantAction: ActionImplement,
 		},
 		{
-			name:  "reconciled issue authored by the decomposer holds off",
-			event: issueEvent(EventReconcile),
-			state: State{Issue: authoredIssue("decomposer"), DecomposerIdentity: "decomposer"},
+			name:  "issue opened authored by the decomposer with closed blockers dispatches implement",
+			event: issueEvent(EventIssueOpened),
+			state: State{
+				Issue:    authoredIssue("decomposer"),
+				Blockers: []Issue{{Number: 3, State: "closed", Repository: "o/r"}},
+			},
+			wantAction: ActionImplement,
+		},
+		{
+			// The sweep is the cascade's backstop: the reconciliation
+			// row decides a mature decomposer-authored member like any
+			// other work item (s-git/maitred#135).
+			name:       "reconciled issue authored by the decomposer dispatches implement",
+			event:      issueEvent(EventReconcile),
+			state:      State{Issue: authoredIssue("decomposer")},
+			wantAction: ActionImplement,
 		},
 		{
 			name:  "issue opened without re-fetched state holds off",
@@ -1495,7 +1500,7 @@ func TestDecide(t *testing.T) {
 				i := ideationIssue()
 				i.Author = "decomposer"
 				return i
-			}(), DecomposerIdentity: "decomposer"},
+			}()},
 			wantAction: ActionDecompose,
 		},
 		{
@@ -2414,44 +2419,33 @@ func TestDecide_ForestSeedingHoldOff(t *testing.T) {
 	}
 }
 
-// TestDecide_DecomposerAuthorshipHoldOffNamesTheAuthorship pins the
-// authorship hold-off's reason on the event path and on the sweep: the
-// reason names the authorship that denied the action
-// (§forgejo/decisions/loop-prevention).
-func TestDecide_DecomposerAuthorshipHoldOffNamesTheAuthorship(t *testing.T) {
+// TestDecide_DecomposerAuthoredMemberIsAnOrdinaryWorkItem pins the
+// retired authorship guard: on the event path and on the sweep, an
+// open, unblocked member the decomposer authored — seed-less, no
+// connected PR — dispatches implement; the sweep is the cascade's
+// backstop (s-git/maitred#135, §forgejo/decisions/transition-table).
+func TestDecide_DecomposerAuthoredMemberIsAnOrdinaryWorkItem(t *testing.T) {
 	tests := []struct {
 		name  string
 		event Event
-		state State
 	}{
-		{
-			name:  "issue opened",
-			event: issueEvent(EventIssueOpened),
-			state: State{Issue: authoredIssue("decomposer"), DecomposerIdentity: "decomposer"},
-		},
-		{
-			name:  "reconcile — the sweep's synthetic current-state event",
-			event: issueEvent(EventReconcile),
-			state: State{Issue: authoredIssue("decomposer"), DecomposerIdentity: "decomposer"},
-		},
+		{name: "issue opened", event: issueEvent(EventIssueOpened)},
+		{name: "reconcile — the sweep's synthetic current-state event", event: issueEvent(EventReconcile)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d := Decide(tt.event, tt.state, nil)
-			if !d.HoldOff() {
-				t.Fatalf("decision = %+v, want a hold-off", d)
-			}
-			if !strings.Contains(d.Reason, "authored by the decomposer") || !strings.Contains(d.Reason, "decomposer") {
-				t.Errorf("hold-off reason = %q, want it to name the authorship and the identity", d.Reason)
+			d := Decide(tt.event, State{Issue: authoredIssue("decomposer")}, nil)
+			if !d.Dispatched || d.Action != ActionImplement {
+				t.Errorf("decision = %+v, want a dispatch of %v", d, ActionImplement)
 			}
 		})
 	}
 }
 
-// TestDecide_CascadeUnblocksDecomposerAuthoredMember pins that the
-// authorship rule does not narrow the unblock cascade: the ideation
-// ticket closing unblocks the member the decomposer authored
-// (§forgejo/decisions/loop-prevention, §forgejo/decisions/unblock-cascade).
+// TestDecide_CascadeUnblocksDecomposerAuthoredMember pins that
+// seeding, not authorship, gates a member: the ideation ticket closing
+// unblocks the member the decomposer authored exactly as before
+// (§forgejo/decisions/transition-table, §forgejo/decisions/unblock-cascade).
 func TestDecide_CascadeUnblocksDecomposerAuthoredMember(t *testing.T) {
 	root := &IssueNode{
 		Issue: Issue{Number: 3, State: "closed", Repository: "o/r"},
@@ -2462,7 +2456,7 @@ func TestDecide_CascadeUnblocksDecomposerAuthoredMember(t *testing.T) {
 			},
 		},
 	}
-	d := Decide(issueEvent(EventIssueClosed), State{Issue: closedIssue(), CascadeRoot: root, DecomposerIdentity: "decomposer"}, nil)
+	d := Decide(issueEvent(EventIssueClosed), State{Issue: closedIssue(), CascadeRoot: root}, nil)
 	want := []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 7}, Action: ActionImplement}}
 	if !reflect.DeepEqual(d.Cascade, want) {
 		t.Errorf("cascade = %v, want %v (the cascade is not narrowed by authorship)", d.Cascade, want)

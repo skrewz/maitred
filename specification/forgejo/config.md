@@ -88,26 +88,27 @@ reconciliation sweep runs (§forgejo/reconciliation/scheduling).
 ## Decomposer identity
 
 One optional key names the Forgejo identity that performs decomposition —
-the persona the engine holds off on, and the author of forest members:
+the author of forest members:
 
 | Key | Required | Value |
 |---|---|---|
 | `decomposer_identity` | no | the login of the decomposer account, compared exactly (no fuzzy matching) |
 
-The key is **optional**: with no identity configured, the authorship
-hold-off is inert and everything else works. An unset optional key is never
-a load error (§forgejo/config/validation). The key grants no privilege and
-admits nothing by itself — it only names the account that authorship
-decisions compare against, and where that comparison applies is the
-decision function's business (§forgejo/decisions/transition-table). In a
+The key is **optional**: an unset optional key is never a load error
+(§forgejo/config/validation). The key grants no privilege and admits
+nothing by itself — it names the account that composes forests and is
+read for authorship reporting only; no decision reads it as a gate:
+what gates a forest member is the `forest-seeding` hold-off
+(§forgejo/decisions/transition-table, s-git/maitred#135). In a
 directory merge, files that set the key must agree, exactly as with the
 org; a conflict is a load error.
 
 Why a config key and not a repository topic: topics mark *repositories*
 (the discovery vocabulary, exactly as `maitred-enabled` works), not users.
-"Who authored this issue?" is a fact about an account, which the
+"Who authored this issue?" is a fact about the account, which the
 repository-marking vocabulary cannot answer; and the identity must be the
-operator's declaration, not something the engine infers.
+operator's declaration, not something the engine infers. The key records
+who composes forests; it decides nothing (s-git/maitred#135).
 
 ## Placeholders
 

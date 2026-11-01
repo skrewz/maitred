@@ -52,10 +52,10 @@ type Issue struct {
 	State string
 	// Labels are the issue's label names.
 	Labels []string
-	// Author is the login of the user who opened the issue. The engine
-	// compares it with the configured decomposer identity, which is the
-	// only fact about a forest member that is true at the instant of its
-	// creation (§forgejo/decisions/loop-prevention).
+	// Author is the login of the user who opened the issue. It is
+	// reported, not compared: authorship gates nothing — the
+	// forest-seeding label gates a forest member
+	// (§forgejo/decisions/transition-table, s-git/maitred#135).
 	Author string
 	// Body is the issue's text. The engine reads it at one seat: the
 	// landing set's revision digests the grouping issue's body, because

@@ -189,12 +189,6 @@ type State struct {
 	// graph the assembly holds, so the read costs nothing
 	// (§forgejo/decisions/sync-set, §forgejo/webhook/re-fetch).
 	SyncSets []Issue
-	// DecomposerIdentity is the configured login of the identity that
-	// performs decomposition (§forgejo/config/decomposer-identity). It is
-	// a declared configuration input the engine passes verbatim from its
-	// config, not fetched state; when empty the authorship rule is inert
-	// (§forgejo/decisions/inputs).
-	DecomposerIdentity string
 	// CascadeRoot is the closed issue the unblock cascade walks from,
 	// for close events.
 	CascadeRoot *IssueNode
@@ -452,10 +446,11 @@ func otherKindLabel(issue *Issue) string {
 // label, not the repository and not the title, is what makes a root
 // (§forgejo/decisions/transition-table); otherwise dispatch implement
 // if the re-fetched issue is open, unblocked, and has no connected PR.
-// An issue authored by the configured decomposer identity is never an
-// implement candidate on either path: it waits for the unblock cascade
-// alone (§forgejo/decisions/transition-table,
-// §forgejo/decisions/loop-prevention).
+// Authorship is not a gate: what gates a forest member is the
+// forest-seeding hold-off, and once the label is gone the member is
+// an ordinary work item on every path — the sweep included, which is
+// the cascade's backstop (s-git/maitred#135,
+// §forgejo/decisions/transition-table).
 func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 	issue := s.Issue
 	if issue == nil {
@@ -475,9 +470,6 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 	}
 	if hasLabel(issue, LabelTeardownForest) {
 		return holdOffTeardownWithoutRoot(issue.Number)
-	}
-	if decomposerAuthored(issue, s.DecomposerIdentity) {
-		return holdOffDecomposerAuthored(issue.Number, issue.Author)
 	}
 	if open := openBlockers(s.Blockers); len(open) > 0 {
 		return holdOff(fmt.Sprintf("issue %d is blocked by %d open issue(s)", issue.Number, len(open)))
@@ -1514,23 +1506,6 @@ func holdOffNeverReassess(number int, label string) Decision {
 // (§forgejo/decisions/transition-table, s-git/maitred#125).
 func holdOffForestSeeding(number int, label string) Decision {
 	return holdOff(fmt.Sprintf("issue %d carries %s; forest is seeding, not yet gated", number, label))
-}
-
-// decomposerAuthored reports whether the issue was opened by the
-// configured decomposer identity. The match is exact — no case folding,
-// no substring — and an unset identity (or an issue with no author) never
-// matches, which keeps the rule inert
-// (§forgejo/config/decomposer-identity, §forgejo/decisions/loop-prevention).
-func decomposerAuthored(issue *Issue, identity string) bool {
-	return identity != "" && issue.Author == identity
-}
-
-// holdOffDecomposerAuthored is the authorship hold-off: the issue was
-// authored by the configured decomposer identity, so it is a forest
-// member that the unblock cascade unblocks, never the event path or the
-// sweep (§forgejo/decisions/loop-prevention).
-func holdOffDecomposerAuthored(number int, author string) Decision {
-	return holdOff(fmt.Sprintf("issue %d is authored by the decomposer %s; held for the unblock cascade, not dispatched as an implement candidate", number, author))
 }
 
 // holdOffScopeUnknown is the scope test's failure hold-off: the

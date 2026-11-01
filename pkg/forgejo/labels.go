@@ -57,8 +57,9 @@ const (
 	// While it is present the issue holds off from implement and
 	// reassess on every path, so no event can dispatch work before the
 	// forest's gate exists. It is not a kind label — the member IS a
-	// work item and will need reassess once commissioned, which an
-	// authorship hold-off would disable permanently; the label names
+	// work item and needs reassess once commissioned, which an
+	// authorship hold-off would have disabled permanently (retired by
+	// s-git/maitred#135); the label names
 	// only the seeding window (§forgejo/decisions/transition-table,
 	// s-git/maitred#125).
 	LabelForestSeeding = "forest-seeding"
