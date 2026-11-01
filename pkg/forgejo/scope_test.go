@@ -52,6 +52,12 @@ func TestHandleEvent_RepoWithoutRole_HoldsOff(t *testing.T) {
 	if n := api.callCount("GetIssue"); n != 0 {
 		t.Errorf("re-fetch happened for an un-enabled repository: %d GetIssue call(s)", n)
 	}
+	// The extra read a role-less delivery may pay is restricted to
+	// closes: an opened event stays the zero-cost hold-off
+	// (§forgejo/webhook/repository-roles).
+	if n := api.callCount("IssueBlocks"); n != 0 {
+		t.Errorf("graph read happened for an opened event in a role-less repository: %d IssueBlocks call(s)", n)
+	}
 	w, err := store.Load(Key{Repo: "o/off", Kind: KindIssue, Number: 7})
 	if err != nil {
 		t.Fatalf("load watermark: %v", err)
@@ -122,9 +128,12 @@ func TestHandleEvent_RepoEnabled_Unchanged(t *testing.T) {
 	}
 }
 
-// TestHandleEvent_NoCascadeForRepoWithoutRole: the scope test precedes
-// the re-fetch, so a repository holding no role yields no cascade
-// dispatches either (§forgejo/webhook/the-pipeline).
+// TestHandleEvent_NoCascadeForRepoWithoutRole: a close in a role-less
+// repository is read through the graph — the cascade runs — but every
+// emission is judged by the roles of the repository holding its key,
+// so a close that blocks nothing tracked dispatches nothing: cascade
+// keys in role-less repositories hold off out of remit
+// (§forgejo/webhook/repository-roles, §forgejo/decisions/unblock-cascade).
 func TestHandleEvent_NoCascadeForRepoWithoutRole(t *testing.T) {
 	eng, api, q, _ := newScopeEngine(t)
 	closed := &Issue{Number: 7, State: "closed", UpdatedAt: testUpdatedAt, Repository: "o/off"}
@@ -138,6 +147,111 @@ func TestHandleEvent_NoCascadeForRepoWithoutRole(t *testing.T) {
 
 	if tasks := q.all(); len(tasks) != 0 {
 		t.Fatalf("got %d cascade tasks for a repository outside the remit, want none", len(tasks))
+	}
+}
+
+// TestHandleEvent_RepoWithoutRole_CloseWakesCascade: roles decide which
+// repositories the engine acts on, not which repositories the graph may
+// be read through. A close in a role-less repository dispatches nothing
+// for the closed issue itself, but it wakes the unblock cascade for
+// what it blocks: an outcome tracker in a role-holding repository is
+// wrapped up on the event, not at the next sweep. The closed key's own
+// record stays a hold-off, and its reason names the cascade it woke —
+// inert, but not opaque (§forgejo/webhook/repository-roles,
+// §forgejo/decisions/unblock-cascade).
+func TestHandleEvent_RepoWithoutRole_CloseWakesCascade(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, q, store := newScopeEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log, nil)))
+	api.repos = append(api.repos, testRepoOutcomes("o/outcomes"))
+	closed := &Issue{Number: 7, State: "closed", UpdatedAt: testUpdatedAt, Repository: "o/off"}
+	api.issues[7] = closed
+	tracker := trackerFixtureCrossRepo("o/outcomes")
+	api.issues[10] = tracker
+	api.blocks[7] = []Issue{*tracker}
+	api.deps[10] = []Issue{*closed}
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/off", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (wrap-up for the tracker the close unblocked)", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=wrap-up repo=o/outcomes kind=issue number=10") {
+		t.Errorf("prompt = %q, want the wrap-up dispatch for o/outcomes issue 10", tasks[0].Prompt)
+	}
+	// The closed issue is inert: no dispatch for its key, no watermark.
+	if n := api.callCount("GetIssue:off"); n != 0 {
+		t.Errorf("closed issue of a role-less repository was re-fetched: %d GetIssue call(s), want none", n)
+	}
+	w, err := store.Load(Key{Repo: "o/off", Kind: KindIssue, Number: 7})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark on the closed key = %+v, want none (a role-less repository is never acted on)", w)
+	}
+	// The cascade key's own watermark records the wrap-up.
+	w, err = store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 10})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w == nil || w.Action != string(ActionWrapUp) {
+		t.Errorf("tracker watermark = %+v, want wrap-up", w)
+	}
+	// The event key's record is a hold-off naming the cascade it woke.
+	entry := findEntry(t, parseLogLines(t, log.Bytes()), "decision")
+	if key, _ := entry["key"].(string); key != "o/off/issue/7" {
+		t.Fatalf("first decision entry keyed %q, want o/off/issue/7", key)
+	}
+	if dispatched, _ := entry["dispatched"].(bool); dispatched {
+		t.Errorf("the closed key logged as dispatched: %v", entry)
+	}
+	reason, _ := entry["reason"].(string)
+	if !strings.Contains(reason, "repo o/off holds no maitred role") {
+		t.Errorf("hold-off reason = %q, want it to name the repository's missing role", reason)
+	}
+	if !strings.Contains(reason, "unblock cascade") {
+		t.Errorf("hold-off reason = %q, want it to name the unblock cascade the close woke", reason)
+	}
+}
+
+// TestHandleEvent_RepoWithoutRole_CloseBlocksNothing_HoldsOffRemitOnly:
+// a close in a role-less repository that blocks nothing tracked holds
+// off with the remit-only reason — inert and unrelated, no cascade
+// wording — and dispatches nothing
+// (§forgejo/webhook/repository-roles).
+func TestHandleEvent_RepoWithoutRole_CloseBlocksNothing_HoldsOffRemitOnly(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, q, _ := newScopeEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log, nil)))
+	api.issues[7] = &Issue{Number: 7, State: "closed", UpdatedAt: testUpdatedAt, Repository: "o/off"}
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/off", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none (a close blocking nothing tracked dispatches nothing)", len(tasks))
+	}
+	reason := reasonFor(t, &log, "o/off/issue/7")
+	if !strings.Contains(reason, "holds no maitred role") {
+		t.Errorf("hold-off reason = %q, want the remit-only wording", reason)
+	}
+	if strings.Contains(reason, "cascade") {
+		t.Errorf("hold-off reason = %q, want no cascade wording for a close outside the graph", reason)
+	}
+}
+
+// TestHandleEvent_RepoWithoutRole_CloseReadFailureHoldsOff: a failed
+// blocks read on the close path is a hold-off, acknowledged, with the
+// sweep as the backstop — the re-fetch-failure rule
+// (§forgejo/webhook/the-pipeline, §forgejo/reconciliation/failure-handling).
+func TestHandleEvent_RepoWithoutRole_CloseReadFailureHoldsOff(t *testing.T) {
+	eng, api, q, _ := newScopeEngine(t)
+	api.issues[7] = &Issue{Number: 7, State: "closed", UpdatedAt: testUpdatedAt, Repository: "o/off"}
+	api.issueBlocksErr = errors.New("boom")
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/off", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none (a failed graph read dispatches nothing)", len(tasks))
 	}
 }
 

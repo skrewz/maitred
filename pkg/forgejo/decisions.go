@@ -1432,6 +1432,18 @@ func holdOffOutOfRemit(repo string) Decision {
 	return holdOff(fmt.Sprintf("repo %s holds no maitred role (neither %s nor %s)", repo, maitredEnabledTopic, maitredOutcomesTopic))
 }
 
+// holdOffOutOfRemitWakesCascade is the admission hold-off of a close
+// in a role-less repository whose issue sits in the blocker graph: the
+// repository stays outside the engine's remit — nothing is acted on for
+// the closed issue — but the graph may be read through it, and the
+// reason names the unblock cascade the close woke. The two wordings
+// distinguish inert-and-unrelated (the remit-only reason) from
+// inert-but-in-the-graph (§forgejo/webhook/repository-roles,
+// §forgejo/decisions/unblock-cascade).
+func holdOffOutOfRemitWakesCascade(repo string, number int) Decision {
+	return holdOff(fmt.Sprintf("%s; close of issue %d is in the blocker graph: unblock cascade woken", holdOffOutOfRemit(repo).Reason, number))
+}
+
 // workItemActions are the actions the maitred-enabled role grants
 // admissibility to; outcomesActions are those the
 // maitred-outcomes-repo role grants it to

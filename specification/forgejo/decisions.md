@@ -624,7 +624,15 @@ rooted the cascade (§forgejo/webhook/repository-roles) — which is how
 a cascade rooted at an issue in a work-item repository can emit
 `wrap-up` into an outcomes repository: the cascaded action is judged
 against the roles of the repository holding the tracker, whatever
-rooted the walk. The dispatch re-checks the action against the
+rooted the walk. The walk may also be **rooted at a close in a
+role-less repository**: such a repository is inert, not opaque — the
+root itself is never acted on (not re-fetched, not dispatched for, not
+watermarked), and admissibility is judged on the **blocked** object
+alone, exactly as for any other root. This is what makes the cascade
+half of the `wrap-up` row reachable when the last blocker lived
+outside the role set (§forgejo/webhook/repository-roles); a close that
+blocks nothing wakes nothing, and the sweep remains the backstop for
+reads that fail. The dispatch re-checks the action against the
 re-fetched issue — the state wins over the graph data: an `implement`
 key carrying any reserved label holds off, naming the label; a
 `wrap-up` key whose issue no longer carries `outcome`, or now carries
