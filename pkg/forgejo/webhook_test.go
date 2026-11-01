@@ -2749,14 +2749,13 @@ func TestHandler_IssueClosed_CascadePROutOfRemit(t *testing.T) {
 }
 
 // TestHandler_IssueOpened_DecomposerAuthoredImplements: an open,
-// unblocked issue authored by the configured decomposer identity,
-// carrying no forest-seeding label and no connected PR, is an
-// implement candidate on the opened path like any other work item:
-// authorship is no gate — the seeding label is
-// (s-git/maitred#135, §forgejo/decisions/transition-table).
+// unblocked issue authored by the decomposer, carrying no
+// forest-seeding label and no connected PR, is an implement candidate
+// on the opened path like any other work item: authorship is no gate —
+// the seeding label is (s-git/maitred#135,
+// §forgejo/decisions/transition-table).
 func TestHandler_IssueOpened_DecomposerAuthoredImplements(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
-	eng.cfg.DecomposerIdentity = "decomposer"
 	member := testIssue(7, "open")
 	member.Author = "decomposer"
 	api.issues[7] = member
@@ -2790,7 +2789,6 @@ func TestHandler_IssueOpened_DecomposerAuthoredImplements(t *testing.T) {
 func TestHandler_IssueOpened_ForestSeedingHoldsOff(t *testing.T) {
 	var log bytes.Buffer
 	eng, api, q, store := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log, nil)))
-	eng.cfg.DecomposerIdentity = "decomposer"
 	member := testIssue(7, "open")
 	member.Author = "decomposer"
 	member.Labels = []string{LabelForestSeeding}
@@ -2819,11 +2817,10 @@ func TestHandler_IssueOpened_ForestSeedingHoldsOff(t *testing.T) {
 
 // TestHandler_IssueOpened_OtherAuthorImplements: an issue authored by
 // anyone else, with no blockers and no connected PR, is an implement
-// candidate as before, identity configured or not
-// (§forgejo/decisions/transition-table).
+// candidate as before; authorship is not read at all
+// (§forgejo/decisions/transition-table, s-git/maitred#135).
 func TestHandler_IssueOpened_OtherAuthorImplements(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
-	eng.cfg.DecomposerIdentity = "decomposer"
 	member := testIssue(7, "open")
 	member.Author = "alice"
 	api.issues[7] = member
@@ -2848,7 +2845,6 @@ func TestHandler_IssueOpened_OtherAuthorImplements(t *testing.T) {
 // §forgejo/decisions/unblock-cascade).
 func TestHandler_IssueClosed_CascadeUnblocksDecomposerAuthoredMember(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
-	eng.cfg.DecomposerIdentity = "decomposer"
 	// Issue 7 (the ideation ticket, closed) blocks issue 10 (the member,
 	// authored by the decomposer); 10's only blocker is 7.
 	api.issues[7] = testIssue(7, "closed")

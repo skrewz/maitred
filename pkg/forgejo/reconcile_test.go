@@ -593,7 +593,6 @@ func TestReconcile_VisitsBothRoleSets(t *testing.T) {
 // §forgejo/decisions/transition-table, §forgejo/reconciliation/the-sweep).
 func TestReconcile_DecomposerAuthoredIssueDispatches(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
-	eng.cfg.DecomposerIdentity = "decomposer"
 	api.repos = []Repository{testRepo("o/r")}
 	member := &Issue{Number: 7, State: "open", Author: "decomposer", UpdatedAt: testUpdatedAt, Repository: "o/r"}
 	api.issues[7] = member
@@ -623,7 +622,6 @@ func TestReconcile_DecomposerAuthoredIssueDispatches(t *testing.T) {
 // (§forgejo/decisions/transition-table, s-git/maitred#125).
 func TestReconcile_ForestSeedingMemberHoldsOff(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
-	eng.cfg.DecomposerIdentity = "decomposer"
 	api.repos = []Repository{testRepo("o/r")}
 	member := &Issue{Number: 7, State: "open", Author: "decomposer", UpdatedAt: testUpdatedAt, Repository: "o/r", Labels: []string{LabelForestSeeding}}
 	api.issues[7] = member
@@ -644,12 +642,11 @@ func TestReconcile_ForestSeedingMemberHoldsOff(t *testing.T) {
 }
 
 // TestReconcile_OtherAuthorIssueDispatches: the sweep still dispatches
-// an unblocked issue authored by anyone else with the identity
-// configured (§forgejo/decisions/loop-prevention,
+// an unblocked issue authored by anyone else; authorship is read by
+// nothing at all (§forgejo/decisions/loop-prevention,
 // §forgejo/reconciliation/the-sweep).
 func TestReconcile_OtherAuthorIssueDispatches(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
-	eng.cfg.DecomposerIdentity = "decomposer"
 	api.repos = []Repository{testRepo("o/r")}
 	issue := &Issue{Number: 7, State: "open", Author: "alice", UpdatedAt: testUpdatedAt, Repository: "o/r"}
 	api.issues[7] = issue
