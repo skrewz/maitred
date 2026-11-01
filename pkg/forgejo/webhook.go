@@ -101,7 +101,10 @@ func NewEngine(api API, store *Store, cfg *Config, q queue.TaskQueueProvider, lo
 // events for the same key cannot race the watermark
 // (§forgejo/webhook/serialisation). A repository holding no maitred
 // role is outside the engine's remit: it holds off before the re-fetch
-// (§forgejo/webhook/repository-roles). A re-fetch failure holds off: the
+// (§forgejo/webhook/repository-roles) — except a close, which is inert
+// for its own issue but reads through the graph to wake the unblock
+// cascade (§forgejo/webhook/repository-roles,
+// §forgejo/decisions/unblock-cascade). A re-fetch failure holds off: the
 // reconciliation sweep re-derives from the source of truth
 // (§forgejo/webhook/the-pipeline).
 func (e *Engine) HandleEvent(ev Event) {
@@ -118,7 +121,16 @@ func (e *Engine) HandleEvent(ev Event) {
 		// The repository holds no role: outside the engine's remit, so
 		// hold off before re-fetching, so an inert repository costs
 		// nothing and dispatches nothing — cascade included
-		// (§forgejo/webhook/repository-roles).
+		// (§forgejo/webhook/repository-roles). The one exception is a
+		// close: the closed issue itself stays inert, but the graph
+		// may be read through the repository, so the unblock cascade
+		// runs for what the close blocks
+		// (§forgejo/webhook/repository-roles,
+		// §forgejo/decisions/unblock-cascade).
+		if ev.Kind == KindIssue && ev.Type == EventIssueClosed {
+			e.handleCascadeOnlyClose(ev)
+			return
+		}
 		e.recordDecision(key, ev, State{}, holdOffOutOfRemit(ev.Repo))
 		return
 	}
@@ -153,24 +165,65 @@ func (e *Engine) HandleEvent(ev Event) {
 				e.log.Error("save watermark", "key", key.String(), "error", err)
 			}
 		}
-		for _, cd := range d.Cascade {
-			if err := e.dispatchCascade(cd, ev.Sender); err != nil {
-				e.log.Error("cascade dispatch failed", "key", key.String(), "cascade", cd.Key.String(), "error", err)
-			}
-		}
-		for _, ch := range d.CascadeHoldOffs {
-			// A still-blocked tracker is not silent: the hold-off belongs
-			// to the decision log like any other decision, carries the
-			// tracker as the graph showed it (so its state and revision are
-			// its own), and is qualified by the roles of the repository
-			// holding the key, so it never promises an action those roles
-			// exclude (§forgejo/decisions/unblock-cascade,
-			// §forgejo/observability/the-decision-log,
-			// §forgejo/webhook/repository-roles).
-			cev := Event{Type: EventIssueOpened, Repo: ch.Key.Repo, Kind: ch.Key.Kind, Number: ch.Key.Number, Sender: ev.Sender}
-			e.recordDecision(ch.Key, cev, State{Issue: ch.Issue}, holdOff(e.cascadeHoldOffReason(ch)))
-		}
+		e.emitCascade(d, key, ev.Sender)
 	})
+}
+
+// emitCascade applies the unblock cascade's emissions: each dispatch
+// goes through dispatchCascade (its own admission, re-check, and
+// watermark), and each still-blocked tracker hold-off is recorded in
+// the decision log like any other decision — carrying the tracker as
+// the graph showed it and qualified by the roles of the repository
+// holding its key, so it never promises an action those roles exclude
+// (§forgejo/decisions/unblock-cascade,
+// §forgejo/observability/the-decision-log,
+// §forgejo/webhook/repository-roles).
+func (e *Engine) emitCascade(d Decision, rootKey Key, sender string) {
+	for _, cd := range d.Cascade {
+		if err := e.dispatchCascade(cd, sender); err != nil {
+			e.log.Error("cascade dispatch failed", "key", rootKey.String(), "cascade", cd.Key.String(), "error", err)
+		}
+	}
+	for _, ch := range d.CascadeHoldOffs {
+		cev := Event{Type: EventIssueOpened, Repo: ch.Key.Repo, Kind: ch.Key.Kind, Number: ch.Key.Number, Sender: sender}
+		e.recordDecision(ch.Key, cev, State{Issue: ch.Issue}, holdOff(e.cascadeHoldOffReason(ch)))
+	}
+}
+
+// handleCascadeOnlyClose is the close path of a repository holding no
+// maitred role. The roles decide what the engine acts on, not which
+// repositories the graph may be read through: the closed issue itself
+// is inert — nothing is acted on for it, no re-fetch, no watermark —
+// but the engine asks what it blocks and runs the ordinary unblock
+// cascade for it. Every emission stays judged by the roles of the
+// repository holding its key, so a cascade woken by an inert close can
+// only act where the roles admit it. The extra read is restricted to
+// closes: no other event in a role-less repository gets past the
+// zero-cost hold-off. A failed graph read is a hold-off the sweep
+// backstops, like any re-fetch failure
+// (§forgejo/webhook/repository-roles,
+// §forgejo/decisions/unblock-cascade).
+func (e *Engine) handleCascadeOnlyClose(ev Event) {
+	key := ev.KeyOf()
+	// The root's own fields are never consulted by the walk — each
+	// visited issue is judged by its own dependency rows, so a root
+	// that is not in fact closed emits nothing — only its identity
+	// and its downstream edges matter here (§forgejo/decisions/unblock-cascade).
+	root, err := e.graphNode(&Issue{Number: ev.Number, Repository: ev.Repo, State: "closed"})
+	if err != nil {
+		e.log.Error("graph read failed, holding off", "key", key.String(), "error", err)
+		return
+	}
+	if len(root.Blocks) == 0 {
+		// Inert and unrelated: the remit-only hold-off, unchanged.
+		e.recordDecision(key, ev, State{}, holdOffOutOfRemit(ev.Repo))
+		return
+	}
+	// Inert, but in the graph: the hold-off names the cascade it woke.
+	e.recordDecision(key, ev, State{}, holdOffOutOfRemitWakesCascade(ev.Repo, ev.Number))
+	var d Decision
+	d.Cascade, d.CascadeHoldOffs = unblockCascade(root)
+	e.emitCascade(d, key, ev.Sender)
 }
 
 // refetch re-fetches the authoritative state for ev from Forgejo

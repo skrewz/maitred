@@ -63,8 +63,17 @@ On each `POST`:
    **holds off** with the reason
    `repo <name> holds no maitred role (neither maitred-enabled nor
    maitred-outcomes-repo)`, logged like any other hold-off
-   (§forgejo/observability/the-decision-log); nothing is re-fetched,
-   dispatched, or cascaded for it, and the delivery is acknowledged. A
+   (§forgejo/observability/the-decision-log); nothing is re-fetched or
+   dispatched for its object, and the delivery is acknowledged. A
+   **closed issue** in such a repository is the one exception to the
+   read: nothing is ever acted on for the closed issue itself, but the
+   engine asks what it blocks and runs the unblock cascade for whatever
+   it blocks in a role-holding repository
+   (§forgejo/webhook/repository-roles, §forgejo/decisions/unblock-cascade)
+   — a role-less repository stays inert, never opaque. The hold-off
+   reason distinguishes the two kinds of inert close: one that blocks
+   nothing tracked names the remit alone; one that sits in the blocker
+   graph additionally names the unblock cascade the close woke. A
    repository listing that **fails** also holds off, but with a reason
    naming the failure — never the role or topic wording — so a transient
    API failure is not recorded as a deliberate exclusion
@@ -129,13 +138,25 @@ One organisation listing feeds every repository's roles
 (§forgejo/webhook/the-scope-cache, §forgejo/reconciliation/the-sweep); a
 repository may hold both roles or neither.
 
-Two distinct rules consult the roles:
+Two distinct rules consult the roles. Roles decide which repositories
+the engine **acts on**; they were never meant to decide which
+repositories the graph may be **read through**:
 
 - **Admission** — whether a delivery may be considered at all: the
   repository of its object holds at least one role
   (§forgejo/webhook/the-pipeline, step 3). Admission stays a Decision, never
   a listener drop: a delivery from an out-of-remit repository appears in the
-  decision log as a hold-off.
+  decision log as a hold-off. Admission governs what the engine acts on,
+  not what the graph may be read through: an issue **closed** in a
+  role-less repository wakes the unblock cascade for the issues it
+  blocks, each emission's admissibility still judged by the roles of
+  the repository holding its key — never by the roles of the
+  repository the event arrived from (§forgejo/decisions/unblock-cascade).
+  This extra read is restricted to **closes**: opens, edits, labels and
+  comments in an inert repository keep the zero-cost pre-re-fetch
+  hold-off, and no other decision — no `implement`, no `reassess`, no
+  review, no merge — may ever follow from an event in a role-less
+  repository.
 - **Admissibility** — whether an action may fire for an object: granted by
   the roles of the repository holding **the object under consideration** —
   the event's object on the event path and the sweep, the cascade key for
