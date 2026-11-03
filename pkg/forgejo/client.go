@@ -98,6 +98,12 @@ type PullRequest struct {
 	// HeadSHA is the SHA of the PR's head commit; it serves as the PR's
 	// activity revision for the watermark.
 	HeadSHA string
+	// Author is the login of the user who opened the pull request. It
+	// is read by the fix-feedback ownership gate: fix-feedback is
+	// dispatched only when the PR's author is the configured
+	// implementer identity (§forgejo/config/implementer-identity,
+	// §forgejo/decisions/loop-prevention, s-git/maitred#143).
+	Author string
 	// Labels are the PR's label names.
 	Labels    []string
 	UpdatedAt time.Time
@@ -438,6 +444,7 @@ type wirePullRequest struct {
 	Head      struct {
 		SHA string `json:"sha"`
 	} `json:"head"`
+	User      wireUser    `json:"user"`
 	Labels    []wireLabel `json:"labels"`
 	UpdatedAt time.Time   `json:"updated_at"`
 	HTMLURL   string      `json:"html_url"`
@@ -497,6 +504,7 @@ func toPullRequest(w wirePullRequest) PullRequest {
 		Merged:    w.Merged,
 		Mergeable: w.Mergeable,
 		HeadSHA:   w.Head.SHA,
+		Author:    w.User.Login,
 		Labels:    labelNames(w.Labels),
 		UpdatedAt: w.UpdatedAt,
 		HTMLURL:   w.HTMLURL,

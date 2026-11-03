@@ -296,7 +296,11 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		if err != nil {
 			return ev, State{}, err
 		}
-		st := State{PR: pr}
+		// The implementer identity rides on the state verbatim from the
+		// config: the fix-feedback ownership gate reads it alongside
+		// the PR's author (§forgejo/config/implementer-identity,
+		// §forgejo/decisions/inputs, s-git/maitred#143).
+		st := State{PR: pr, ImplementerIdentity: e.cfg.ImplementerIdentity}
 		switch ev.Type {
 		case EventPROpened, EventPRReviewed, EventPRCommented, EventReconcile:
 			// The one hop performed wherever the reject-pr test and the
@@ -859,7 +863,7 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 	// empty SyncSets and a member of an open set would merge here, on
 	// the one path the labels table forbids it on
 	// (§forgejo/decisions/sync-set, §forgejo/decisions/unblock-cascade).
-	st := State{PR: pr, Reviews: reviews}
+	st := State{PR: pr, Reviews: reviews, ImplementerIdentity: e.cfg.ImplementerIdentity}
 	if err := e.fetchPRSetState(owner, name, k.Number, &st); err != nil {
 		return err
 	}

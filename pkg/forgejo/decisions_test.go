@@ -237,6 +237,19 @@ func openPR(sha string) *PullRequest {
 	}
 }
 
+// openPRBy returns an open PR authored by the given login: the input
+// to the fix-feedback ownership gate (§forgejo/decisions/loop-prevention,
+// s-git/maitred#143).
+func openPRBy(author, sha string) *PullRequest {
+	pr := openPR(sha)
+	pr.Author = author
+	return pr
+}
+
+// testImplementerIdentity is the configured implementer identity used
+// by the ownership-gate fixtures (§forgejo/config/implementer-identity).
+const testImplementerIdentity = "s-autonomics-implementer"
+
 // gateBlocker returns an issue blocker on a connected issue, for the
 // merge gate (§forgejo/decisions/merge-gate).
 func gateBlocker(repo string, number int, state string) Issue {
@@ -773,6 +786,51 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionFixFeedback,
 		},
 		{
+			// The ownership gate: fix-feedback is the implementer's
+			// action, dispatched only when the PR's author is the
+			// configured implementer identity — a human handling their
+			// own PR must not be collided with
+			// (§forgejo/decisions/loop-prevention, s-git/maitred#143).
+			name:  "PR review changes-requested on a PR not authored by the implementer identity holds off",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:                  openPRBy("skrewz-bot", "abc"),
+				Reviews:             []Review{review(ReviewChangesRequested, "carol", testTime)},
+				ImplementerIdentity: testImplementerIdentity,
+			},
+		},
+		{
+			name:  "PR review changes-requested on a PR authored by the implementer identity dispatches fix-feedback",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:                  openPRBy(testImplementerIdentity, "abc"),
+				Reviews:             []Review{review(ReviewChangesRequested, "carol", testTime)},
+				ImplementerIdentity: testImplementerIdentity,
+			},
+			wantAction: ActionFixFeedback,
+		},
+		{
+			// An unset identity keeps the gate inert: dispatch exactly
+			// as before, whatever the author (§forgejo/config/implementer-identity).
+			name:       "PR review changes-requested with no implementer identity configured dispatches fix-feedback whatever the author",
+			event:      prEvent(EventPRReviewed, "carol"),
+			state:      State{PR: openPRBy("skrewz-bot", "abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
+			wantAction: ActionFixFeedback,
+		},
+		{
+			// The gate covers fix-feedback alone: reviewing and
+			// reporting on a human-owned PR remain intended
+			// (s-git/maitred#143).
+			name:  "PR review approved on a PR not authored by the implementer identity dispatches merge-or-wait",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:                  openPRBy("skrewz-bot", "abc"),
+				Reviews:             []Review{review("APPROVED", "carol", testTime)},
+				ImplementerIdentity: testImplementerIdentity,
+			},
+			wantAction: ActionMergeOrWait,
+		},
+		{
 			name:       "PR review approved dispatches merge-or-wait",
 			event:      prEvent(EventPRReviewed, "carol"),
 			state:      State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
@@ -1127,6 +1185,57 @@ func TestDecide(t *testing.T) {
 			event:      prEvent(EventReconcile, "maitred"),
 			state:      State{PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
 			wantAction: ActionFixFeedback,
+		},
+		{
+			// The sweep follows a changes-requested review into
+			// fix-feedback only for a PR the implementer identity owns
+			// (§forgejo/decisions/loop-prevention, s-git/maitred#143).
+			name:  "reconcile PR standing at a changes-requested review on a PR not authored by the implementer identity holds off",
+			event: prEvent(EventReconcile, "maitred"),
+			state: State{
+				PR:                  openPRBy("skrewz-bot", "abc"),
+				Reviews:             []Review{review(ReviewChangesRequested, "carol", testTime)},
+				ImplementerIdentity: testImplementerIdentity,
+			},
+		},
+		{
+			name:  "reconcile PR standing at a comment review on a PR not authored by the implementer identity holds off",
+			event: prEvent(EventReconcile, "maitred"),
+			state: State{
+				PR:                  openPRBy("skrewz-bot", "abc"),
+				Reviews:             []Review{review("COMMENT", "carol", testTime)},
+				ImplementerIdentity: testImplementerIdentity,
+			},
+		},
+		{
+			name:  "reconcile PR standing at a comment review authored by the implementer identity dispatches fix-feedback",
+			event: prEvent(EventReconcile, "maitred"),
+			state: State{
+				PR:                  openPRBy(testImplementerIdentity, "abc"),
+				Reviews:             []Review{review("COMMENT", "carol", testTime)},
+				ImplementerIdentity: testImplementerIdentity,
+			},
+			wantAction: ActionFixFeedback,
+		},
+		{
+			// The sweep's other PR rows are untouched by the gate:
+			// an approved human-owned PR still reaches
+			// merge-or-wait, a synced one still reaches review
+			// (s-git/maitred#143).
+			name:  "reconcile PR standing at an approved review on a PR not authored by the implementer identity dispatches merge-or-wait",
+			event: prEvent(EventReconcile, "maitred"),
+			state: State{
+				PR:                  openPRBy("skrewz-bot", "abc"),
+				Reviews:             []Review{review("APPROVED", "carol", testTime)},
+				ImplementerIdentity: testImplementerIdentity,
+			},
+			wantAction: ActionMergeOrWait,
+		},
+		{
+			name:       "PR synced on a PR not authored by the implementer identity dispatches review",
+			event:      prEvent(EventPRSynced, "skrewz-bot"),
+			state:      State{PR: openPRBy("skrewz-bot", "abc"), ImplementerIdentity: testImplementerIdentity},
+			wantAction: ActionReview,
 		},
 		{
 			name:       "reconcile PR standing at a changes-requested review dispatches fix-feedback",
@@ -1581,6 +1690,48 @@ func TestDecide(t *testing.T) {
 			}
 			if d.Reason == "" {
 				t.Error("Reason is empty; every decision carries a reason")
+			}
+		})
+	}
+}
+
+// TestDecide_FixFeedbackOwnershipHoldOffNamesAuthor pins the
+// acceptance that a fix-feedback transition on a PR whose author is
+// not the configured implementer identity holds off with a reason
+// naming both the PR's author and the identity
+// (§forgejo/decisions/loop-prevention, s-git/maitred#143).
+func TestDecide_FixFeedbackOwnershipHoldOffNamesAuthor(t *testing.T) {
+	cases := []struct {
+		name  string
+		event Event
+		state State
+	}{
+		{
+			name:  "review submitted, changes requested",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{PR: openPRBy("skrewz-bot", "abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}, ImplementerIdentity: testImplementerIdentity},
+		},
+		{
+			name:  "reconcile standing at a changes-requested review",
+			event: prEvent(EventReconcile, "maitred"),
+			state: State{PR: openPRBy("skrewz-bot", "abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}, ImplementerIdentity: testImplementerIdentity},
+		},
+		{
+			name:  "reconcile standing at a comment review",
+			event: prEvent(EventReconcile, "maitred"),
+			state: State{PR: openPRBy("skrewz-bot", "abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}, ImplementerIdentity: testImplementerIdentity},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := Decide(tc.event, tc.state, nil)
+			if !d.HoldOff() {
+				t.Fatalf("HoldOff() = false with action %q, want hold-off (reason: %s)", d.Action, d.Reason)
+			}
+			for _, want := range []string{"skrewz-bot", testImplementerIdentity} {
+				if !strings.Contains(d.Reason, want) {
+					t.Errorf("reason %q does not name %q", d.Reason, want)
+				}
 			}
 		})
 	}

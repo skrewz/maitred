@@ -51,7 +51,8 @@ type PromptConfig struct {
 }
 
 // Config is the engine's configuration: canned prompts plus the scalar
-// keys (§forgejo/config/canned-prompts, §forgejo/config/decomposer-identity).
+// keys (§forgejo/config/canned-prompts, §forgejo/config/decomposer-identity,
+// §forgejo/config/implementer-identity).
 type Config struct {
 	// Org is the organisation whose role-holding repositories the
 	// engine tracks (§forgejo/webhook/repository-roles).
@@ -67,6 +68,14 @@ type Config struct {
 	// forest-seeding label gates a member, not its author
 	// (s-git/maitred#135). Unset is never a load error.
 	DecomposerIdentity string `yaml:"decomposer_identity"`
+	// ImplementerIdentity names the Forgejo identity that implements
+	// work and fixes review feedback (§forgejo/config/implementer-identity).
+	// Optional: when set, the fix-feedback ownership gate holds the
+	// action off on PRs authored by anyone else; when unset the gate
+	// is inert and fix-feedback dispatches as before
+	// (§forgejo/decisions/loop-prevention, s-git/maitred#143). Unset is
+	// never a load error.
+	ImplementerIdentity string `yaml:"implementer_identity"`
 	// Actions maps each action the decision function references to its
 	// canned prompt.
 	Actions map[string]PromptConfig `yaml:"actions"`
@@ -206,10 +215,11 @@ func loadConfigFile(path string) (*Config, error) {
 }
 
 // loadConfigDir parses every .yaml/.yml file in dir, in sorted order,
-// and merges them: the org and the optional decomposer identity must
-// agree, and an action may be defined in only one file
-// (§forgejo/config/loading, §forgejo/config/validation,
-// §forgejo/config/decomposer-identity).
+// and merges them: the org, the optional decomposer identity, and the
+// optional implementer identity must agree, and an action may be
+// defined in only one file (§forgejo/config/loading,
+// §forgejo/config/validation, §forgejo/config/decomposer-identity,
+// §forgejo/config/implementer-identity).
 func loadConfigDir(dir string) (*Config, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -251,6 +261,12 @@ func loadConfigDir(dir string) (*Config, error) {
 		}
 		if cfg.DecomposerIdentity != "" {
 			merged.DecomposerIdentity = cfg.DecomposerIdentity
+		}
+		if cfg.ImplementerIdentity != "" && merged.ImplementerIdentity != "" && cfg.ImplementerIdentity != merged.ImplementerIdentity {
+			return nil, fmt.Errorf("config %q: implementer_identity %q conflicts with %q", name, cfg.ImplementerIdentity, merged.ImplementerIdentity)
+		}
+		if cfg.ImplementerIdentity != "" {
+			merged.ImplementerIdentity = cfg.ImplementerIdentity
 		}
 		if merged.Actions == nil {
 			merged.Actions = make(map[string]PromptConfig)

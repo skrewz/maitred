@@ -111,6 +111,32 @@ repository-marking vocabulary cannot answer; and the identity must be the
 operator's declaration, not something the engine infers. The key records
 who composes forests; it decides nothing (s-git/maitred#135).
 
+## Implementer identity
+
+One optional key names the Forgejo identity that implements work and
+fixes review feedback:
+
+| Key | Required | Value |
+|---|---|---|
+| `implementer_identity` | no | the login of the implementer account; the `fix-feedback` dispatch compares the PR's author against it — a PR authored by anyone else holds the action off (§forgejo/decisions/loop-prevention, s-git/maitred#143) |
+
+The key is **optional**: an unset optional key is never a load error
+(§forgejo/config/validation). Unset, the ownership gate is **inert**:
+`fix-feedback` dispatches exactly as before, whatever the PR's author
+— a missing declaration is not treated as a gate. In a directory
+merge, files that set the key must agree, exactly as with the org and
+the decomposer identity; a conflict is a load error.
+
+Why a config key follows the decomposer identity's reasoning: topics
+mark repositories, not users, and the gate must be the operator's
+declaration, not something the engine infers. The two keys name
+different roles: the decomposer composes forests and decides nothing
+(s-git/maitred#135); the implementer implements and fixes, and its
+identity holds `fix-feedback` off the pull requests it does not own —
+the churn of an implementer dispatched onto a human's PR, answering
+reviews the human is handling themselves, is what the gate prevents
+(s-git/s-puppet#118, s-git/maitred#143).
+
 ## Placeholders
 
 Prompt templates are Go `text/template` templates. The engine fills the
@@ -145,11 +171,13 @@ Loading **fails at load time** — mirroring the trigger `Validate()` — when:
   in the placeholder table above,
 - the config names an action the decision function does not dispatch,
 - the org is missing, or a directory's files disagree about it, about
-  `reconcile_interval`, or about `decomposer_identity`,
+  `reconcile_interval`, about `decomposer_identity`, or about
+  `implementer_identity`,
 - a directory's files define the same action twice.
 
-Optional keys are the exception: `decomposer_identity` unset is valid and
-never a load error (§forgejo/config/decomposer-identity).
+Optional keys are the exception: `decomposer_identity` and
+`implementer_identity` unset are valid and never a load error
+(§forgejo/config/decomposer-identity, §forgejo/config/implementer-identity).
 
 Loading fails **closed**, and that fixes the upgrade ordering: a binary
 that references a new action requires every deployment's config to
