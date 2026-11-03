@@ -8,6 +8,11 @@
 #           -v /path/to/config:/etc/maitred:Z,ro \
 #           -v /path/to/data:/var/lib/maitred:Z \
 #           maitred:latest
+#
+# Note:   the MAITRED_* ENVs below are the fallback only — the flags the
+#         CMD passes take precedence. Overriding CMD without --data-dir
+#         now writes state to /var/lib/maitred rather than the
+#         WORKDIR-relative /var/lib/maitred/data.
 # ---------------------------------------------------------------------------
 FROM golang:1.26-trixie AS builder
 
@@ -38,8 +43,18 @@ USER maitred
 
 EXPOSE 9090 9091
 
+# The dirs the process runs on, also as ENVs, so any invocation —
+# including a flag-free `--health` once flag/env/default resolution
+# lands — resolves the same configuration the CMD passes. Flags still
+# override these.
+ENV MAITRED_TRIGGER_DIR=/etc/maitred/triggers.d
+ENV MAITRED_DATA_DIR=/var/lib/maitred
+
+# The probe must target the same dirs the CMD below passes: config is
+# mounted at /etc/maitred, not under WORKDIR, so `--health` with no
+# flags would probe defaults the image does not ship and stay dark.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD /usr/local/bin/maitred --health || exit 1
+    CMD /usr/local/bin/maitred --health --trigger-dir /etc/maitred/triggers.d --data-dir /var/lib/maitred || exit 1
 
 ENTRYPOINT ["/usr/local/bin/maitred"]
 CMD ["--trigger-dir", "/etc/maitred/triggers.d", "--data-dir", "/var/lib/maitred"]
