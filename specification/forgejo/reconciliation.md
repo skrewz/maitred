@@ -99,6 +99,9 @@ while the prior task is still pending).
 | `wrap-up` | the issue is open, carries the `outcome` label, and has no open blockers |
 | `teardown-forest` | the issue is open, carries the `ideation` label, carries the `teardown-forest` label **and blocks at least one issue** — the forest still standing is the state that calls for the deletion, so a teardown that died half way through re-fires until the graph is empty, and stops the sweep the moment it is (§forgejo/decisions/forest-teardown) |
 | `merge-or-wait` | the PR is open, its latest review approves at head, no connected issue has an open blocker (the merge gate, §forgejo/decisions/merge-gate), and it carries the `agentic-auto-merge` label — the label is the whole point: an approved PR with no opt-in waits on a human, and only the sweep's row for a labelled, approved, unblocked PR is exempt |
+| `review` | the PR is open, mergeable and has **no reviews** — the review the sweep would ask for has still not happened, and the `trigger-review` label is not needed to ask again (§forgejo/decisions/label-triggered-review) |
+| `re-review` | the PR is open, mergeable, has at least one review, and its **latest review is not at the current head sha** — the head carries work no reviewer has looked at |
+| `fix-feedback` | the PR is open, mergeable, and its latest review **at the current head** requests changes, or is a comment review — feedback was asked for and the head has not moved since |
 
 `ideation` and `outcome` are reserved label names, not configuration.
 They match **case-insensitively**: a label name is a user-authored
@@ -143,12 +146,12 @@ closing a member, a human restating the order: the candidate not fired
 by any event is caught within one reconcile interval.
 by any event is caught within one reconcile interval.
 
-All other actions — `implement`, `reassess`, `review`, `re-review`,
-`rebase`, `fix-feedback`, and `merge-or-wait` on any path other than
-the sweep's exempt row above — keep revision-keyed watermarks:
-re-dispatching those would re-run real work. The exemption is the
-sweep's row alone; on the event path `merge-or-wait` stays
-revision-keyed, so an approving review never re-fires on its own
+All other actions — `implement`, `reassess`, `rebase`, `merge-or-wait`
+on any path other than a sweep row exempted above — keep
+revision-keyed watermarks: re-dispatching those would re-run real
+work. The `review`, `re-review` and `fix-feedback` exemptions are the
+sweep's rows alone; on the event path those actions stay
+revision-keyed, so a push or a review never re-fires on its own
 (§forgejo/decisions/loop-prevention).
 
 The `merge-or-wait` row is exempt for the reason `teardown-forest`
@@ -170,6 +173,30 @@ its function with the PR-commented event, which decides the same state
 under the ordinary guard: the exemption reads the **event**, not the
 shape of the state, exactly as `decompose`'s event rows keep the guard
 for their own action.
+
+A PR waiting to be reviewed sits at a **frozen head sha** — by
+definition nobody is pushing to it while it waits — so a
+revision-keyed watermark makes it a fixed point the sweep can never
+fire on, and a review dispatch that went nowhere never recovers. The
+state is therefore its watermark: the sweep re-fires until the state
+changes, and every state in the table above is self-limiting — a
+review at head ends `review` and `re-review` (the review-following
+rows then own the PR, §forgejo/decisions/transition-table), a push
+ends `fix-feedback`, and the sweep enumerates **open** pull requests
+only, so a merged or closed PR stops firing at once
+(§forgejo/reconciliation/the-sweep). Recovery latency is one
+`reconcile_interval`. Re-fires are bounded twice over: the queue's
+`(action, revision)` dedup key squelches a re-dispatch only while an
+identical task is still `PENDING` — a fact the queue reports for
+pending tasks alone, which is what makes the exemption able to recover
+a lost dispatch rather than be blocked by the dead one — and every
+canned prompt's timeout is minutes against an interval measured in
+hours, so a re-fire cannot overtake a task still running
+(§forgejo/config/canned-prompts, §forgejo/webhook/the-pipeline).
+Because these rows are reached from `decidePRSynced`, which the synced
+event shares, the exemption keys on the **event**, not the shape of
+the state, exactly as the `merge-or-wait` row does
+(§forgejo/reconciliation/watermark-exemptions).
 
 A hold-off for a watermark-exempt action always names the state fact
 that calls for no action (e.g. `blocked by N open issue(s)`); the

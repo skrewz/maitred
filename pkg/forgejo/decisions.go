@@ -686,6 +686,17 @@ func decideRejectPR(pr *PullRequest, s State, w *Watermark) (Decision, bool) {
 // the author's own push — while the revision-keyed watermark guard
 // keeps the label merely present from re-firing
 // (§forgejo/decisions/label-triggered-review).
+// The sweep's rows for review and re-review are watermark-exempt:
+// a PR waiting to be reviewed sits at a frozen head sha, so a
+// revision-keyed watermark makes it a fixed point the sweep can never
+// fire on and a review dispatch that went nowhere never recovers. The
+// exempt states are self-limiting — no review at all, or a latest
+// review standing at an older revision, is the state that calls for
+// asking again, and a review landing at head ends the exemption —
+// and the exemption is keyed on the event, not the state: the same
+// rows reached from the PR-synced event keep the revision-keyed guard
+// (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/decisions/loop-prevention).
 func decidePRSynced(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
 	if pr == nil {
@@ -704,19 +715,28 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 	if len(s.Reviews) > 0 {
 		action = ActionReReview
 	}
+	// The exemption's state: no review has landed at all (the review
+	// the sweep would ask for has still not happened), or the latest
+	// review stands at a revision the head has moved past (the head
+	// carries work no reviewer has looked at). A review at head is
+	// self-limiting and stays under the guard — the review-following
+	// rows own the PR then, and an unknown review type at head must
+	// not read as unreviewed work (§forgejo/reconciliation/watermark-exemptions).
+	latest := latestReview(s.Reviews)
+	exempt := onSweep(e) && (latest == nil || latest.CommitID != pr.HeadSHA)
 	if carriesLabel(pr.Labels, LabelTriggerReview) {
-		if alreadyDispatched(w, action, pr.HeadSHA) {
+		if !exempt && alreadyDispatched(w, action, pr.HeadSHA) {
 			return holdOff(fmt.Sprintf("%s already dispatched at revision %s", action, pr.HeadSHA))
 		}
-		return dispatch(action, fmt.Sprintf("PR %d carries the %s label: explicit request for a review at head %s", pr.Number, LabelTriggerReview, pr.HeadSHA))
+		return dispatchOnState(w, exempt, action, pr.HeadSHA, fmt.Sprintf("PR %d carries the %s label: explicit request for a review at head %s", pr.Number, LabelTriggerReview, pr.HeadSHA))
 	}
-	if alreadyDispatched(w, action, pr.HeadSHA) {
+	if !exempt && alreadyDispatched(w, action, pr.HeadSHA) {
 		return holdOff(fmt.Sprintf("%s already dispatched at revision %s", action, pr.HeadSHA))
 	}
-	if latest := latestReview(s.Reviews); latest != nil && latest.Author == e.Sender {
+	if latest != nil && latest.Author == e.Sender {
 		return holdOff(fmt.Sprintf("PR %d commit pushed by the reviewing author %s; not re-reviewing the reviewer's own push", pr.Number, e.Sender))
 	}
-	return dispatch(action, fmt.Sprintf("PR %d synced (head %s)", pr.Number, pr.HeadSHA))
+	return dispatchOnState(w, exempt, action, pr.HeadSHA, fmt.Sprintf("PR %d synced (head %s)", pr.Number, pr.HeadSHA))
 }
 
 // decidePRReconcile handles the reconciliation sweep's synthetic
@@ -737,13 +757,17 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 // author is not the configured implementer identity holds off
 // (§forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention,
 // s-git/maitred#143).
-// The approved row is the one place a PR path is watermark-exempt, and
-// only when the PR opts into merging on its own with the
-// agentic-auto-merge label: an approved auto-merge PR at a frozen head
-// sha is then re-fired whatever its watermark records
-// (§forgejo/reconciliation/watermark-exemptions). Because the PR-
-// commented event shares this function, the exemption tests the event,
-// not the state: only the sweep is exempt.
+// The changes-requested and comment rows are watermark-exempt on the
+// sweep, and the approved row is exempt only when the PR opts into
+// merging on its own with the agentic-auto-merge label: a PR standing
+// at a review at a frozen head sha is then re-fired whatever its
+// watermark records (§forgejo/reconciliation/watermark-exemptions).
+// A fix-feedback dispatch that died recovers on the next sweep the
+// same way an approved auto-merge PR's merge does: the state — an
+// open, mergeable PR whose latest review at head asks for changes —
+// is self-limiting, ending the moment the author pushes. Because the
+// PR-commented event shares this function, the exemption tests the
+// event, not the state: only the sweep is exempt.
 func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
 	if pr != nil && prOpen(pr) {
@@ -761,18 +785,18 @@ func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 				if d, held := holdOffPRNotOwned(pr, s.ImplementerIdentity); held {
 					return d
 				}
-				if alreadyDispatched(w, ActionFixFeedback, pr.HeadSHA) {
+				if !onSweep(e) && alreadyDispatched(w, ActionFixFeedback, pr.HeadSHA) {
 					return holdOff(fmt.Sprintf("fix-feedback already dispatched at revision %s", pr.HeadSHA))
 				}
-				return dispatch(ActionFixFeedback, fmt.Sprintf("PR %d stands at a changes-requested review by %s", pr.Number, latest.Author))
+				return dispatchOnState(w, onSweep(e), ActionFixFeedback, pr.HeadSHA, fmt.Sprintf("PR %d stands at a changes-requested review by %s", pr.Number, latest.Author))
 			case ReviewComment:
 				if d, held := holdOffPRNotOwned(pr, s.ImplementerIdentity); held {
 					return d
 				}
-				if alreadyDispatched(w, ActionFixFeedback, pr.HeadSHA) {
+				if !onSweep(e) && alreadyDispatched(w, ActionFixFeedback, pr.HeadSHA) {
 					return holdOff(fmt.Sprintf("fix-feedback already dispatched at revision %s", pr.HeadSHA))
 				}
-				return dispatch(ActionFixFeedback, fmt.Sprintf("PR %d stands at a comment review by %s", pr.Number, latest.Author))
+				return dispatchOnState(w, onSweep(e), ActionFixFeedback, pr.HeadSHA, fmt.Sprintf("PR %d stands at a comment review by %s", pr.Number, latest.Author))
 			case ReviewApproved:
 				if d, ok := syncMemberSetHoldOff(pr, s); ok {
 					return d
@@ -835,6 +859,22 @@ func holdOffPRNotOwned(pr *PullRequest, identity string) (Decision, bool) {
 		return Decision{}, false
 	}
 	return holdOff(fmt.Sprintf("PR %d is authored by %s, not the implementer identity %s; fix-feedback is theirs to fix, not the implementer's", pr.Number, pr.Author, identity)), true
+}
+
+// dispatchOnState dispatches an exempt sweep row: the state is the
+// watermark, so the row never consults the guard. When the watermark
+// does happen to already record the action at this revision — the
+// stalled shape the exemption exists to recover — the reason names
+// the revision the state carries past it, so the decision log keeps
+// stating the state fact and never "already dispatched at this
+// revision" (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/observability/the-decision-log). On a guarded row
+// (exempt false) it is a plain dispatch.
+func dispatchOnState(w *Watermark, exempt bool, action Action, revision, reason string) Decision {
+	if exempt && alreadyDispatched(w, action, revision) {
+		reason = fmt.Sprintf("%s; the state calls for %s regardless of revision %s", reason, action, revision)
+	}
+	return dispatch(action, reason)
 }
 
 // decidePRReviewed handles a submitted review: the reject-pr test is
@@ -1441,8 +1481,9 @@ func bodyRevision(issue *Issue) string {
 // path: the same (event, state, revision) does not re-dispatch the same
 // action (§forgejo/decisions/loop-prevention). The watermark exemption
 // is not implemented here: it is scoped to the sweep, whose exempt rows
-// in decideIssueReconcile, and the sweep's merge-or-wait row for an
-// agentic-auto-merge PR in decidePRReconcile, simply never consult the
+// in decideIssueReconcile, and the sweep's PR rows — review and
+// re-review in decidePRSynced, fix-feedback and the labelled
+// merge-or-wait row in decidePRReconcile — simply never consult the
 // watermark (§forgejo/reconciliation/watermark-exemptions). Keying the
 // bypass on the action instead of the path would hand every future
 // event row for those actions a suppression-free path by accident.
