@@ -107,6 +107,16 @@ On each `POST`:
    enqueueing an invocation that names no object
    (§forgejo/config/canned-prompts); the failure is logged and nothing is
    watermarked, so a later sweep or event tries again.
+   The task also **names its work**: its `title` is composed by one helper
+   for both event kinds — the action's verb, the title of the object the
+   state carries (the pull request where one is present, the issue
+   otherwise), and the `repo#number` reference, e.g.
+   `Review: Make everything awesome and pink (o/r#1337)` — with the
+   subject capped so a long issue title cannot produce an unreadable row.
+   Its `url` is the pull request's `html_url` where the state carries one,
+   the issue's otherwise, and empty where the state carries neither — the
+   engine never invents a link. A state with no object at all therefore
+   yields a title naming only the action and the reference, and no URL.
 7. **Watermark.** A dispatch records its watermark — the action and the
    revision (the PR head sha, or the issue's `updated_at`) — in the store
    (§forgejo/state/watermark); a hold-off records nothing. Each key of the

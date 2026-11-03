@@ -1393,6 +1393,105 @@ func TestDispatch_DedupKeyDistinctRepos(t *testing.T) {
 	}
 }
 
+// TestDispatch_TitleAndRefURL: a dispatch names its work. The title reads
+// as the action's verb, the subject's issue or PR title, and the
+// `repo#number` reference; the URL is the pull request's when the state
+// carries one and the issue's otherwise — empty where the state carries
+// neither, since the engine invents no link. A long subject is capped so
+// it cannot produce an unreadable row (§forgejo/webhook/the-pipeline).
+func TestDispatch_TitleAndRefURL(t *testing.T) {
+	long := strings.Repeat("x", maxTaskSubjectRunes+40)
+
+	cases := []struct {
+		name   string
+		prompt *PromptConfig
+		ev     Event
+		st     State
+		action Action
+		want   string
+		url    string
+	}{
+		{
+			name:   "issue dispatch",
+			ev:     Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"},
+			st:     State{Issue: testIssue(7, "open")},
+			action: ActionImplement,
+			want:   "Implement: issue 7 (o/r#7)",
+			url:    "https://forge.example.com/o/r/issues/7",
+		},
+		{
+			name:   "pull request dispatch",
+			ev:     Event{Type: EventPRSynced, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "alice"},
+			st:     State{PR: testPR(9, "open", true)},
+			action: ActionReview,
+			want:   "Review: pr 9 (o/r#9)",
+			url:    "https://forge.example.com/o/r/pulls/9",
+		},
+		{
+			// A pull request alongside its issue is named by the pull
+			// request: title and URL name the same object.
+			name:   "pull request dispatch with its issue",
+			ev:     Event{Type: EventPRSynced, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "alice"},
+			st:     State{Issue: testIssue(7, "open"), PR: testPR(9, "open", true)},
+			action: ActionMergeOrWait,
+			want:   "Merge-or-wait: pr 9 (o/r#9)",
+			url:    "https://forge.example.com/o/r/pulls/9",
+		},
+		{
+			// The state carries neither object, so the title names only
+			// the action and the reference and no URL is invented. A
+			// prompt naming no URL placeholder keeps dispatching
+			// (§forgejo/config/canned-prompts).
+			name:   "state with no object",
+			prompt: &PromptConfig{Prompt: "/housekeeping {{.Repo}}", Persona: "sweeper", Timeout: time.Hour},
+			ev:     Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"},
+			st:     State{},
+			action: ActionWrapUp,
+			want:   "Wrap-up (o/r#7)",
+		},
+		{
+			name:   "long subject is capped",
+			ev:     Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"},
+			st:     State{Issue: &Issue{Number: 7, Title: long, State: "open", HTMLURL: "https://forge.example.com/o/r/issues/7"}},
+			action: ActionImplement,
+			want:   "Implement: " + strings.Repeat("x", maxTaskSubjectRunes-1) + "… (o/r#7)",
+			url:    "https://forge.example.com/o/r/issues/7",
+		},
+		{
+			// A reference so long that no subject fits the line leaves
+			// the action-and-reference form, capped.
+			name:   "reference leaving no room for a subject",
+			ev:     Event{Type: EventIssueOpened, Repo: strings.Repeat("r", maxTaskTitleRunes), Kind: KindIssue, Number: 7, Sender: "alice"},
+			st:     State{Issue: testIssue(7, "open")},
+			action: ActionImplement,
+			want:   "Implement (" + strings.Repeat("r", maxTaskTitleRunes-len("Implement (")-1) + "…",
+			url:    "https://forge.example.com/o/r/issues/7",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, _, q, _ := newTestEngine(t)
+			if tc.prompt != nil {
+				eng.cfg.Actions[string(tc.action)] = *tc.prompt
+			}
+			if err := eng.dispatch(tc.ev, tc.st, tc.action); err != nil {
+				t.Fatalf("dispatch: %v", err)
+			}
+			tasks := q.all()
+			if len(tasks) != 1 {
+				t.Fatalf("got %d tasks, want 1", len(tasks))
+			}
+			if tasks[0].Title != tc.want {
+				t.Errorf("title = %q, want %q", tasks[0].Title, tc.want)
+			}
+			if tasks[0].URL != tc.url {
+				t.Errorf("url = %q, want %q", tasks[0].URL, tc.url)
+			}
+		})
+	}
+}
+
 // TestDispatch_WithoutURLArgument: a canned prompt that asks for a URL the
 // state cannot fill renders as a command naming no object — "/issue-
 // implementer " — and Pi reports nothing over one, so the persona would
