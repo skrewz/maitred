@@ -67,6 +67,22 @@ func testPR(number int, state string, mergeable bool) *PullRequest {
 	}
 }
 
+// authoredPR is testPR with the PR's author set — the field the
+// fix-feedback ownership gate reads alongside the configured
+// implementer identity (§forgejo/config/implementer-identity).
+func authoredPR(number int, state string, mergeable bool, author string) *PullRequest {
+	pr := testPR(number, state, mergeable)
+	pr.Author = author
+	return pr
+}
+
+// setImplementerIdentity declares the implementer identity on the
+// engine's config, engaging the fix-feedback ownership gate
+// (§forgejo/config/implementer-identity).
+func setImplementerIdentity(cfg *Config) {
+	cfg.ImplementerIdentity = testImplementerIdentity
+}
+
 // fakeAPI is a fake Forgejo API for the webhook tests
 // (§forgejo/client/operations).
 type fakeAPI struct {
@@ -526,6 +542,9 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 		action    string
 		payload   map[string]any
 		setup     func(api *fakeAPI)
+		// configure adjusts the engine's config for the case;
+		// nil keeps testConfig's defaults.
+		configure func(cfg *Config)
 		want      Action // empty: no dispatch
 	}{
 		{
@@ -719,6 +738,36 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			want: ActionFixFeedback,
 		},
 		{
+			// The ownership gate's wiring at engine level: config
+			// → state → decision → (no) dispatch. The fixtures
+			// above leave the identity unset, so their fix-feedback
+			// rows pass on the gate's inert branch; these rows pin
+			// that a dropped or unparsed identity cannot silently
+			// restore the churn this gate exists to stop
+			// (§forgejo/config/implementer-identity,
+			// §forgejo/decisions/loop-prevention).
+			name:      "PR reviewed, rejected on a PR not authored by the configured implementer identity",
+			eventType: "pull_request_review_rejected", action: "rejected",
+			payload:   prPayload("o/r", 9, "rejected"),
+			configure: setImplementerIdentity,
+			setup: func(api *fakeAPI) {
+				api.pulls[9] = authoredPR(9, "open", true, "dave")
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewChangesRequested}}
+			},
+			want: "",
+		},
+		{
+			name:      "PR reviewed, rejected on a PR authored by the configured implementer identity",
+			eventType: "pull_request_review_rejected", action: "rejected",
+			payload:   prPayload("o/r", 9, "rejected"),
+			configure: setImplementerIdentity,
+			setup: func(api *fakeAPI) {
+				api.pulls[9] = authoredPR(9, "open", true, testImplementerIdentity)
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewChangesRequested}}
+			},
+			want: ActionFixFeedback,
+		},
+		{
 			name:      "PR reviewed, comment, hold off",
 			eventType: "pull_request_review_comment", action: "created",
 			payload: prPayload("o/r", 9, "created"),
@@ -756,6 +805,20 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 				api.reviews[9] = []Review{{Author: "bob", Event: ReviewChangesRequested, CommitID: "sha-9", SubmittedAt: testUpdatedAt}}
 			},
 			want: ActionFixFeedback,
+		},
+		{
+			// The same wiring on the comment path, which decides
+			// as the reconcile sweep does
+			// (§forgejo/decisions/transition-table).
+			name:      "PR commented, standing at a changes-requested review on a PR not authored by the configured implementer identity",
+			eventType: "pull_request_comment", action: "created",
+			payload:   prPayload("o/r", 9, "created"),
+			configure: setImplementerIdentity,
+			setup: func(api *fakeAPI) {
+				api.pulls[9] = authoredPR(9, "open", true, "dave")
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewChangesRequested, CommitID: "sha-9", SubmittedAt: testUpdatedAt}}
+			},
+			want: "",
 		},
 		{
 			name:      "PR commented, standing at a comment review",
@@ -804,6 +867,9 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			eng, api, q, _ := newTestEngine(t)
 			h := NewHandler(eng, "s3cret", nil)
+			if tc.configure != nil {
+				tc.configure(eng.cfg)
+			}
 			tc.setup(api)
 
 			rec := serve(t, h, signedRequest(t, "s3cret", tc.eventType, tc.action, tc.payload))

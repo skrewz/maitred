@@ -818,6 +818,22 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionFixFeedback,
 		},
 		{
+			// A PR whose author is empty (no user in the API
+			// response) reads as not owned when an identity is
+			// configured: the fail-closed exact match, pinned at
+			// the decision level so a future TrimSpace- or
+			// EqualFold-style tweak to the comparison cannot
+			// silently widen who gets dispatched
+			// (§forgejo/client/operations, s-git/maitred#143).
+			name:  "PR review changes-requested with an empty author and a configured implementer identity holds off",
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR:                  openPRBy("", "abc"),
+				Reviews:             []Review{review(ReviewChangesRequested, "carol", testTime)},
+				ImplementerIdentity: testImplementerIdentity,
+			},
+		},
+		{
 			// The gate covers fix-feedback alone: reviewing and
 			// reporting on a human-owned PR remain intended
 			// (s-git/maitred#143).
