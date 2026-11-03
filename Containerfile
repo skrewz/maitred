@@ -38,6 +38,13 @@ USER maitred
 
 EXPOSE 9090 9091
 
+# The dirs the process runs on, also as ENVs, so any invocation —
+# including a flag-free `--health` once flag/env/default resolution
+# lands — resolves the same configuration the CMD passes. Flags still
+# override these.
+ENV MAITRED_TRIGGER_DIR=/etc/maitred/triggers.d
+ENV MAITRED_DATA_DIR=/var/lib/maitred
+
 # The probe must target the same dirs the CMD below passes: config is
 # mounted at /etc/maitred, not under WORKDIR, so `--health` with no
 # flags would probe defaults the image does not ship and stay dark.

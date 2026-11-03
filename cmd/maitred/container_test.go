@@ -137,3 +137,53 @@ func containsToken(argv []string, tok string) bool {
 	}
 	return false
 }
+
+// envValues returns the KEY=VALUE pairs declared by ENV instructions,
+// keyed by name. Both the `ENV KEY=VALUE` form and the paired
+// `ENV KEY VALUE` form are accepted.
+func envValues(t *testing.T, content string) map[string]string {
+	t.Helper()
+	envs := make(map[string]string)
+	for _, line := range logicalLines(content) {
+		if !strings.HasPrefix(line, "ENV ") {
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(line, "ENV "))
+		if key, val, ok := strings.Cut(rest, "="); ok {
+			envs[strings.TrimSpace(key)] = strings.TrimSpace(val)
+			continue
+		}
+		if fields := strings.Fields(rest); len(fields) == 2 {
+			envs[fields[0]] = fields[1]
+		}
+	}
+	return envs
+}
+
+// The image must also carry MAITRED_TRIGGER_DIR and MAITRED_DATA_DIR as
+// ENVs naming the same directories the CMD passes, so flag-free
+// invocations of the binary resolve the same configuration the process
+// runs on (the issue's ENV alternative).
+func TestContainerfileDeclaresDirEnvs(t *testing.T) {
+	content := containerfilePath(t)
+
+	envs := envValues(t, content)
+	cmd := entrypointCMDArgs(t, content)
+	for flag, key := range map[string]string{
+		"--trigger-dir": "MAITRED_TRIGGER_DIR",
+		"--data-dir":    "MAITRED_DATA_DIR",
+	} {
+		want := flagValue(cmd, flag)
+		if want == "" {
+			t.Fatalf("CMD does not pass %s explicitly: %v", flag, cmd)
+		}
+		got, ok := envs[key]
+		if !ok {
+			t.Errorf("Containerfile declares no ENV %s", key)
+			continue
+		}
+		if got != want {
+			t.Errorf("ENV %s = %q, want %q (must match CMD's %s)", key, got, want, flag)
+		}
+	}
+}
