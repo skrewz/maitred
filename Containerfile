@@ -8,6 +8,11 @@
 #           -v /path/to/config:/etc/maitred:Z,ro \
 #           -v /path/to/data:/var/lib/maitred:Z \
 #           maitred:latest
+#
+# Note:   the MAITRED_* ENVs below are the fallback only — the flags the
+#         CMD passes take precedence. Overriding CMD without --data-dir
+#         now writes state to /var/lib/maitred rather than the
+#         WORKDIR-relative /var/lib/maitred/data.
 # ---------------------------------------------------------------------------
 FROM golang:1.26-trixie AS builder
 
