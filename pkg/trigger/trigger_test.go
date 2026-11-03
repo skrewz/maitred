@@ -1382,3 +1382,99 @@ func TestTriggerDefinition_Validate_HoldOffConditionsValid(t *testing.T) {
 		t.Errorf("expected no error, got: %v", err)
 	}
 }
+
+func TestLoadTriggerDefinition_Title(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "titled-trigger"
+    type: periodic
+    schedule: "@every 1h"
+    title: "Nightly research sweep"
+    prompt: "Research changes since {{ .LastRun }}"
+  - id: "untitled-trigger"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "Research changes since {{ .LastRun }}"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(defs) != 2 {
+		t.Fatalf("expected 2 triggers, got %d", len(defs))
+	}
+
+	if defs[0].Title != "Nightly research sweep" {
+		t.Errorf("expected title 'Nightly research sweep', got %q", defs[0].Title)
+	}
+
+	if defs[1].Title != "" {
+		t.Errorf("expected empty title, got %q", defs[1].Title)
+	}
+}
+
+func TestTriggerDefinition_EvalTitleTemplate(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:       "test",
+		Type:     trigger.TypePeriodic,
+		Schedule: "@every 1h",
+		Title:    "Sweep since {{ .LastRun }}",
+		Prompt:   "Research changes since {{ .LastRun }}",
+	}
+
+	lastRun := time.Date(2026, time.November, 3, 10, 0, 0, 0, time.UTC)
+	title, err := def.EvalTitleTemplate(lastRun)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if want := "Sweep since " + lastRun.Format(time.RFC3339); title != want {
+		t.Errorf("expected title %q, got %q", want, title)
+	}
+}
+
+func TestTriggerDefinition_EvalTitleTemplate_Empty(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:     "test",
+		Prompt: "test prompt",
+	}
+
+	title, err := def.EvalTitleTemplate(time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if title != "" {
+		t.Errorf("expected empty title, got %q", title)
+	}
+}
+
+func TestTriggerDefinition_EvalTitleTemplate_BadTemplate(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:    "test",
+		Title: "{{ invalid syntax }}",
+	}
+
+	if _, err := def.EvalTitleTemplate(time.Time{}); err == nil {
+		t.Error("expected error for invalid title template, got nil")
+	}
+}
+
+func TestTriggerDefinition_Validate_InvalidTitle(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:     "test",
+		Title:  "{{ invalid syntax }}",
+		Prompt: "test prompt",
+	}
+
+	if err := def.Validate(); err == nil {
+		t.Error("expected error for invalid title template, got nil")
+	}
+}

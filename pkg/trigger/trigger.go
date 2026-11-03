@@ -68,6 +68,7 @@ type triggerFileEntry struct {
 	ID                string      `yaml:"id"`
 	Type              TriggerType `yaml:"type"`
 	Schedule          string      `yaml:"schedule"`
+	Title             string      `yaml:"title,omitempty"`
 	HoldOffCondition  string      `yaml:"hold-off-condition,omitempty"`
 	HoldOffConditions []string    `yaml:"hold-off-conditions,omitempty"`
 	Prompt            string      `yaml:"prompt"`
@@ -94,12 +95,28 @@ type TriggerDefinition struct {
 	// On hotelier, this resolves to a named set of environment variables
 	// and file copies that are applied to the task's working directory.
 	Persona string `yaml:"persona,omitempty" json:"persona,omitempty"`
+	// Title is an optional human-readable name for the work the trigger
+	// enqueues. It is a template like the prompt, so it may refer to
+	// .LastRun. Empty means the queue system names the task itself
+	// (see §overview/scope).
+	Title string `yaml:"title,omitempty" json:"title,omitempty"`
 }
 
 // EvalPromptTemplate evaluates the trigger's prompt template with the
 // given lastRun time. The template has access to .LastRun (RFC3339 format).
 func (d *TriggerDefinition) EvalPromptTemplate(lastRun time.Time) (string, error) {
 	return d.EvalPromptTemplateWith(nil, lastRun)
+}
+
+// EvalTitleTemplate evaluates the trigger's title template with the given
+// lastRun time, using the same template machinery as the prompt. An empty
+// title evaluates to an empty string without being expanded, so no default
+// is invented for a definition that declares none.
+func (d *TriggerDefinition) EvalTitleTemplate(lastRun time.Time) (string, error) {
+	if d.Title == "" {
+		return "", nil
+	}
+	return d.evalTemplate(d.Title, nil, lastRun)
 }
 
 // HoldOffCauses evaluates the hold-off condition (if set) followed by
@@ -262,13 +279,19 @@ func (d *TriggerDefinition) evalTemplate(tmplStr string, payload map[string]inte
 	return buf.String(), nil
 }
 
-// Validate compiles the trigger's prompt and hold-off condition templates
-// (if set) with a nil payload to catch obvious template errors at load time.
+// Validate compiles the trigger's prompt, title and hold-off condition
+// templates (if set) with a nil payload to catch obvious template errors at
+// load time.
 // This catches issues like calling len() on a nil field before the trigger
 // ever fires, making failures visible at startup rather than at runtime.
 func (d *TriggerDefinition) Validate() error {
 	if _, err := d.evalTemplate(d.Prompt, nil, time.Time{}); err != nil {
 		return fmt.Errorf("invalid prompt template: %w", err)
+	}
+	if d.Title != "" {
+		if _, err := d.evalTemplate(d.Title, nil, time.Time{}); err != nil {
+			return fmt.Errorf("invalid title template: %w", err)
+		}
 	}
 	if d.HoldOffCondition != "" {
 		if _, err := d.evalTemplate(d.HoldOffCondition, nil, time.Time{}); err != nil {
@@ -376,6 +399,7 @@ func loadTriggerFile(path string) ([]TriggerDefinition, error) {
 			ID:                entry.ID,
 			Type:              entry.Type,
 			Schedule:          entry.Schedule,
+			Title:             entry.Title,
 			HoldOffCondition:  entry.HoldOffCondition,
 			HoldOffConditions: entry.HoldOffConditions,
 			Prompt:            entry.Prompt,

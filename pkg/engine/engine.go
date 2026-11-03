@@ -303,6 +303,20 @@ func (e *Engine) executeTrigger(def trigger.TriggerDefinition) {
 		return
 	}
 
+	// Expand the definition's title, if it declares one. A title that
+	// cannot be expanded is a template error like a prompt template error:
+	// the execution is recorded as failed and nothing is dispatched.
+	title, err := def.EvalTitleTemplate(lastRun)
+	if err != nil {
+		e.log.Printf("[trigger:%s] failed to evaluate title: %v", def.ID, err)
+		e.history.Append(def.ID, ExecutionRecord{
+			Timestamp: now,
+			Success:   false,
+			Error:     err.Error(),
+		})
+		return
+	}
+
 	// Create task
 	task := &queue.Task{
 		ID:      fmt.Sprintf("task-%s-%d", def.ID, time.Now().UnixNano()),
@@ -310,6 +324,7 @@ func (e *Engine) executeTrigger(def trigger.TriggerDefinition) {
 		Tags:    def.Tags,
 		Timeout: def.Timeout,
 		Persona: def.Persona,
+		Title:   title,
 	}
 
 	// Dispatch to queue
