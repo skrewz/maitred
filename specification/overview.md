@@ -35,7 +35,8 @@ HTTP queue system.
   interface: an HTTP queue adapter (optional mTLS, optional custom task
   template; the prompt is passed through verbatim) or, without a queue
   config, an in-memory queue. Tasks carry a prompt, capability tags, a timeout,
-  an optional persona, and an optional dedup key — a queue system with
+  an optional persona, an optional dedup key, an optional human-readable
+  title, and an optional reference URL — a queue system with
   de-duplication may squelch a submission whose key matches a still-pending
   task's key (the Forgejo engine sets one per dispatch identity, per
   §forgejo/webhook/the-pipeline).
