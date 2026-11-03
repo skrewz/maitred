@@ -204,6 +204,7 @@ func TestListOpenPullRequests(t *testing.T) {
 				"merged": false, "mergeable": true,
 				"head":       map[string]any{"sha": "abc123"},
 				"labels":     []map[string]any{{"name": "ready"}},
+				"user":       map[string]any{"login": "skrewz-bot"},
 				"updated_at": "2026-09-18T02:56:38Z",
 				"html_url":   "https://forge.example.com/acme/maitred/pulls/58",
 			},
@@ -229,6 +230,12 @@ func TestListOpenPullRequests(t *testing.T) {
 	}
 	if pulls[0].Labels[0] != "ready" {
 		t.Errorf("Labels = %v, want [ready]", pulls[0].Labels)
+	}
+	// The PR's author is the login of its user: the fix-feedback
+	// ownership gate reads it (§forgejo/client/operations,
+	// s-git/maitred#143).
+	if pulls[0].Author != "skrewz-bot" {
+		t.Errorf("Author = %q, want skrewz-bot", pulls[0].Author)
 	}
 }
 
@@ -364,6 +371,7 @@ func TestGetPullRequest(t *testing.T) {
 			"number": 58, "title": "a PR", "state": "closed",
 			"merged": true, "mergeable": true,
 			"head":       map[string]any{"sha": "4db2ef6"},
+			"user":       map[string]any{"login": "s-autonomics-implementer"},
 			"updated_at": "2026-09-18T02:56:38Z",
 			"html_url":   "https://forge.example.com/acme/maitred/pulls/58",
 		})
@@ -379,6 +387,32 @@ func TestGetPullRequest(t *testing.T) {
 	}
 	if !pr.Merged || !pr.Mergeable || pr.State != "closed" || pr.HeadSHA != "4db2ef6" {
 		t.Errorf("pr = %+v, want merged, mergeable, closed, head 4db2ef6", *pr)
+	}
+	// The re-fetch carries the PR's author for the fix-feedback
+	// ownership gate (§forgejo/client/operations, s-git/maitred#143).
+	if pr.Author != "s-autonomics-implementer" {
+		t.Errorf("Author = %q, want s-autonomics-implementer", pr.Author)
+	}
+}
+
+// TestGetPullRequest_NoUserIsEmptyAuthor pins that a PR response
+// without a user object yields an empty author rather than an error
+// (§forgejo/client/operations).
+func TestGetPullRequest_NoUserIsEmptyAuthor(t *testing.T) {
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"number": 58, "title": "a PR", "state": "open",
+			"head": map[string]any{"sha": "abc123"},
+		})
+	})
+
+	c := New(srv.URL, "test-token", nil)
+	pr, err := c.GetPullRequest("acme", "maitred", 58)
+	if err != nil {
+		t.Fatalf("GetPullRequest: %v", err)
+	}
+	if pr.Author != "" {
+		t.Errorf("Author = %q, want empty", pr.Author)
 	}
 }
 

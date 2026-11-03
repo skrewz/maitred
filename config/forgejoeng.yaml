@@ -9,6 +9,11 @@ reconcile_interval: 1h
 # forest members; no decision reads it as a gate
 # (§forgejo/config/decomposer-identity, s-git/maitred#135).
 decomposer_identity: decomposer
+# Optional: the identity that implements work and fixes review feedback.
+# When set, fix-feedback dispatches only on PRs authored by this identity;
+# unset, the ownership gate is inert (§forgejo/config/implementer-identity,
+# s-git/maitred#143).
+implementer_identity: implementer
 
 # Every prompt invokes the persona's Pi canned prompt: Pi expands a
 # prompt template only when the dispatched message starts with

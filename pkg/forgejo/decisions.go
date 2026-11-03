@@ -189,6 +189,14 @@ type State struct {
 	// graph the assembly holds, so the read costs nothing
 	// (§forgejo/decisions/sync-set, §forgejo/webhook/re-fetch).
 	SyncSets []Issue
+	// ImplementerIdentity is the configured login of the identity that
+	// implements work and fixes review feedback
+	// (§forgejo/config/implementer-identity). It is a declared
+	// configuration input the engine passes verbatim from its config,
+	// not fetched state; when empty the fix-feedback ownership gate is
+	// inert (§forgejo/decisions/inputs, §forgejo/decisions/loop-prevention,
+	// s-git/maitred#143).
+	ImplementerIdentity string
 	// CascadeRoot is the closed issue the unblock cascade walks from,
 	// for close events.
 	CascadeRoot *IssueNode
@@ -725,6 +733,10 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 // (§forgejo/decisions/merge-gate). A comment review holds off on the
 // event path, but the sweep moves the PR along by triggering the
 // implementer, not the reviewer (§forgejo/decisions/transition-table).
+// Both fix-feedback rows sit behind the ownership gate: a PR whose
+// author is not the configured implementer identity holds off
+// (§forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention,
+// s-git/maitred#143).
 // The approved row is the one place a PR path is watermark-exempt, and
 // only when the PR opts into merging on its own with the
 // agentic-auto-merge label: an approved auto-merge PR at a frozen head
@@ -746,11 +758,17 @@ func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 		if latest := latestReview(s.Reviews); latest != nil && latest.CommitID == pr.HeadSHA {
 			switch latest.Event {
 			case ReviewChangesRequested:
+				if d, held := holdOffPRNotOwned(pr, s.ImplementerIdentity); held {
+					return d
+				}
 				if alreadyDispatched(w, ActionFixFeedback, pr.HeadSHA) {
 					return holdOff(fmt.Sprintf("fix-feedback already dispatched at revision %s", pr.HeadSHA))
 				}
 				return dispatch(ActionFixFeedback, fmt.Sprintf("PR %d stands at a changes-requested review by %s", pr.Number, latest.Author))
 			case ReviewComment:
+				if d, held := holdOffPRNotOwned(pr, s.ImplementerIdentity); held {
+					return d
+				}
 				if alreadyDispatched(w, ActionFixFeedback, pr.HeadSHA) {
 					return holdOff(fmt.Sprintf("fix-feedback already dispatched at revision %s", pr.HeadSHA))
 				}
@@ -801,13 +819,35 @@ func onSweep(e Event) bool {
 	return e.Type == EventReconcile
 }
 
+// holdOffPRNotOwned is the fix-feedback ownership gate: the implementer
+// is dispatched to fix review feedback only on PRs it owns — a PR
+// authored by anyone else is that author's to fix, and dispatching the
+// implementer onto it collides with a human handling their own review
+// feedback (s-git/maitred#143, s-git/s-puppet#118). The gate covers
+// fix-feedback alone: reviewing, reporting on, and merging a
+// human-owned PR remain intended. When the implementer identity is
+// unset the gate is inert — no identity is declared, so the dispatch
+// proceeds as before (§forgejo/config/implementer-identity,
+// §forgejo/decisions/loop-prevention). The match is exact — no case
+// folding, no substring — mirroring the retired authorship guard.
+func holdOffPRNotOwned(pr *PullRequest, identity string) (Decision, bool) {
+	if identity == "" || pr.Author == identity {
+		return Decision{}, false
+	}
+	return holdOff(fmt.Sprintf("PR %d is authored by %s, not the implementer identity %s; fix-feedback is theirs to fix, not the implementer's", pr.Number, pr.Author, identity)), true
+}
+
 // decidePRReviewed handles a submitted review: the reject-pr test is
 // applied first, so a gate that closed after the PR opened cannot be
 // walked through by the review-following decisions; then the
 // re-fetched latest review decides — changes-requested dispatches
-// fix-feedback, approved dispatches merge-or-wait only when the merge
-// gate lets it through, no connected issue having an open blocker
-// (§forgejo/decisions/merge-gate), anything else holds off
+// fix-feedback behind the ownership gate (a PR authored by anyone but
+// the configured implementer identity holds off: the human owns that
+// PR and handles the feedback themselves —
+// §forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention,
+// s-git/maitred#143), approved dispatches merge-or-wait only when the
+// merge gate lets it through, no connected issue having an open
+// blocker (§forgejo/decisions/merge-gate), anything else holds off
 // (§forgejo/decisions/transition-table).
 func decidePRReviewed(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
@@ -826,6 +866,9 @@ func decidePRReviewed(e Event, s State, w *Watermark) Decision {
 	}
 	switch latest.Event {
 	case ReviewChangesRequested:
+		if d, held := holdOffPRNotOwned(pr, s.ImplementerIdentity); held {
+			return d
+		}
 		if alreadyDispatched(w, ActionFixFeedback, pr.HeadSHA) {
 			return holdOff(fmt.Sprintf("fix-feedback already dispatched at revision %s", pr.HeadSHA))
 		}

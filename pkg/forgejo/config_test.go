@@ -19,6 +19,7 @@ const validConfigYAML = `
 org: example-org
 reconcile_interval: 15m
 decomposer_identity: decomposer
+implementer_identity: implementer
 actions:
   implement:
     prompt: "/issue-implementer {{.IssueURL}}"
@@ -108,6 +109,9 @@ func TestLoadConfigFile(t *testing.T) {
 	if cfg.DecomposerIdentity != "decomposer" {
 		t.Errorf("decomposer_identity = %q, want %q", cfg.DecomposerIdentity, "decomposer")
 	}
+	if cfg.ImplementerIdentity != "implementer" {
+		t.Errorf("implementer_identity = %q, want %q", cfg.ImplementerIdentity, "implementer")
+	}
 	if len(cfg.Actions) != len(AllActions) {
 		t.Fatalf("loaded %d actions, want %d", len(cfg.Actions), len(AllActions))
 	}
@@ -131,7 +135,7 @@ func TestLoadConfigFile(t *testing.T) {
 // merged in sorted order (§forgejo/config/loading).
 func TestLoadConfigDirectory(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, "01-org.yaml", "org: example-org\ndecomposer_identity: decomposer\n")
+	writeConfig(t, dir, "01-org.yaml", "org: example-org\ndecomposer_identity: decomposer\nimplementer_identity: implementer\n")
 	writeConfig(t, dir, "02-implement.yaml", `
 actions:
   implement:
@@ -153,8 +157,29 @@ actions:
 	if cfg.DecomposerIdentity != "decomposer" {
 		t.Errorf("decomposer_identity = %q, want %q", cfg.DecomposerIdentity, "decomposer")
 	}
+	if cfg.ImplementerIdentity != "implementer" {
+		t.Errorf("implementer_identity = %q, want %q", cfg.ImplementerIdentity, "implementer")
+	}
 	if len(cfg.Actions) != len(AllActions) {
 		t.Errorf("loaded %d actions, want %d", len(cfg.Actions), len(AllActions))
+	}
+}
+
+// TestLoadConfigImplementerIdentityAbsent pins that the implementer
+// identity is optional: with no key configured the config loads, the
+// identity is empty, and the fix-feedback ownership gate the engine
+// derives from it is inert (§forgejo/config/implementer-identity,
+// §forgejo/config/validation, s-git/maitred#143).
+func TestLoadConfigImplementerIdentityAbsent(t *testing.T) {
+	dir := t.TempDir()
+	yaml := strings.Replace(validConfigYAML, "implementer_identity: implementer\n", "", 1)
+	path := writeConfig(t, dir, "forgejoeng.yaml", yaml)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig without implementer_identity: %v", err)
+	}
+	if cfg.ImplementerIdentity != "" {
+		t.Errorf("implementer_identity = %q, want empty", cfg.ImplementerIdentity)
 	}
 }
 
@@ -325,6 +350,14 @@ func TestLoadConfigDirectoryConflicts(t *testing.T) {
 		writeConfig(t, dir, "02-b.yaml", "decomposer_identity: two\n")
 		if _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), "decomposer_identity") {
 			t.Fatalf("expected conflicting-decomposer_identity error, got %v", err)
+		}
+	})
+	t.Run("conflicting implementer_identity", func(t *testing.T) {
+		dir := t.TempDir()
+		writeConfig(t, dir, "01-a.yaml", "org: example-org\nimplementer_identity: one\n")
+		writeConfig(t, dir, "02-b.yaml", "implementer_identity: two\n")
+		if _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), "implementer_identity") {
+			t.Fatalf("expected conflicting-implementer_identity error, got %v", err)
 		}
 	})
 }

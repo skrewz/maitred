@@ -169,7 +169,7 @@ prompts:
 | `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement), and it carries no reserved label |
 | `review` | a mergeable PR opened, or synced while it has no review, or an open mergeable PR carrying the `trigger-review` label while it has no review (§forgejo/decisions/label-triggered-review) |
 | `re-review` | a mergeable PR synced while it has a review, or an open mergeable PR carrying the `trigger-review` label while it has a review (§forgejo/decisions/label-triggered-review) |
-| `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review |
+| `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review — **and** the PR's author is the configured implementer identity; a PR authored by anyone else holds off, its feedback theirs to fix (§forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention, s-git/maitred#143) |
 | `merge-or-wait` | the PR's latest review approves **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's; never for a PR whose connected issue is a member of an open sync set — landing is the set's decision (§forgejo/decisions/sync-set); a labelled member of no open set — its set retired — reads as stale authoring, not a gate, and the merge gate decides on (§forgejo/decisions/sync-set); watermark-exempt on the sweep when the PR carries `agentic-auto-merge` (§forgejo/reconciliation/watermark-exemptions) |
 | `rebase` | an open PR is not mergeable (conflicts) |
 | `decompose` | an open issue carrying the `ideation` label was opened, edited, or had its labels changed; or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
@@ -205,7 +205,8 @@ prompts:
 | PR carrying the `trigger-review` label (open, mergeable, no review) | `review` — explicit request (§forgejo/decisions/label-triggered-review) |
 | PR carrying the `trigger-review` label (open, mergeable, has a review) | `re-review` — explicit request (§forgejo/decisions/label-triggered-review) |
 | review submitted (a connected issue blocked by an open `ideation` issue) | `reject-pr` |
-| review submitted (latest review requests changes) | `fix-feedback` |
+| review submitted (latest review requests changes, PR authored by the implementer identity) | `fix-feedback` |
+| review submitted (latest review requests changes, PR authored by anyone else) | hold off — the reason names the PR's author and the configured implementer identity (§forgejo/config/implementer-identity, s-git/maitred#143) |
 | review submitted (latest review approves, no connected issue has an open blocker) | `merge-or-wait` |
 | review submitted (latest review approves, a connected issue has an open blocker) | hold off — the reason names the open blockers (§forgejo/decisions/merge-gate) |
 | review submitted (latest review approves, a connected issue carries `agentic-sync-merge`, or the PR itself stands in an open grouping issue's blockers) | hold off, naming the sync set — the member never merges on its own; the member's open sync sets are emitted for a `sync` dispatch against their grouping issues. A member of **no open set** — its set retired — decides on through the merge gate, its label stale rather than a gate; a member also carrying `agentic-auto-merge` holds off naming both labels, whatever sets exist (§forgejo/decisions/sync-set) |
@@ -222,7 +223,7 @@ prompts:
 | reconcile — open `outcome` issue with open blockers, its `ideation` blocker open | hold off, naming the root — the forest is not yet commissioned, and the root's own row is the pulse: a forest is curated once per sweep |
 | reconcile — open `outcome` issue with open blockers and no `ideation` blocker | hold off, naming the absence — a tracker not gated by a root is not a forest's tracker |
 | reconcile — open issue carrying the `sync` label | `sync` when every member is closed or approved-at-head, mergeable, and opted in; otherwise a silent hold-off naming the members that are not ready — and a hold-off naming both reserved labels when the issue also carries `ideation` or `outcome`, two kind claims one row must not settle by label order (§forgejo/decisions/sync-set) |
-| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, `reject-pr` when a connected issue is blocked by an open `ideation` issue and otherwise as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate), and dispatches `merge-or-wait` **revision notwithstanding** when the PR carries `agentic-auto-merge`, the exempt row of an approved PR at a frozen head (§forgejo/reconciliation/watermark-exemptions) |
+| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, `reject-pr` when a connected issue is blocked by an open `ideation` issue and otherwise as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback` — behind the ownership gate, so a PR authored by anyone but the configured implementer identity holds off naming the author and the identity (§forgejo/config/implementer-identity, s-git/maitred#143) — approved dispatches `merge-or-wait` — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate), and dispatches `merge-or-wait` **revision notwithstanding** when the PR carries `agentic-auto-merge`, the exempt row of an approved PR at a frozen head (§forgejo/reconciliation/watermark-exemptions) |
 
 The **reject-pr test precedes the review and rebase rows** on every path
 that can dispatch review, re-review, fix-feedback, or merge-or-wait: it
@@ -352,6 +353,16 @@ gate holds it off on an open blocker (§forgejo/decisions/merge-gate). A
 PR whose latest
 review is anything else (e.g. dismissed), or whose latest review predates
 the current head, is reconciled as PR synced.
+
+Both `fix-feedback` dispatches that follow a review — the submitted-review
+row and the sweep's — sit behind the **ownership gate**: when the
+implementer identity is configured (§forgejo/config/implementer-identity)
+and the PR's author is not that identity, the action holds off, the
+reason naming both. The PR belongs to its author, who may be handling
+the review feedback themselves; dispatching the implementer onto it
+collides with them (s-git/s-puppet#118, s-git/maitred#143). With the
+identity unset the gate is inert, and the review-following rows decide
+exactly as before.
 
 ## Label-triggered review
 
@@ -683,7 +694,7 @@ staying silent (§forgejo/decisions/sync-set).
 
 ## Loop prevention
 
-Four mechanisms, in this order:
+Five mechanisms, in this order:
 
 1. **The machine is terminating.** Each action's side-effect maps to
    the *next* transition, never a re-run of the same one: a review
@@ -721,6 +732,19 @@ Four mechanisms, in this order:
    cross-persona triggering (a reviewer's changes-requested leading to
    the implementer's fix, a decomposer's member reaching the
    implementer once gated) is intended and unguarded.
+5. **The fix-feedback ownership gate**, where the implementer would
+   otherwise be dispatched onto a pull request it does not own: with
+   the implementer identity configured
+   (§forgejo/config/implementer-identity), `fix-feedback` fires only
+   when the PR's author is that identity — a human (or their bot)
+   handling review feedback on their own PR must not be collided with
+   an implementer answering the same reviews (s-git/s-puppet#118,
+   s-git/maitred#143). The gate covers `fix-feedback` alone: reviewing,
+   reporting on, and merging a human-owned PR stay intended, and the
+   author's own push does not suppress a review. Unset identity keeps
+   the gate inert. This is a PR-side ownership read, not the retired
+   issue-side authorship guard (s-git/maitred#136): it asks who *owns
+   the pull request*, not who opened the issue.
 
 ## Inputs
 
@@ -733,8 +757,8 @@ reconciliation sweep. A general comment on a pull request arrives as
 decides as reconcile (§forgejo/decisions/transition-table).
 
 **State** — the re-fetched state of the affected object: the issue or
-PR itself (an issue carrying its **author**, the login of whoever opened
-it, §forgejo/client/operations); the issue's blockers (with their states)
+PR itself (an issue or pull request carrying its **author**, the login
+of whoever opened it, §forgejo/client/operations); the issue's blockers (with their states)
 and its connected open PRs, for the `implement` and `reassess`
 conditions; the PR's reviews, for the review transitions; the PR's labels,
 for the label-triggered review override
@@ -751,11 +775,15 @@ that PR's reviews; for a PR whose connected issue is a member, the
 membership edges — the open sync issues that issue blocks
 (§forgejo/decisions/sync-set).
 
-The function consults **no declared configuration input**: state alone
-decides every row. The configured **decomposer identity**
+The function consults **one declared configuration input**: the
+configured **implementer identity**
+(§forgejo/config/implementer-identity), which the engine passes
+verbatim on the state and the `fix-feedback` rows alone read
+(§forgejo/decisions/loop-prevention, s-git/maitred#143). Every other
+row decides on state alone. The configured **decomposer identity**
 (§forgejo/config/decomposer-identity) remains loadable and names the
 account that composes forests, but the decision path never reads it —
-authorship gates nothing (s-git/maitred#135).
+issue authorship gates nothing (s-git/maitred#135).
 
 **Watermark** — the last dispatch for the object's key
 (§forgejo/state/watermark), or none.

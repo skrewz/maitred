@@ -16,7 +16,7 @@ authenticated with a bearer token:
 | list open issues in a repo | event filtering and reconciliation enumeration |
 | list open pull requests in a repo | event filtering and reconciliation enumeration |
 | get a single issue (state, labels, author, `updated_at`, `html_url`) | authoritative issue state |
-| get a single pull request (state, merged, head sha, `mergeable`, `html_url`) | authoritative PR state |
+| get a single pull request (state, merged, head sha, `mergeable`, author, `html_url`) | authoritative PR state |
 | list the issues an issue **blocks** (`issue-blocks`) | the unblock cascade, including cross-repo blockers |
 | list the issues that block an issue (`issue-dependencies`) | the unblock cascade, including cross-repo blockers |
 | list a pull request's reviews (event + author + commit) | the review transitions |
@@ -27,6 +27,14 @@ author is carried on the issue model and read by nothing in the engine
 guard was retired in favour of the `forest-seeding` hold-off
 (§forgejo/decisions/transition-table, s-git/maitred#135). A response
 without a `user` object yields an empty author.
+
+Pull request responses likewise report **who opened the pull request**
+(`user.login`): the author is carried on the PR model and read by the
+`fix-feedback` ownership gate, which dispatches the action only when
+the PR's author is the configured implementer identity
+(§forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention,
+s-git/maitred#143). A response without a `user` object yields an empty
+author, which with an identity configured reads as not owned.
 
 Issue responses also report **whether the issue is a pull request** —
 Forgejo represents pull requests as issues, and the API marks them with a
