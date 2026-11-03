@@ -18,7 +18,11 @@ HTTP queue system.
   recursively from the trigger directory) with a cron or `@every <duration>`
   schedule. Each trigger is evaluated on its own ticker and dispatches a task
   when its schedule fires. Cron schedules may be evaluated in a fixed
-  timezone (`MAITRED_CRON_TZ`).
+  timezone (`MAITRED_CRON_TZ`). A trigger may declare an optional
+  human-readable `title` for the work it enqueues, expanded with the same
+  template machinery as the prompt and carried on the dispatched task; a
+  trigger that declares none leaves the task untitled and the queue system
+  names it.
 - **Prompt templating.** A trigger's `prompt` is a Go `text/template` with
   `.LastRun` (RFC 3339 timestamp of the trigger's last execution) and
   `.Payload` (the webhook payload, when present), plus custom template
@@ -30,7 +34,7 @@ HTTP queue system.
 - **Webhook ingestion.** Named webhook endpoints (YAML files in the webhook
   directory) expose `POST /v1/{provider}/{endpoint}` on the API port. A
   received payload is mapped to a trigger and made available to its prompt
-  template as `.Payload`.
+  and title templates as `.Payload`.
 - **Queue dispatch.** Tasks are dispatched through the `TaskQueueProvider`
   interface: an HTTP queue adapter (optional mTLS, optional custom task
   template; the prompt is passed through verbatim) or, without a queue

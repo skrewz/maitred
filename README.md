@@ -59,6 +59,7 @@ triggers:
   - id: "my-trigger"
     type: periodic
     schedule: "0 */6 * * *"
+    title: "Nightly research sweep"
     prompt: "Research since {{ .LastRun }}"
     tags:
       - "business-default"
@@ -70,6 +71,7 @@ triggers:
 | `id` | ✅ | Unique trigger identifier |
 | `type` | ✅ | Currently only `periodic` is supported |
 | `schedule` | ✅ | Cron expression or `@every <duration>` |
+| `title` | | Human-readable name for the work the trigger enqueues, sent to the queue system as the task's `title`. A Go template like the prompt, with `.LastRun` available (and `.Payload` on the `@webhook` path); omitted when empty or blank — no default is invented, so the queue system names the task itself |
 | `prompt` | ✅ | Go template with `.LastRun` and `.Payload` variables |
 | `hold-off-conditions` | | List of Go template conditions, each evaluated one at a time; if any evaluates to `true` the trigger is held off and the matching conditions are logged |
 | `tags` | | Agent capability tags for routing |

@@ -165,6 +165,16 @@ func (h *Handler) handleWebhook(providers []ProviderConfig) http.HandlerFunc {
 			return
 		}
 
+		// Expand the definition's title, if it declares one, with the
+		// payload available. A title that fails to expand is handled like
+		// a prompt template error: nothing is dispatched.
+		title, err := def.EvalTitleTemplateWith(payload, lastRun)
+		if err != nil {
+			h.log.Printf("[webhook:%s] failed to evaluate title: %v", ep.Name, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
 		// Create and dispatch task
 		task := &queue.Task{
 			ID:      fmt.Sprintf("task-%s-webhook-%d", ep.TriggerID, time.Now().UnixNano()),
@@ -172,6 +182,7 @@ func (h *Handler) handleWebhook(providers []ProviderConfig) http.HandlerFunc {
 			Tags:    def.Tags,
 			Timeout: def.Timeout,
 			Persona: def.Persona,
+			Title:   title,
 		}
 
 		if err := h.engine.Queue().AddTask(task); err != nil {

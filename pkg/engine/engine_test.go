@@ -3,6 +3,7 @@ package engine_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1059,5 +1060,112 @@ triggers:
 
 	if tasks[0].Persona != "s-autonomics-implementer" {
 		t.Errorf("expected persona 's-autonomics-implementer', got %q", tasks[0].Persona)
+	}
+}
+
+func TestEngine_TitlePassedThrough(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "titled"
+    type: periodic
+    schedule: "@every 1h"
+    title: "Nightly sweep since {{ .LastRun }}"
+    prompt: "research"
+  - id: "untitled"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "research"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mq := &mockQueue{}
+	eng, err := engine.New(engine.Config{
+		TriggerDir: dir,
+		DataDir:    t.TempDir(),
+		Queue:      mq,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating engine: %v", err)
+	}
+
+	for _, id := range []string{"titled", "untitled"} {
+		if err := eng.FireNow(id); err != nil {
+			t.Fatalf("FireNow(%s): %v", id, err)
+		}
+	}
+
+	tasks := mq.Tasks()
+	if len(tasks) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(tasks))
+	}
+
+	byTrigger := map[string]*queue.Task{}
+	for _, task := range tasks {
+		switch {
+		case strings.HasPrefix(task.ID, "task-titled-"):
+			byTrigger["titled"] = task
+		case strings.HasPrefix(task.ID, "task-untitled-"):
+			byTrigger["untitled"] = task
+		}
+	}
+
+	titled, untitled := byTrigger["titled"], byTrigger["untitled"]
+	if titled == nil || untitled == nil {
+		t.Fatalf("expected one task per trigger, got %v", tasks)
+	}
+	if titled.Title == "" {
+		t.Error("expected the titled trigger's task to carry a title, got empty")
+	}
+	if !strings.HasPrefix(titled.Title, "Nightly sweep since ") {
+		t.Errorf("expected the title template to be expanded, got %q", titled.Title)
+	}
+	if untitled.Title != "" {
+		t.Errorf("expected no title for the untitled trigger, got %q", untitled.Title)
+	}
+}
+
+func TestEngine_InvalidTitleTemplateDoesNotDispatch(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "bad-title"
+    type: periodic
+    schedule: "@every 1h"
+    title: "{{ invalid syntax }}"
+    prompt: "research"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mq := &mockQueue{}
+	eng, err := engine.New(engine.Config{
+		TriggerDir: dir,
+		DataDir:    t.TempDir(),
+		Queue:      mq,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating engine: %v", err)
+	}
+
+	if err := eng.FireNow("bad-title"); err != nil {
+		t.Fatalf("FireNow: %v", err)
+	}
+
+	if got := len(mq.Tasks()); got != 0 {
+		t.Errorf("expected no task when the title template fails, got %d", got)
+	}
+
+	record := eng.History().Last("bad-title")
+	if record == nil {
+		t.Fatal("expected a history record for the failed execution")
+	}
+	if record.Success {
+		t.Error("expected the last history record to be a failure")
 	}
 }
