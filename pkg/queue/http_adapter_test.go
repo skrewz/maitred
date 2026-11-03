@@ -440,6 +440,86 @@ func TestHTTPAdapter_AddTask_NoTags(t *testing.T) {
 	}
 }
 
+// TestHTTPAdapter_AddTask_TitleAndURL: a task carrying a title and a
+// reference URL sends both on the wire, so a queue system (hotelier) can
+// name the work and link back to its origin.
+func TestHTTPAdapter_AddTask_TitleAndURL(t *testing.T) {
+	var received map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dec := json.NewDecoder(r.Body)
+		dec.Decode(&received)
+		w.WriteHeader(201)
+		w.Write([]byte(`{"id":"remote-1"}`))
+	}))
+	defer server.Close()
+
+	adapter, err := queue.NewHTTPAdapter(queue.AdapterConfig{
+		Endpoint: server.URL,
+	}, log.New(os.Stdout, "", log.LstdFlags))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	task := &queue.Task{
+		ID:     "task-1",
+		Prompt: "implement the feature",
+		Title:  "Issue o/r#7: add a title",
+		URL:    "https://forge.example.com/o/r/issues/7",
+	}
+	if err := adapter.AddTask(task); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if received["title"] != "Issue o/r#7: add a title" {
+		t.Errorf("expected title in request body, got %v", received["title"])
+	}
+	if received["url"] != "https://forge.example.com/o/r/issues/7" {
+		t.Errorf("expected url in request body, got %v", received["url"])
+	}
+}
+
+// TestHTTPAdapter_AddTask_NoTitleOrURL: a task without a title or URL
+// produces the body it produces today — no "title"/"url" keys — so an
+// older queue system sees an unchanged payload.
+func TestHTTPAdapter_AddTask_NoTitleOrURL(t *testing.T) {
+	var received map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dec := json.NewDecoder(r.Body)
+		dec.Decode(&received)
+		w.WriteHeader(201)
+		w.Write([]byte(`{"id":"remote-1"}`))
+	}))
+	defer server.Close()
+
+	adapter, err := queue.NewHTTPAdapter(queue.AdapterConfig{
+		Endpoint: server.URL,
+	}, log.New(os.Stdout, "", log.LstdFlags))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	task := &queue.Task{
+		ID:      "task-1",
+		Prompt:  "plain task",
+		Tags:    []string{"business-default"},
+		Timeout: 1800,
+	}
+	if err := adapter.AddTask(task); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, ok := received["title"]; ok {
+		t.Errorf("expected no 'title' key in request body, got %v", received["title"])
+	}
+	if _, ok := received["url"]; ok {
+		t.Errorf("expected no 'url' key in request body, got %v", received["url"])
+	}
+	// The rest of the body is unchanged.
+	if received["prompt"] != "plain task" {
+		t.Errorf("expected prompt 'plain task', got %v", received["prompt"])
+	}
+}
+
 // TestHTTPAdapter_AddTask_DedupKey: the default template sends the
 // task's dedup key to the remote queue system, so a queue system with
 // de-duplication (hotelier) can squelch a duplicate submission.

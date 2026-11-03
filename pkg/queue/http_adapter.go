@@ -36,6 +36,8 @@ type AdapterConfig struct {
 	//   .DedupKey  — dedup key (optional; a queue system with
 	//                de-duplication squelches a submission matching a
 	//                still-pending task's key)
+	//   .Title     — human-readable task title (optional)
+	//   .URL       — reference URL for the work (optional)
 	//
 	// A built-in "json" function marshals values to JSON for safe embedding
 	// inside the template. If empty, a default template is used that omits
@@ -75,7 +77,9 @@ const defaultTaskTemplate = `{
 	"tags": {{ .Tags | json }},
 	"timeout": {{ .Timeout }},
 	"persona": {{ .Persona | json }},
-	"dedup_key": {{ .DedupKey | json }}
+	"dedup_key": {{ .DedupKey | json }}{{ if .Title }},
+	"title": {{ .Title | json }}{{ end }}{{ if .URL }},
+	"url": {{ .URL | json }}{{ end }}
 }`
 
 // HTTPAdapter is a TaskQueueProvider that sends tasks to a remote
@@ -172,6 +176,8 @@ func (a *HTTPAdapter) AddTask(task *Task) error {
 		Timeout  int
 		Persona  string
 		DedupKey string
+		Title    string
+		URL      string
 	}{
 		ID:       task.ID,
 		Prompt:   task.Prompt,
@@ -179,6 +185,8 @@ func (a *HTTPAdapter) AddTask(task *Task) error {
 		Timeout:  task.Timeout,
 		Persona:  task.Persona,
 		DedupKey: task.DedupKey,
+		Title:    task.Title,
+		URL:      task.URL,
 	}
 
 	if err := a.tmpl.Execute(&buf, data); err != nil {

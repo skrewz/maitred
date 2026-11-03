@@ -56,6 +56,38 @@ func TestTask_Persona(t *testing.T) {
 	}
 }
 
+func TestTask_TitleAndURL(t *testing.T) {
+	q := queue.NewTaskQueue()
+	task := &queue.Task{
+		ID:     "task-1",
+		Prompt: "do something",
+		Title:  "Issue o/r#7: name the work",
+		URL:    "https://forge.example.com/o/r/issues/7",
+	}
+
+	if err := q.Add(task); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The in-memory queue passes the fields through untouched.
+	got, ok := q.Get("task-1")
+	if !ok {
+		t.Fatal("expected task to be found")
+	}
+	if got.Title != "Issue o/r#7: name the work" {
+		t.Errorf("expected title passthrough, got %q", got.Title)
+	}
+	if got.URL != "https://forge.example.com/o/r/issues/7" {
+		t.Errorf("expected url passthrough, got %q", got.URL)
+	}
+
+	// Empty title/URL are zero values.
+	bare := &queue.Task{ID: "task-2", Prompt: "plain"}
+	if bare.Title != "" || bare.URL != "" {
+		t.Errorf("expected empty title/url, got %q/%q", bare.Title, bare.URL)
+	}
+}
+
 func TestTaskQueue_Add(t *testing.T) {
 	q := queue.NewTaskQueue()
 	task := &queue.Task{
@@ -169,5 +201,25 @@ func TestTask_DedupKey_JSON(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `"dedup_key":"k"`) {
 		t.Errorf("expected dedup_key in JSON, got %s", b)
+	}
+}
+
+func TestTask_TitleAndURL_JSON(t *testing.T) {
+	// Omitted when empty.
+	b, err := json.Marshal(&queue.Task{ID: "task-1", Prompt: "p"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(b), "title") || strings.Contains(string(b), `"url"`) {
+		t.Errorf("title/url should be omitted when empty, got %s", b)
+	}
+
+	// Present when set.
+	b, err = json.Marshal(&queue.Task{ID: "task-1", Prompt: "p", Title: "t", URL: "https://example.com/x"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"title":"t"`) || !strings.Contains(string(b), `"url":"https://example.com/x"`) {
+		t.Errorf("expected title/url in JSON, got %s", b)
 	}
 }

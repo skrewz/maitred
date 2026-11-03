@@ -31,6 +31,14 @@ type Task struct {
 	// still-pending task's key, so a re-dispatch of the same logical task
 	// does not enqueue a duplicate. Empty disables de-duplication.
 	DedupKey string `json:"dedup_key,omitempty"`
+	// Title is an optional human-readable name for the work the task
+	// represents. The queue system may display it; maitred does not
+	// interpret it. Empty omits the field.
+	Title string `json:"title,omitempty"`
+	// URL is an optional reference URL for the work the task represents
+	// (for example the issue or pull request that triggered it). maitred
+	// does not interpret it. Empty omits the field.
+	URL string `json:"url,omitempty"`
 }
 
 // String returns a human-readable representation of the task.
