@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"maitred/pkg/queue"
 )
@@ -585,6 +587,84 @@ func urlArguments(prompt string, p Placeholders) (referenced, filled int) {
 	return referenced, filled
 }
 
+// The caps on a dispatched task's title (§forgejo/webhook/the-pipeline):
+// the subject — the issue or PR's own title — is truncated so a long one
+// cannot produce an unreadable row, and the composed line is capped on
+// top of that in case the reference and the verb push it out too.
+const (
+	maxTaskSubjectRunes = 80
+	maxTaskTitleRunes   = 120
+)
+
+// trimRunes caps s at n runes, marking an elision with an ellipsis so a
+// truncated title reads as truncated.
+func trimRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 1 {
+		return string(r[:n])
+	}
+	return string(r[:n-1]) + "…"
+}
+
+// taskSubject is the title of the object the state carries — the pull
+// request where one is present, the issue otherwise, so a dispatch that
+// carries both names the object its URL points at
+// (§forgejo/webhook/the-pipeline).
+func taskSubject(st State) string {
+	switch {
+	case st.PR != nil:
+		return st.PR.Title
+	case st.Issue != nil:
+		return st.Issue.Title
+	}
+	return ""
+}
+
+// taskURL is the dispatch's reference link: the pull request's HTML URL
+// when the state carries one, the issue's otherwise, and empty where
+// neither is there — the engine invents no link. The URL-placeholder
+// refusal above guards the prompt, not this field, and is unaffected
+// (§forgejo/config/canned-prompts).
+func taskURL(st State) string {
+	switch {
+	case st.PR != nil:
+		return st.PR.HTMLURL
+	case st.Issue != nil:
+		return st.Issue.HTMLURL
+	}
+	return ""
+}
+
+// taskTitle composes the dispatched task's human-readable name — the
+// action's verb, the subject's title where the state carries one, and
+// the `repo#number` reference — in the one helper both event kinds go
+// through, so a queue system's row reads the same whichever object
+// dispatched, e.g. "Review: Make everything awesome and pink (o/r#1337)"
+// (§forgejo/webhook/the-pipeline).
+func taskTitle(action Action, ev Event, st State) string {
+	verb := string(action)
+	if r := []rune(verb); len(r) > 0 {
+		verb = string(unicode.ToUpper(r[0])) + string(r[1:])
+	}
+	ref := fmt.Sprintf("%s#%d", ev.Repo, ev.Number)
+	if subject := taskSubject(st); subject != "" {
+		// The subject takes what is left of the line's budget once the
+		// verb and the reference are paid for — never more than its own
+		// cap. An elision may eat the subject but never the reference.
+		overhead := utf8.RuneCountInString(verb) + utf8.RuneCountInString(ref) + utf8.RuneCountInString(": ()") + 1
+		// Below six runes a truncated subject would read as an ellipsis
+		// and nothing else, so such a line drops it and keeps the
+		// action-and-reference form.
+		if budget := min(maxTaskSubjectRunes, maxTaskTitleRunes-overhead); budget >= 6 {
+			return fmt.Sprintf("%s: %s (%s)", verb, trimRunes(subject, budget), ref)
+		}
+	}
+	return trimRunes(fmt.Sprintf("%s (%s)", verb, ref), maxTaskTitleRunes)
+}
+
 // dispatch fills the action's canned prompt and enqueues the task, with
 // the dedup key of the dispatch identity — the key's repo, kind, and
 // number, the action, and the revision — so a queue system with
@@ -626,6 +706,8 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 		Persona:  pc.Persona,
 		Timeout:  int(pc.Timeout.Seconds()),
 		DedupKey: fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%s", ev.Repo, ev.Kind, ev.Number, action, rev),
+		Title:    taskTitle(action, ev, st),
+		URL:      taskURL(st),
 	}
 	if err := e.queue.AddTask(task); err != nil {
 		return fmt.Errorf("enqueue %s for %s: %w", action, ev.KeyOf(), err)

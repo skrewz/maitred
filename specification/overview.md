@@ -38,7 +38,8 @@ HTTP queue system.
   an optional persona, an optional dedup key, an optional human-readable
   title, and an optional reference URL — a queue system with
   de-duplication may squelch a submission whose key matches a still-pending
-  task's key (the Forgejo engine sets one per dispatch identity, per
+  task's key (the Forgejo engine sets one per dispatch identity, and names
+  each task with a title and a reference URL, per
   §forgejo/webhook/the-pipeline).
 - **Persistent state.** Each trigger's last run time and extra state is
   persisted as a JSON file per trigger under the data directory and survives
