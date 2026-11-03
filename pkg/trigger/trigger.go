@@ -113,10 +113,30 @@ func (d *TriggerDefinition) EvalPromptTemplate(lastRun time.Time) (string, error
 // title evaluates to an empty string without being expanded, so no default
 // is invented for a definition that declares none.
 func (d *TriggerDefinition) EvalTitleTemplate(lastRun time.Time) (string, error) {
+	return d.EvalTitleTemplateWith(nil, lastRun)
+}
+
+// EvalTitleTemplateWith evaluates the trigger's title template with the
+// given payload and lastRun time, mirroring EvalPromptTemplateWith. The
+// template has access to:
+//   - .LastRun (RFC3339 format of lastRun)
+//   - .Payload (the payload map, if non-nil)
+//
+// A title that is empty, or that expands to empty or whitespace-only text,
+// evaluates to an empty string: "declared but blank" behaves the same as
+// "not declared", so no whitespace-only title reaches the queue.
+func (d *TriggerDefinition) EvalTitleTemplateWith(payload map[string]interface{}, lastRun time.Time) (string, error) {
 	if d.Title == "" {
 		return "", nil
 	}
-	return d.evalTemplate(d.Title, nil, lastRun)
+	title, err := d.evalTemplate(d.Title, payload, lastRun)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(title) == "" {
+		return "", nil
+	}
+	return title, nil
 }
 
 // HoldOffCauses evaluates the hold-off condition (if set) followed by

@@ -1456,6 +1456,55 @@ func TestTriggerDefinition_EvalTitleTemplate_Empty(t *testing.T) {
 	}
 }
 
+func TestTriggerDefinition_EvalTitleTemplate_WhitespaceOnly(t *testing.T) {
+	// A declared-but-blank title behaves the same as no title: nothing
+	// whitespace-only reaches the queue.
+	def := trigger.TriggerDefinition{
+		ID:    "test",
+		Title: "   ",
+	}
+
+	title, err := def.EvalTitleTemplate(time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if title != "" {
+		t.Errorf("expected empty title for whitespace-only declaration, got %q", title)
+	}
+
+	// Same when the blankness only appears after expansion.
+	def.Title = "{{ .Payload.name }}"
+	title, err = def.EvalTitleTemplateWith(map[string]interface{}{"name": "  "}, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if title != "" {
+		t.Errorf("expected empty title for whitespace-only expansion, got %q", title)
+	}
+}
+
+func TestTriggerDefinition_EvalTitleTemplateWith(t *testing.T) {
+	def := trigger.TriggerDefinition{
+		ID:    "test",
+		Title: "PR: {{ .Payload.pull_request.title }} since {{ .LastRun }}",
+	}
+
+	lastRun := time.Date(2026, time.November, 3, 10, 0, 0, 0, time.UTC)
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{"title": "Add titles"},
+	}
+
+	title, err := def.EvalTitleTemplateWith(payload, lastRun)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := "PR: Add titles since " + lastRun.Format(time.RFC3339)
+	if title != want {
+		t.Errorf("expected title %q, got %q", want, title)
+	}
+}
+
 func TestTriggerDefinition_EvalTitleTemplate_BadTemplate(t *testing.T) {
 	def := trigger.TriggerDefinition{
 		ID:    "test",

@@ -1394,6 +1394,72 @@ endpoints:
 	}
 }
 
+func TestHandler_WebhookDispatchesTitle(t *testing.T) {
+	triggerYAML := `
+triggers:
+  - id: "titled-pr-review"
+    type: periodic
+    schedule: "@webhook"
+    title: "PR review: {{ .Payload.pull_request.title }}"
+    prompt: "Review PR: {{ .Payload.pull_request.title }}"
+  - id: "untitled-pr-review"
+    type: periodic
+    schedule: "@webhook"
+    prompt: "Review PR: {{ .Payload.pull_request.title }}"
+`
+	webhookYAML := `
+endpoints:
+  - name: "titled"
+    trigger_id: "titled-pr-review"
+    response: '{"status": "submitted"}'
+  - name: "untitled"
+    trigger_id: "untitled-pr-review"
+    response: '{"status": "submitted"}'
+`
+
+	eng, mq, providers := setupTestEnvNoStart(t, triggerYAML, webhookYAML)
+	defer eng.Stop()
+
+	st := eng.StateStore()
+	handler := webhook.NewHandler(eng, st, "test", providers)
+
+	payload := map[string]interface{}{
+		"pull_request": map[string]interface{}{
+			"title": "Add titles",
+		},
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	for _, tc := range []struct {
+		endpoint string
+		want     string
+	}{
+		{"titled", "PR review: Add titles"},
+		{"untitled", ""},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/v1/forgejo/"+tc.endpoint, strings.NewReader(string(payloadBytes)))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeMux().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("endpoint %s: expected status 200, got %d", tc.endpoint, w.Code)
+		}
+	}
+
+	if mq.Count() != 2 {
+		t.Fatalf("expected exactly 2 tasks, got %d", mq.Count())
+	}
+
+	tasks := mq.Tasks()
+	if tasks[0].Title != "PR review: Add titles" {
+		t.Errorf("expected titled task to carry expanded title, got %q", tasks[0].Title)
+	}
+	if tasks[1].Title != "" {
+		t.Errorf("expected untitled task to carry no title, got %q", tasks[1].Title)
+	}
+}
+
 func TestHandler_MountOverride_TakesPrecedence(t *testing.T) {
 	triggerYAML := `
 triggers:

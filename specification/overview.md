@@ -34,7 +34,7 @@ HTTP queue system.
 - **Webhook ingestion.** Named webhook endpoints (YAML files in the webhook
   directory) expose `POST /v1/{provider}/{endpoint}` on the API port. A
   received payload is mapped to a trigger and made available to its prompt
-  template as `.Payload`.
+  and title templates as `.Payload`.
 - **Queue dispatch.** Tasks are dispatched through the `TaskQueueProvider`
   interface: an HTTP queue adapter (optional mTLS, optional custom task
   template; the prompt is passed through verbatim) or, without a queue
