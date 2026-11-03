@@ -658,3 +658,50 @@ func TestReconcile_OtherAuthorIssueDispatches(t *testing.T) {
 		t.Fatalf("got %d sweep tasks, want 1 (implement)", len(tasks))
 	}
 }
+
+// TestReconcile_ApprovedAutoMergePRRefires: the sweep's merge-or-wait
+// row is watermark-exempt for an open, approved-at-head PR carrying
+// agentic-auto-merge with no connected open blocker — the state is the
+// watermark, so a PR that stalled at a frozen head sha recovers on the
+// next sweep instead of sitting forever at "already dispatched at
+// revision". Without the label the row keeps the revision-keyed guard
+// (§forgejo/reconciliation/watermark-exemptions).
+func TestReconcile_ApprovedAutoMergePRRefires(t *testing.T) {
+	cases := []struct {
+		name   string
+		labels []string
+		want   string
+	}{
+		{"auto-merge PR re-fires merge-or-wait", []string{LabelAgenticAutoMerge}, "action=merge-or-wait"},
+		{"unlabelled PR holds off at the recorded revision", nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, q, store := newTestEngine(t)
+			api.repos = []Repository{testRepo("o/r")}
+			pr := PullRequest{Number: 1, State: "open", Mergeable: true, HeadSHA: "sha-1", Labels: tc.labels}
+			api.pulls[1] = &pr
+			api.openPulls["r"] = []PullRequest{pr}
+			api.reviews[1] = []Review{{Event: ReviewApproved, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt}}
+			if err := store.Save(Key{Repo: "o/r", Kind: KindPR, Number: 1}, Watermark{Action: string(ActionMergeOrWait), Revision: "sha-1"}); err != nil {
+				t.Fatalf("save watermark: %v", err)
+			}
+
+			eng.Reconcile()
+
+			tasks := q.all()
+			if tc.want == "" {
+				if len(tasks) != 0 {
+					t.Fatalf("expected no dispatch without the opt-in, got %d", len(tasks))
+				}
+				return
+			}
+			if len(tasks) != 1 {
+				t.Fatalf("expected the exempt row to re-fire, got %d tasks", len(tasks))
+			}
+			if !strings.Contains(tasks[0].Prompt, tc.want) {
+				t.Errorf("prompt = %q, want %q", tasks[0].Prompt, tc.want)
+			}
+		})
+	}
+}

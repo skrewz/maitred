@@ -725,6 +725,13 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 // (§forgejo/decisions/merge-gate). A comment review holds off on the
 // event path, but the sweep moves the PR along by triggering the
 // implementer, not the reviewer (§forgejo/decisions/transition-table).
+// The approved row is the one place a PR path is watermark-exempt, and
+// only when the PR opts into merging on its own with the
+// agentic-auto-merge label: an approved auto-merge PR at a frozen head
+// sha is then re-fired whatever its watermark records
+// (§forgejo/reconciliation/watermark-exemptions). Because the PR-
+// commented event shares this function, the exemption tests the event,
+// not the state: only the sweep is exempt.
 func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
 	if pr != nil && prOpen(pr) {
@@ -755,6 +762,24 @@ func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 				if open := mergeGateOpenBlockers(e, s); len(open) > 0 {
 					return holdOff(fmt.Sprintf("PR %d stands at an approved review, but a connected issue is blocked by %s; not merging", pr.Number, blockerNames(open)))
 				}
+				// The sweep's exempt row. An agentic-auto-merge PR sits at
+				// a frozen head sha once approved, so a revision-keyed
+				// watermark makes it a fixed point the sweep can never
+				// fire on and a labelled PR that failed to merge never
+				// recovers. The state is therefore its watermark: the row
+				// re-fires until the PR closes, and stops the moment it
+				// does, because the sweep enumerates open pull requests
+				// only. The opt-in label is the whole of it — an approved
+				// PR without it waits on a human, revision-keyed as ever
+				// — and the exemption belongs to this row alone: the same
+				// state reached from an event (the review event, a PR
+				// comment) keeps the guard below, so an approving review
+				// never re-fires on its own
+				// (§forgejo/reconciliation/watermark-exemptions,
+				// §forgejo/decisions/loop-prevention).
+				if onSweep(e) && carriesLabel(pr.Labels, LabelAgenticAutoMerge) {
+					return dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d stands at an approved review by %s and carries %s; the state calls for merge-or-wait regardless of revision %s", pr.Number, latest.Author, LabelAgenticAutoMerge, pr.HeadSHA))
+				}
 				if alreadyDispatched(w, ActionMergeOrWait, pr.HeadSHA) {
 					return holdOff(fmt.Sprintf("merge-or-wait already dispatched at revision %s", pr.HeadSHA))
 				}
@@ -763,6 +788,17 @@ func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 		}
 	}
 	return decidePRSynced(e, s, w)
+}
+
+// onSweep reports whether the event is the reconciliation sweep's
+// synthetic current-state event — the path the watermark exemption
+// belongs to. The sweep's PR row is shared with the PR-commented
+// event, which decides the same state under the ordinary
+// revision-keyed guard, so an exempt row on that path is keyed on the
+// event, not on the function that reads the state
+// (§forgejo/reconciliation/watermark-exemptions).
+func onSweep(e Event) bool {
+	return e.Type == EventReconcile
 }
 
 // decidePRReviewed handles a submitted review: the reject-pr test is
@@ -1362,10 +1398,11 @@ func bodyRevision(issue *Issue) string {
 // path: the same (event, state, revision) does not re-dispatch the same
 // action (§forgejo/decisions/loop-prevention). The watermark exemption
 // is not implemented here: it is scoped to the sweep, whose exempt rows
-// in decideIssueReconcile simply never consult the watermark
-// (§forgejo/reconciliation/watermark-exemptions). Keying the bypass on
-// the action instead of the path would hand every future event row for
-// those actions a suppression-free path by accident.
+// in decideIssueReconcile, and the sweep's merge-or-wait row for an
+// agentic-auto-merge PR in decidePRReconcile, simply never consult the
+// watermark (§forgejo/reconciliation/watermark-exemptions). Keying the
+// bypass on the action instead of the path would hand every future
+// event row for those actions a suppression-free path by accident.
 func alreadyDispatched(w *Watermark, action Action, revision string) bool {
 	return w != nil && w.Action == string(action) && w.Revision == revision
 }

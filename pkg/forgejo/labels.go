@@ -46,10 +46,13 @@ const (
 	LabelAgenticSyncMerge = "agentic-sync-merge"
 	// LabelAgenticAutoMerge is the work item's opt-in to merging on
 	// its own once approved and unblocked. The merge-or-wait prompt's
-	// merge policy owns it; the decision function reads it only to
-	// name the error state of a landing-set member carrying both
-	// opt-ins, which the approval hold-off contains
-	// (§forgejo/decisions/sync-set).
+	// merge policy owns it; the decision function reads it in two
+	// places: to name the error state of a landing-set member carrying
+	// both opt-ins, which the approval hold-off contains, and as the
+	// opt-in that makes the sweep's merge-or-wait row watermark-exempt
+	// — an approved, unblocked PR carrying it is re-fired whatever its
+	// watermark records (§forgejo/decisions/sync-set,
+	// §forgejo/reconciliation/watermark-exemptions).
 	LabelAgenticAutoMerge = "agentic-auto-merge"
 	// LabelForestSeeding is the transient hold-off on a newborn forest
 	// member: the decomposer attaches it atomically at the member's

@@ -98,6 +98,7 @@ while the prior task is still pending).
 | `decompose` | the issue is open and carries the `ideation` label, or it is open, carries the `outcome` label, has an open blocker, and the `ideation` issue it is blocked by is closed |
 | `wrap-up` | the issue is open, carries the `outcome` label, and has no open blockers |
 | `teardown-forest` | the issue is open, carries the `ideation` label, carries the `teardown-forest` label **and blocks at least one issue** — the forest still standing is the state that calls for the deletion, so a teardown that died half way through re-fires until the graph is empty, and stops the sweep the moment it is (§forgejo/decisions/forest-teardown) |
+| `merge-or-wait` | the PR is open, its latest review approves at head, no connected issue has an open blocker (the merge gate, §forgejo/decisions/merge-gate), and it carries the `agentic-auto-merge` label — the label is the whole point: an approved PR with no opt-in waits on a human, and only the sweep's row for a labelled, approved, unblocked PR is exempt |
 
 `ideation` and `outcome` are reserved label names, not configuration.
 They match **case-insensitively**: a label name is a user-authored
@@ -143,8 +144,32 @@ by any event is caught within one reconcile interval.
 by any event is caught within one reconcile interval.
 
 All other actions — `implement`, `reassess`, `review`, `re-review`,
-`rebase`, `fix-feedback`, `merge-or-wait` — keep revision-keyed
-watermarks: re-dispatching those would re-run real work.
+`rebase`, `fix-feedback`, and `merge-or-wait` on any path other than
+the sweep's exempt row above — keep revision-keyed watermarks:
+re-dispatching those would re-run real work. The exemption is the
+sweep's row alone; on the event path `merge-or-wait` stays
+revision-keyed, so an approving review never re-fires on its own
+(§forgejo/decisions/loop-prevention).
+
+The `merge-or-wait` row is exempt for the reason `teardown-forest`
+is, and not for the dependency-edge reason that opens this section: a
+labelled PR sits at a **frozen head sha** once approved — nothing more
+is pushed to it — so a revision-keyed watermark makes it a fixed point
+the sweep can never fire on, and an `agentic-auto-merge` PR that was
+approved and never merged slips between the cracks and never
+recovers. The state is therefore its watermark: the sweep re-fires
+until the PR closes, and stops the moment it does, because the sweep
+enumerates **open** pull requests only
+(§forgejo/reconciliation/the-sweep). Recovery latency is one
+`reconcile_interval`, and the re-fires are bounded by the queue's
+`(action, revision)` dedup key — identical on every sweep while the
+head sha is frozen (§forgejo/webhook/the-pipeline), so only one merge
+task is in flight at a time — while the agent's silence-on-noop keeps
+the re-fire quiet (§forgejo/decisions/loop-prevention). The row shares
+its function with the PR-commented event, which decides the same state
+under the ordinary guard: the exemption reads the **event**, not the
+shape of the state, exactly as `decompose`'s event rows keep the guard
+for their own action.
 
 A hold-off for a watermark-exempt action always names the state fact
 that calls for no action (e.g. `blocked by N open issue(s)`); the

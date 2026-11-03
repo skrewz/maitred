@@ -170,7 +170,7 @@ prompts:
 | `review` | a mergeable PR opened, or synced while it has no review, or an open mergeable PR carrying the `trigger-review` label while it has no review (§forgejo/decisions/label-triggered-review) |
 | `re-review` | a mergeable PR synced while it has a review, or an open mergeable PR carrying the `trigger-review` label while it has a review (§forgejo/decisions/label-triggered-review) |
 | `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review |
-| `merge-or-wait` | the PR's latest review approves **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's; never for a PR whose connected issue is a member of an open sync set — landing is the set's decision (§forgejo/decisions/sync-set); a labelled member of no open set — its set retired — reads as stale authoring, not a gate, and the merge gate decides on (§forgejo/decisions/sync-set) |
+| `merge-or-wait` | the PR's latest review approves **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's; never for a PR whose connected issue is a member of an open sync set — landing is the set's decision (§forgejo/decisions/sync-set); a labelled member of no open set — its set retired — reads as stale authoring, not a gate, and the merge gate decides on (§forgejo/decisions/sync-set); watermark-exempt on the sweep when the PR carries `agentic-auto-merge` (§forgejo/reconciliation/watermark-exemptions) |
 | `rebase` | an open PR is not mergeable (conflicts) |
 | `decompose` | an open issue carrying the `ideation` label was opened, edited, or had its labels changed; or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions); or the unblock cascade newly unblocks an open issue carrying the `outcome` label (§forgejo/decisions/unblock-cascade) |
@@ -212,7 +212,7 @@ prompts:
 | review submitted (latest review is anything else) | hold off |
 | PR merged | unblock cascade (for the connected issue) |
 | PR closed without merging | hold off |
-| PR commented (open) | as reconcile — the sweep's logic: the re-fetched PR state decides the next action |
+| PR commented (open) | as reconcile — the sweep's logic: the re-fetched PR state decides the next action — but **not** the sweep's watermark exemption: an approved `agentic-auto-merge` PR whose watermark already records `merge-or-wait` at head holds off here (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open issue carrying both the `ideation` and the `teardown-forest` label, blocking at least one issue | `teardown-forest`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open issue carrying both labels, blocking nothing | hold off, naming the empty forest: the re-firing ends where the forest does (§forgejo/decisions/forest-teardown) |
 | reconcile — open issue with the `ideation` label | `decompose`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
@@ -222,7 +222,7 @@ prompts:
 | reconcile — open `outcome` issue with open blockers, its `ideation` blocker open | hold off, naming the root — the forest is not yet commissioned, and the root's own row is the pulse: a forest is curated once per sweep |
 | reconcile — open `outcome` issue with open blockers and no `ideation` blocker | hold off, naming the absence — a tracker not gated by a root is not a forest's tracker |
 | reconcile — open issue carrying the `sync` label | `sync` when every member is closed or approved-at-head, mergeable, and opted in; otherwise a silent hold-off naming the members that are not ready — and a hold-off naming both reserved labels when the issue also carries `ideation` or `outcome`, two kind claims one row must not settle by label order (§forgejo/decisions/sync-set) |
-| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, `reject-pr` when a connected issue is blocked by an open `ideation` issue and otherwise as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate) |
+| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, `reject-pr` when a connected issue is blocked by an open `ideation` issue and otherwise as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback`, approved dispatches `merge-or-wait` — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate), and dispatches `merge-or-wait` **revision notwithstanding** when the PR carries `agentic-auto-merge`, the exempt row of an approved PR at a frozen head (§forgejo/reconciliation/watermark-exemptions) |
 
 The **reject-pr test precedes the review and rebase rows** on every path
 that can dispatch review, re-review, fix-feedback, or merge-or-wait: it
@@ -694,10 +694,13 @@ Four mechanisms, in this order:
    records the action at the current revision (the PR head sha, or the
    issue's `updated_at`), the decision holds off. The guard is
    revision-keyed on every path. The watermark-exempt actions
-   `decompose` and `wrap-up` are exempt only **on the sweep**, whose
-   rows for them decide without consulting the watermark: state is
-   their watermark (§forgejo/reconciliation/watermark-exemptions), and
-   the agent's silence-on-noop keeps the re-firing quiet.
+   `decompose`, `wrap-up`, and `merge-or-wait` are exempt only **on the
+   sweep**, whose rows for them decide without consulting the watermark:
+   state is their watermark (§forgejo/reconciliation/watermark-exemptions),
+   and the agent's silence-on-noop keeps the re-firing quiet. For
+   `merge-or-wait` the exemption is narrower still: the sweep's row, and
+   only for an approved, unblocked PR carrying `agentic-auto-merge`, so
+   an approving review never re-fires on its own.
 3. **Targeted per-transition sender guards**, only where an agent's
    *own* action would re-trigger the *same* action: a commit pushed by
    the PR's reviewing author (the author of its latest review) must
