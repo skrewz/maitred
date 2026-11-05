@@ -92,24 +92,36 @@ the author of forest members:
 
 | Key | Required | Value |
 |---|---|---|
-| `decomposer_identity` | no | the login of the decomposer account; no decision compares it — the `forest-seeding` label gates a member (§forgejo/decisions/transition-table, s-git/maitred#135) |
+| `decomposer_identity` | no | the login of the decomposer account; read by one row alone — a comment on an open `ideation` root authored by this identity holds off, any other author's dispatches `decompose` (§forgejo/decisions/transition-table, §forgejo/decisions/loop-prevention, s-git/maitred#147); issue authorship still gates nothing (s-git/maitred#135) |
 
 The key is **optional**: an unset optional key is never a load error
 (§forgejo/config/validation). The key grants no privilege and admits
 nothing by itself — it names the account that composes forests; the
 engine retains it as the operator's declaration of who composes forests
-and reads it nowhere else. No decision compares it:
-what gates a forest member is the `forest-seeding` hold-off
-(§forgejo/decisions/transition-table, s-git/maitred#135). In a
-directory merge, files that set the key must agree, exactly as with the
-org; a conflict is a load error.
+and reads it in exactly one place: the author guard on a comment at an
+open `ideation` root, where the decomposer's own comment must not
+re-trigger the decomposer (§forgejo/decisions/loop-prevention,
+s-git/maitred#147). The guard compares the delivery's `sender.login`
+against the declared key by **exact, case-sensitive equality** — the
+same rule the `fix-feedback` ownership gate applies to
+`implementer_identity` below. A declaration that does not match the
+account that actually posts (a stale key, a renamed persona) leaves
+the guard silently fail-open, so it is the operator's responsibility
+to keep the declared login current; the dispatch reason on the comment
+row names the comment's author, so such a mis-declaration is legible
+in the decision log. No other decision compares it — what gates a
+forest member is still the `forest-seeding` hold-off, and issue
+authorship gates nothing (s-git/maitred#135). In a directory merge,
+files that set the key must agree, exactly as with the org; a conflict
+is a load error.
 
 Why a config key and not a repository topic: topics mark *repositories*
 (the discovery vocabulary, exactly as `maitred-enabled` works), not users.
 "Who authored this issue?" is a fact about the account, which the
 repository-marking vocabulary cannot answer; and the identity must be the
 operator's declaration, not something the engine infers. The key records
-who composes forests; it decides nothing (s-git/maitred#135).
+who composes forests; it gates no work item — only the author row of a
+root's comment (s-git/maitred#135, s-git/maitred#147).
 
 ## Implementer identity
 
@@ -130,8 +142,9 @@ the decomposer identity; a conflict is a load error.
 Why a config key follows the decomposer identity's reasoning: topics
 mark repositories, not users, and the gate must be the operator's
 declaration, not something the engine infers. The two keys name
-different roles: the decomposer composes forests and decides nothing
-(s-git/maitred#135); the implementer implements and fixes, and its
+different roles: the decomposer composes forests and its identity
+guards one row alone — a comment at a root (s-git/maitred#135,
+s-git/maitred#147); the implementer implements and fixes, and its
 identity holds `fix-feedback` off the pull requests it does not own —
 the churn of an implementer dispatched onto a human's PR, answering
 reviews the human is handling themselves, is what the gate prevents

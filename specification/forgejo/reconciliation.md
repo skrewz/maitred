@@ -117,7 +117,9 @@ opening, editing, or changing the labels of an open `ideation` issue
 dispatches `decompose` like the sweep row does, but under the ordinary
 revision-keyed watermark guard — the exemption, not the action, is what
 belongs to the sweep (§forgejo/decisions/transition-table). A comment
-on an open root holds off: it is not a revision of intent. For
+on an open root takes the same event-path row under the same guard,
+held off only when its author is the configured decomposer identity
+(§forgejo/decisions/loop-prevention, s-git/maitred#147). For
 `wrap-up` the sweep stays the only exempt firing row: an `outcome`
 tracker's activity on the event path is a hold-off naming the label.
 The **unblock cascade** dispatches `wrap-up` too, when it newly

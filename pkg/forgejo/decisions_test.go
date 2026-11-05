@@ -1559,8 +1559,7 @@ func TestDecide(t *testing.T) {
 		// The event path dispatches `decompose` for an open ideation
 		// root — the label, not the repository and not the title, is
 		// what makes a root — but never implements or reassesses an
-		// issue carrying a reserved label, and a comment is not a
-		// revision of intent
+		// issue carrying a reserved label
 		// (§forgejo/decisions/transition-table).
 		{
 			name:       "issue opened carrying the ideation label dispatches decompose",
@@ -1575,9 +1574,17 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionDecompose,
 		},
 		{
-			name:  "feedback comment on an issue carrying the ideation label holds off",
-			event: issueEvent(EventIssueCommented),
-			state: State{Issue: ideationIssue()},
+			// A comment authored by the decomposer itself on a root
+			// holds off on authorship (s-git/maitred#147).
+			name: "feedback comment on an issue carrying the ideation label by the decomposer holds off",
+			event: Event{
+				Type:   EventIssueCommented,
+				Repo:   "o/r",
+				Kind:   KindIssue,
+				Number: 7,
+				Sender: "decomposer",
+			},
+			state: State{Issue: ideationIssue(), DecomposerIdentity: "decomposer"},
 		},
 		{
 			name:  "decompose already dispatched at the revision holds off on the event path",
@@ -2633,21 +2640,11 @@ func TestDecide_CascadeUnblocksDecomposerAuthoredMember(t *testing.T) {
 }
 
 // TestDecide_IdeationRowsReasons pins the reasons of the ideation event
-// rows: a comment on an open root holds off saying a comment is not a
-// revision of intent, and an opened, edited, or re-labelled root
-// dispatches decompose naming the root
-// (§forgejo/decisions/transition-table).
+// rows: an opened, edited, re-labelled root — and a root a non-decomposer
+// commented on — dispatches decompose naming the root
+// (§forgejo/decisions/transition-table, s-git/maitred#147).
 func TestDecide_IdeationRowsReasons(t *testing.T) {
-	t.Run("comment hold-off says a comment is not a revision of intent", func(t *testing.T) {
-		d := Decide(issueEvent(EventIssueCommented), State{Issue: ideationIssue()}, nil)
-		if !d.HoldOff() {
-			t.Fatalf("dispatched %q, want a hold-off", d.Action)
-		}
-		if !strings.Contains(d.Reason, "revision of intent") {
-			t.Errorf("reason = %q, want it to say a comment is not a revision of intent", d.Reason)
-		}
-	})
-	for _, typ := range []EventType{EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged} {
+	for _, typ := range []EventType{EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged, EventIssueCommented} {
 		d := Decide(issueEvent(typ), State{Issue: ideationIssue()}, nil)
 		if d.HoldOff() || d.Action != ActionDecompose {
 			t.Fatalf("%s: decision = %+v, want a dispatch of %q", typ, d, ActionDecompose)
@@ -2656,6 +2653,71 @@ func TestDecide_IdeationRowsReasons(t *testing.T) {
 			t.Errorf("%s: reason = %q, want it to name the ideation label", typ, d.Reason)
 		}
 	}
+}
+
+// TestDecide_IdeationCommentAuthorGuard pins the author-scoped comment
+// row at an open ideation root: a comment authored by anyone other than
+// the configured decomposer identity dispatches decompose under the
+// ordinary revision-keyed watermark guard, while the decomposer's own
+// comment holds off naming the authorship — the guard that keeps the
+// decomposer's clarifying question from re-triggering itself. An unset
+// identity leaves the guard inert, the same idiom as the fix-feedback
+// ownership gate (§forgejo/decisions/loop-prevention,
+// §forgejo/config/decomposer-identity, s-git/maitred#147).
+func TestDecide_IdeationCommentAuthorGuard(t *testing.T) {
+	root := ideationIssue()
+	st := State{Issue: root, DecomposerIdentity: "decomposer"}
+	byDecomposer := func(issue *Issue) Event {
+		return Event{Type: EventIssueCommented, Repo: "o/r", Kind: KindIssue, Number: issue.Number, Sender: "decomposer"}
+	}
+
+	t.Run("a comment by any other author dispatches decompose", func(t *testing.T) {
+		d := Decide(issueEvent(EventIssueCommented), st, nil)
+		if d.HoldOff() || d.Action != ActionDecompose {
+			t.Fatalf("decision = %+v, want a dispatch of %q", d, ActionDecompose)
+		}
+		// The author guard is this row's whole loop prevention, so the
+		// dispatch reason names the comment's author: a stream of
+		// decompose dispatches authored by the account the operator
+		// meant to declare — but did not, so the guard fails open — is
+		// legible in the decision log
+		// (§forgejo/config/decomposer-identity).
+		if !strings.Contains(d.Reason, "alice") {
+			t.Errorf("reason = %q, want it to name the comment's author", d.Reason)
+		}
+	})
+
+	t.Run("the decomposer's own comment holds off naming the authorship", func(t *testing.T) {
+		d := Decide(byDecomposer(root), st, nil)
+		if !d.HoldOff() {
+			t.Fatalf("dispatched %q, want a hold-off", d.Action)
+		}
+		if !strings.Contains(d.Reason, "decomposer") {
+			t.Errorf("reason = %q, want it to name the decomposer identity as the comment's author", d.Reason)
+		}
+	})
+
+	t.Run("the human's comment keeps the revision-keyed watermark guard", func(t *testing.T) {
+		w := &Watermark{Action: string(ActionDecompose), Revision: issueRevision(root)}
+		d := Decide(issueEvent(EventIssueCommented), st, w)
+		if !d.HoldOff() || !strings.Contains(d.Reason, "already dispatched") {
+			t.Fatalf("decision = %+v, want the revision-keyed hold-off", d)
+		}
+	})
+
+	t.Run("an unset identity leaves the guard inert", func(t *testing.T) {
+		d := Decide(byDecomposer(root), State{Issue: root}, nil)
+		if d.HoldOff() || d.Action != ActionDecompose {
+			t.Fatalf("decision = %+v, want a dispatch of %q with no identity configured", d, ActionDecompose)
+		}
+	})
+
+	t.Run("a comment by the decomposer on a root under teardown also holds off", func(t *testing.T) {
+		d := Decide(byDecomposer(teardownRoot()), State{Issue: teardownRoot(), DecomposerIdentity: "decomposer"}, nil)
+		if !d.HoldOff() {
+			t.Fatalf("dispatched %q, want the authorship hold-off even under a teardown order", d.Action)
+		}
+	})
 }
 
 // TestAdmissibleInRoles pins the action-to-role table: the work-item
@@ -2757,6 +2819,19 @@ func TestDecide_ForestTeardownRows(t *testing.T) {
 		}
 	}
 
+	// The author-guarded comment row falls through to the root rows
+	// like an edit, so a human comment on a root under a teardown
+	// order takes the teardown row rather than holding off: the order
+	// is the label, not the event, and the row wins over the root's
+	// decompose row exactly as it does for an edit
+	// (§forgejo/decisions/forest-teardown, s-git/maitred#147).
+	t.Run("a human comment on a root under teardown takes the teardown row, as an edit does", func(t *testing.T) {
+		d := Decide(issueEvent(EventIssueCommented), State{Issue: teardownRoot(), Blocked: standingForest(), DecomposerIdentity: "decomposer"}, nil)
+		if d.Action != ActionTeardownForest {
+			t.Errorf("action = %q, want %q (%s)", d.Action, ActionTeardownForest, d.Reason)
+		}
+	})
+
 	for _, tc := range []struct {
 		name  string
 		event Event
@@ -2785,11 +2860,6 @@ func TestDecide_ForestTeardownRows(t *testing.T) {
 			name:  "the label beside a kind label names the kind label",
 			event: issueEvent(EventIssueLabelsChanged),
 			issue: labelledIssue(LabelHumanTask, LabelTeardownForest),
-		},
-		{
-			name:  "a comment on a root under teardown is not a revision of intent",
-			event: issueEvent(EventIssueCommented),
-			issue: teardownRoot(),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

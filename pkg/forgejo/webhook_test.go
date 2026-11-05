@@ -26,7 +26,7 @@ import (
 // testConfig returns a config with a canned prompt for every action,
 // rendering the placeholders so tests can assert on the rendered prompt.
 func testConfig() *Config {
-	cfg := &Config{Org: "o", ReconcileInterval: 15 * time.Minute}
+	cfg := &Config{Org: "o", ReconcileInterval: 15 * time.Minute, DecomposerIdentity: "decomposer"}
 	cfg.Actions = make(map[string]PromptConfig, len(AllActions))
 	for _, a := range AllActions {
 		cfg.Actions[string(a)] = PromptConfig{
@@ -3052,10 +3052,11 @@ func newOutcomesEngine(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store) {
 // TestHandler_IdeationEventPath_DispatchesDecompose: opening, editing,
 // or changing the labels of an open ideation issue in a repository with
 // the outcomes role dispatches decompose and records the watermark; a
-// comment holds off — a comment is not a revision of intent
-// (§forgejo/decisions/transition-table).
+// comment authored by anyone other than the configured decomposer
+// identity dispatches decompose the same way
+// (§forgejo/decisions/transition-table, s-git/maitred#147).
 func TestHandler_IdeationEventPath_DispatchesDecompose(t *testing.T) {
-	for _, typ := range []EventType{EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged} {
+	for _, typ := range []EventType{EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged, EventIssueCommented} {
 		t.Run(string(typ), func(t *testing.T) {
 			eng, api, q, store := newOutcomesEngine(t)
 			issue := &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/out", Labels: []string{LabelIdeation}}
@@ -3082,8 +3083,11 @@ func TestHandler_IdeationEventPath_DispatchesDecompose(t *testing.T) {
 }
 
 // TestHandler_IdeationComment_HoldsOff: a comment created on an open
-// root is not a revision of intent: no dispatch, no watermark
-// (§forgejo/decisions/transition-table).
+// root by the configured decomposer identity is inert: no dispatch, no
+// watermark, and the reason names the authorship — the author-scoped
+// guard that keeps the decomposer's own clarifying question from
+// re-triggering it (§forgejo/decisions/loop-prevention,
+// s-git/maitred#147).
 func TestHandler_IdeationComment_HoldsOff(t *testing.T) {
 	var log bytes.Buffer
 	eng, api, q, store := newOutcomesEngine(t)
@@ -3091,10 +3095,10 @@ func TestHandler_IdeationComment_HoldsOff(t *testing.T) {
 	issue := &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/out", Labels: []string{LabelIdeation}}
 	api.issues[7] = issue
 
-	eng.HandleEvent(Event{Type: EventIssueCommented, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "alice"})
+	eng.HandleEvent(Event{Type: EventIssueCommented, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "decomposer"})
 
 	if tasks := q.all(); len(tasks) != 0 {
-		t.Fatalf("got %d tasks for a comment on a root, want none", len(tasks))
+		t.Fatalf("got %d tasks for the decomposer's own comment on a root, want none", len(tasks))
 	}
 	w, err := store.Load(Key{Repo: "o/out", Kind: KindIssue, Number: 7})
 	if err != nil {
@@ -3104,8 +3108,8 @@ func TestHandler_IdeationComment_HoldsOff(t *testing.T) {
 		t.Errorf("watermark = %+v, want none", w)
 	}
 	reason, _ := findEntry(t, parseLogLines(t, log.Bytes()), "decision")["reason"].(string)
-	if !strings.Contains(reason, "revision of intent") {
-		t.Errorf("decision-log reason = %q, want it to say a comment is not a revision of intent", reason)
+	if !strings.Contains(reason, "decomposer") {
+		t.Errorf("decision-log reason = %q, want it to name the decomposer identity as the comment's author", reason)
 	}
 }
 
