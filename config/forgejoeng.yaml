@@ -5,9 +5,11 @@
 # (§forgejo/config/loading).
 org: o
 reconcile_interval: 1h
-# Optional: the identity that composes forests — names the author of
-# forest members; no decision reads it as a gate
-# (§forgejo/config/decomposer-identity, s-git/maitred#135).
+# Optional: the identity that composes forests — read as a gate by one
+# row alone: a comment on an open ideation root authored by this login
+# holds off, any other author's re-cures the forest. Matched by exact,
+# case-sensitive comparison against the comment's author
+# (§forgejo/config/decomposer-identity, s-git/maitred#147).
 decomposer_identity: decomposer
 # Optional: the identity that implements work and fixes review feedback.
 # When set, fix-feedback dispatches only on PRs authored by this identity;

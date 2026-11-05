@@ -2676,6 +2676,15 @@ func TestDecide_IdeationCommentAuthorGuard(t *testing.T) {
 		if d.HoldOff() || d.Action != ActionDecompose {
 			t.Fatalf("decision = %+v, want a dispatch of %q", d, ActionDecompose)
 		}
+		// The author guard is this row's whole loop prevention, so the
+		// dispatch reason names the comment's author: a stream of
+		// decompose dispatches authored by the account the operator
+		// meant to declare — but did not, so the guard fails open — is
+		// legible in the decision log
+		// (§forgejo/config/decomposer-identity).
+		if !strings.Contains(d.Reason, "alice") {
+			t.Errorf("reason = %q, want it to name the comment's author", d.Reason)
+		}
 	})
 
 	t.Run("the decomposer's own comment holds off naming the authorship", func(t *testing.T) {
@@ -2809,6 +2818,19 @@ func TestDecide_ForestTeardownRows(t *testing.T) {
 				typ, d.Action, ActionTeardownForest, d.Reason)
 		}
 	}
+
+	// The author-guarded comment row falls through to the root rows
+	// like an edit, so a human comment on a root under a teardown
+	// order takes the teardown row rather than holding off: the order
+	// is the label, not the event, and the row wins over the root's
+	// decompose row exactly as it does for an edit
+	// (§forgejo/decisions/forest-teardown, s-git/maitred#147).
+	t.Run("a human comment on a root under teardown takes the teardown row, as an edit does", func(t *testing.T) {
+		d := Decide(issueEvent(EventIssueCommented), State{Issue: teardownRoot(), Blocked: standingForest(), DecomposerIdentity: "decomposer"}, nil)
+		if d.Action != ActionTeardownForest {
+			t.Errorf("action = %q, want %q (%s)", d.Action, ActionTeardownForest, d.Reason)
+		}
+	})
 
 	for _, tc := range []struct {
 		name  string

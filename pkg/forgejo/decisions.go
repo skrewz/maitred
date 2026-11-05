@@ -529,8 +529,15 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 		// decomposer's own comment on its root holds off silently,
 		// every other author's re-cures the forest under the ordinary
 		// revision-keyed watermark guard (§forgejo/decisions/loop-prevention,
-		// s-git/maitred#147).
+		// s-git/maitred#147). The fall-through is the root row in full:
+		// a root that also carries a teardown order takes the teardown
+		// row, exactly as an edit does — the order is the label, not
+		// the event (§forgejo/decisions/forest-teardown).
 		if e.Type == EventIssueCommented && s.DecomposerIdentity != "" && e.Sender == s.DecomposerIdentity {
+			// The match is exact — no case folding, no substring —
+			// the same rule the fix-feedback ownership gate applies
+			// to the implementer identity
+			// (§forgejo/config/decomposer-identity).
 			return holdOff(fmt.Sprintf("issue %d is an open %s root; comment authored by the decomposer identity %s: not re-curing on the decomposer's own words", issue.Number, LabelIdeation, e.Sender))
 		}
 		return decideDecompose(e, issue, s, w)
@@ -570,7 +577,19 @@ func decideDecompose(e Event, issue *Issue, s State, w *Watermark) Decision {
 	if alreadyDispatched(w, ActionDecompose, rev) {
 		return holdOff(fmt.Sprintf("decompose already dispatched at revision %s", rev))
 	}
-	return dispatch(ActionDecompose, fmt.Sprintf("issue %d is an open %s root: the label makes the root", issue.Number, LabelIdeation))
+	reason := fmt.Sprintf("issue %d is an open %s root: the label makes the root", issue.Number, LabelIdeation)
+	if e.Type == EventIssueCommented {
+		// The author guard on the comment row is this row's whole loop
+		// prevention, so the dispatch names the comment's author: when
+		// the declared identity does not match the account that
+		// actually posts — a stale declaration, a renamed persona —
+		// the fail-open loop is legible in the decision log as a
+		// stream of decompose dispatches authored by that account
+		// (§forgejo/config/decomposer-identity,
+		// §forgejo/decisions/loop-prevention, s-git/maitred#147).
+		reason = fmt.Sprintf("issue %d is an open %s root: a comment by %s", issue.Number, LabelIdeation, e.Sender)
+	}
+	return dispatch(ActionDecompose, reason)
 }
 
 // decideTeardown is the event path's teardown row: an open root carrying

@@ -101,10 +101,19 @@ engine retains it as the operator's declaration of who composes forests
 and reads it in exactly one place: the author guard on a comment at an
 open `ideation` root, where the decomposer's own comment must not
 re-trigger the decomposer (§forgejo/decisions/loop-prevention,
-s-git/maitred#147). No other decision compares it — what gates a forest
-member is still the `forest-seeding` hold-off, and issue authorship
-gates nothing (s-git/maitred#135). In a directory merge, files that set
-the key must agree, exactly as with the org; a conflict is a load error.
+s-git/maitred#147). The guard compares the delivery's `sender.login`
+against the declared key by **exact, case-sensitive equality** — the
+same rule the `fix-feedback` ownership gate applies to
+`implementer_identity` below. A declaration that does not match the
+account that actually posts (a stale key, a renamed persona) leaves
+the guard silently fail-open, so it is the operator's responsibility
+to keep the declared login current; the dispatch reason on the comment
+row names the comment's author, so such a mis-declaration is legible
+in the decision log. No other decision compares it — what gates a
+forest member is still the `forest-seeding` hold-off, and issue
+authorship gates nothing (s-git/maitred#135). In a directory merge,
+files that set the key must agree, exactly as with the org; a conflict
+is a load error.
 
 Why a config key and not a repository topic: topics mark *repositories*
 (the discovery vocabulary, exactly as `maitred-enabled` works), not users.
