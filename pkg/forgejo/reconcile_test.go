@@ -119,10 +119,13 @@ func TestReconcile_PullRequests(t *testing.T) {
 			want: "action=rebase",
 		},
 		{
-			name:      "already reviewed at this revision",
+			// The sweep's review row is watermark-exempt: no review at
+			// head is the state that calls for asking again, revision
+			// notwithstanding (§forgejo/reconciliation/watermark-exemptions).
+			name:      "review already dispatched at this revision re-fires while no review has landed",
 			pr:        PullRequest{Number: 4, State: "open", Mergeable: true, HeadSHA: "sha-4"},
 			watermark: &Watermark{Action: string(ActionReview), Revision: "sha-4"},
-			want:      "",
+			want:      "action=review",
 		},
 	}
 	for _, tc := range cases {
@@ -185,10 +188,14 @@ func TestReconcile_PRStandingAtReview(t *testing.T) {
 			want:   "action=fix-feedback",
 		},
 		{
-			name:      "fix-feedback already dispatched at the revision",
+			// The sweep's fix-feedback rows are watermark-exempt: an open,
+			// mergeable PR standing at a changes-requested or comment review
+			// at head is the state that calls for the implementer, revision
+			// notwithstanding (§forgejo/reconciliation/watermark-exemptions).
+			name:      "fix-feedback already dispatched at the revision re-fires while the changes-requested review stands at head",
 			review:    Review{Event: ReviewChangesRequested, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt},
 			watermark: &Watermark{Action: string(ActionFixFeedback), Revision: "sha-1"},
-			want:      "",
+			want:      "action=fix-feedback",
 		},
 		{
 			name:      "merge-or-wait already dispatched at the revision",
@@ -197,10 +204,10 @@ func TestReconcile_PRStandingAtReview(t *testing.T) {
 			want:      "",
 		},
 		{
-			name:      "comment review, fix-feedback already dispatched at the revision",
+			name:      "comment review, fix-feedback already dispatched at the revision, re-fires",
 			review:    Review{Event: ReviewComment, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt},
 			watermark: &Watermark{Action: string(ActionFixFeedback), Revision: "sha-1"},
-			want:      "",
+			want:      "action=fix-feedback",
 		},
 	}
 	for _, tc := range cases {
@@ -656,6 +663,62 @@ func TestReconcile_OtherAuthorIssueDispatches(t *testing.T) {
 
 	if tasks := q.all(); len(tasks) != 1 {
 		t.Fatalf("got %d sweep tasks, want 1 (implement)", len(tasks))
+	}
+}
+
+// TestReconcile_ReviewRowsRefireAtUnchangedRevision: the sweep's rows
+// for review, re-review and fix-feedback are watermark-exempt — the
+// state is the watermark, so a dispatch the queue lost, a task that
+// died, or a reviewer that finished without posting recovers on the
+// next sweep while the head stands frozen at the recorded revision
+// (§forgejo/reconciliation/watermark-exemptions).
+func TestReconcile_ReviewRowsRefireAtUnchangedRevision(t *testing.T) {
+	cases := []struct {
+		name      string
+		reviews   []Review
+		watermark Watermark
+		want      string
+	}{
+		{
+			name:      "no reviews at all re-fires review",
+			watermark: Watermark{Action: string(ActionReview), Revision: "sha-1"},
+			want:      "action=review",
+		},
+		{
+			name:      "latest review at an older revision re-fires re-review",
+			reviews:   []Review{{Event: ReviewApproved, Author: "bob", CommitID: "sha-0", SubmittedAt: testUpdatedAt}},
+			watermark: Watermark{Action: string(ActionReReview), Revision: "sha-1"},
+			want:      "action=re-review",
+		},
+		{
+			name:      "changes-requested at head re-fires fix-feedback",
+			reviews:   []Review{{Event: ReviewChangesRequested, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt}},
+			watermark: Watermark{Action: string(ActionFixFeedback), Revision: "sha-1"},
+			want:      "action=fix-feedback",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, q, store := newTestEngine(t)
+			api.repos = []Repository{testRepo("o/r")}
+			pr := PullRequest{Number: 1, State: "open", Mergeable: true, HeadSHA: "sha-1"}
+			api.pulls[1] = &pr
+			api.openPulls["r"] = []PullRequest{pr}
+			api.reviews[1] = tc.reviews
+			if err := store.Save(Key{Repo: "o/r", Kind: KindPR, Number: 1}, tc.watermark); err != nil {
+				t.Fatalf("save watermark: %v", err)
+			}
+
+			eng.Reconcile()
+
+			tasks := q.all()
+			if len(tasks) != 1 {
+				t.Fatalf("expected the exempt row to re-fire at the recorded revision, got %d tasks", len(tasks))
+			}
+			if !strings.Contains(tasks[0].Prompt, tc.want) {
+				t.Errorf("prompt = %q, want %q", tasks[0].Prompt, tc.want)
+			}
+		})
 	}
 }
 

@@ -1370,10 +1370,11 @@ func TestDecide(t *testing.T) {
 			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
 		},
 		{
-			name:      "reconcile PR fix-feedback already dispatched at the revision holds off",
-			event:     prEvent(EventReconcile, "maitred"),
-			state:     State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
-			watermark: &Watermark{Action: "fix-feedback", Revision: "abc"},
+			name:       "reconcile PR fix-feedback already dispatched at the revision re-fires: the state at head is the watermark",
+			event:      prEvent(EventReconcile, "maitred"),
+			state:      State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
+			watermark:  &Watermark{Action: "fix-feedback", Revision: "abc"},
+			wantAction: ActionFixFeedback,
 		},
 		{
 			name:      "reconcile PR merge-or-wait already dispatched at the revision holds off",
@@ -1382,10 +1383,11 @@ func TestDecide(t *testing.T) {
 			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
 		},
 		{
-			name:      "reconcile PR standing at a comment review, fix-feedback already dispatched at the revision, holds off",
-			event:     prEvent(EventReconcile, "maitred"),
-			state:     State{PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
-			watermark: &Watermark{Action: "fix-feedback", Revision: "abc"},
+			name:       "reconcile PR standing at a comment review, fix-feedback already dispatched at the revision, re-fires",
+			event:      prEvent(EventReconcile, "maitred"),
+			state:      State{PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
+			watermark:  &Watermark{Action: "fix-feedback", Revision: "abc"},
+			wantAction: ActionFixFeedback,
 		},
 		{
 			name:       "PR commented decides as reconcile: approved at head dispatches merge-or-wait",
@@ -3276,6 +3278,154 @@ func TestDecide_SweepAutoMergeRowIsWatermarkExempt(t *testing.T) {
 			}
 			if !strings.Contains(d.Reason, "already dispatched at revision abc") {
 				t.Errorf("event %q: reason = %q, want the revision-keyed hold-off", ev.Type, d.Reason)
+			}
+		}
+	})
+}
+
+// TestDecide_SweepReviewRowsAreWatermarkExempt: the sweep's rows for
+// review, re-review and fix-feedback are watermark-exempt — the state
+// is their watermark, so a dispatch that went nowhere recovers on the
+// next sweep while the head stands still. Each exempt state is
+// self-limiting: a review at head ends review and re-review, a push
+// ends fix-feedback, and the sweep enumerates open pull requests only.
+// The exemption is the sweep's rows alone: the same states reached
+// from an event (pr_synced, pr_reviewed, pr_commented) keep the
+// revision-keyed guard, so a push or a review never re-fires on its own
+// (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/decisions/loop-prevention).
+func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
+	oldReview := func(event string) Review {
+		return Review{Event: event, Author: "carol", CommitID: "old", SubmittedAt: testTime}
+	}
+
+	t.Run("sweep re-fires review for a PR with no reviews at the recorded revision", func(t *testing.T) {
+		d := Decide(prEvent(EventReconcile, ""), State{PR: openPR("abc")}, &Watermark{Action: string(ActionReview), Revision: "abc"})
+		if d.Action != ActionReview {
+			t.Fatalf("decision = %+v, want review: the review the sweep asked for has still not happened", d)
+		}
+		if strings.Contains(d.Reason, "already dispatched") {
+			t.Errorf("reason = %q, want the state that calls for the action, not the watermark", d.Reason)
+		}
+		if !strings.Contains(d.Reason, "regardless of revision abc") {
+			t.Errorf("reason = %q, want it to name the revision the state overrides", d.Reason)
+		}
+	})
+
+	t.Run("sweep re-fires re-review when the latest review stands at an older revision", func(t *testing.T) {
+		d := Decide(prEvent(EventReconcile, ""), State{PR: openPR("abc"), Reviews: []Review{oldReview(ReviewApproved)}}, &Watermark{Action: string(ActionReReview), Revision: "abc"})
+		if d.Action != ActionReReview {
+			t.Fatalf("decision = %+v, want re-review: the head carries work no reviewer has looked at", d)
+		}
+		if strings.Contains(d.Reason, "already dispatched") {
+			t.Errorf("reason = %q, want the state that calls for the action, not the watermark", d.Reason)
+		}
+		if !strings.Contains(d.Reason, "regardless of revision abc") {
+			t.Errorf("reason = %q, want it to name the revision the state overrides", d.Reason)
+		}
+	})
+
+	t.Run("sweep re-fires fix-feedback at a changes-requested review standing at head", func(t *testing.T) {
+		d := Decide(prEvent(EventReconcile, ""), State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}}, &Watermark{Action: string(ActionFixFeedback), Revision: "abc"})
+		if d.Action != ActionFixFeedback {
+			t.Fatalf("decision = %+v, want fix-feedback: feedback was asked for and the head has not moved since", d)
+		}
+		if strings.Contains(d.Reason, "already dispatched") {
+			t.Errorf("reason = %q, want the state that calls for the action, not the watermark", d.Reason)
+		}
+		if !strings.Contains(d.Reason, "regardless of revision abc") {
+			t.Errorf("reason = %q, want it to name the revision the state overrides", d.Reason)
+		}
+	})
+
+	t.Run("sweep re-fires fix-feedback at a comment review standing at head", func(t *testing.T) {
+		d := Decide(prEvent(EventReconcile, ""), State{PR: openPR("abc"), Reviews: []Review{review(ReviewComment, "carol", testTime)}}, &Watermark{Action: string(ActionFixFeedback), Revision: "abc"})
+		if d.Action != ActionFixFeedback {
+			t.Fatalf("decision = %+v, want fix-feedback: the sweep moves the PR along by triggering the implementer", d)
+		}
+		if strings.Contains(d.Reason, "already dispatched") {
+			t.Errorf("reason = %q, want the state that calls for the action, not the watermark", d.Reason)
+		}
+	})
+
+	t.Run("the trigger-review label is not needed to ask again on the sweep", func(t *testing.T) {
+		d := Decide(prEvent(EventReconcile, ""), State{PR: labelledPR("abc", LabelTriggerReview)}, &Watermark{Action: string(ActionReview), Revision: "abc"})
+		if d.Action != ActionReview {
+			t.Fatalf("decision = %+v, want review: a labelled hold-off at the recorded revision would leave the PR stranded like an unlabelled one", d)
+		}
+		if strings.Contains(d.Reason, "already dispatched") {
+			t.Errorf("reason = %q, want the state that calls for the action, not the watermark", d.Reason)
+		}
+	})
+
+	// Green controls: the exemption is exactly the three sweep rows.
+
+	t.Run("an approving review at head still belongs to merge-or-wait and none of the three fires", func(t *testing.T) {
+		d := Decide(prEvent(EventReconcile, ""), State{PR: openPR("abc"), Reviews: []Review{review(ReviewApproved, "carol", testTime)}}, &Watermark{Action: string(ActionMergeOrWait), Revision: "abc"})
+		if d.Dispatched {
+			t.Fatalf("decision = %+v, want the merge-or-wait hold-off: an approved PR without the opt-in waits on a human", d)
+		}
+		if d.Action == ActionReview || d.Action == ActionReReview || d.Action == ActionFixFeedback {
+			t.Errorf("decision = %+v, want no review-side action: a review at head ends the review rows", d)
+		}
+		if !strings.Contains(d.Reason, "already dispatched at revision abc") {
+			t.Errorf("reason = %q, want the revision-keyed merge-or-wait hold-off", d.Reason)
+		}
+	})
+
+	t.Run("a PR that is not mergeable still decides rebase, revision-keyed", func(t *testing.T) {
+		d := Decide(prEvent(EventReconcile, ""), State{PR: notMergeablePR("abc")}, &Watermark{Action: string(ActionRebase), Revision: "abc"})
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want a hold-off: rebase is real work and stays revision-keyed", d)
+		}
+		if !strings.Contains(d.Reason, "rebase already dispatched at revision abc") {
+			t.Errorf("reason = %q, want the revision-keyed hold-off", d.Reason)
+		}
+	})
+
+	t.Run("reject-pr still precedes the exempt rows", func(t *testing.T) {
+		d := Decide(prEvent(EventReconcile, ""), State{
+			PR: openPR("abc"),
+			ConnectedIssues: []ConnectedIssue{{
+				Issue:    *connectedIssue(),
+				Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
+			}},
+		}, &Watermark{Action: string(ActionReview), Revision: "abc"})
+		if d.Action != ActionRejectPR {
+			t.Fatalf("decision = %+v, want reject-pr: the commissioning gate decides ahead of the exempt rows", d)
+		}
+	})
+
+	t.Run("a closed PR holds off: the re-fire ends where the PR does", func(t *testing.T) {
+		d := Decide(prEvent(EventReconcile, ""), State{PR: closedPR("abc")}, &Watermark{Action: string(ActionReview), Revision: "abc"})
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want a hold-off: the sweep enumerates open pull requests only", d)
+		}
+		if !strings.Contains(d.Reason, "not open") {
+			t.Errorf("reason = %q, want it to name the PR's state", d.Reason)
+		}
+	})
+
+	t.Run("event paths keep the revision-keyed guard", func(t *testing.T) {
+		cases := []struct {
+			name      string
+			event     Event
+			state     State
+			watermark *Watermark
+		}{
+			{"pr_synced with no review at a recorded revision", prEvent(EventPRSynced, "alice"), State{PR: openPR("abc")}, &Watermark{Action: string(ActionReview), Revision: "abc"}},
+			{"pr_synced with a review at an older revision", prEvent(EventPRSynced, "alice"), State{PR: openPR("abc"), Reviews: []Review{oldReview(ReviewApproved)}}, &Watermark{Action: string(ActionReReview), Revision: "abc"}},
+			{"pr_synced carrying trigger-review with no review", prEvent(EventPRSynced, "alice"), State{PR: labelledPR("abc", LabelTriggerReview)}, &Watermark{Action: string(ActionReview), Revision: "abc"}},
+			{"pr_reviewed requesting changes at head", prEvent(EventPRReviewed, "carol"), State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}}, &Watermark{Action: string(ActionFixFeedback), Revision: "abc"}},
+			{"pr_commented standing at a changes-requested review at head", prEvent(EventPRCommented, "alice"), State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}}, &Watermark{Action: string(ActionFixFeedback), Revision: "abc"}},
+		}
+		for _, tt := range cases {
+			d := Decide(tt.event, tt.state, tt.watermark)
+			if !d.HoldOff() {
+				t.Errorf("%s: decision = %+v, want a hold-off: the exemption is the sweep's rows alone", tt.name, d)
+			}
+			if !strings.Contains(d.Reason, "already dispatched at revision abc") {
+				t.Errorf("%s: reason = %q, want the revision-keyed hold-off", tt.name, d.Reason)
 			}
 		}
 	})
