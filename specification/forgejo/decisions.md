@@ -184,8 +184,8 @@ prompts:
 |---|---|
 | issue opened (open, all blockers closed, no connected PR) | `implement` |
 | issue opened (blocked, or a connected open PR, or not open) | hold off |
-| issue opened / edited / labels changed (issue open, carries both the `ideation` and the `teardown-forest` label, blocks at least one issue) | `teardown-forest` — the teardown row wins over the root's `decompose` row, so a forest under teardown is never re-commissioned while it is being deleted (§forgejo/decisions/forest-teardown) |
-| issue opened / edited / labels changed (issue open, carries both labels, blocks no issue) | hold off, naming the empty forest — the engine can see there is nothing to delete, so no agent is asked to discover it (§forgejo/decisions/forest-teardown) |
+| issue opened / edited / labels changed / comment not authored by the configured decomposer identity (issue open, carries both the `ideation` and the `teardown-forest` label, blocks at least one issue) | `teardown-forest` — the teardown row wins over the root's `decompose` row, so a forest under teardown is never re-commissioned while it is being deleted (§forgejo/decisions/forest-teardown) |
+| issue opened / edited / labels changed / comment not authored by the configured decomposer identity (issue open, carries both labels, blocks no issue) | hold off, naming the empty forest — the engine can see there is nothing to delete, so no agent is asked to discover it (§forgejo/decisions/forest-teardown) |
 | issue opened / edited / labels changed / comment (issue open, carries the `teardown-forest` label without `ideation`) | hold off, naming that the label modifies the root row and retires no work item — a kind label carried alongside is named first, since what an issue *is* outweighs what a label *modifies* (§forgejo/decisions/forest-teardown) |
 | issue opened / edited / labels changed (issue open, carries the `ideation` label, and — for the labels-changed event — no longer carries `teardown-forest`) | `decompose` — the label makes the root, whatever the repository and the title; attaching the label is the *first* trigger. The event path keeps the revision-keyed watermark guard; the sweep is watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | issue comment by an author other than the configured decomposer identity (issue open, carries the `ideation` label) | `decompose` — the comment bumps the root's `updated_at`, so it reads as a new revision under the ordinary revision-keyed watermark guard: a human answering the decomposer's questions re-cures the forest event-driven, without waiting for the sweep; a root that also carries `teardown-forest` takes the teardown row instead, as an edit does (§forgejo/decisions/forest-teardown) (§forgejo/decisions/loop-prevention, s-git/maitred#147) |
@@ -733,13 +733,17 @@ Five mechanisms, in this order:
    root authored by the configured decomposer identity must not
    re-dispatch `decompose` — every other author's comment re-cures the
    forest, which is what makes answering the decomposer's clarifying
-   questions work event-driven (s-git/maitred#147). The identity
-   comparison on both sender guards is an exact, case-sensitive
-   equality of the payload's login against the declared config key —
-   no case folding, no substring (§forgejo/config/decomposer-identity,
-   §forgejo/config/implementer-identity). The guard yields
-   to an explicit request: a PR carrying the `trigger-review` label is
-   reviewed whatever its author pushed
+   questions work event-driven (s-git/maitred#147). The two guards
+   that read a *declared* identity — the root-comment author guard and
+   the fix-feedback ownership gate of mechanism 5 — compare the
+   payload's login to that config key by exact, case-sensitive
+   equality, no case folding, no substring
+   (§forgejo/config/decomposer-identity,
+   §forgejo/config/implementer-identity); the re-review author guard
+   reads no config key at all, comparing the payload's login to the
+   author of the PR's latest review, both logins read from the forge.
+   The re-review guard yields to an explicit request: a PR carrying the
+   `trigger-review` label is reviewed whatever its author pushed
    (§forgejo/decisions/label-triggered-review).
    Cross-persona triggering (a reviewer's changes-requested leading to
    the implementer's fix) is intended and unguarded.
