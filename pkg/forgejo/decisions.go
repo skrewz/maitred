@@ -197,6 +197,17 @@ type State struct {
 	// inert (§forgejo/decisions/inputs, §forgejo/decisions/loop-prevention,
 	// s-git/maitred#143).
 	ImplementerIdentity string
+	// DecomposerIdentity is the configured login of the identity that
+	// composes forests (§forgejo/config/decomposer-identity). Like
+	// ImplementerIdentity it is a declared configuration input the
+	// engine passes verbatim from its config, not fetched state. It is
+	// read by one row alone: a comment on an open `ideation` root is
+	// held off only when its author is this identity, so the
+	// decomposer's own clarifying question does not re-trigger itself
+	// while any other author's comment re-cures the root
+	// (§forgejo/decisions/loop-prevention, s-git/maitred#147). When
+	// empty the guard is inert, like the ownership gate above.
+	DecomposerIdentity string
 	// CascadeRoot is the closed issue the unblock cascade walks from,
 	// for close events.
 	CascadeRoot *IssueNode
@@ -496,12 +507,15 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 // feedback comment: on an open issue carrying the ideation label the
 // edit or label change is the revision of intent the decomposer
 // re-cures against and dispatches decompose — attaching the label is
-// the first trigger — while a comment is not a revision of intent and
-// holds off (§forgejo/decisions/transition-table); otherwise dispatch
-// reassess if the re-fetched issue is open and has no open blocker;
-// activity on a blocked issue has nothing to reassess — the work is
-// held by the blocker, so the decision holds off naming the open
-// blockers.
+// the first trigger — and so is a comment, by the same guard: the
+// comment bumps the root's updated_at, so it reads as a new revision
+// (s-git/maitred#147). The row is author-scoped, not blanket: a comment
+// authored by the configured decomposer identity holds off naming the
+// authorship, so the decomposer's own question never re-triggers it
+// (§forgejo/decisions/loop-prevention); otherwise dispatch reassess if
+// the re-fetched issue is open and has no open blocker; activity on a
+// blocked issue has nothing to reassess — the work is held by the
+// blocker, so the decision holds off naming the open blockers.
 func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	issue := s.Issue
 	if issue == nil {
@@ -511,8 +525,13 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 		return holdOff(fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State))
 	}
 	if hasLabel(issue, LabelIdeation) {
-		if e.Type == EventIssueCommented {
-			return holdOff(fmt.Sprintf("issue %d is an open %s root; a comment is not a revision of intent", issue.Number, LabelIdeation))
+		// The comment row is guarded by authorship, not blanket: the
+		// decomposer's own comment on its root holds off silently,
+		// every other author's re-cures the forest under the ordinary
+		// revision-keyed watermark guard (§forgejo/decisions/loop-prevention,
+		// s-git/maitred#147).
+		if e.Type == EventIssueCommented && s.DecomposerIdentity != "" && e.Sender == s.DecomposerIdentity {
+			return holdOff(fmt.Sprintf("issue %d is an open %s root; comment authored by the decomposer identity %s: not re-curing on the decomposer's own words", issue.Number, LabelIdeation, e.Sender))
 		}
 		return decideDecompose(e, issue, s, w)
 	}

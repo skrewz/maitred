@@ -172,7 +172,7 @@ prompts:
 | `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review — **and** the PR's author is the configured implementer identity; a PR authored by anyone else holds off, its feedback theirs to fix (§forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention, s-git/maitred#143); watermark-exempt on the sweep while the latest review at the current head requests changes or is a comment review (§forgejo/reconciliation/watermark-exemptions) |
 | `merge-or-wait` | the PR's latest review approves **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's; never for a PR whose connected issue is a member of an open sync set — landing is the set's decision (§forgejo/decisions/sync-set); a labelled member of no open set — its set retired — reads as stale authoring, not a gate, and the merge gate decides on (§forgejo/decisions/sync-set); watermark-exempt on the sweep when the PR carries `agentic-auto-merge` (§forgejo/reconciliation/watermark-exemptions) |
 | `rebase` | an open PR is not mergeable (conflicts) |
-| `decompose` | an open issue carrying the `ideation` label was opened, edited, or had its labels changed; or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
+| `decompose` | an open issue carrying the `ideation` label was opened, edited, had its labels changed, or received a comment authored by anyone other than the configured decomposer identity (§forgejo/decisions/loop-prevention, s-git/maitred#147); or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions); or the unblock cascade newly unblocks an open issue carrying the `outcome` label (§forgejo/decisions/unblock-cascade) |
 | `teardown-forest` | an open issue carrying the `ideation` label **also** carries the `teardown-forest` label, **and blocks at least one issue**: the human has ordered the forest that root commissioned to be deleted, and there is a forest to delete (§forgejo/decisions/forest-teardown); watermark-exempt on the sweep while the forest stands (§forgejo/reconciliation/watermark-exemptions) |
 | `reject-pr` | a PR is connected to work that is not yet commissioned: a **connected issue** — any non-PR issue the PR blocks, every one being tested — is blocked by an **open** `ideation` issue; tested when a PR opens, when a review is submitted, and by the reconciliation sweep, ahead of every review, rebase, fix and merge decision; the prompt closes the PR, names the breach, and reports it |
@@ -188,7 +188,8 @@ prompts:
 | issue opened / edited / labels changed (issue open, carries both labels, blocks no issue) | hold off, naming the empty forest — the engine can see there is nothing to delete, so no agent is asked to discover it (§forgejo/decisions/forest-teardown) |
 | issue opened / edited / labels changed / comment (issue open, carries the `teardown-forest` label without `ideation`) | hold off, naming that the label modifies the root row and retires no work item — a kind label carried alongside is named first, since what an issue *is* outweighs what a label *modifies* (§forgejo/decisions/forest-teardown) |
 | issue opened / edited / labels changed (issue open, carries the `ideation` label, and — for the labels-changed event — no longer carries `teardown-forest`) | `decompose` — the label makes the root, whatever the repository and the title; attaching the label is the *first* trigger. The event path keeps the revision-keyed watermark guard; the sweep is watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
-| issue comment (issue open, carries the `ideation` label) | hold off — a comment is not a revision of intent; the reason says so |
+| issue comment by an author other than the configured decomposer identity (issue open, carries the `ideation` label) | `decompose` — the comment bumps the root's `updated_at`, so it reads as a new revision under the ordinary revision-keyed watermark guard: a human answering the decomposer's questions re-cures the forest event-driven, without waiting for the sweep (§forgejo/decisions/loop-prevention, s-git/maitred#147) |
+| issue comment authored by the configured decomposer identity (issue open, carries the `ideation` label) | hold off, naming the authorship — the decomposer's own comment on its root must not re-trigger it; an unset identity leaves the guard inert (§forgejo/config/decomposer-identity, §forgejo/decisions/loop-prevention, s-git/maitred#147) |
 | issue opened / edited / labels changed / comment (issue carries the `outcome` or `human-task` label) | hold off, naming the label — the sweep is where `wrap-up` fires (§forgejo/reconciliation/watermark-exemptions) |
 | issue opened / edited / labels changed / comment (issue open, carries the `forest-seeding` label) | hold off, naming the seeding window — a newborn forest member is dispatchable neither for `implement` nor for `reassess` until its blocking edges are wired and the decomposer removes the label (§forgejo/decisions/transition-table, §forgejo/decisions/commissioning) |
 | issue opened / edited / labels changed / comment (issue carries the `sync` label) | hold off, naming the label — the sweep is where a landing set's `sync` fires (§forgejo/reconciliation/watermark-exemptions, §forgejo/decisions/sync-set) |
@@ -283,8 +284,12 @@ in a repository holding both roles, must not wake the implementer. The
 is decided `decompose` on the issue-opened, issue-edited, and
 labels-changed rows — the label, not the repository and not the title,
 is what makes a root. The body of an edit is the revision of intent the
-decomposer re-cures against, so an edit re-fires `decompose`; a comment
-is not a revision of intent, so a comment on an open root holds off.
+decomposer re-cures against, so an edit re-fires `decompose`; so does a
+comment, by the same revision-keyed guard — the comment bumps the root's
+`updated_at` — except when its author is the configured decomposer
+identity, whose own comment holds off naming the authorship, so the
+decomposer's clarifying question never re-triggers it
+(§forgejo/decisions/loop-prevention, s-git/maitred#147).
 A root that is closed on re-fetch holds off on every row: closing it
 commissions the forest; the unblock cascade dispatches its members.
 The `outcome` and `human-task` labels keep their hold-offs, naming the
@@ -724,9 +729,14 @@ Five mechanisms, in this order:
 3. **Targeted per-transition sender guards**, only where an agent's
    *own* action would re-trigger the *same* action: a commit pushed by
    the PR's reviewing author (the author of its latest review) must
-   not re-review that same commit. The guard yields to an explicit
-   request: a PR carrying the `trigger-review` label is reviewed
-   whatever its author pushed (§forgejo/decisions/label-triggered-review).
+   not re-review that same commit; a comment on an open `ideation`
+   root authored by the configured decomposer identity must not
+   re-dispatch `decompose` — every other author's comment re-cures the
+   forest, which is what makes answering the decomposer's clarifying
+   questions work event-driven (s-git/maitred#147). The guard yields
+   to an explicit request: a PR carrying the `trigger-review` label is
+   reviewed whatever its author pushed
+   (§forgejo/decisions/label-triggered-review).
    Cross-persona triggering (a reviewer's changes-requested leading to
    the implementer's fix) is intended and unguarded.
 4. **The seeding hold-off**, where a delivery that is new to a key
@@ -784,15 +794,20 @@ that PR's reviews; for a PR whose connected issue is a member, the
 membership edges — the open sync issues that issue blocks
 (§forgejo/decisions/sync-set).
 
-The function consults **one declared configuration input**: the
+The function consults **two declared configuration inputs**: the
 configured **implementer identity**
 (§forgejo/config/implementer-identity), which the engine passes
 verbatim on the state and the `fix-feedback` rows alone read
-(§forgejo/decisions/loop-prevention, s-git/maitred#143). Every other
-row decides on state alone. The configured **decomposer identity**
-(§forgejo/config/decomposer-identity) remains loadable and names the
-account that composes forests, but the decision path never reads it —
-issue authorship gates nothing (s-git/maitred#135).
+(§forgejo/decisions/loop-prevention, s-git/maitred#143), and the
+configured **decomposer identity**
+(§forgejo/config/decomposer-identity), passed verbatim on the state as
+well and read by one row alone: the comment on an open `ideation` root,
+where the author *is* the relation being tested — a human answering the
+decomposer re-cures; the decomposer's own comment holds off
+(§forgejo/decisions/loop-prevention, s-git/maitred#147). Issue
+authorship still gates nothing — #135 stands for work items; a root
+comment is a different relation. Every other row decides on state
+alone. Both guards are inert when the identity is unset.
 
 **Watermark** — the last dispatch for the object's key
 (§forgejo/state/watermark), or none.
