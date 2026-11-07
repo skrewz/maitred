@@ -300,14 +300,18 @@ func newForgejoEngine(dataDir string, qe queue.TaskQueueProvider, logger *slog.L
 	if err != nil {
 		return nil, nil, err
 	}
-	baseURL := os.Getenv("MAITRED_FORGEJO_URL")
-	token := os.Getenv("MAITRED_FORGEJO_TOKEN")
+	baseURL := os.Getenv(forgejo.URLEnvVar)
+	token := os.Getenv(forgejo.TokenEnvVar)
 	secret, err := forgejo.LoadSecret()
 	if err != nil {
 		return nil, nil, err
 	}
-	if baseURL == "" || token == "" || secret == "" {
-		return nil, nil, fmt.Errorf("MAITRED_FORGEJO_URL, MAITRED_FORGEJO_TOKEN and the shared secret (%s or %s) must be set", forgejo.SecretFileEnvVar, forgejo.SecretEnvVar)
+	// The config has enabled the engine; the environment has to be able
+	// to serve it. The error wraps forgejo.ErrEnvironmentIncomplete so
+	// the surfaces can call this cause credentials missing
+	// (§forgejo/webhook/configuration).
+	if err := forgejo.CheckEnvironment(baseURL, token, secret); err != nil {
+		return nil, nil, err
 	}
 	httpClient, err := forgejo.NewClient(
 		os.Getenv(forgejo.ClientCertEnvVar),
