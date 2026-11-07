@@ -353,7 +353,7 @@ handled by a reverse proxy in front of the API port.
 | `--api-port` | Port for the webhook API (overrides `MAITRED_API_PORT`) |
 | `--webhook-dir` | Directory containing webhook endpoint YAML files (overrides `MAITRED_WEBHOOK_DIR`) |
 | `--version` | Print version and exit |
-| `--health` | Health check mode (exits 0 if config is valid) |
+| `--health` | Health check mode (exits 0 if the configuration is valid; a configured but broken Forgejo engine is unhealthy and names its category, no Forgejo config at all is healthy) |
 
 ## Development
 

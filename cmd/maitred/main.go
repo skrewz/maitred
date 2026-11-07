@@ -332,16 +332,36 @@ func newForgejoEngine(dataDir string, qe queue.TaskQueueProvider, logger *slog.L
 	return fjEngine, forgejo.NewHandler(fjEngine, secret, logger), nil
 }
 
-// healthCheck validates that trigger and data directories are accessible
-// and trigger definitions can be loaded. Used for container HEALTHCHECK.
+// healthCheck validates that trigger and data directories are accessible,
+// trigger definitions can be loaded, and the Forgejo engine is either not
+// configured or would come up (§forgejo/observability/why-the-engine-is-off,
+// §overview/scope). The engine answer comes from the offline
+// classification — opening a store or building a client to ask the
+// question would be a side effect the probe must not cause. A configured
+// but broken engine returns an error naming the category every surface
+// prints; a deployment with no Forgejo configuration at all stays
+// healthy — "not configured" is not a fault — with a note saying the
+// engine is simply not configured.
 func healthCheck(triggerDir, dataDir string) error {
 	mq := queue.NewTaskQueue()
-	_, err := engine.New(engine.Config{
+	if _, err := engine.New(engine.Config{
 		TriggerDir: triggerDir,
 		DataDir:    dataDir,
 		Queue:      mq,
-	})
-	return err
+	}); err != nil {
+		return err
+	}
+	cause, category := forgejo.EngineStatus(defaultEnv(forgejo.ConfigEnvVar, forgejo.DefaultConfigPath), forgejo.ProcessEnv())
+	switch {
+	case category.IsFault():
+		return fmt.Errorf("forgejo engine %s: %w", category, cause)
+	case cause != nil:
+		// A cause without a fault is a location that does not exist:
+		// the engine disabled by design, which the healthy output says
+		// out loud rather than leaving the operator to infer.
+		fmt.Printf("forgejo engine %s: %v\n", category, cause)
+	}
+	return nil
 }
 
 // loadQueueConfig reads and parses a queue adapter configuration file.
