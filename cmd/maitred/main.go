@@ -215,10 +215,10 @@ func main() {
 	// (§forgejo/observability/the-dashboard-view).
 	var fjEngine *forgejo.Engine
 	var forgejoHandler http.Handler
-	var forgejoDisabledReason string
+	var forgejoDisabledCause error
 	forgejoLog := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if engine, fh, err := newForgejoEngine(dataDirStr, qe, forgejoLog); err != nil {
-		forgejoDisabledReason = err.Error()
+		forgejoDisabledCause = err
 		log.Printf("forgejo engine disabled: %v", err)
 		log.Printf("  forgejo engine:   disabled (route %s answers 503)", forgejo.WebhookPath)
 	} else if fh != nil {
@@ -242,7 +242,7 @@ func main() {
 		// not: disabled, it refuses deliveries with 503 rather than
 		// letting the trigger handler 404 them
 		// (§forgejo/webhook/the-route).
-		mountForgejoRoute(webhookSrv, forgejoHandler, forgejoDisabledReason, forgejoLog)
+		mountForgejoRoute(webhookSrv, forgejoHandler, forgejoDisabledCause, forgejoLog)
 		if err := webhookSrv.Start(); err != nil {
 			log.Printf("webhook server error: %v (continuing without webhook API)", err)
 			webhookSrv = nil
@@ -280,15 +280,19 @@ type routeMounter interface {
 // mountForgejoRoute mounts the Forgejo all-events route on the webhook
 // API router (§forgejo/webhook/the-route). With the engine enabled its
 // handler serves the route; disabled, the route still exists and refuses
-// every delivery with 503 naming the startup error, so a delivery lands
-// in Forgejo's delivery log as "not serving yet" instead of "no such
-// endpoint".
-func mountForgejoRoute(m routeMounter, enabled http.Handler, disabledReason string, logger *slog.Logger) {
+// every delivery with 503 naming the disabledCause's category — not the
+// raw error, whose reader is Forgejo's delivery log rather than the
+// process log (§forgejo/observability/why-the-engine-is-off) — so a
+// delivery lands in Forgejo's delivery log as "not serving yet" instead
+// of "no such endpoint". The category is the one the sentinel
+// classification gives the startup error, so body and startup cannot
+// disagree about the same failure.
+func mountForgejoRoute(m routeMounter, enabled http.Handler, disabledCause error, logger *slog.Logger) {
 	if enabled != nil {
 		m.MountOverride(forgejo.WebhookPath, enabled)
 		return
 	}
-	m.MountOverride(forgejo.WebhookPath, forgejo.NewDisabledHandler(disabledReason, logger))
+	m.MountOverride(forgejo.WebhookPath, forgejo.NewDisabledHandler(forgejo.CategoryOf(disabledCause), disabledCause, logger))
 }
 
 // newForgejoEngine constructs the Forgejo engine and its webhook handler

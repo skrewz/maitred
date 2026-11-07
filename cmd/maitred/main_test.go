@@ -79,7 +79,7 @@ func TestMountForgejoRoute_EngineEnabledKeepsTheOverride(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	mountForgejoRoute(h, enabled, "", discardLog())
+	mountForgejoRoute(h, enabled, nil, discardLog())
 
 	if w := serve(h, http.MethodPost, forgejo.WebhookPath); w.Code != http.StatusNoContent {
 		t.Errorf("expected 204 from the engine handler, got %d", w.Code)
@@ -90,19 +90,23 @@ func TestMountForgejoRoute_EngineEnabledKeepsTheOverride(t *testing.T) {
 }
 
 // With the engine disabled the route still exists and answers 503
-// naming the startup error, not 404 (§forgejo/webhook/the-route).
+// naming the category of the startup error — not the raw error, which
+// may quote filesystem paths — and not 404 (§forgejo/webhook/the-route).
 func TestMountForgejoRoute_EngineDisabledAnswers503(t *testing.T) {
 	h := testHandler(t)
-	const reason = `parse forgejoeng config: no such file or directory`
+	cause := fmt.Errorf("parse forgejoeng config %q: %w", "/data/maitred/forgejoeng/config.yaml", forgejo.ErrConfigUnreadable)
 
-	mountForgejoRoute(h, nil, reason, discardLog())
+	mountForgejoRoute(h, nil, cause, discardLog())
 
 	w := serve(h, http.MethodPost, forgejo.WebhookPath)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d (body %q)", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), reason) {
-		t.Errorf("body %q does not name the config error %q", w.Body.String(), reason)
+	if !strings.Contains(w.Body.String(), forgejo.CategoryConfigUnreadable.String()) {
+		t.Errorf("body %q does not name the category %q", w.Body.String(), forgejo.CategoryConfigUnreadable.String())
+	}
+	if strings.Contains(w.Body.String(), "/data/maitred") {
+		t.Errorf("body %q leaks the raw startup error", w.Body.String())
 	}
 }
 
@@ -111,7 +115,7 @@ func TestMountForgejoRoute_EngineDisabledAnswers503(t *testing.T) {
 func TestMountForgejoRoute_TriggerFallbackUnchanged(t *testing.T) {
 	h := testHandler(t)
 
-	mountForgejoRoute(h, nil, "config error", discardLog())
+	mountForgejoRoute(h, nil, errors.New("config error"), discardLog())
 
 	w := serve(h, http.MethodPost, "/v1/gitlab/push")
 	if w.Code != http.StatusNotFound {
