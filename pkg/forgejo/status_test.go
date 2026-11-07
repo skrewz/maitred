@@ -1,0 +1,348 @@
+package forgejo
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// Tests for the vocabulary that names why the engine is off
+// (§forgejo/observability/why-the-engine-is-off): every construction
+// path yields one typed cause and exactly one category.
+
+// mapEnv adapts a table to Env for the tests that do not want to touch
+// the real process environment.
+func mapEnv(vars map[string]string) Env {
+	return func(key string) (string, bool) {
+		v, ok := vars[key]
+		return v, ok
+	}
+}
+
+// completeEnv is an environment with every credential set; the config
+// path is supplied separately.
+func completeEnv() map[string]string {
+	return map[string]string{
+		URLEnvVar:    "https://forgejo.example.com",
+		TokenEnvVar:  "a-token",
+		SecretEnvVar: "a-secret",
+	}
+}
+
+// withEnvWithout drops the named keys from an environment table.
+func withEnvWithout(vars map[string]string, keys ...string) map[string]string {
+	out := make(map[string]string, len(vars))
+	for k, v := range vars {
+		drop := false
+		for _, key := range keys {
+			if k == key {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// TestCategoryString pins the text every surface prints
+// (§forgejo/observability/why-the-engine-is-off).
+func TestCategoryString(t *testing.T) {
+	cases := []struct {
+		category Category
+		want     string
+	}{
+		{CategoryNotConfigured, "not configured"},
+		{CategoryConfigUnreadable, "config unreadable"},
+		{CategoryConfigBinaryMismatch, "config or binary mismatch"},
+		{CategoryCredentialsMissing, "credentials missing"},
+		{CategoryOther, "other fault"},
+	}
+	for _, tc := range cases {
+		if got := tc.category.String(); got != tc.want {
+			t.Errorf("Category(%d).String() = %q, want %q", tc.category, got, tc.want)
+		}
+	}
+	if unknown := Category(99).String(); unknown == "" {
+		t.Error("an unnamed category must still render non-empty text")
+	}
+}
+
+// TestCategoryIsFault keeps "no configuration at all is not a fault"
+// expressible on every surface (§forgejo/observability/why-the-engine-is-off).
+func TestCategoryIsFault(t *testing.T) {
+	if CategoryNotConfigured.IsFault() {
+		t.Error("CategoryNotConfigured must not be a fault")
+	}
+	for _, c := range []Category{CategoryConfigUnreadable, CategoryConfigBinaryMismatch, CategoryCredentialsMissing, CategoryOther} {
+		if !c.IsFault() {
+			t.Errorf("%s must be a fault", c)
+		}
+	}
+}
+
+// TestCategoryOfIsTotal asserts the mapping is total: every error — and
+// the absence of one — lands in exactly one category
+// (§forgejo/observability/why-the-engine-is-off).
+func TestCategoryOfIsTotal(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want Category
+	}{
+		{"no error", nil, CategoryNotConfigured},
+		{"no config", fmt.Errorf("stat config %q: %w", "/x", ErrConfigNotFound), CategoryNotConfigured},
+		{"unreadable config", fmt.Errorf("read config %q: %w: permission denied", "/x", ErrConfigUnreadable), CategoryConfigUnreadable},
+		{"missing action entry", fmt.Errorf("validate config %q: %w", "/x", fmt.Errorf("action %q: no canned prompt configured: %w", "sync", ErrActionSetMismatch)), CategoryConfigBinaryMismatch},
+		{"unknown action entry", fmt.Errorf("validate config %q: %w", "/x", fmt.Errorf("unknown action %q: the decision function does not dispatch it: %w", "bogus", ErrActionSetMismatch)), CategoryConfigBinaryMismatch},
+		{"incomplete environment", fmt.Errorf("%w: credentials", ErrEnvironmentIncomplete), CategoryCredentialsMissing},
+		{"unclassified error", errors.New("something else"), CategoryOther},
+		{"unclassified wrapped error", fmt.Errorf("outer: %w", errors.New("something else")), CategoryOther},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CategoryOf(tc.err); got != tc.want {
+				t.Errorf("CategoryOf(%v) = %s, want %s", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEngineStatusConstructionPaths classifies every way the engine can
+// come up disabled, without constructing it
+// (§forgejo/observability/why-the-engine-is-off).
+func TestEngineStatusConstructionPaths(t *testing.T) {
+	t.Run("no config at all", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "forgejoeng.yaml")
+		cause, category := EngineStatus(path, mapEnv(completeEnv()))
+		if !errors.Is(cause, ErrConfigNotFound) {
+			t.Fatalf("cause = %v, want ErrConfigNotFound", cause)
+		}
+		if category != CategoryNotConfigured {
+			t.Errorf("category = %s, want %s", category, CategoryNotConfigured)
+		}
+		if category.IsFault() {
+			t.Error("no configuration at all is not a fault")
+		}
+	})
+
+	t.Run("config present but unreadable", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", validConfigYAML)
+		if err := os.Chmod(path, 0o000); err != nil {
+			t.Skipf("chmod: %v", err)
+		}
+		cause, category := EngineStatus(path, mapEnv(completeEnv()))
+		if !errors.Is(cause, ErrConfigUnreadable) {
+			t.Fatalf("cause = %v, want ErrConfigUnreadable", cause)
+		}
+		if category != CategoryConfigUnreadable {
+			t.Errorf("category = %s, want %s", category, CategoryConfigUnreadable)
+		}
+	})
+
+	t.Run("config present but unparseable", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", "org: [unclosed")
+		cause, category := EngineStatus(path, mapEnv(completeEnv()))
+		if !errors.Is(cause, ErrConfigUnreadable) {
+			t.Fatalf("cause = %v, want ErrConfigUnreadable", cause)
+		}
+		if category != CategoryConfigUnreadable {
+			t.Errorf("category = %s, want %s", category, CategoryConfigUnreadable)
+		}
+	})
+
+	t.Run("config directory unreadable", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Chmod(dir, 0o000); err != nil {
+			t.Skipf("chmod: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+		cause, category := EngineStatus(dir, mapEnv(completeEnv()))
+		if !errors.Is(cause, ErrConfigUnreadable) {
+			t.Fatalf("cause = %v, want ErrConfigUnreadable", cause)
+		}
+		if category != CategoryConfigUnreadable {
+			t.Errorf("category = %s, want %s", category, CategoryConfigUnreadable)
+		}
+	})
+
+	t.Run("config omits an action the binary knows", func(t *testing.T) {
+		yaml := strings.Replace(validConfigYAML,
+			"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    persona: s-autonomics-implementer\n    timeout: 30m\n",
+			"", 1)
+		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", yaml)
+		cause, category := EngineStatus(path, mapEnv(completeEnv()))
+		if !errors.Is(cause, ErrActionSetMismatch) {
+			t.Fatalf("cause = %v, want ErrActionSetMismatch", cause)
+		}
+		if category != CategoryConfigBinaryMismatch {
+			t.Errorf("category = %s, want %s", category, CategoryConfigBinaryMismatch)
+		}
+		if !strings.Contains(cause.Error(), "rebase") {
+			t.Errorf("cause %q must name the action it failed on", cause)
+		}
+	})
+
+	t.Run("config names an action the binary does not know", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", validConfigYAML+"  bogus:\n    prompt: x\n    persona: p\n    timeout: 1h\n")
+		cause, category := EngineStatus(path, mapEnv(completeEnv()))
+		if !errors.Is(cause, ErrActionSetMismatch) {
+			t.Fatalf("cause = %v, want ErrActionSetMismatch", cause)
+		}
+		if category != CategoryConfigBinaryMismatch {
+			t.Errorf("category = %s, want %s", category, CategoryConfigBinaryMismatch)
+		}
+	})
+
+	t.Run("credentials missing", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			drop []string
+		}{
+			{"no url", []string{URLEnvVar}},
+			{"no token", []string{TokenEnvVar}},
+			{"no secret", []string{SecretEnvVar, SecretFileEnvVar}},
+			{"empty secret", nil},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				vars := withEnvWithout(completeEnv(), tc.drop...)
+				if tc.name == "empty secret" {
+					vars[SecretEnvVar] = ""
+				}
+				path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", validConfigYAML)
+				cause, category := EngineStatus(path, mapEnv(vars))
+				if !errors.Is(cause, ErrEnvironmentIncomplete) {
+					t.Fatalf("cause = %v, want ErrEnvironmentIncomplete", cause)
+				}
+				if category != CategoryCredentialsMissing {
+					t.Errorf("category = %s, want %s", category, CategoryCredentialsMissing)
+				}
+				if !category.IsFault() {
+					t.Error("a configured engine with no credentials is a fault")
+				}
+			})
+		}
+	})
+
+	t.Run("secret file set but unreadable", func(t *testing.T) {
+		vars := withEnvWithout(completeEnv(), SecretEnvVar)
+		vars[SecretFileEnvVar] = filepath.Join(t.TempDir(), "absent")
+		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", validConfigYAML)
+		cause, category := EngineStatus(path, mapEnv(vars))
+		if cause == nil {
+			t.Fatal("expected a cause, got nil")
+		}
+		if errors.Is(cause, ErrEnvironmentIncomplete) {
+			t.Errorf("an unreadable secret file is not a missing credential: %v", cause)
+		}
+		if category != CategoryOther {
+			t.Errorf("category = %s, want %s", category, CategoryOther)
+		}
+	})
+
+	t.Run("config valid but unrelated validation failure", func(t *testing.T) {
+		yaml := strings.Replace(validConfigYAML, "reconcile_interval: 15m\n", "", 1)
+		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", yaml)
+		cause, category := EngineStatus(path, mapEnv(completeEnv()))
+		if cause == nil {
+			t.Fatal("expected a cause, got nil")
+		}
+		if errors.Is(cause, ErrActionSetMismatch) || errors.Is(cause, ErrConfigUnreadable) || errors.Is(cause, ErrConfigNotFound) {
+			t.Errorf("an unrelated validation failure must not classify as a named cause: %v", cause)
+		}
+		if category != CategoryOther {
+			t.Errorf("category = %s, want %s", category, CategoryOther)
+		}
+	})
+
+	t.Run("configured and sound", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", validConfigYAML)
+		cause, category := EngineStatus(path, mapEnv(completeEnv()))
+		if cause != nil {
+			t.Fatalf("cause = %v, want nil", cause)
+		}
+		if category.IsFault() {
+			t.Errorf("category = %s, want no fault", category)
+		}
+	})
+
+	t.Run("classification needs no engine", func(t *testing.T) {
+		// The classifier takes only a path and an environment: no store
+		// directory is created, no client built, no network touched
+		// (§forgejo/observability/why-the-engine-is-off).
+		dir := t.TempDir()
+		path := filepath.Join(dir, "forgejoeng.yaml")
+		cause, _ := EngineStatus(path, mapEnv(completeEnv()))
+		if !errors.Is(cause, ErrConfigNotFound) {
+			t.Fatalf("cause = %v, want ErrConfigNotFound", cause)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read dir: %v", err)
+		}
+		if len(entries) != 0 {
+			t.Errorf("EngineStatus created %d entries under %s", len(entries), dir)
+		}
+	})
+}
+
+// TestEngineStatusUsesTheGivenEnv proves the classifier reads the
+// environment it is handed rather than the process's own
+// (§forgejo/observability/why-the-engine-is-off).
+func TestEngineStatusUsesTheGivenEnv(t *testing.T) {
+	path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", validConfigYAML)
+	t.Setenv(URLEnvVar, "https://forgejo.example.com")
+	t.Setenv(TokenEnvVar, "a-token")
+	t.Setenv(SecretEnvVar, "a-secret")
+	if _, category := EngineStatus(path, mapEnv(nil)); category != CategoryCredentialsMissing {
+		t.Errorf("category = %s, want %s from the injected (empty) environment", category, CategoryCredentialsMissing)
+	}
+	if cause, category := EngineStatus(path, ProcessEnv()); cause != nil {
+		t.Errorf("ProcessEnv: cause = %v, category = %s, want the process environment to read complete", cause, category)
+	}
+	// A nil Env reads the process environment, the way LoadSecret does.
+	if cause, category := EngineStatus(path, nil); cause != nil {
+		t.Errorf("nil Env: cause = %v, category = %s, want the process environment to read complete", cause, category)
+	}
+}
+
+// TestCheckEnvironment names every variable that is missing
+// (§forgejo/webhook/configuration).
+func TestCheckEnvironment(t *testing.T) {
+	cases := []struct {
+		name   string
+		url    string
+		token  string
+		secret string
+		wantOK bool
+	}{
+		{"all present", "https://forgejo.example.com", "a-token", "a-secret", true},
+		{"no url", "", "a-token", "a-secret", false},
+		{"no token", "https://forgejo.example.com", "", "a-secret", false},
+		{"no secret", "https://forgejo.example.com", "a-token", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckEnvironment(tc.url, tc.token, tc.secret)
+			if tc.wantOK {
+				if err != nil {
+					t.Fatalf("CheckEnvironment: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrEnvironmentIncomplete) {
+				t.Fatalf("err = %v, want ErrEnvironmentIncomplete", err)
+			}
+			for _, name := range []string{URLEnvVar, TokenEnvVar, SecretFileEnvVar, SecretEnvVar} {
+				if !strings.Contains(err.Error(), name) {
+					t.Errorf("error %q must name %s", err, name)
+				}
+			}
+		})
+	}
+}
