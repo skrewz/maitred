@@ -12,7 +12,7 @@ exclusively canned prompts.
 ## Canned prompts
 
 The config maps each action — `implement`, `reassess`, `review`, `re-review`,
-`fix-feedback`, `merge-or-wait`, `rebase`, `decompose`, `wrap-up`, `reject-pr`,
+`fix-feedback`, `merge-or-wait`, `rebase`, `decompose`, `wrap-up`,
 `teardown-forest`, `sync` — to:
 
 - a **prompt template** — the canned prompt: the hotelier task invocation
@@ -58,7 +58,6 @@ config it deploys (§forgejo/config/loading).
 | `rebase` | `/pr-rebase` |
 | `decompose` | `/issue-decomposer` |
 | `wrap-up` | `/issue-wrapper` |
-| `reject-pr` | `/pr-rejector` |
 | `teardown-forest` | `/forest-teardown` |
 | `sync` | `/set-lander` |
 
@@ -198,3 +197,9 @@ carry that entry **first**. Extending the enum is therefore a
 config-before-binary change — a deployment whose config has not gained
 the entry does not start, which is the loud failure; a prompt that
 merely went missing at runtime would be the quiet one.
+
+Shrinking the enum is the mirror image, and the same rule: a config
+that still names an action the binary no longer dispatches fails the
+unknown-action check above, so the deployment's config must **stop**
+naming the action before the binary that has forgotten it is deployed
+(s-git/maitred#151).

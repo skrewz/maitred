@@ -70,10 +70,6 @@ actions:
     prompt: "/issue-wrapper {{.IssueURL}}"
     persona: ui-test
     timeout: 1h
-  reject-pr:
-    prompt: "/pr-rejector {{.PRURL}}"
-    persona: ui-test
-    timeout: 1h
   teardown-forest:
     prompt: "/forest-teardown {{.IssueURL}}"
     persona: ui-test

@@ -620,6 +620,11 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			want:    ActionRebase,
 		},
 		{
+			// Nothing on the open path decides a merge, so nothing there
+			// reads the graph: a PR opened against work whose forest is not
+			// yet commissioned is reviewed like any other, and the merge
+			// gate is where it stops (§forgejo/decisions/commissioning,
+			// §forgejo/decisions/merge-gate, s-git/maitred#151).
 			name:      "PR opened, connected issue blocked by an open ideation issue",
 			eventType: "pull_request", action: "opened",
 			payload: prPayload("o/r", 9, "opened"),
@@ -630,10 +635,10 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 				ideation.Labels = []string{LabelIdeation}
 				api.deps[4] = []Issue{*ideation}
 			},
-			want: ActionRejectPR,
+			want: ActionReview,
 		},
 		{
-			name:      "PR opened, not mergeable but blocked by an open ideation issue: reject-pr precedes rebase",
+			name:      "PR opened, not mergeable and blocked by an open ideation issue",
 			eventType: "pull_request", action: "opened",
 			payload: prPayload("o/r", 9, "opened"),
 			setup: func(api *fakeAPI) {
@@ -643,7 +648,7 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 				ideation.Labels = []string{LabelIdeation}
 				api.deps[4] = []Issue{*ideation}
 			},
-			want: ActionRejectPR,
+			want: ActionRebase,
 		},
 		{
 			name:      "PR opened, connected issue blocked only by a closed ideation issue",
@@ -700,7 +705,10 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			want: ActionMergeOrWait,
 		},
 		{
-			name:      "PR reviewed, approved but the connected issue is blocked by an open ideation issue: reject-pr precedes merge-or-wait",
+			// The gate that stops this merge is the merge gate: the PR
+			// stays open, nothing is closed, and the hold-off names the
+			// blocker (§forgejo/decisions/merge-gate, s-git/maitred#151).
+			name:      "PR reviewed, approved but the connected issue is blocked by an open ideation issue",
 			eventType: "pull_request_review_approved", action: "approved",
 			payload: prPayload("o/r", 9, "approved"),
 			setup: func(api *fakeAPI) {
@@ -711,7 +719,7 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 				ideation.Labels = []string{LabelIdeation}
 				api.deps[4] = []Issue{*ideation}
 			},
-			want: ActionRejectPR,
+			want: "",
 		},
 		{
 			name:      "PR reviewed, approved, connected issue blocked only by a closed ideation issue",
@@ -944,70 +952,14 @@ func TestHandler_IssueActivity_BlockersFetchFailureHoldsOff(t *testing.T) {
 	}
 }
 
-// TestHandler_RejectPR_ConnectedIssueFetchFailureHoldsOff pins that a
-// re-fetch which fails to resolve the connected issue holds off naming
-// the failure — never defaulting to review
-// (§forgejo/webhook/re-fetch, §forgejo/decisions/actions).
-func TestHandler_RejectPR_ConnectedIssueFetchFailureHoldsOff(t *testing.T) {
+// TestHandler_PROpened_BlockedConnectedIssueDispatchesReview pins the
+// retired rejection's absence end to end: a PR opened against a work
+// item that is blocked by an open ideation issue is not closed by the
+// engine — the client holds no close-a-PR verb at all — it is reviewed
+// as any other PR would be, and the decision log records the review
+// (§forgejo/decisions/transition-table, s-git/maitred#151).
+func TestHandler_PROpened_BlockedConnectedIssueDispatchesReview(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
-	h := NewHandler(eng, "s3cret", nil)
-	api.pulls[9] = testPR(9, "open", true)
-	api.issueBlocksErr = errors.New("blocks unavailable")
-
-	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request", "opened", prPayload("o/r", 9, "opened")))
-	if rec.Code != http.StatusNoContent {
-		t.Errorf("status = %d, want 204", rec.Code)
-	}
-	if n := api.callCount("IssueBlocks"); n != 1 {
-		t.Errorf("IssueBlocks called %d time(s), want 1: the delivery must reach the connected-issue resolution for this test to test it", n)
-	}
-	if len(q.all()) != 0 {
-		t.Errorf("task dispatched despite failed connected-issue re-fetch")
-	}
-	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if w != nil {
-		t.Errorf("watermark recorded after failed re-fetch: %+v", w)
-	}
-}
-
-// TestHandler_RejectPR_ConnectedIssueBlocksFetchFailureHoldsOff pins
-// the same hold-off when it is the connected issue's *blockers* whose
-// re-fetch fails (§forgejo/webhook/re-fetch).
-func TestHandler_RejectPR_ConnectedIssueBlocksFetchFailureHoldsOff(t *testing.T) {
-	eng, api, q, store := newTestEngine(t)
-	h := NewHandler(eng, "s3cret", nil)
-	api.pulls[9] = testPR(9, "open", true)
-	api.blocks[9] = []Issue{*testIssue(4, "open")}
-	api.issueDepsErr = errors.New("dependencies unavailable")
-
-	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request", "opened", prPayload("o/r", 9, "opened")))
-	if rec.Code != http.StatusNoContent {
-		t.Errorf("status = %d, want 204", rec.Code)
-	}
-	if n := api.callCount("IssueDependencies"); n != 1 {
-		t.Errorf("IssueDependencies called %d time(s), want 1: the delivery must reach the blocker resolution for this test to test it", n)
-	}
-	if len(q.all()) != 0 {
-		t.Errorf("task dispatched despite failed blocker re-fetch")
-	}
-	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if w != nil {
-		t.Errorf("watermark recorded after failed re-fetch: %+v", w)
-	}
-}
-
-// TestHandler_PROpened_FetchesConnectedIssueOneHop pins the fetch
-// surface: PR opened fetches the connected issue's blockers exactly
-// once — one hop, no recursion — and PR synced fetches neither
-// (§forgejo/webhook/re-fetch).
-func TestHandler_PROpened_FetchesConnectedIssueOneHop(t *testing.T) {
-	eng, api, q, _ := newTestEngine(t)
 	h := NewHandler(eng, "s3cret", nil)
 	api.pulls[9] = testPR(9, "open", true)
 	api.blocks[9] = []Issue{*testIssue(4, "open")}
@@ -1016,56 +968,48 @@ func TestHandler_PROpened_FetchesConnectedIssueOneHop(t *testing.T) {
 	api.deps[4] = []Issue{*ideation}
 
 	serve(t, h, signedRequest(t, "s3cret", "pull_request", "opened", prPayload("o/r", 9, "opened")))
-	if len(q.all()) != 1 || !strings.Contains(q.all()[0].Prompt, "action="+string(ActionRejectPR)) {
-		t.Fatalf("want one reject-pr dispatch, got %+v", q.all())
+	if len(q.all()) != 1 || !strings.Contains(q.all()[0].Prompt, "action="+string(ActionReview)) {
+		t.Fatalf("want one review dispatch, got %+v", q.all())
 	}
-	if n := api.callCount("IssueBlocks"); n != 1 {
-		t.Errorf("IssueBlocks called %d time(s), want 1 (one hop, no recursion)", n)
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
 	}
-	if n := api.callCount("IssueDependencies:r/4"); n != 1 {
-		t.Errorf("IssueDependencies on the connected issue called %d time(s), want 1", n)
+	if w == nil || w.Action != string(ActionReview) {
+		t.Errorf("watermark = %+v, want review at the head revision", w)
 	}
 }
 
-// TestHandler_PROpened_ConnectedIssueInAnotherRepo pins the cross-repo
-// half of the one hop: the connected issue's blockers are read from the
-// connected issue's own repository, not the event's. Cross-repo is the
-// normal shape of this data — the ideation blockers live in the outcomes
-// repository — so the split must not be lost silently
-// (§forgejo/webhook/re-fetch).
-func TestHandler_PROpened_ConnectedIssueInAnotherRepo(t *testing.T) {
-	eng, api, q, _ := newTestEngine(t)
+// TestHandler_PROpened_DoesNotFetchConnectedIssues: the open path
+// dispatches no merge, so it grows no gate read — the hop it used to
+// perform served only the retired rejection
+// (§forgejo/webhook/re-fetch, s-git/maitred#151).
+func TestHandler_PROpened_DoesNotFetchConnectedIssues(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
 	h := NewHandler(eng, "s3cret", nil)
 	api.pulls[9] = testPR(9, "open", true)
-	connected := testIssue(4, "open")
-	connected.Repository = "o/outcomes"
-	api.blocks[9] = []Issue{*connected}
+	api.blocks[9] = []Issue{*testIssue(4, "open")}
 	ideation := testIssue(1, "open")
-	ideation.Repository = "o/outcomes"
 	ideation.Labels = []string{LabelIdeation}
 	api.deps[4] = []Issue{*ideation}
 
 	serve(t, h, signedRequest(t, "s3cret", "pull_request", "opened", prPayload("o/r", 9, "opened")))
-	if len(q.all()) != 1 || !strings.Contains(q.all()[0].Prompt, "action="+string(ActionRejectPR)) {
-		t.Fatalf("want one reject-pr dispatch, got %+v", q.all())
+	if n := api.callCount("IssueBlocks"); n != 0 {
+		t.Errorf("IssueBlocks called %d time(s) on PR opened, want 0: the gate hop is PR reviewed, PR commented and the sweep, not an open", n)
 	}
-	if n := api.callCount("IssueDependencies:outcomes/4"); n != 1 {
-		t.Errorf("IssueDependencies on the connected issue's own repo called %d time(s), want 1: the hop must read the connected issue's repository, not the event's", n)
-	}
-	if n := api.callCount("IssueDependencies:r/4"); n != 0 {
-		t.Errorf("IssueDependencies on the event's repo called %d time(s), want 0", n)
+	if n := api.callCount("IssueDependencies"); n != 0 {
+		t.Errorf("IssueDependencies called %d time(s) on PR opened, want 0: one hop per connected issue belongs to the paths that may merge", n)
 	}
 }
 
-// TestHandler_PROpened_TestsEveryConnectedIssue pins the re-fetch
+// TestHandler_PRReviewed_ResolvesEveryConnectedIssue pins the re-fetch
 // surface when a PR blocks several non-PR issues: every non-PR entry is
 // resolved with its blockers — one hop each, once per issue — so the
-// reject-pr decision cannot depend on the order the API returned the
+// merge gate's decision cannot depend on the order the API returned the
 // relationships in (§forgejo/webhook/re-fetch).
-func TestHandler_PROpened_TestsEveryConnectedIssue(t *testing.T) {
-	eng, api, q, _ := newTestEngine(t)
+func TestHandler_PRReviewed_ResolvesEveryConnectedIssue(t *testing.T) {
+	eng, api, q, _, log := mergeGateFixtures(t)
 	h := NewHandler(eng, "s3cret", nil)
-	api.pulls[9] = testPR(9, "open", true)
 	first := testIssue(4, "open")
 	second := testIssue(5, "open")
 	second.Repository = "o/outcomes"
@@ -1076,9 +1020,12 @@ func TestHandler_PROpened_TestsEveryConnectedIssue(t *testing.T) {
 	ideation.Labels = []string{LabelIdeation}
 	api.deps[5] = []Issue{*ideation}
 
-	serve(t, h, signedRequest(t, "s3cret", "pull_request", "opened", prPayload("o/r", 9, "opened")))
-	if len(q.all()) != 1 || !strings.Contains(q.all()[0].Prompt, "action="+string(ActionRejectPR)) {
-		t.Fatalf("want one reject-pr dispatch, got %+v", q.all())
+	serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
+	if len(q.all()) != 0 {
+		t.Fatalf("want no dispatch — a connected issue has an open blocker, so the merge gate holds off, got %+v", q.all())
+	}
+	if reason := reasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "o/outcomes#2") {
+		t.Errorf("reason %q does not name the open blocker o/outcomes#2: every connected issue is resolved, not just the first", reason)
 	}
 	if n := api.callCount("IssueBlocks"); n != 1 {
 		t.Errorf("IssueBlocks called %d time(s), want 1", n)
@@ -1104,15 +1051,15 @@ func TestHandler_PRSynced_DoesNotFetchConnectedIssue(t *testing.T) {
 		t.Fatalf("want one review dispatch, got %+v", q.all())
 	}
 	if n := api.callCount("IssueBlocks"); n != 0 {
-		t.Errorf("IssueBlocks called %d time(s) on PR sync, want 0: the reject-pr hop is PR opened, PR reviewed and the sweep, not a sync", n)
+		t.Errorf("IssueBlocks called %d time(s) on PR sync, want 0: the gate hop is PR reviewed, PR commented and the sweep, not a sync", n)
 	}
 }
 
 // TestHandler_PRReviewed_FetchesConnectedIssueOneHop pins the fetch
-// surface of the review path: a PR-reviewed delivery performs the
-// reject-pr hop — one IssueBlocks, one IssueDependencies per connected
-// issue, no recursion — so the test is fed where it now applies
-// (§forgejo/webhook/re-fetch).
+// surface of the review path: a PR-reviewed delivery performs the gate
+// hop — one IssueBlocks, one IssueDependencies per connected issue, no
+// recursion — so the merge gate is fed where it applies
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/merge-gate).
 func TestHandler_PRReviewed_FetchesConnectedIssueOneHop(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
 	h := NewHandler(eng, "s3cret", nil)
@@ -1124,8 +1071,8 @@ func TestHandler_PRReviewed_FetchesConnectedIssueOneHop(t *testing.T) {
 	api.deps[4] = []Issue{*ideation}
 
 	serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
-	if len(q.all()) != 1 || !strings.Contains(q.all()[0].Prompt, "action="+string(ActionRejectPR)) {
-		t.Fatalf("want one reject-pr dispatch, got %+v", q.all())
+	if len(q.all()) != 0 {
+		t.Fatalf("want no dispatch — the merge gate holds the approved merge off, got %+v", q.all())
 	}
 	if n := api.callCount("IssueBlocks"); n != 1 {
 		t.Errorf("IssueBlocks called %d time(s), want 1 (one hop, no recursion)", n)
@@ -1165,9 +1112,38 @@ func TestHandler_PRReviewed_ConnectedIssueFetchFailureHoldsOff(t *testing.T) {
 	}
 }
 
+// TestHandler_PRReviewed_ConnectedIssueBlocksFetchFailureHoldsOff pins
+// the same fail-closed hold-off when it is the connected issue's
+// *blockers* whose read fails: the merge gate never reads "no blockers"
+// off a failed listing (§forgejo/webhook/re-fetch,
+// §forgejo/decisions/merge-gate).
+func TestHandler_PRReviewed_ConnectedIssueBlocksFetchFailureHoldsOff(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved}}
+	api.blocks[9] = []Issue{*testIssue(4, "open")}
+	api.issueDepsErr = errors.New("dependencies unavailable")
+
+	serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
+	if n := api.callCount("IssueDependencies"); n != 1 {
+		t.Errorf("IssueDependencies called %d time(s), want 1: the delivery must reach the blocker resolution for this test to test it", n)
+	}
+	if len(q.all()) != 0 {
+		t.Errorf("task dispatched despite failed blocker re-fetch: %+v", q.all())
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark recorded after failed re-fetch: %+v", w)
+	}
+}
+
 // TestHandler_ReconcilePR_FetchesConnectedIssueOneHop pins the sweep
 // half of the hop: the sweep's synthetic current-state event for a PR
-// performs the same one hop, so the gate is fed before the sweep's
+// performs the same one hop, so the merge gate is fed before the sweep's
 // review-following and synced-like branches
 // (§forgejo/webhook/re-fetch, §forgejo/decisions/transition-table).
 func TestHandler_ReconcilePR_FetchesConnectedIssueOneHop(t *testing.T) {
@@ -1181,8 +1157,8 @@ func TestHandler_ReconcilePR_FetchesConnectedIssueOneHop(t *testing.T) {
 	api.deps[4] = []Issue{*ideation}
 
 	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
-	if len(q.all()) != 1 || !strings.Contains(q.all()[0].Prompt, "action="+string(ActionRejectPR)) {
-		t.Fatalf("want one reject-pr dispatch, got %+v", q.all())
+	if len(q.all()) != 0 {
+		t.Fatalf("want no dispatch — the merge gate holds the sweep's merge off, got %+v", q.all())
 	}
 	if n := api.callCount("IssueBlocks"); n != 1 {
 		t.Errorf("IssueBlocks called %d time(s), want 1 (one hop, no recursion)", n)
@@ -1192,11 +1168,11 @@ func TestHandler_ReconcilePR_FetchesConnectedIssueOneHop(t *testing.T) {
 	}
 }
 
-// TestHandler_PRLabelDelivery_NeverRejects pins that a label delivery
-// stays cheaply ignored even amid the full reject-pr fixtures: it must
-// not reach the decision, no re-fetch, no dispatch
-// (§forgejo/webhook/event-mapping, §forgejo/decisions/actions).
-func TestHandler_PRLabelDelivery_NeverRejects(t *testing.T) {
+// TestHandler_PRLabelDelivery_IgnoredWithoutFetching pins that a label
+// delivery stays cheaply ignored even with a connected issue blocked by
+// an open ideation issue: it must not reach the decision, no re-fetch,
+// no dispatch (§forgejo/webhook/event-mapping).
+func TestHandler_PRLabelDelivery_IgnoredWithoutFetching(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
 	h := NewHandler(eng, "s3cret", nil)
 	api.pulls[9] = testPR(9, "open", true)
@@ -2690,10 +2666,10 @@ func TestHandler_PRReviewed_ConnectedIssueInAnotherRepo(t *testing.T) {
 
 // TestHandler_PRSynced_DoesNotFetchConnectedIssues: the push path
 // dispatches no merge, so it grows no gate read
-// (§forgejo/webhook/re-fetch). The open path is not tested here: it
-// performs the hop for the reject-pr test, so a PR opened is covered by
-// TestHandler_PROpened_FetchesConnectedIssueOneHop
-// (§forgejo/decisions/actions).
+// (§forgejo/webhook/re-fetch). The open path reads no graph either, for
+// the same reason — it dispatches no merge — and is pinned by
+// TestHandler_PROpened_DoesNotFetchConnectedIssues
+// (§forgejo/decisions/merge-gate, s-git/maitred#151).
 func TestHandler_PRSynced_DoesNotFetchConnectedIssues(t *testing.T) {
 	eng, api, q, _, _ := mergeGateFixtures(t)
 	serve(t, NewHandler(eng, "s3cret", nil),

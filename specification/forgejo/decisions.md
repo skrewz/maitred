@@ -175,7 +175,6 @@ prompts:
 | `decompose` | an open issue carrying the `ideation` label was opened, edited, had its labels changed, or received a comment authored by anyone other than the configured decomposer identity (§forgejo/decisions/loop-prevention, s-git/maitred#147); or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions); or the unblock cascade newly unblocks an open issue carrying the `outcome` label (§forgejo/decisions/unblock-cascade) |
 | `teardown-forest` | an open issue carrying the `ideation` label **also** carries the `teardown-forest` label, **and blocks at least one issue**: the human has ordered the forest that root commissioned to be deleted, and there is a forest to delete (§forgejo/decisions/forest-teardown); watermark-exempt on the sweep while the forest stands (§forgejo/reconciliation/watermark-exemptions) |
-| `reject-pr` | a PR is connected to work that is not yet commissioned: a **connected issue** — any non-PR issue the PR blocks, every one being tested — is blocked by an **open** `ideation` issue; tested when a PR opens, when a review is submitted, and by the reconciliation sweep, ahead of every review, rebase, fix and merge decision; the prompt closes the PR, names the breach, and reports it |
 | `sync` | an open issue carrying the `sync` label — a **landing set**: changes that must land together — has every blocking issue either closed or standing with its delivering PR approved at head and mergeable while carrying `agentic-sync-merge` (a blocking issue that is itself a pull request is held to that test through its own state); dispatched from the reconciliation sweep, from the unblock cascade's sync-set candidate, and from the approval path's emission re-checked on re-fetch; the watermark is a revision derived from the whole set (§forgejo/decisions/sync-set) |
 
 ## Transition table
@@ -197,7 +196,6 @@ prompts:
 | issue edited / labels changed / feedback comment (issue open, an open blocker) | hold off — the reason names the open blockers |
 | issue edited / labels changed / feedback comment (issue not open) | hold off |
 | issue closed | unblock cascade |
-| PR opened (a connected issue blocked by an open `ideation` issue) | `reject-pr` |
 | PR opened (open, mergeable) | `review` |
 | PR opened (open, not mergeable) | `rebase` |
 | PR synced (open, not mergeable) | `rebase` |
@@ -205,7 +203,6 @@ prompts:
 | PR synced (open, mergeable, has a review) | `re-review` |
 | PR carrying the `trigger-review` label (open, mergeable, no review) | `review` — explicit request (§forgejo/decisions/label-triggered-review) |
 | PR carrying the `trigger-review` label (open, mergeable, has a review) | `re-review` — explicit request (§forgejo/decisions/label-triggered-review) |
-| review submitted (a connected issue blocked by an open `ideation` issue) | `reject-pr` |
 | review submitted (latest review requests changes, PR authored by the implementer identity) | `fix-feedback` |
 | review submitted (latest review requests changes, PR authored by anyone else) | hold off — the reason names the PR's author and the configured implementer identity (§forgejo/config/implementer-identity, s-git/maitred#143) |
 | review submitted (latest review approves, no connected issue has an open blocker) | `merge-or-wait` |
@@ -224,19 +221,26 @@ prompts:
 | reconcile — open `outcome` issue with open blockers, its `ideation` blocker open | hold off, naming the root — the forest is not yet commissioned, and the root's own row is the pulse: a forest is curated once per sweep |
 | reconcile — open `outcome` issue with open blockers and no `ideation` blocker | hold off, naming the absence — a tracker not gated by a root is not a forest's tracker |
 | reconcile — open issue carrying the `sync` label | `sync` when every member is closed or approved-at-head, mergeable, and opted in; otherwise a silent hold-off naming the members that are not ready — and a hold-off naming both reserved labels when the issue also carries `ideation` or `outcome`, two kind claims one row must not settle by label order (§forgejo/decisions/sync-set) |
-| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, `reject-pr` when a connected issue is blocked by an open `ideation` issue and otherwise as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback` **revision notwithstanding**, the exempt rows of a PR standing at feedback for a fix that has not landed — behind the ownership gate, so a PR authored by anyone but the configured implementer identity holds off naming the author and the identity (§forgejo/config/implementer-identity, s-git/maitred#143) — approved dispatches `merge-or-wait` — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate), and dispatches `merge-or-wait` **revision notwithstanding** when the PR carries `agentic-auto-merge`, the exempt row of an approved PR at a frozen head; the synced-like rows for `review` and `re-review` likewise dispatch **revision notwithstanding** while no review stands at the head — the exempt rows of a PR waiting to be reviewed (§forgejo/reconciliation/watermark-exemptions) |
+| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback` **revision notwithstanding**, the exempt rows of a PR standing at feedback for a fix that has not landed — behind the ownership gate, so a PR authored by anyone but the configured implementer identity holds off naming the author and the identity (§forgejo/config/implementer-identity, s-git/maitred#143) — approved dispatches `merge-or-wait` — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate), and dispatches `merge-or-wait` **revision notwithstanding** when the PR carries `agentic-auto-merge`, the exempt row of an approved PR at a frozen head; the synced-like rows for `review` and `re-review` likewise dispatch **revision notwithstanding** while no review stands at the head — the exempt rows of a PR waiting to be reviewed (§forgejo/reconciliation/watermark-exemptions) |
 
-The **reject-pr test precedes the review and rebase rows** on every path
-that can dispatch review, re-review, fix-feedback, or merge-or-wait: it
-applies when a PR opens, ahead of the review-following decisions of a
-submitted review — so a gate that closed after the PR opened cannot be
-walked through by the next approving review — and on the whole PR path of
-the reconciliation sweep, whose re-fetch performs the same one hop. The
-remaining boundary is the **PR synced event**: a push to an open PR
-decides review or re-review without the test — its re-fetch grows no hop,
-keeping the push path cheap — and the next review submission or sweep
-applies the test. Stated here so the boundary is a known limitation and
-not a silent contradiction of the gate.
+The **merge gate is the only place work is stopped**, and it stops it
+by holding off, never by closing: whichever path can dispatch
+`merge-or-wait` — the review event, a PR comment, the sweep's PR path,
+or the unblock cascade's — reads the connected issues' open blockers
+first (§forgejo/decisions/merge-gate), and the review, rebase, fix and
+merge rows decide everything else. A pull request opened against work
+whose forest has not been commissioned is therefore closed nowhere,
+commented on nowhere, and treated no differently from any other pull
+request — reviewed or rebased on its own state — while its merge is held
+off naming the blocker for as long as the blocker stands, and the
+decision log is the engine's only remark about it. Un-commissioned work
+is held off upstream, where the `forest-seeding` window gates the
+member's `implement` (§forgejo/decisions/commissioning); a branch and a
+pull request that a human can read are not what the gate exists to
+forbid. The paths that dispatch no merge read no graph at all — the
+`PR synced` and `PR opened` events grow no hop, keeping those paths
+cheap — and the next review submission, PR comment or sweep applies the
+gate (§forgejo/webhook/re-fetch).
 
 A PR's **connected issues** are the non-PR issues the PR blocks
 (§forgejo/webhook/re-fetch) — **recorded** blocker relationships, never
@@ -249,25 +253,9 @@ records `issue-block <PR> → <issue>` for each issue the PR closes,
 cross-repo targets included, and the engine only reads it. That
 instruction lives in the canned prompts, deployed outside this
 repository (§forgejo/config/loading); **it does not exist yet**, and
-until it does the `reject-pr` row cannot be reached — a PR whose
-opening recorded no dependency has no connected issues and decides as
-before.
-
-When **any** connected issue is blocked by an **open** issue carrying
-the reserved `ideation` label — work whose gate has not opened: an
-ideation issue's closure *is* the commissioning of its forest
-(§forgejo/decisions/commissioning) — the PR is work started before
-its gate, and `reject-pr` is decided. The test applies to **every**
-connected issue, not just the first: any blocked connected issue is work
-started before its gate, so the decision does not depend on the order
-the API returns the relationships in. Reserved names are matched exactly
-and case-sensitively, as elsewhere in the engine: renaming the label in
-the UI disables the test silently, a fragility accepted with the name.
-A connected issue's **own** state is not consulted — the gate is the
-blocker's — so a PR opened against a closed connected issue still
-blocked by an open ideation issue is rejected. A blocked *closed*
-ideation issue, an open blocker without the label, and the absence of
-any connected issue all decide as before.
+until it does the merge gate sees no blockers — a PR whose opening
+recorded no dependency has no connected issues and merges as the graph
+states.
 
 The "latest review" is the PR's most recently submitted review. An
 issue that *became unblocked* is dispatched `implement` through the
@@ -412,12 +400,13 @@ issue-blocks record that connects them makes the PR one of the issue's
 blockers), so the test excludes the PR itself and counts every other
 open blocker.
 
-A blocked merge **holds off**; it does not reject. `reject-pr` means
-"this PR should not have been opened" — the work-not-yet-commissioned test of
-§forgejo/decisions/transition-table — and is decided ahead of this gate;
-a PR that opened clean and was blocked afterwards is legitimate work
-waiting to land. It holds off silently on the merge
-path — the hold-off reason names each open blocker as `repo#number`,
+A blocked merge **holds off**. The engine closes no pull request on any
+path: work that should not land is held from landing, and work that
+should not have started is held off upstream, at the member's
+`implement` (§forgejo/decisions/commissioning). A PR whose gate closed
+after it opened is therefore legitimate work waiting to land — it holds
+off silently on the merge path, the hold-off reason names each open
+blocker as `repo#number`,
 cross-repo included — and the unblock cascade (or the sweep) moves it
 when its blockers close.
 
@@ -789,12 +778,12 @@ of whoever opened it, §forgejo/client/operations); the issue's blockers (with t
 and its connected open PRs, for the `implement` and `reassess`
 conditions; the PR's reviews, for the review transitions; the PR's labels,
 for the label-triggered review override
-(§forgejo/decisions/label-triggered-review); for PR opened,
-PR reviewed and the sweep's PR path, the issues the PR blocks and each
-issue's blockers, for the `reject-pr` test (§forgejo/decisions/actions)
-and for the merge gate (§forgejo/decisions/merge-gate), which reads the
-same rows on the PR reviewed event and the sweep's synthetic PR event;
-and, for close events, the blocker-graph root — the closed issue — with
+(§forgejo/decisions/label-triggered-review); for PR reviewed, PR
+commented, the sweep's PR path and the unblock cascade's PR leg, the
+issues the PR blocks and each issue's blockers, for the merge gate
+(§forgejo/decisions/merge-gate) and the landing-set read
+(§forgejo/decisions/sync-set); and, for close events, the blocker-graph
+root — the closed issue — with
 each node carrying the issues it blocks and the issues that block it.
 For a sync issue under the sweep's gaze, the state carries the
 blocking issues as **set members**, each with its delivering PR and

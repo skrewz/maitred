@@ -25,7 +25,6 @@ var AllActions = []Action{
 	ActionRebase,
 	ActionDecompose,
 	ActionWrapUp,
-	ActionRejectPR,
 	ActionTeardownForest,
 	ActionSync,
 }

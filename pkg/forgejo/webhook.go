@@ -302,25 +302,24 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		// §forgejo/decisions/inputs, s-git/maitred#143).
 		st := State{PR: pr, ImplementerIdentity: e.cfg.ImplementerIdentity}
 		switch ev.Type {
-		case EventPROpened, EventPRReviewed, EventPRCommented, EventReconcile:
-			// The one hop performed wherever the reject-pr test and the
-			// merge gate apply (PR opened, PR reviewed, PR commented —
-			// which decides as the sweep's PR path — and the sweep's
-			// synthetic current-state event): every non-PR issue the
-			// PR blocks — relationships recorded on the blocker graph
-			// rather than inferred from the PR body — and each issue's
-			// blockers, read from that issue's own repository, no
-			// recursion. Every non-PR entry is resolved: neither test is
-			// left to API ordering. A failure to resolve any connected
-			// issue is a re-fetch failure — a hold-off naming the
-			// failure, never the path's default (§forgejo/webhook/re-
-			// fetch, §forgejo/decisions/actions,
+		case EventPRReviewed, EventPRCommented, EventReconcile:
+			// The one hop performed wherever a merge may be dispatched —
+			// the PR reviewed event, PR commented (which decides as the
+			// sweep's PR path), and the sweep's synthetic current-state
+			// event: every non-PR issue the PR blocks — relationships
+			// recorded on the blocker graph rather than inferred from the
+			// PR body — and each issue's blockers, read from that issue's
+			// own repository, no recursion. Every non-PR entry is
+			// resolved: the merge gate is not left to API ordering. A
+			// failure to resolve any connected issue is a re-fetch
+			// failure — a hold-off naming the failure, never the path's
+			// default (§forgejo/webhook/re-fetch,
 			// §forgejo/decisions/merge-gate).
 			if err := e.fetchPRSetState(owner, name, ev.Number, &st); err != nil {
 				return ev, State{}, err
 			}
 			fallthrough
-		case EventPRSynced:
+		case EventPROpened, EventPRSynced:
 			reviews, err := e.api.ListPullRequestReviews(owner, name, ev.Number)
 			if err != nil {
 				return ev, State{}, err
@@ -350,13 +349,12 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 	return ev, State{}, fmt.Errorf("unknown kind %q", ev.Kind)
 }
 
-// connectedIssues fetches the one hop shared by the reject-pr test and
-// the merge gate: every non-PR issue the PR blocks — its connected
-// issues — each carrying the issues that block it. The hop is read in
-// the connected issue's own repository (cross-repo aware), one hop per
-// connected issue, no recursion; a failed read fails the whole re-fetch
-// (§forgejo/webhook/re-fetch, §forgejo/decisions/actions,
-// §forgejo/decisions/merge-gate).
+// connectedIssues fetches the one hop the merge gate reads: every
+// non-PR issue the PR blocks — its connected issues — each carrying the
+// issues that block it. The hop is read in the connected issue's own
+// repository (cross-repo aware), one hop per connected issue, no
+// recursion; a failed read fails the whole re-fetch
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/merge-gate).
 func (e *Engine) connectedIssues(owner, name string, number int) ([]ConnectedIssue, error) {
 	blocks, err := e.api.IssueBlocks(owner, name, number)
 	if err != nil {

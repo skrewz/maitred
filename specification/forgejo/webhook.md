@@ -141,7 +141,7 @@ name appears in the engine or its config:
 
 | role | topic | grants admissibility to |
 |---|---|---|
-| work-item source | `maitred-enabled` | `implement`, `reassess`, `review`, `re-review`, `rebase`, `fix-feedback`, `merge-or-wait`, `reject-pr` |
+| work-item source | `maitred-enabled` | `implement`, `reassess`, `review`, `re-review`, `rebase`, `fix-feedback`, `merge-or-wait` |
 | outcomes source | `maitred-outcomes-repo` | `decompose`, `wrap-up`, `teardown-forest`, `sync` |
 
 One organisation listing feeds every repository's roles
@@ -298,23 +298,30 @@ For each decision event, the re-fetch assembles the state
   For issue closed, the blocker graph rooted at the closed issue.
 - **PR events** — the PR itself, and its reviews, for the review
   transitions and for PR comments (which decide as reconcile). For PR
-  opened, PR reviewed, PR commented, and the sweep's synthetic
+  reviewed, PR commented, and the sweep's synthetic
   current-state event for a PR, the connected issues — the non-PR issues
   the PR blocks, read from the issue-blocks surface, each carrying its
   own repository, which may differ from the PR's — and each issue's
   blockers as well: one hop per connected issue, no recursion, the input
-  both to the `reject-pr` test (§forgejo/decisions/actions) and to the
-  merge gate (§forgejo/decisions/merge-gate, §forgejo/decisions/inputs),
-  the latter consulted wherever a merge may be dispatched — the PR
+  to the merge gate (§forgejo/decisions/merge-gate,
+  §forgejo/decisions/inputs), consulted wherever a merge may be
+  dispatched — the PR
   reviewed event and the sweep's PR path (which PR commented also
-  decides as). Every non-PR entry is resolved: neither gate's decision is
-  left to the order the listing happens to return; a failed read fails
-  the re-fetch — a hold-off naming the failure, never "no blockers". The
-  hop is performed wherever the tests apply; the PR synced event grows no
-  such read — the push path decides without them, dispatches no merge,
-  and the next review submission, PR comment or sweep applies them
-  (§forgejo/decisions/transition-table). A connected issue carrying
-  `agentic-sync-merge` is a landing-set member and grows one outbound
+  decides as). Every non-PR entry is resolved: the gate's decision is
+  never left to the order the listing happens to return; a failed read
+  fails the re-fetch — a hold-off naming the failure, never "no
+  blockers". The hop is performed wherever a merge may be dispatched,
+  and nowhere else: the PR opened and PR synced events grow no such
+  read — neither path dispatches a merge, so neither needs the
+  gate's rows. An opened pull request therefore costs one graph walk
+  fewer than it did, and the sweep's PR path performs exactly the one
+  hop the merge gate needs — no walk that served only the retired
+  action (§forgejo/decisions/commissioning, s-git/maitred#151). A pull
+  request opened against a connected issue blocked by an open
+  `ideation` issue is decided on its own state — `review` or `rebase` —
+  and no graph walk runs for it at all (§forgejo/decisions/transition-table).
+  A connected issue carrying `agentic-sync-merge` is a landing-set
+  member and grows one outbound
   hop — the open sync issues it blocks, its membership edges, so the
   approval path can emit the set without waiting for the sweep
   (§forgejo/decisions/sync-set). A connected issue carrying `sync`

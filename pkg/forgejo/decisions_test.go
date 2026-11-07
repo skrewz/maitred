@@ -218,7 +218,7 @@ func dualLabelledSyncMember(number int) ConnectedIssue {
 }
 
 // connectedIssue is the non-PR issue a PR under test blocks — the
-// connected issue of the reject-pr test (§forgejo/decisions/actions).
+// connected issue the merge gate reads (§forgejo/decisions/merge-gate).
 func connectedIssue() *Issue {
 	issue := openIssue()
 	issue.Number = 4
@@ -299,7 +299,6 @@ func TestActionNames(t *testing.T) {
 		ActionRebase:         "rebase",
 		ActionDecompose:      "decompose",
 		ActionWrapUp:         "wrap-up",
-		ActionRejectPR:       "reject-pr",
 		ActionTeardownForest: "teardown-forest",
 		ActionSync:           "sync",
 	}
@@ -540,7 +539,12 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionRebase,
 		},
 		{
-			name:  "PR opened whose connected issue is blocked by an open ideation issue dispatches reject-pr",
+			// Nothing about a connected issue's blockers decides a PR's
+			// opening: un-commissioned work is held off upstream, by the
+			// seeding window, and the merge gate is where a blocked merge
+			// is stopped (§forgejo/decisions/commissioning,
+			// §forgejo/decisions/merge-gate, s-git/maitred#151).
+			name:  "PR opened whose connected issue is blocked by an open ideation issue dispatches review",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
 				PR: openPR("abc"),
@@ -549,14 +553,10 @@ func TestDecide(t *testing.T) {
 					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
 				}},
 			},
-			wantAction: ActionRejectPR,
+			wantAction: ActionReview,
 		},
 		{
-			// The test applies to every connected issue: a later
-			// connected issue blocked by an open ideation issue rejects
-			// whatever order the API returned the relationships in
-			// (§forgejo/decisions/transition-table).
-			name:  "PR opened whose second connected issue is blocked by an open ideation issue dispatches reject-pr",
+			name:  "PR opened whose second connected issue is blocked by an open ideation issue dispatches review",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
 				PR: openPR("abc"),
@@ -571,7 +571,7 @@ func TestDecide(t *testing.T) {
 					},
 				},
 			},
-			wantAction: ActionRejectPR,
+			wantAction: ActionReview,
 		},
 		{
 			name:  "PR opened whose two connected issues have no open ideation blocker dispatches review",
@@ -592,23 +592,9 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionReview,
 		},
 		{
-			// Ordering: reject-pr is decided before review and rebase
-			// (§forgejo/decisions/transition-table).
-			name:  "PR opened not mergeable but blocked by an open ideation issue dispatches reject-pr",
-			event: prEvent(EventPROpened, "alice"),
-			state: State{
-				PR: notMergeablePR("abc"),
-				ConnectedIssues: []ConnectedIssue{{
-					Issue:    *connectedIssue(),
-					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
-				}},
-			},
-			wantAction: ActionRejectPR,
-		},
-		{
-			// The connected issue's own state is not consulted: the gate
-			// has not opened either way (§forgejo/decisions/transition-table).
-			name:  "PR opened against a closed connected issue blocked by an open ideation issue dispatches reject-pr",
+			// The connected issue's own state decides nothing either: the
+			// open row reads the PR alone.
+			name:  "PR opened against a closed connected issue blocked by an open ideation issue dispatches review",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
 				PR: openPR("abc"),
@@ -621,7 +607,7 @@ func TestDecide(t *testing.T) {
 					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
 				}},
 			},
-			wantAction: ActionRejectPR,
+			wantAction: ActionReview,
 		},
 		{
 			// The reserved name is matched exactly and case-sensitively
@@ -668,18 +654,6 @@ func TestDecide(t *testing.T) {
 				PR: openPR("abc"),
 			},
 			wantAction: ActionReview,
-		},
-		{
-			name:  "reject-pr already dispatched at the revision holds off",
-			event: prEvent(EventPROpened, "alice"),
-			state: State{
-				PR: openPR("abc"),
-				ConnectedIssues: []ConnectedIssue{{
-					Issue:    *connectedIssue(),
-					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
-				}},
-			},
-			watermark: &Watermark{Action: string(ActionRejectPR), Revision: "abc"},
 		},
 		{
 			name:  "PR opened but closed on re-fetch holds off",
@@ -853,11 +827,11 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionMergeOrWait,
 		},
 		{
-			// The reject-pr test precedes the review-following
-			// decisions: a gate that closed after the PR opened must
-			// not be walked through by an approving review
-			// (§forgejo/decisions/transition-table).
-			name:  "PR review approved whose connected issue is blocked by an open ideation issue dispatches reject-pr",
+			// A submitted review decides on the review's own content: what
+			// stops an un-commissioned merge is the merge gate, named by
+			// its open blockers, not a rejection decided ahead of the row
+			// (§forgejo/decisions/merge-gate, s-git/maitred#151).
+			name:  "PR review approved whose connected issue is blocked by an open ideation issue holds off at the merge gate",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
 				PR:      openPR("abc"),
@@ -867,10 +841,9 @@ func TestDecide(t *testing.T) {
 					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
 				}},
 			},
-			wantAction: ActionRejectPR,
 		},
 		{
-			name:  "PR review changes-requested whose connected issue is blocked by an open ideation issue dispatches reject-pr",
+			name:  "PR review changes-requested whose connected issue is blocked by an open ideation issue dispatches fix-feedback",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
 				PR:      openPR("abc"),
@@ -880,7 +853,7 @@ func TestDecide(t *testing.T) {
 					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
 				}},
 			},
-			wantAction: ActionRejectPR,
+			wantAction: ActionFixFeedback,
 		},
 		{
 			name:  "PR review approved whose connected issue is blocked only by a closed ideation issue dispatches merge-or-wait",
@@ -894,19 +867,6 @@ func TestDecide(t *testing.T) {
 				}},
 			},
 			wantAction: ActionMergeOrWait,
-		},
-		{
-			name:  "reject-pr already dispatched at the revision holds off on the review path",
-			event: prEvent(EventPRReviewed, "carol"),
-			state: State{
-				PR:      openPR("abc"),
-				Reviews: []Review{review("APPROVED", "carol", testTime)},
-				ConnectedIssues: []ConnectedIssue{{
-					Issue:    *connectedIssue(),
-					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
-				}},
-			},
-			watermark: &Watermark{Action: string(ActionRejectPR), Revision: "abc"},
 		},
 		{
 			name:  "PR review comment holds off",
@@ -1295,11 +1255,11 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionReReview,
 		},
 		{
-			// The sweep applies the reject-pr test ahead of the whole
-			// PR path, not only its review-following branches — the
-			// gate is not left to whether the PR happens to stand at a
-			// review (§forgejo/decisions/transition-table).
-			name:  "reconcile PR whose connected issue is blocked by an open ideation issue dispatches reject-pr",
+			// The sweep's PR path decides as PR synced and as the
+			// review-following rows do; a connected issue blocked by an
+			// open ideation issue is the merge gate's business alone
+			// (§forgejo/decisions/merge-gate, s-git/maitred#151).
+			name:  "reconcile PR whose connected issue is blocked by an open ideation issue dispatches review",
 			event: prEvent(EventReconcile, "maitred"),
 			state: State{
 				PR: openPR("abc"),
@@ -1308,7 +1268,7 @@ func TestDecide(t *testing.T) {
 					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
 				}},
 			},
-			wantAction: ActionRejectPR,
+			wantAction: ActionReview,
 		},
 		{
 			// The label overrides the trigger, not the review's
@@ -1321,7 +1281,7 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionMergeOrWait,
 		},
 		{
-			name:  "reconcile PR standing at an approved review whose connected issue is blocked by an open ideation issue dispatches reject-pr",
+			name:  "reconcile PR standing at an approved review whose connected issue is blocked by an open ideation issue holds off at the merge gate",
 			event: prEvent(EventReconcile, "maitred"),
 			state: State{
 				PR:      openPR("abc"),
@@ -1331,7 +1291,6 @@ func TestDecide(t *testing.T) {
 					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
 				}},
 			},
-			wantAction: ActionRejectPR,
 		},
 		{
 			name:      "implement already dispatched at the revision holds off",
@@ -2740,11 +2699,9 @@ func TestAdmissibleInRoles(t *testing.T) {
 		{ActionRebase, workItem, true},
 		{ActionFixFeedback, workItem, true},
 		{ActionMergeOrWait, workItem, true},
-		{ActionRejectPR, workItem, true},
 		{ActionImplement, outcomes, false},
 		{ActionReassess, outcomes, false},
 		{ActionReview, outcomes, false},
-		{ActionRejectPR, outcomes, false},
 		// The outcomes actions: decompose fires on the event path and
 		// on the sweep, wrap-up on the sweep (#83, #84, #85).
 		{Action("decompose"), outcomes, true},
@@ -3453,7 +3410,7 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 		}
 	})
 
-	t.Run("reject-pr still precedes the exempt rows", func(t *testing.T) {
+	t.Run("a PR whose connected issue is blocked by an open ideation issue still dispatches the exempt review row", func(t *testing.T) {
 		d := Decide(prEvent(EventReconcile, ""), State{
 			PR: openPR("abc"),
 			ConnectedIssues: []ConnectedIssue{{
@@ -3461,8 +3418,8 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 				Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
 			}},
 		}, &Watermark{Action: string(ActionReview), Revision: "abc"})
-		if d.Action != ActionRejectPR {
-			t.Fatalf("decision = %+v, want reject-pr: the commissioning gate decides ahead of the exempt rows", d)
+		if d.Action != ActionReview {
+			t.Fatalf("decision = %+v, want review: nothing about a connected issue's blockers decides ahead of the exempt rows (s-git/maitred#151)", d)
 		}
 	})
 
