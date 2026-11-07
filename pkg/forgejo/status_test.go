@@ -132,6 +132,7 @@ func TestEngineStatusConstructionPaths(t *testing.T) {
 	})
 
 	t.Run("config present but unreadable", func(t *testing.T) {
+		skipUnlessAccessDenied(t)
 		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", validConfigYAML)
 		if err := os.Chmod(path, 0o000); err != nil {
 			t.Skipf("chmod: %v", err)
@@ -157,6 +158,7 @@ func TestEngineStatusConstructionPaths(t *testing.T) {
 	})
 
 	t.Run("config directory unreadable", func(t *testing.T) {
+		skipUnlessAccessDenied(t)
 		dir := t.TempDir()
 		if err := os.Chmod(dir, 0o000); err != nil {
 			t.Skipf("chmod: %v", err)

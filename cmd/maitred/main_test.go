@@ -169,6 +169,7 @@ func TestNewForgejoEngineEnvironmentIncomplete(t *testing.T) {
 // cannot read is reported with its config context intact
 // (§forgejo/observability/why-the-engine-is-off).
 func TestNewForgejoEngineUnreadableConfig(t *testing.T) {
+	skipUnlessAccessDenied(t)
 	dir := t.TempDir()
 	writeForgejoConfig(t, dir)
 	if err := os.Chmod(dir, 0o000); err != nil {

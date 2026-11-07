@@ -383,6 +383,7 @@ func TestLoadConfigSentinels(t *testing.T) {
 	})
 
 	t.Run("config unreadable", func(t *testing.T) {
+		skipUnlessAccessDenied(t)
 		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", validConfigYAML)
 		if err := os.Chmod(path, 0o000); err != nil {
 			t.Skipf("chmod: %v", err)
