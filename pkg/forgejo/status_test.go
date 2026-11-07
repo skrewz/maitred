@@ -290,6 +290,34 @@ func TestEngineStatusConstructionPaths(t *testing.T) {
 		}
 	})
 
+	t.Run("config location holds no config", func(t *testing.T) {
+		// A location the operator pointed the engine at that yields no
+		// config is a fault, not the by-design absence of one
+		// (§forgejo/observability/why-the-engine-is-off).
+		dir := t.TempDir()
+		cause, category := EngineStatus(dir, mapEnv(completeEnv()))
+		if cause == nil {
+			t.Fatal("expected a cause, got nil")
+		}
+		if errors.Is(cause, ErrConfigNotFound) {
+			t.Errorf("an empty location is not the absence of one: %v", cause)
+		}
+		if category != CategoryOther {
+			t.Errorf("category = %s, want %s", category, CategoryOther)
+		}
+	})
+
+	t.Run("zero-byte config file", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", "")
+		cause, category := EngineStatus(path, mapEnv(completeEnv()))
+		if cause == nil {
+			t.Fatal("expected a cause, got nil")
+		}
+		if category != CategoryOther {
+			t.Errorf("category = %s, want %s", category, CategoryOther)
+		}
+	})
+
 	t.Run("secret file set but unreadable", func(t *testing.T) {
 		vars := withEnvWithout(completeEnv(), SecretEnvVar)
 		vars[SecretFileEnvVar] = filepath.Join(t.TempDir(), "absent")
@@ -322,6 +350,9 @@ func TestEngineStatusConstructionPaths(t *testing.T) {
 	})
 
 	t.Run("configured and sound", func(t *testing.T) {
+		// The category here is the zero value, whose text is "not
+		// configured": a surface with no cause names no category
+		// (§forgejo/observability/why-the-engine-is-off).
 		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", validConfigYAML)
 		cause, category := EngineStatus(path, mapEnv(completeEnv()))
 		if cause != nil {

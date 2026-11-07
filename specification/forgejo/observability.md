@@ -63,6 +63,13 @@ one **category**, whose printed name is the same on every surface:
 | credentials missing | the config enables the engine, the environment cannot serve it (§forgejo/webhook/configuration) | yes |
 | other fault | any failure the named causes do not describe | yes |
 
+A **location that exists but yields no config at all** — a directory with
+no `.yaml`/`.yml` file in it, a file of zero bytes — is a fault, not the
+by-design absence of one: the operator pointed the engine at something, and
+what it holds is not a config, so the load fails validation and classifies
+as *other fault* (§forgejo/config/loading). Only the absence of the
+location itself is *not configured*.
+
 *Naming half a landing set* is the failure this distinction exists for: a
 config deployed without its binary, or a binary without its config, leaves
 the engine inert, and that must be told apart from a typo in a prompt
@@ -82,13 +89,19 @@ certificate pair the environment names (§forgejo/client/configuration) — in
 the order startup takes them, sharing one function per step with the startup
 path so the two cannot disagree about the same deployment.
 
-What a probe cannot see is every failure that only the act of
+What a probe therefore cannot see is every failure that only the act of
 constructing an object can find: the store directory startup creates, and
 anything a constructor fails on beyond the environment-derived inputs above.
 Such a failure classifies from the startup error the engine produced
 (*other fault*, unless a named cause describes it), and a surface that has
 the process's own startup error in hand must prefer that over a probe of its
 own.
+
+A surface prints a **category only alongside a cause**. Where the
+classification returns no cause the engine is up, and the surface says so in
+its own words and names no category: the zero value of the enum prints as
+*not configured*, which is a statement about an engine that was never
+configured rather than one that is running.
 
 The raw error text keeps going to the log verbatim: the category is how a
 surface names the cause in one word, not a replacement for the message

@@ -33,7 +33,11 @@ const (
 	CategoryOther
 )
 
-// String is the text every surface prints (§forgejo/observability/why-the-engine-is-off).
+// String is the text every surface prints
+// (§forgejo/observability/why-the-engine-is-off). A surface prints it
+// only alongside the cause it came from: with no cause there is nothing
+// to name, and the zero value's text — "not configured" — describes an
+// engine that was never configured, not one that is up.
 func (c Category) String() string {
 	switch c {
 	case CategoryNotConfigured:
@@ -147,7 +151,8 @@ func CategoryOf(cause error) Category {
 // configured and would come up, and the category carries no meaning: the
 // zero value, CategoryNotConfigured, prints as "not configured", which is
 // a statement about an engine that was never configured rather than one
-// that is running.
+// that is running. A surface prints a category only alongside a non-nil
+// cause (§forgejo/observability/why-the-engine-is-off).
 func EngineStatus(configPath string, env Env) (cause error, category Category) {
 	if _, err := LoadConfig(configPath); err != nil {
 		return err, CategoryOf(err)
