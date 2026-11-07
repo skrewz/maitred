@@ -50,7 +50,15 @@ HTTP queue system.
   restarts. Per-trigger execution history is recorded.
 - **Web dashboard.** A web UI on the web port shows trigger cards (schedule,
   state, countdown), stats, and interactive controls (fire now, pause/resume).
-- **Health check.** `maitred --health` exits 0 if the configuration is valid.
+- **Health check.** `maitred --health` exits 0 if the configuration is
+  valid. It answers for the Forgejo engine too, using the offline
+  classification of §forgejo/observability/why-the-engine-is-off: a
+  configured but broken engine fails the check with the fault's category
+  named in the output, while **no Forgejo configuration at all stays
+  healthy** — the note then says the engine is simply not configured,
+  because "not configured" is not a fault. Failures only engine
+  construction can find (the store directory, the client constructor) are
+  deliberately beyond the probe; they surface at startup.
 - **Forgejo engine.** A stateful webhook component that tracks issue/PR
   state and dispatches canned hotelier tasks when a tracked transition
   warrants it, reconciling periodically so missed webhooks are recovered.

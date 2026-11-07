@@ -106,3 +106,9 @@ configured rather than one that is running.
 The raw error text keeps going to the log verbatim: the category is how a
 surface names the cause in one word, not a replacement for the message
 that already carries the path and the action.
+
+The health check (`maitred --health`, §overview/scope) is exactly this
+classification run by a probe: it fails on any fault with the category
+named in its text, stays healthy on the by-design absence of
+configuration — with a note saying the engine is not configured — and
+says nothing about an engine that is up.

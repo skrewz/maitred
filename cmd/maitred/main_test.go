@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -227,4 +228,172 @@ func TestNewForgejoEngineUnusableMTLSPair(t *testing.T) {
 			}
 		})
 	}
+}
+
+// captureStdout runs fn with os.Stdout redirected to a pipe and returns
+// what fn printed. The health branch's notes go to stdout, so the tests
+// that pin them have to read the process's own output.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+	fn()
+	_ = w.Close()
+	os.Stdout = old
+	out := <-done
+	_ = r.Close()
+	return out
+}
+
+// healthTriggerDirs builds the directories healthCheck probes: one valid
+// trigger and a fresh data directory.
+func healthTriggerDirs(t *testing.T) (string, string) {
+	t.Helper()
+	triggerDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(triggerDir, "triggers.yaml"), []byte(triggerYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return triggerDir, t.TempDir()
+}
+
+// writeForgejoConfigVariant writes an engine config covering the binary's
+// action set except for the action named omit, plus the extra lines —
+// enough to name an action the binary does not know.
+func writeForgejoConfigVariant(t *testing.T, dir, omit, extra string) {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("org: example-org\nreconcile_interval: 15m\nactions:\n")
+	for _, a := range forgejo.AllActions {
+		if string(a) == omit {
+			continue
+		}
+		fmt.Fprintf(&b, "  %s:\n    prompt: \"do {{.IssueURL}}\"\n    persona: persona\n    timeout: 1h\n", a)
+	}
+	b.WriteString(extra)
+	if err := os.WriteFile(filepath.Join(dir, "forgejoeng.yaml"), []byte(b.String()), 0o644); err != nil {
+		t.Fatalf("write engine config: %v", err)
+	}
+}
+
+// TestHealthCheckForgejoEngine pins the health check's Forgejo states:
+// nothing configured stays healthy and says so, a configured engine the
+// environment cannot serve, or a config the binary disagrees with, fails
+// the check with the category in its text — offline, without opening the
+// store (§forgejo/observability/why-the-engine-is-off, §overview/scope).
+func TestHealthCheckForgejoEngine(t *testing.T) {
+	// setForgejoEnv isolates one case's Forgejo environment: the config
+	// location and every credential variable the probe reads.
+	setForgejoEnv := func(t *testing.T, configPath string, creds bool) {
+		t.Helper()
+		t.Setenv(forgejo.ConfigEnvVar, configPath)
+		url, token, secret := "", "", ""
+		if creds {
+			url, token, secret = "https://forgejo.example.com", "a-token", "a-secret"
+		}
+		t.Setenv(forgejo.URLEnvVar, url)
+		t.Setenv(forgejo.TokenEnvVar, token)
+		t.Setenv(forgejo.SecretEnvVar, secret)
+		t.Setenv(forgejo.SecretFileEnvVar, "")
+		t.Setenv(forgejo.ClientCertEnvVar, "")
+		t.Setenv(forgejo.ClientKeyEnvVar, "")
+	}
+
+	t.Run("no config at all is healthy and says the engine is not configured", func(t *testing.T) {
+		setForgejoEnv(t, filepath.Join(t.TempDir(), "forgejoeng.yaml"), false)
+		triggerDir, dataDir := healthTriggerDirs(t)
+		var err error
+		out := captureStdout(t, func() { err = healthCheck(triggerDir, dataDir) })
+		if err != nil {
+			t.Errorf("healthCheck with no forgejo config = %v, want healthy: not configured is not a fault", err)
+		}
+		if !strings.Contains(out, forgejo.CategoryNotConfigured.String()) {
+			t.Errorf("healthy output %q must say the engine is not configured", out)
+		}
+		if _, statErr := os.Stat(filepath.Join(dataDir, "forgejoeng")); statErr == nil {
+			t.Error("the health check must not create the engine store: it answers offline")
+		}
+	})
+
+	t.Run("configured and complete is healthy without a not-configured note", func(t *testing.T) {
+		dir := t.TempDir()
+		writeForgejoConfig(t, dir)
+		setForgejoEnv(t, dir, true)
+		triggerDir, dataDir := healthTriggerDirs(t)
+		var err error
+		out := captureStdout(t, func() { err = healthCheck(triggerDir, dataDir) })
+		if err != nil {
+			t.Errorf("healthCheck with a working deployment = %v, want healthy", err)
+		}
+		if strings.Contains(out, forgejo.CategoryNotConfigured.String()) {
+			t.Errorf("a running engine must not be reported as %q: the zero value names an engine that was never configured", forgejo.CategoryNotConfigured)
+		}
+	})
+
+	t.Run("config omits an action the binary knows is unhealthy naming the category", func(t *testing.T) {
+		dir := t.TempDir()
+		writeForgejoConfigVariant(t, dir, "rebase", "")
+		setForgejoEnv(t, dir, true)
+		triggerDir, dataDir := healthTriggerDirs(t)
+		err := healthCheck(triggerDir, dataDir)
+		if !errors.Is(err, forgejo.ErrActionSetMismatch) {
+			t.Fatalf("healthCheck = %v, want one wrapping forgejo.ErrActionSetMismatch", err)
+		}
+		if !strings.Contains(err.Error(), forgejo.CategoryConfigBinaryMismatch.String()) {
+			t.Errorf("error text %q must name the category %q", err, forgejo.CategoryConfigBinaryMismatch)
+		}
+	})
+
+	t.Run("config names an action the binary does not know is unhealthy naming the category", func(t *testing.T) {
+		dir := t.TempDir()
+		writeForgejoConfigVariant(t, dir, "", "  bogus:\n    prompt: x\n    persona: p\n    timeout: 1h\n")
+		setForgejoEnv(t, dir, true)
+		triggerDir, dataDir := healthTriggerDirs(t)
+		err := healthCheck(triggerDir, dataDir)
+		if !errors.Is(err, forgejo.ErrActionSetMismatch) {
+			t.Fatalf("healthCheck = %v, want one wrapping forgejo.ErrActionSetMismatch", err)
+		}
+		if !strings.Contains(err.Error(), forgejo.CategoryConfigBinaryMismatch.String()) {
+			t.Errorf("error text %q must name the category %q", err, forgejo.CategoryConfigBinaryMismatch)
+		}
+	})
+
+	t.Run("config present with credentials missing is unhealthy naming the category", func(t *testing.T) {
+		dir := t.TempDir()
+		writeForgejoConfig(t, dir)
+		setForgejoEnv(t, dir, false)
+		triggerDir, dataDir := healthTriggerDirs(t)
+		err := healthCheck(triggerDir, dataDir)
+		if !errors.Is(err, forgejo.ErrEnvironmentIncomplete) {
+			t.Fatalf("healthCheck = %v, want one wrapping forgejo.ErrEnvironmentIncomplete", err)
+		}
+		if !strings.Contains(err.Error(), forgejo.CategoryCredentialsMissing.String()) {
+			t.Errorf("error text %q must name the category %q", err, forgejo.CategoryCredentialsMissing)
+		}
+	})
+
+	t.Run("config present but unparseable is unhealthy naming the category", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "forgejoeng.yaml"), []byte("org: [unclosed"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		setForgejoEnv(t, dir, true)
+		triggerDir, dataDir := healthTriggerDirs(t)
+		err := healthCheck(triggerDir, dataDir)
+		if !errors.Is(err, forgejo.ErrConfigUnreadable) {
+			t.Fatalf("healthCheck = %v, want one wrapping forgejo.ErrConfigUnreadable", err)
+		}
+		if !strings.Contains(err.Error(), forgejo.CategoryConfigUnreadable.String()) {
+			t.Errorf("error text %q must name the category %q", err, forgejo.CategoryConfigUnreadable)
+		}
+	})
 }
