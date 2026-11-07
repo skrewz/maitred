@@ -155,8 +155,12 @@ func EngineStatus(configPath string, env Env) (cause error, category Category) {
 	secret, err := loadSecret(env)
 	if err != nil {
 		// A secret file that exists but cannot be read, or that is
-		// empty, is neither an absent config nor a missing credential.
-		return err, CategoryOther
+		// empty, is neither an absent config nor a missing credential:
+		// no named cause describes it, so CategoryOf answers other
+		// fault. It is left to the classifier rather than written here,
+		// so that folding this case into a named category later moves
+		// every surface at once (§forgejo/observability/why-the-engine-is-off).
+		return err, CategoryOf(err)
 	}
 	if err := CheckEnvironment(lookup(env, URLEnvVar), lookup(env, TokenEnvVar), secret); err != nil {
 		return err, CategoryOf(err)
