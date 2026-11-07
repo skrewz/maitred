@@ -44,3 +44,41 @@ tracked issue or PR. The view reflects the engine's in-memory record of
 decisions: it is empty when the engine is disabled or has made no
 decisions yet, and it is cleared on restart (the watermark store is
 unaffected, §forgejo/state/persistence).
+
+## Why the engine is off
+
+An engine that did not come up is not one diagnosis but several, and the
+surfaces that report it — the disabled route's 503 body, the health check,
+and the dashboard's Forgejo view (§forgejo/webhook/the-route,
+§overview/scope) — must name the same cause without anyone reading a
+startup log. The cause is therefore typed at the place it is produced
+(`errors.Is`-able, not matched by text), and it classifies into exactly
+one **category**, whose printed name is the same on every surface:
+
+| Category | Means | A fault? |
+|---|---|---|
+| not configured | nothing is configured at the configured location (§forgejo/config/loading) | no |
+| config unreadable | something is there, but it cannot be stat-ed, read, or parsed (§forgejo/config/loading) | yes |
+| config or binary mismatch | the config and the binary disagree about the action set, in either direction (§forgejo/config/validation) | yes |
+| credentials missing | the config enables the engine, the environment cannot serve it (§forgejo/webhook/configuration) | yes |
+| other fault | any failure the named causes do not describe | yes |
+
+*Naming half a landing set* is the failure this distinction exists for: a
+config deployed without its binary, or a binary without its config, leaves
+the engine inert, and that must be told apart from a typo in a prompt
+block. Whether a state is a fault is part of the vocabulary, not a
+convention each surface invents: **no configuration at all is not a
+fault**, and a surface that reports faults must stay silent about it.
+
+The classification is **runnable without constructing the engine** — it
+takes the config path and the environment and returns the cause and its
+category, opening no store, building no client, and making no contact with
+the Forgejo instance. A health probe has no business causing those side
+effects, and the instance may be unreachable while the question is being
+asked (§forgejo/webhook/the-route). The classification startup makes and
+the classification a probe makes are the same function of the same inputs,
+so the two can never disagree.
+
+The raw error text keeps going to the log verbatim: the category is how a
+surface names the cause in one word, not a replacement for the message
+that already carries the path and the action.

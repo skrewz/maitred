@@ -192,6 +192,17 @@ Optional keys are the exception: `decomposer_identity` and
 `implementer_identity` unset are valid and never a load error
 (§forgejo/config/decomposer-identity, §forgejo/config/implementer-identity).
 
+The two exact-set failures — an entry missing for an action the binary
+knows, and an entry the binary does not know — are one named cause, the
+**config-or-binary mismatch**, distinguishable from every other load
+failure without matching text. It is the signature of half a
+config-and-binary change having landed, and surfaces must be able to say
+so (§forgejo/observability/why-the-engine-is-off). A failure that is
+neither that mismatch nor one of the loading kinds — no config at the
+location, a config that cannot be read or parsed
+(§forgejo/config/loading) — is a third thing: a fault, but not one of the
+named ones.
+
 Loading fails **closed**, and that fixes the upgrade ordering: a binary
 that references a new action requires every deployment's config to
 carry that entry **first**. Extending the enum is therefore a
