@@ -465,15 +465,22 @@ async function testForgejoTracking(page, results) {
   });
   results.push(assert(delivery.status === 204, `Webhook delivery acknowledged (got: ${delivery.status})`));
 
-  // Poll the dashboard endpoint until the tracked entry appears.
-  let tracked = [];
+  // Poll the dashboard endpoint until the tracked entry appears. The
+  // response is an object carrying the tracked list alongside the one
+  // engine-status field (§forgejo/observability/the-dashboard-view).
+  let view = {};
   for (let i = 0; i < 40; i++) {
     const r = await fetch(`${baseUrl}/api/forgejo`).catch(() => ({ ok: false }));
-    if (r.ok) tracked = await r.json();
-    if (tracked.length > 0) break;
+    if (r.ok) view = await r.json();
+    if ((view.items ?? []).length > 0) break;
     await new Promise(res => setTimeout(res, 500));
   }
+  const tracked = view.items ?? [];
   results.push(assert(tracked.length === 1, `One tracked entry in /api/forgejo (got: ${tracked.length})`));
+  results.push(assert(
+    view.engine_status === 'enabled',
+    `Engine status field reads "enabled" for the running engine (got: "${view.engine_status}")`
+  ));
 
   const entry = tracked[0] ?? {};
   results.push(assert(

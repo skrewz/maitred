@@ -38,12 +38,24 @@ the view shows:
 - the **last decision** — the most recent dispatch or hold-off, with
   its reason and the event that produced it.
 
-The view is served by a dashboard API endpoint and rendered as a
-section of the dashboard, which appears only when there is at least one
-tracked issue or PR. The view reflects the engine's in-memory record of
-decisions: it is empty when the engine is disabled or has made no
-decisions yet, and it is cleared on restart (the watermark store is
-unaffected, §forgejo/state/persistence).
+The view is served by a dashboard API endpoint whose response is an
+object carrying two things: the tracked list, and **one engine-status
+field** rendering the engine's state in the words of the category enum
+(§forgejo/observability/why-the-engine-is-off) — while the engine is up
+the view's own word for it and no category, while it is off the
+fault's category, and when nothing is configured the not-configured
+word. The field carries no raw error text: that keeps going to the log
+(§forgejo/observability/why-the-engine-is-off). The state is handed to
+the web layer at startup as the sentinel classification produced it;
+the view never guesses it from a nil engine.
+
+The dashboard renders the view as a section that appears when there is
+at least one tracked issue or PR, and — when the state names a fault —
+names that category, so a configured-but-broken engine never looks
+like a healthy one with nothing tracked. The view reflects the
+engine's in-memory record of decisions: the tracked list is empty when
+the engine is disabled or has made no decisions yet, and it is cleared
+on restart (the watermark store is unaffected, §forgejo/state/persistence).
 
 ## Why the engine is off
 

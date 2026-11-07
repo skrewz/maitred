@@ -131,7 +131,7 @@
                 const history = await historyRes.json();
                 const webhooksRes = await fetch('/api/webhooks').catch(() => ({ ok: false }));
                 const webhooks = webhooksRes.ok ? await webhooksRes.json() : [];
-                const forgejo = forgejoRes.ok ? await forgejoRes.json() : [];
+                const forgejo = forgejoRes.ok ? await forgejoRes.json() : null;
 
                 // Load paused state for each trigger
                 const pausedPromises = defs.map(d =>
@@ -351,20 +351,33 @@
         }
 
         // renderForgejo renders the dashboard view of the issues and
-        // pull requests the Forgejo engine tracks (§forgejo/observability/
-        // the-dashboard-view). The section is hidden when the engine is
-        // disabled or has made no decisions yet.
-        function renderForgejo(tracked) {
+        // pull requests the Forgejo engine tracks, alongside the one
+        // engine-status field
+        // (§forgejo/observability/the-dashboard-view). The section stays
+        // hidden while nothing is tracked and the engine's state is no
+        // fault; when a fault is what stopped the engine it names the
+        // state's category — the category word alone, never raw error
+        // text — so a configured-but-broken engine does not look like a
+        // healthy one with nothing tracked
+        // (§forgejo/observability/why-the-engine-is-off).
+        function renderForgejo(payload) {
             const section = document.getElementById('forgejo-section');
-            if (!tracked || tracked.length === 0) {
+            const tracked = (payload && payload.items) || [];
+            const status = (payload && payload.engine_status) || '';
+            const fault = status !== '' && status !== 'enabled' && status !== 'not configured';
+            if (tracked.length === 0 && !fault) {
                 section.style.display = 'none';
                 section.innerHTML = '';
                 return;
             }
             section.style.display = '';
-            section.innerHTML = `
-                <div class="forgejo-title">Forgejo engine — tracked</div>
-                ${tracked.map(t => {
+            const statusNote = fault
+                ? `<div class="forgejo-title">Forgejo engine — ${escapeHtml(status)}</div>`
+                : '';
+            const trackedTitle = tracked.length > 0
+                ? '<div class="forgejo-title">Forgejo engine — tracked</div>'
+                : '';
+            section.innerHTML = statusNote + trackedTitle + tracked.map(t => {
                     const stateLabel = t.merged ? 'merged' : (t.state || 'unknown');
                     const badgeClass = t.merged ? 'badge-merged' : (t.state === 'open' ? 'badge-open' : 'badge-closed');
                     const watermark = t.watermark
@@ -396,8 +409,7 @@
                             </div>
                         </div>
                     `;
-                }).join('')}
-            `;
+                }).join('');
         }
 
         async function fireNow(id) {
