@@ -3,6 +3,8 @@ package forgejo
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -11,10 +13,10 @@ import (
 )
 
 // disabledLog builds a disabled-engine handler over a capturing logger.
-func disabledLog(t *testing.T, reason string) (http.Handler, *bytes.Buffer) {
+func disabledLog(t *testing.T, category Category, cause error) (http.Handler, *bytes.Buffer) {
 	t.Helper()
 	var buf bytes.Buffer
-	h := NewDisabledHandler(reason, slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+	h := NewDisabledHandler(category, cause, slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
 		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
 			// Drop the timestamp so log lines compare stably.
 			if a.Key == slog.TimeKey {
@@ -42,26 +44,33 @@ func delivery(t *testing.T, h http.Handler, deliveryID string) *httptest.Respons
 }
 
 // A delivery that reaches the route while the engine is off is refused
-// with 503 naming the config error verbatim (§forgejo/webhook/the-route).
-func TestDisabledHandler_Answers503WithTheConfigError(t *testing.T) {
-	const reason = `parse config: reconcile_interval: unknown field "reconcile_interval"`
-	h, _ := disabledLog(t, reason)
+// with 503 naming the category, never the raw error text — the body's
+// reader is Forgejo, which logs and displays it
+// (§forgejo/webhook/the-route, §forgejo/observability/why-the-engine-is-off).
+func TestDisabledHandler_Answers503WithTheCategory(t *testing.T) {
+	cause := fmt.Errorf("stat config %q: %w", "/etc/maitred/forgejoeng/config.yaml", ErrConfigUnreadable)
+	h, _ := disabledLog(t, CategoryOf(cause), cause)
 
 	w := delivery(t, h, "d1")
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), reason) {
-		t.Errorf("body %q does not carry the config error verbatim %q", w.Body.String(), reason)
+	if got, want := w.Body.String(), "forgejo engine disabled: "+CategoryConfigUnreadable.String()+"\n"; got != want {
+		t.Errorf("body %q, want %q", got, want)
+	}
+	for _, leak := range []string{"/etc/maitred", "config.yaml", "config unreadable: stat"} {
+		if strings.Contains(w.Body.String(), leak) {
+			t.Errorf("body %q leaks raw error text %q", w.Body.String(), leak)
+		}
 	}
 }
 
-// Per-delivery silence is half the defect: every refused delivery leaves
-// one log line naming path, delivery id, and reason.
-func TestDisabledHandler_LogsEveryRefusedDelivery(t *testing.T) {
-	const reason = "MAITRED_FORGEJO_TOKEN must be set"
-	h, buf := disabledLog(t, reason)
+// The detail is relocated, not lost: every refused delivery leaves one
+// log line naming path, delivery id, and the full error under reason.
+func TestDisabledHandler_LogKeepsTheFullError(t *testing.T) {
+	cause := errors.New("MAITRED_FORGEJO_TOKEN must be set")
+	h, buf := disabledLog(t, CategoryCredentialsMissing, cause)
 
 	for _, id := range []string{"aaa-111", "bbb-222"} {
 		if w := delivery(t, h, id); w.Code != http.StatusServiceUnavailable {
@@ -75,7 +84,7 @@ func TestDisabledHandler_LogsEveryRefusedDelivery(t *testing.T) {
 	}
 	for i, id := range []string{"aaa-111", "bbb-222"} {
 		line := lines[i]
-		for _, want := range []string{WebhookPath, id, reason} {
+		for _, want := range []string{WebhookPath, id, cause.Error(), CategoryCredentialsMissing.String()} {
 			if !strings.Contains(line, want) {
 				t.Errorf("line %d: missing %q in %q", i+1, want, line)
 			}
@@ -83,17 +92,21 @@ func TestDisabledHandler_LogsEveryRefusedDelivery(t *testing.T) {
 	}
 }
 
-// An empty reason never yields an empty body or a reasonless log line.
-func TestDisabledHandler_EmptyReasonFallsBack(t *testing.T) {
-	h, buf := disabledLog(t, "")
+// No cause and the zero category — the state that must never produce an
+// empty refusal — answer with the enum's not-configured value.
+func TestDisabledHandler_NotConfiguredFallsBack(t *testing.T) {
+	h, buf := disabledLog(t, CategoryNotConfigured, nil)
 
 	w := delivery(t, h, "ccc-333")
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", w.Code)
 	}
-	if strings.TrimSpace(w.Body.String()) == "" {
-		t.Error("body is empty; the refusal must say something")
+	if want := CategoryNotConfigured.String(); !strings.Contains(w.Body.String(), want) {
+		t.Errorf("body %q does not name %q", w.Body.String(), want)
+	}
+	if strings.TrimSpace(buf.String()) == "" {
+		t.Error("no log line; the refusal must be findable from the log too")
 	}
 	if !strings.Contains(buf.String(), "path=") {
 		t.Errorf("log line %q does not name the path", buf.String())
@@ -103,7 +116,7 @@ func TestDisabledHandler_EmptyReasonFallsBack(t *testing.T) {
 // The refusal does not depend on the method or a parseable body; the
 // route serves nothing while the engine is off.
 func TestDisabledHandler_RefusesWithoutReadingTheBody(t *testing.T) {
-	h, _ := disabledLog(t, "config error")
+	h, _ := disabledLog(t, CategoryOther, errors.New("some fault"))
 
 	req := httptest.NewRequest(http.MethodGet, WebhookPath, nil)
 	w := httptest.NewRecorder()
@@ -123,7 +136,7 @@ func TestDisabledHandler_RefusesWithoutReadingTheBody(t *testing.T) {
 
 // A nil logger falls back to the default one, like the engine's handler.
 func TestDisabledHandler_NilLogger(t *testing.T) {
-	h := NewDisabledHandler("config error", nil)
+	h := NewDisabledHandler(CategoryOther, errors.New("some fault"), nil)
 
 	if w := delivery(t, h, "fff-666"); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", w.Code)

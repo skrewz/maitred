@@ -22,10 +22,14 @@ environment.
 whenever the webhook API server runs — and every delivery to it is
 **refused**:
 
-- The response is `503 Service Unavailable`, the body naming the startup
-  error (the config or credential failure) verbatim.
+- The response is `503 Service Unavailable`, the body naming the **category**
+  of the startup error (§forgejo/observability/why-the-engine-is-off) — one
+  word, never the raw error text. The body's reader is Forgejo, which logs
+  it and displays it in a delivery list people read, so a config error
+  quoting a filesystem path does not belong in it.
 - One line is logged per refused delivery, naming the request path, the
-  delivery id (`X-Forgejo-Delivery`), and that same reason. Per-delivery
+  delivery id (`X-Forgejo-Delivery`), the same category, and the full startup
+  error as `reason`: the detail is relocated to the log, not lost. Per-delivery
   silence is a defect: a refused delivery must be findable from Forgejo's
   delivery log alone.
 - The body is never read and nothing is verified, mapped, or dispatched.
