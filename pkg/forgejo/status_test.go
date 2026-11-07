@@ -229,6 +229,67 @@ func TestEngineStatusConstructionPaths(t *testing.T) {
 		}
 	})
 
+	t.Run("mTLS pair set only halfway is a missing credential", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			cert string
+			key  string
+		}{
+			{"cert without key", filepath.Join(t.TempDir(), "client.crt"), ""},
+			{"key without cert", "", filepath.Join(t.TempDir(), "client.key")},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				vars := completeEnv()
+				vars[ClientCertEnvVar] = tc.cert
+				vars[ClientKeyEnvVar] = tc.key
+				path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", validConfigYAML)
+				cause, category := EngineStatus(path, mapEnv(vars))
+				if !errors.Is(cause, ErrEnvironmentIncomplete) {
+					t.Fatalf("cause = %v, want ErrEnvironmentIncomplete", cause)
+				}
+				if category != CategoryCredentialsMissing {
+					t.Errorf("category = %s, want %s", category, CategoryCredentialsMissing)
+				}
+				if CategoryOf(cause) != category {
+					t.Errorf("EngineStatus says %s, CategoryOf says %s: the two must agree", category, CategoryOf(cause))
+				}
+			})
+		}
+	})
+
+	t.Run("mTLS pair named but unloadable is a fault", func(t *testing.T) {
+		missing := t.TempDir()
+		vars := completeEnv()
+		vars[ClientCertEnvVar] = filepath.Join(missing, "client.crt")
+		vars[ClientKeyEnvVar] = filepath.Join(missing, "client.key")
+		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", validConfigYAML)
+		cause, category := EngineStatus(path, mapEnv(vars))
+		if cause == nil {
+			t.Fatal("cause = nil: startup fails on this pair, so a probe must not read healthy")
+		}
+		if errors.Is(cause, ErrEnvironmentIncomplete) {
+			t.Errorf("a pair that will not load is not a missing credential: %v", cause)
+		}
+		if category != CategoryOther {
+			t.Errorf("category = %s, want %s", category, CategoryOther)
+		}
+	})
+
+	t.Run("mTLS pair set and loadable", func(t *testing.T) {
+		certPath, keyPath := writeCertFiles(t, genTestCert(t, "maitred-client", false, nil))
+		vars := completeEnv()
+		vars[ClientCertEnvVar] = certPath
+		vars[ClientKeyEnvVar] = keyPath
+		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", validConfigYAML)
+		cause, category := EngineStatus(path, mapEnv(vars))
+		if cause != nil {
+			t.Fatalf("cause = %v, want nil", cause)
+		}
+		if category.IsFault() {
+			t.Errorf("category = %s, want no fault", category)
+		}
+	})
+
 	t.Run("secret file set but unreadable", func(t *testing.T) {
 		vars := withEnvWithout(completeEnv(), SecretEnvVar)
 		vars[SecretFileEnvVar] = filepath.Join(t.TempDir(), "absent")
@@ -299,6 +360,8 @@ func TestEngineStatusUsesTheGivenEnv(t *testing.T) {
 	t.Setenv(URLEnvVar, "https://forgejo.example.com")
 	t.Setenv(TokenEnvVar, "a-token")
 	t.Setenv(SecretEnvVar, "a-secret")
+	t.Setenv(ClientCertEnvVar, "")
+	t.Setenv(ClientKeyEnvVar, "")
 	if _, category := EngineStatus(path, mapEnv(nil)); category != CategoryCredentialsMissing {
 		t.Errorf("category = %s, want %s from the injected (empty) environment", category, CategoryCredentialsMissing)
 	}

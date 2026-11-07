@@ -68,8 +68,9 @@ const (
 
 // ErrEnvironmentIncomplete is returned when the engine config enables
 // the engine but the environment cannot serve it: the instance URL, the
-// token, or the shared secret is missing
-// (§forgejo/webhook/configuration). It classifies as
+// token, or the shared secret is missing, or the mTLS pair is set only
+// halfway through (§forgejo/webhook/configuration,
+// §forgejo/client/configuration). It classifies as
 // CategoryCredentialsMissing.
 var ErrEnvironmentIncomplete = errors.New("environment incomplete")
 
@@ -128,13 +129,25 @@ func CategoryOf(cause error) Category {
 // EngineStatus answers "why is the engine off?" from the config path
 // and the environment alone: no store is opened, no client built, no
 // contact made with the Forgejo instance, so a health probe may call it
-// (§forgejo/observability/why-the-engine-is-off).
+// (§forgejo/observability/why-the-engine-is-off). It walks the
+// environment-derived construction steps startup takes before it needs
+// an object — the config, the shared secret, the credentials, the mTLS
+// pair — in the same order startup takes them, so the two classifications
+// of one deployment cannot disagree.
+//
+// What is left is every failure that only the act of constructing an
+// object can find: the store directory startup creates, and any error a
+// client constructor raises beyond the pair above. A probe cannot see
+// those without causing the side effects it must not cause; they classify
+// from the startup error itself, which is what CategoryOf answers
+// (CategoryOther for anything unnamed).
 //
 // The cause is non-nil exactly when the engine could not start; with it
 // goes the category a surface prints. A nil cause means the engine is
-// configured and would come up, and the category — CategoryNotConfigured,
-// the zero value — carries no meaning. The classification is the same
-// one startup makes: the same inputs, the same verdict.
+// configured and would come up, and the category carries no meaning: the
+// zero value, CategoryNotConfigured, prints as "not configured", which is
+// a statement about an engine that was never configured rather than one
+// that is running.
 func EngineStatus(configPath string, env Env) (cause error, category Category) {
 	if _, err := LoadConfig(configPath); err != nil {
 		return err, CategoryOf(err)
@@ -146,7 +159,13 @@ func EngineStatus(configPath string, env Env) (cause error, category Category) {
 		return err, CategoryOther
 	}
 	if err := CheckEnvironment(lookup(env, URLEnvVar), lookup(env, TokenEnvVar), secret); err != nil {
-		return err, CategoryCredentialsMissing
+		return err, CategoryOf(err)
+	}
+	// The mTLS pair is environment-derived and loads offline, so the
+	// probe sees the failure startup sees; the client itself is never
+	// built (§forgejo/client/configuration).
+	if err := CheckClientCertificate(lookup(env, ClientCertEnvVar), lookup(env, ClientKeyEnvVar)); err != nil {
+		return err, CategoryOf(err)
 	}
 	return nil, CategoryNotConfigured
 }

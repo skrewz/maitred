@@ -360,7 +360,8 @@ retained only so deployments can adopt the file incrementally — and is to
 be removed once every deployment reads the secret from a file.
 
 An engine the config has enabled that the environment cannot serve — no
-instance URL, no token, or no shared secret — is a named cause, **the
+instance URL, no token, no shared secret, or an mTLS pair set only halfway
+through (§forgejo/client/configuration) — is a named cause, **the
 environment is incomplete**, and classifies as *credentials missing*
 (§forgejo/observability/why-the-engine-is-off). It is a fault, not a
 deliberate disablement: the config asked for the engine. A secret file

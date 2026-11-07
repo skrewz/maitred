@@ -75,9 +75,20 @@ takes the config path and the environment and returns the cause and its
 category, opening no store, building no client, and making no contact with
 the Forgejo instance. A health probe has no business causing those side
 effects, and the instance may be unreachable while the question is being
-asked (§forgejo/webhook/the-route). The classification startup makes and
-the classification a probe makes are the same function of the same inputs,
-so the two can never disagree.
+asked (§forgejo/webhook/the-route). It walks every construction step that
+depends on nothing but the config and the environment — loading the config,
+resolving the shared secret, checking the credentials, and loading the mTLS
+certificate pair the environment names (§forgejo/client/configuration) — in
+the order startup takes them, sharing one function per step with the startup
+path so the two cannot disagree about the same deployment.
+
+What a probe cannot see is every failure that only the act of
+constructing an object can find: the store directory startup creates, and
+anything a constructor fails on beyond the environment-derived inputs above.
+Such a failure classifies from the startup error the engine produced
+(*other fault*, unless a named cause describes it), and a surface that has
+the process's own startup error in hand must prefer that over a probe of its
+own.
 
 The raw error text keeps going to the log verbatim: the category is how a
 surface names the cause in one word, not a replacement for the message

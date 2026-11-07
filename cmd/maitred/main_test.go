@@ -182,3 +182,48 @@ func TestNewForgejoEngineUnreadableConfig(t *testing.T) {
 		t.Fatalf("err = %v, want one wrapping forgejo.ErrConfigUnreadable", err)
 	}
 }
+
+// TestNewForgejoEngineUnusableMTLSPair checks that the mTLS pair the
+// environment names is a cause startup and the offline classifier agree
+// on: a probe must not read healthy on a deployment whose client
+// certificate cannot be built (§forgejo/client/configuration,
+// §forgejo/observability/why-the-engine-is-off).
+func TestNewForgejoEngineUnusableMTLSPair(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cert string
+		key  string
+		want error
+	}{
+		{"half a pair", filepath.Join(t.TempDir(), "client.crt"), "", forgejo.ErrEnvironmentIncomplete},
+		{"unloadable pair", filepath.Join(t.TempDir(), "absent.crt"), filepath.Join(t.TempDir(), "absent.key"), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeForgejoConfig(t, dir)
+			t.Setenv(forgejo.ConfigEnvVar, dir)
+			t.Setenv(forgejo.URLEnvVar, "https://forgejo.example.com")
+			t.Setenv(forgejo.TokenEnvVar, "a-token")
+			t.Setenv(forgejo.SecretEnvVar, "a-secret")
+			t.Setenv(forgejo.SecretFileEnvVar, "")
+			t.Setenv(forgejo.ClientCertEnvVar, tc.cert)
+			t.Setenv(forgejo.ClientKeyEnvVar, tc.key)
+
+			_, _, startupErr := newForgejoEngine(t.TempDir(), nil, nil)
+			if startupErr == nil {
+				t.Fatal("newForgejoEngine: want an error from a deployment with no usable client certificate, got nil")
+			}
+			if tc.want != nil && !errors.Is(startupErr, tc.want) {
+				t.Errorf("startup error = %v, want one wrapping %v", startupErr, tc.want)
+			}
+			cause, category := forgejo.EngineStatus(dir, forgejo.ProcessEnv())
+			if cause == nil {
+				t.Fatal("EngineStatus read a deployment startup refuses as sound")
+			}
+			if category != forgejo.CategoryOf(startupErr) {
+				t.Errorf("EngineStatus says %s, the startup error classifies as %s: the two must agree",
+					category, forgejo.CategoryOf(startupErr))
+			}
+		})
+	}
+}

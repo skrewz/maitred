@@ -183,6 +183,40 @@ const ClientCertEnvVar = "MAITRED_FORGEJO_CLIENT_CERT"
 // client private key (§forgejo/client/configuration).
 const ClientKeyEnvVar = "MAITRED_FORGEJO_CLIENT_KEY"
 
+// loadClientCertificate loads the mTLS pair the environment names, or
+// (nil, nil) when the environment names neither and the client stays
+// plain (§forgejo/client/configuration). Setting exactly one of the two
+// is an environment the engine cannot serve, so it wraps
+// ErrEnvironmentIncomplete and classifies as *credentials missing*; a
+// pair that is named but will not load is a fault the named causes do
+// not describe (§forgejo/observability/why-the-engine-is-off). Startup
+// and the offline classifier share this one function, so the two can
+// never disagree about the pair.
+func loadClientCertificate(certPath, keyPath string) (*tls.Certificate, error) {
+	if certPath == "" && keyPath == "" {
+		return nil, nil
+	}
+	if certPath == "" || keyPath == "" {
+		return nil, fmt.Errorf("%w: %s and %s must be set together",
+			ErrEnvironmentIncomplete, ClientCertEnvVar, ClientKeyEnvVar)
+	}
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("forgejo: load mTLS client certificate/key: %w", err)
+	}
+	return &cert, nil
+}
+
+// CheckClientCertificate answers whether the mTLS pair the environment
+// names can be loaded, without building anything: it is the offline half
+// of NewClient, so a health probe can ask the same question startup
+// answers (§forgejo/client/configuration,
+// §forgejo/observability/why-the-engine-is-off).
+func CheckClientCertificate(certPath, keyPath string) error {
+	_, err := loadClientCertificate(certPath, keyPath)
+	return err
+}
+
 // NewClient builds the *http.Client the Forgejo client uses. When both
 // certPath and keyPath are set, the client presents that mTLS client
 // certificate on every request (a Forgejo instance's ingress may require a
@@ -191,19 +225,16 @@ const ClientKeyEnvVar = "MAITRED_FORGEJO_CLIENT_KEY"
 // configuration error (§forgejo/client/configuration).
 func NewClient(certPath, keyPath string) (*http.Client, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
-	if certPath == "" && keyPath == "" {
-		return client, nil
-	}
-	if certPath == "" || keyPath == "" {
-		return nil, fmt.Errorf("forgejo: client certificate and key must be set together")
-	}
-	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	cert, err := loadClientCertificate(certPath, keyPath)
 	if err != nil {
-		return nil, fmt.Errorf("forgejo: load mTLS client certificate/key: %w", err)
+		return nil, err
+	}
+	if cert == nil {
+		return client, nil
 	}
 	client.Transport = &http.Transport{
 		TLSClientConfig: &tls.Config{
-			Certificates: []tls.Certificate{cert},
+			Certificates: []tls.Certificate{*cert},
 			RootCAs:      nil, // trust system CAs
 		},
 	}
