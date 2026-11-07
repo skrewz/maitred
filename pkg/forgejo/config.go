@@ -2,7 +2,9 @@ package forgejo
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -139,7 +141,7 @@ func (c *Config) Validate() error {
 	for _, a := range AllActions {
 		pc, ok := c.Actions[string(a)]
 		if !ok {
-			return fmt.Errorf("action %q: no canned prompt configured", a)
+			return fmt.Errorf("action %q: no canned prompt configured: %w", a, ErrActionSetMismatch)
 		}
 		if pc.Prompt == "" {
 			return fmt.Errorf("action %q: prompt is required", a)
@@ -160,7 +162,7 @@ func (c *Config) Validate() error {
 	}
 	for name := range c.Actions {
 		if !isKnownAction(name) {
-			return fmt.Errorf("unknown action %q: the decision function does not dispatch it", name)
+			return fmt.Errorf("unknown action %q: the decision function does not dispatch it: %w", name, ErrActionSetMismatch)
 		}
 	}
 	return nil
@@ -177,13 +179,39 @@ func isKnownAction(name string) bool {
 	return false
 }
 
+// The load-time causes, typed so a surface can name which one it is
+// looking at instead of re-reading a sentence (§forgejo/observability/why-the-engine-is-off).
+var (
+	// ErrConfigNotFound means no engine config exists at the given
+	// location. It wraps fs.ErrNotExist so errors.Is matches either
+	// sentinel, and it is the one definition of "nothing is configured
+	// here" (§forgejo/config/loading).
+	ErrConfigNotFound = fmt.Errorf("engine config not found: %w", fs.ErrNotExist)
+	// ErrConfigUnreadable means something is at the location but the
+	// engine cannot make a config out of it: a path it cannot stat,
+	// read, or parse (§forgejo/config/loading).
+	ErrConfigUnreadable = errors.New("config unreadable")
+	// ErrActionSetMismatch means the config and the binary disagree
+	// about the action set, in either direction — the signature of half
+	// a config-and-binary change having landed
+	// (§forgejo/config/validation).
+	ErrActionSetMismatch = errors.New("config and binary disagree")
+)
+
 // LoadConfig loads the engine config from path — a single file, or a
 // directory of .yaml/.yml files merged in sorted order — and validates
-// it (§forgejo/config/loading, §forgejo/config/validation).
+// it (§forgejo/config/loading, §forgejo/config/validation). Every way it
+// fails is recognisable with errors.Is: ErrConfigNotFound when nothing
+// is at path, ErrConfigUnreadable when the path or its contents cannot
+// be read, ErrActionSetMismatch when the config and the binary disagree
+// about the action set.
 func LoadConfig(path string) (*Config, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, fmt.Errorf("stat config %q: %w", path, err)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("stat config %q: %w", path, ErrConfigNotFound)
+		}
+		return nil, fmt.Errorf("stat config %q: %w: %w", path, ErrConfigUnreadable, err)
 	}
 
 	var cfg *Config
@@ -205,11 +233,11 @@ func LoadConfig(path string) (*Config, error) {
 func loadConfigFile(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read config %q: %w", path, err)
+		return nil, fmt.Errorf("read config %q: %w: %w", path, ErrConfigUnreadable, err)
 	}
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse config %q: %w", path, err)
+		return nil, fmt.Errorf("parse config %q: %w: %w", path, ErrConfigUnreadable, err)
 	}
 	return &cfg, nil
 }
@@ -223,7 +251,7 @@ func loadConfigFile(path string) (*Config, error) {
 func loadConfigDir(dir string) (*Config, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("read config directory %q: %w", dir, err)
+		return nil, fmt.Errorf("read config directory %q: %w: %w", dir, ErrConfigUnreadable, err)
 	}
 	var files []string
 	for _, e := range entries {

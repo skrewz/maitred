@@ -1,6 +1,8 @@
 package forgejo
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -360,6 +362,88 @@ func TestLoadConfigDirectoryConflicts(t *testing.T) {
 			t.Fatalf("expected conflicting-implementer_identity error, got %v", err)
 		}
 	})
+}
+
+// TestLoadConfigSentinels checks that each way loading can fail is
+// recognisable with errors.Is, not by matching its text
+// (§forgejo/config/loading, §forgejo/config/validation,
+// §forgejo/observability/why-the-engine-is-off).
+func TestLoadConfigSentinels(t *testing.T) {
+	t.Run("no config at the location", func(t *testing.T) {
+		_, err := LoadConfig(filepath.Join(t.TempDir(), "nope.yaml"))
+		if !errors.Is(err, ErrConfigNotFound) {
+			t.Fatalf("err = %v, want one wrapping ErrConfigNotFound", err)
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("err = %v, want one wrapping fs.ErrNotExist", err)
+		}
+		if errors.Is(err, ErrConfigUnreadable) {
+			t.Errorf("a config that is simply absent must not also be unreadable: %v", err)
+		}
+	})
+
+	t.Run("config unreadable", func(t *testing.T) {
+		skipUnlessAccessDenied(t)
+		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", validConfigYAML)
+		if err := os.Chmod(path, 0o000); err != nil {
+			t.Skipf("chmod: %v", err)
+		}
+		_, err := LoadConfig(path)
+		if !errors.Is(err, ErrConfigUnreadable) {
+			t.Fatalf("err = %v, want one wrapping ErrConfigUnreadable", err)
+		}
+		if !strings.Contains(err.Error(), path) {
+			t.Errorf("error %q must keep the path it failed on", err)
+		}
+	})
+
+	t.Run("config unparseable", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", "org: [unclosed")
+		if _, err := LoadConfig(path); !errors.Is(err, ErrConfigUnreadable) {
+			t.Fatalf("err = %v, want one wrapping ErrConfigUnreadable", err)
+		}
+	})
+
+	t.Run("action the binary knows has no entry", func(t *testing.T) {
+		_, err := LoadConfig(validateFixturePath(t, strings.Replace(validConfigYAML,
+			"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    persona: s-autonomics-implementer\n    timeout: 30m\n",
+			"", 1)))
+		if !errors.Is(err, ErrActionSetMismatch) {
+			t.Fatalf("err = %v, want one wrapping ErrActionSetMismatch", err)
+		}
+		if !strings.Contains(err.Error(), "rebase") {
+			t.Errorf("error %q must name the action it failed on", err)
+		}
+	})
+
+	t.Run("action the binary does not know has an entry", func(t *testing.T) {
+		_, err := LoadConfig(validateFixturePath(t, validConfigYAML+"  bogus:\n    prompt: x\n    persona: p\n    timeout: 1h\n"))
+		if !errors.Is(err, ErrActionSetMismatch) {
+			t.Fatalf("err = %v, want one wrapping ErrActionSetMismatch", err)
+		}
+		if !strings.Contains(err.Error(), "bogus") {
+			t.Errorf("error %q must name the action it failed on", err)
+		}
+	})
+
+	t.Run("any other validation failure", func(t *testing.T) {
+		_, err := LoadConfig(validateFixturePath(t, strings.Replace(validConfigYAML, "reconcile_interval: 15m\n", "", 1)))
+		if err == nil {
+			t.Fatal("expected an error, got nil")
+		}
+		for _, sentinel := range []error{ErrConfigNotFound, ErrConfigUnreadable, ErrActionSetMismatch} {
+			if errors.Is(err, sentinel) {
+				t.Errorf("unrelated failure must not classify as %v: %v", sentinel, err)
+			}
+		}
+	})
+}
+
+// validateFixturePath writes content into a fresh temp file and returns
+// its path.
+func validateFixturePath(t *testing.T, content string) string {
+	t.Helper()
+	return writeConfig(t, t.TempDir(), "forgejoeng.yaml", content)
 }
 
 // TestPromptFor looks up a prompt by action

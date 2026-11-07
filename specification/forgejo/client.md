@@ -79,3 +79,11 @@ loads the pair and presents the certificate on every request — a Forgejo
 instance's ingress may require a client certificate. When neither is set the
 client is plain, so non-mTLS Forgejo instances keep working; setting exactly
 one of the two is a configuration error.
+
+The pair is environment-derived and loads without contacting the instance,
+so the classifier that names why the engine is off checks it under the same
+name the startup path fails on (§forgejo/observability/why-the-engine-is-off,
+§forgejo/webhook/configuration): setting exactly one of the two is the
+environment the engine cannot serve — **the environment is incomplete**, and
+the category is *credentials missing* — while a pair that is named but will
+not load is a fault no named cause describes.

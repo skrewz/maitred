@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -121,5 +123,108 @@ func TestMountForgejoRoute_TriggerFallbackUnchanged(t *testing.T) {
 
 	if w := serve(h, http.MethodPost, "/v1/github/issues"); w.Code != http.StatusOK {
 		t.Errorf("configured trigger route: expected 200, got %d", w.Code)
+	}
+}
+
+// writeForgejoConfig writes a minimal valid engine config — one entry
+// per action the binary knows — into dir, so these tests track the
+// action enum rather than the shipped sample config.
+func writeForgejoConfig(t *testing.T, dir string) {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("org: example-org\nreconcile_interval: 15m\nactions:\n")
+	for _, a := range forgejo.AllActions {
+		fmt.Fprintf(&b, "  %s:\n    prompt: \"do {{.IssueURL}}\"\n    persona: persona\n    timeout: 1h\n", a)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "forgejoeng.yaml"), []byte(b.String()), 0o644); err != nil {
+		t.Fatalf("write engine config: %v", err)
+	}
+}
+
+// TestNewForgejoEngineEnvironmentIncomplete checks that an engine the
+// config enables but the environment cannot serve is reported as an
+// incomplete environment rather than an unclassifiable error
+// (§forgejo/observability/why-the-engine-is-off,
+// §forgejo/webhook/configuration).
+func TestNewForgejoEngineEnvironmentIncomplete(t *testing.T) {
+	dir := t.TempDir()
+	writeForgejoConfig(t, dir)
+	t.Setenv(forgejo.ConfigEnvVar, dir)
+	t.Setenv(forgejo.URLEnvVar, "")
+	t.Setenv(forgejo.TokenEnvVar, "")
+	t.Setenv(forgejo.SecretEnvVar, "")
+	t.Setenv(forgejo.SecretFileEnvVar, "")
+
+	_, _, err := newForgejoEngine(t.TempDir(), nil, nil)
+	if !errors.Is(err, forgejo.ErrEnvironmentIncomplete) {
+		t.Fatalf("err = %v, want one wrapping forgejo.ErrEnvironmentIncomplete", err)
+	}
+	_, category := forgejo.EngineStatus(dir, forgejo.ProcessEnv())
+	if category != forgejo.CategoryCredentialsMissing {
+		t.Errorf("category = %s, want %s — startup and the classifier must agree", category, forgejo.CategoryCredentialsMissing)
+	}
+}
+
+// TestNewForgejoEngineUnreadableConfig checks that a config the process
+// cannot read is reported with its config context intact
+// (§forgejo/observability/why-the-engine-is-off).
+func TestNewForgejoEngineUnreadableConfig(t *testing.T) {
+	skipUnlessAccessDenied(t)
+	dir := t.TempDir()
+	writeForgejoConfig(t, dir)
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Skipf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	t.Setenv(forgejo.ConfigEnvVar, dir)
+
+	_, _, err := newForgejoEngine(t.TempDir(), nil, nil)
+	if !errors.Is(err, forgejo.ErrConfigUnreadable) {
+		t.Fatalf("err = %v, want one wrapping forgejo.ErrConfigUnreadable", err)
+	}
+}
+
+// TestNewForgejoEngineUnusableMTLSPair checks that the mTLS pair the
+// environment names is a cause startup and the offline classifier agree
+// on: a probe must not read healthy on a deployment whose client
+// certificate cannot be built (§forgejo/client/configuration,
+// §forgejo/observability/why-the-engine-is-off).
+func TestNewForgejoEngineUnusableMTLSPair(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cert string
+		key  string
+		want error
+	}{
+		{"half a pair", filepath.Join(t.TempDir(), "client.crt"), "", forgejo.ErrEnvironmentIncomplete},
+		{"unloadable pair", filepath.Join(t.TempDir(), "absent.crt"), filepath.Join(t.TempDir(), "absent.key"), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeForgejoConfig(t, dir)
+			t.Setenv(forgejo.ConfigEnvVar, dir)
+			t.Setenv(forgejo.URLEnvVar, "https://forgejo.example.com")
+			t.Setenv(forgejo.TokenEnvVar, "a-token")
+			t.Setenv(forgejo.SecretEnvVar, "a-secret")
+			t.Setenv(forgejo.SecretFileEnvVar, "")
+			t.Setenv(forgejo.ClientCertEnvVar, tc.cert)
+			t.Setenv(forgejo.ClientKeyEnvVar, tc.key)
+
+			_, _, startupErr := newForgejoEngine(t.TempDir(), nil, nil)
+			if startupErr == nil {
+				t.Fatal("newForgejoEngine: want an error from a deployment with no usable client certificate, got nil")
+			}
+			if tc.want != nil && !errors.Is(startupErr, tc.want) {
+				t.Errorf("startup error = %v, want one wrapping %v", startupErr, tc.want)
+			}
+			cause, category := forgejo.EngineStatus(dir, forgejo.ProcessEnv())
+			if cause == nil {
+				t.Fatal("EngineStatus read a deployment startup refuses as sound")
+			}
+			if category != forgejo.CategoryOf(startupErr) {
+				t.Errorf("EngineStatus says %s, the startup error classifies as %s: the two must agree",
+					category, forgejo.CategoryOf(startupErr))
+			}
+		})
 	}
 }

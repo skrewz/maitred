@@ -26,7 +26,14 @@ const SecretEnvVar = "MAITRED_FORGEJOENG_SECRET"
 // missing credentials alongside the rest; a secret file that is set
 // but unreadable, or that yields an empty secret, is an error.
 func LoadSecret() (string, error) {
-	if path := os.Getenv(SecretFileEnvVar); path != "" {
+	return loadSecret(ProcessEnv())
+}
+
+// loadSecret is LoadSecret over an arbitrary environment, so the
+// classifier can tell whether a secret is present without the process
+// having to start the engine (§forgejo/observability/why-the-engine-is-off).
+func loadSecret(env Env) (string, error) {
+	if path := lookup(env, SecretFileEnvVar); path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return "", fmt.Errorf("read shared secret file: %w", err)
@@ -37,5 +44,5 @@ func LoadSecret() (string, error) {
 		}
 		return secret, nil
 	}
-	return os.Getenv(SecretEnvVar), nil
+	return lookup(env, SecretEnvVar), nil
 }
