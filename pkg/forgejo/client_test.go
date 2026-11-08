@@ -205,6 +205,7 @@ func TestListOpenPullRequests(t *testing.T) {
 				"head":       map[string]any{"sha": "abc123"},
 				"labels":     []map[string]any{{"name": "ready"}},
 				"user":       map[string]any{"login": "skrewz-bot"},
+				"body":       "Summary.\n\nFixes #48",
 				"updated_at": "2026-09-18T02:56:38Z",
 				"html_url":   "https://forge.example.com/acme/maitred/pulls/58",
 			},
@@ -236,6 +237,12 @@ func TestListOpenPullRequests(t *testing.T) {
 	// s-git/maitred#143).
 	if pulls[0].Author != "skrewz-bot" {
 		t.Errorf("Author = %q, want skrewz-bot", pulls[0].Author)
+	}
+	// The listing carries the PR's body: the sync predicate resolves a
+	// member's delivering PR through the auto-close reference it holds
+	// (§forgejo/client/operations, §forgejo/decisions/sync-set).
+	if pulls[0].Body != "Summary.\n\nFixes #48" {
+		t.Errorf("Body = %q, want the PR's text", pulls[0].Body)
 	}
 }
 
@@ -372,6 +379,7 @@ func TestGetPullRequest(t *testing.T) {
 			"merged": true, "mergeable": true,
 			"head":       map[string]any{"sha": "4db2ef6"},
 			"user":       map[string]any{"login": "s-autonomics-implementer"},
+			"body":       "Summary.\n\nFixes #48",
 			"updated_at": "2026-09-18T02:56:38Z",
 			"html_url":   "https://forge.example.com/acme/maitred/pulls/58",
 		})
@@ -392,6 +400,9 @@ func TestGetPullRequest(t *testing.T) {
 	// ownership gate (§forgejo/client/operations, s-git/maitred#143).
 	if pr.Author != "s-autonomics-implementer" {
 		t.Errorf("Author = %q, want s-autonomics-implementer", pr.Author)
+	}
+	if pr.Body != "Summary.\n\nFixes #48" {
+		t.Errorf("Body = %q, want the PR's text", pr.Body)
 	}
 }
 

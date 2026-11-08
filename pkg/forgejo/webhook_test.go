@@ -3184,12 +3184,17 @@ func syncSetFixtures(api *fakeAPI) {
 	syncIssue.Labels = append(syncIssue.Labels, LabelSync)
 	syncIssue.Repository = "o/outcomes"
 	pr := testPR(9, "open", true)
+	// The delivery names the member it auto-closes: the predicate
+	// resolves it from the pull-request side, not through a blocking
+	// edge (§forgejo/decisions/sync-set, s-git/maitred#171).
+	pr.Body = "The delivery for member 4.\n\nFixes #4"
 	prAsIssue := testIssue(9, "open")
 	prAsIssue.IsPull = true
 	api.issues[4] = member
 	api.issues[5] = closedMember
 	api.issues[11] = syncIssue
 	api.pulls[9] = pr
+	api.openPulls["r"] = []PullRequest{*pr}
 	api.reviews[9] = []Review{{Event: ReviewApproved, Author: "bob", CommitID: pr.HeadSHA, SubmittedAt: testUpdatedAt}}
 	api.blocks[9] = []Issue{*member}
 	api.blocks[4] = []Issue{*syncIssue}
@@ -3485,23 +3490,20 @@ func TestHandler_IssueClosed_CascadePRLegMergesRetiredSetMember(t *testing.T) {
 
 // TestHandler_Reconcile_SyncMemberReadsItsFirstOpenPR: the
 // one-delivery-per-member authoring contract — where a member
-// nonetheless stands with several open PRs the set reads it through
-// the first one, the unblock cascade's projection, and the second
-// does not hold the set
+// nonetheless stands with several open pull requests auto-closing it,
+// the set reads it through the first one in the repository listing and
+// the second does not hold the set
 // (§forgejo/decisions/sync-set, §forgejo/webhook/re-fetch).
 func TestHandler_Reconcile_SyncMemberReadsItsFirstOpenPR(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
 	api.repos = syncOutcomesRepos()
 	syncSetFixtures(api)
-	member := api.issues[4]
-	second := testPR(12, "open", true)
-	secondAsIssue := testIssue(12, "open")
-	secondAsIssue.IsPull = true
-	api.pulls[12] = second // open and mergeable, but no reviews at all
-	api.blocks[12] = []Issue{*member}
-	firstAsIssue := testIssue(9, "open")
-	firstAsIssue.IsPull = true
-	api.deps[4] = []Issue{*firstAsIssue, *secondAsIssue}
+	first := api.pulls[9]              // open, mergeable, approved at head, auto-closes member 4
+	second := testPR(12, "open", true) // open and mergeable, but no reviews at all
+	second.Body = "Another delivery.\n\nFixes #4"
+	first.Body = "The delivery.\n\nFixes #4"
+	api.pulls[12] = second
+	api.openPulls["r"] = []PullRequest{*first, *second}
 
 	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
 	tasks := q.all()
@@ -3517,6 +3519,128 @@ func TestHandler_Reconcile_SyncMemberReadsItsFirstOpenPR(t *testing.T) {
 	}
 	if w == nil || w.Action != string(ActionSync) {
 		t.Errorf("sync watermark = %+v, want sync at the set revision", w)
+	}
+}
+
+// TestHandler_Reconcile_SyncSetFindsMemberPRsThroughAutoCloseReferences:
+// the shape the live sets stand in (s-git/maitred#171). Each member
+// delivers through an open, mergeable, approved-at-head pull request
+// that auto-closes the member in its body — the pull-request-side
+// relation the forge honours when the delivery merges — and no
+// PR-to-issue blocking edge exists anywhere: no open pull request
+// stands in either member's dependency rows, and the predicate reads
+// neither the members' dependencies nor the pull requests' blocks.
+// The set dispatches; strip the references from the bodies and the
+// same set reads as not ready and holds off silently, at no new
+// watermark (§forgejo/decisions/sync-set).
+func TestHandler_Reconcile_SyncSetFindsMemberPRsThroughAutoCloseReferences(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.repos = syncOutcomesRepos()
+	memberA := testIssue(4, "open")
+	memberA.Labels = append(memberA.Labels, LabelAgenticSyncMerge)
+	memberB := testIssue(6, "open")
+	memberB.Labels = append(memberB.Labels, LabelAgenticSyncMerge)
+	set := testIssue(11, "open")
+	set.Labels = append(set.Labels, LabelSync)
+	set.Repository = "o/outcomes"
+	api.issues[4] = memberA
+	api.issues[6] = memberB
+	api.issues[11] = set
+	api.deps[11] = []Issue{*memberA, *memberB}
+	// No PR-to-issue blocking edge: neither member's dependency rows
+	// hold an open pull request.
+	api.deps[4] = nil
+	api.deps[6] = nil
+	prA := testPR(9, "open", true)
+	prA.Body = "Retires the widget.\n\nFixes #4"
+	prB := testPR(12, "open", true)
+	prB.Body = "Wires the gadget.\n\nFixes o/r#6"
+	api.pulls[9] = prA
+	api.pulls[12] = prB
+	api.openPulls["r"] = []PullRequest{*prA, *prB}
+	api.reviews[9] = []Review{{Event: ReviewApproved, Author: "bob", CommitID: prA.HeadSHA, SubmittedAt: testUpdatedAt}}
+	api.reviews[12] = []Review{{Event: ReviewApproved, Author: "bob", CommitID: prB.HeadSHA, SubmittedAt: testUpdatedAt}}
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want the sync dispatch — the predicate must find the deliveries through the auto-close references, not through an edge nobody records: %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=sync repo=o/outcomes kind=issue number=11") {
+		t.Errorf("prompt = %q, want the sync dispatch for o/outcomes issue 11", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w == nil || w.Action != string(ActionSync) {
+		t.Fatalf("sync watermark = %+v, want sync", w)
+	}
+	// The read the retired edge would have required is never performed:
+	// the member dependency rows are not consulted for a pull request.
+	if n := api.callCount("IssueDependencies:r/4"); n != 0 {
+		t.Errorf("IssueDependencies on member 4 called %d times, want 0: the predicate reads the relation from the pull-request side", n)
+	}
+	if n := api.callCount("IssueDependencies:r/6"); n != 0 {
+		t.Errorf("IssueDependencies on member 6 called %d times, want 0", n)
+	}
+
+	// An unchanged set does not re-fire.
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Errorf("got %d tasks after the second sweep, want 1", len(tasks))
+	}
+
+	// Without the references the predicate no longer sees the
+	// deliveries: the set holds off silently.
+	bareA := testPR(9, "open", true)
+	bareB := testPR(12, "open", true)
+	api.openPulls["r"] = []PullRequest{*bareA, *bareB}
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Errorf("got %d tasks after the references went away, want 1: a member with no auto-closing pull request has no delivery", len(tasks))
+	}
+}
+
+// TestPRAutoClosesIssue pins the matcher against the forge's own
+// reference semantics: the default closing keywords, keyword and
+// reference adjacent (a colon and a space allowed between them), the
+// #N form resolved in the pull request's own repository and the
+// owner/repo#N form resolved across repositories
+// (https://forgejo.org/docs/latest/user/linked-references/,
+// §forgejo/decisions/sync-set).
+func TestPRAutoClosesIssue(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"bare same-repo reference", "Summary.\n\nFixes #4", true},
+		{"qualified same-repo reference", "Summary.\n\nFixes o/r#4", true},
+		{"keyword closes", "closes #4", true},
+		{"keyword closed", "closed #4", true},
+		{"keyword close", "close #4", true},
+		{"keyword fix", "fix #4", true},
+		{"keyword fixed", "fixed #4", true},
+		{"keyword resolve", "resolve #4", true},
+		{"keyword resolves", "resolves #4", true},
+		{"keyword resolved", "resolved #4", true},
+		{"case insensitive", "FIXES #4", true},
+		{"colon form", "Fixes: #4", true},
+		{"reference later in body", "See #9 for context.\n\nThis branch fixes #4 in passing.", true},
+		{"other issue", "Fixes #5", false},
+		{"other repository", "Fixes o/other#4", false},
+		{"no keyword", "Delivers #4", false},
+		{"keyword not adjacent", "Fixes the issue #4", false},
+		{"non-closing keyword", "reopens #4", false},
+		{"number prefix only", "Fixes #40", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := prAutoClosesIssue(tc.body, "o/r", "o/r", 4); got != tc.want {
+				t.Errorf("prAutoClosesIssue(%q, o/r, o/r, 4) = %v, want %v", tc.body, got, tc.want)
+			}
+		})
 	}
 }
 

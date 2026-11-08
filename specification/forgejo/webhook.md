@@ -292,13 +292,18 @@ For each decision event, the re-fetch assembles the state
   reserved `sync` label grows one hop further: each blocking issue — a
   member of the landing set — is fetched with its delivering PR and
   that PR's reviews, the state the sync predicate reads
-  (§forgejo/decisions/sync-set). Where a member stands with several
-  open PRs the first is read, the unblock cascade's projection; the
-  one-delivery-per-member contract is the decomposer's to keep
-  (§forgejo/decisions/sync-set). A blocking issue that is itself a pull
-  request has no delivering PR to hop to: its own state and reviews are
-  the read, the PR being its own delivery
-  (§forgejo/decisions/sync-set).
+  (§forgejo/decisions/sync-set). The delivering PR is found from the
+  pull-request side: an open pull request of the member's own
+  repository whose body auto-closes the member — no blocking edge
+  between the member and its delivery is read or required, and the
+  member's dependency rows are not consulted for one
+  (§forgejo/decisions/sync-set, s-git/maitred#171). Where a member
+  stands with several auto-closing open pull requests the first in the
+  repository's listing is read; the one-delivery-per-member contract
+  is the decomposer's to keep (§forgejo/decisions/sync-set). A
+  blocking issue that is itself a pull request has no delivering PR to
+  hop to: its own state and reviews are the read, the PR being its own
+  delivery (§forgejo/decisions/sync-set).
   For issue closed, the blocker graph rooted at the closed issue.
 - **PR events** — the PR itself, and its reviews, for the review
   transitions and for PR comments (which decide as reconcile). For PR
