@@ -11,6 +11,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -452,10 +454,21 @@ func blocksPull(blockers []Issue, repo string, number int) bool {
 // syncMembers projects the blocking issues of a sync issue onto the
 // members of a landing set, attaching to every open member the state
 // of its delivering PR — mergeability and reviews — the sync
-// predicate reads. A member's PR is seen through the member's own
-// dependency rows (the PR is a blocker of the issue it delivers), the
-// same projection the unblock cascade uses; where a member has
-// several open PRs the first is read (§forgejo/decisions/sync-set).
+// predicate reads. A member delivers its change through the pull
+// request that auto-closes it: an open pull request of the member's
+// repository whose body carries an auto-close reference to the
+// member, the same pull-request-side relation the forge honours when
+// a merged delivery closes the issue. No blocking edge between a
+// member and its delivery is consulted or expected — implementers
+// record none, the graph's edges mean *cannot proceed while open*,
+// not *delivers*, and a predicate gated on an edge nobody writes
+// strands every set in silence (§forgejo/decisions/sync-set,
+// s-git/maitred#171). Where several open pull requests auto-close a
+// member the first in the repository's listing is its delivery, the
+// one-delivery-per-member projection; the repository's listing is
+// read once per evaluation whatever the set's shape. An open member
+// without agentic-sync-merge is read no further: it holds the set off
+// on the label alone whatever its PR says.
 //
 // A pull request that blocks the grouping issue **directly** is a
 // member whose delivery is itself. It is read through its own state
@@ -467,6 +480,7 @@ func blocksPull(blockers []Issue, repo string, number int) bool {
 // (§forgejo/decisions/sync-set).
 func (e *Engine) syncMembers(blockers []Issue) ([]SyncMember, error) {
 	var members []SyncMember
+	listing := make(map[string][]PullRequest)
 	for i := range blockers {
 		b := blockers[i]
 		m := SyncMember{Issue: b}
@@ -488,21 +502,31 @@ func (e *Engine) syncMembers(blockers []Issue) ([]SyncMember, error) {
 			members = append(members, m)
 			continue
 		}
-		if b.State == "open" {
-			deps, err := e.api.IssueDependencies(owner, name, b.Number)
-			if err != nil {
-				return nil, err
+		if b.State == "open" && hasLabel(&b, LabelAgenticSyncMerge) {
+			pulls, ok := listing[b.Repository]
+			if !ok {
+				var err error
+				pulls, err = e.api.ListOpenPullRequests(owner, name)
+				if err != nil {
+					return nil, err
+				}
+				listing[b.Repository] = pulls
 			}
-			for _, p := range openPullBlockers(issueNodes(deps)) {
-				po, pn := splitRepo(p.Repository)
-				pr, err := e.api.GetPullRequest(po, pn, p.Number)
+			for j := range pulls {
+				if !prAutoClosesIssue(pulls[j].Body, b.Repository, b.Repository, b.Number) {
+					continue
+				}
+				// The listing is the lead; the single read is the
+				// authoritative state the predicate and the revision
+				// digest, as everywhere else (§forgejo/client/operations).
+				pr, err := e.api.GetPullRequest(owner, name, pulls[j].Number)
 				if err != nil {
 					return nil, err
 				}
 				if !prOpen(pr) {
-					continue
+					continue // closed or merged between the listing and the read
 				}
-				reviews, err := e.api.ListPullRequestReviews(po, pn, p.Number)
+				reviews, err := e.api.ListPullRequestReviews(owner, name, pulls[j].Number)
 				if err != nil {
 					return nil, err
 				}
@@ -513,6 +537,45 @@ func (e *Engine) syncMembers(blockers []Issue) ([]SyncMember, error) {
 		members = append(members, m)
 	}
 	return members, nil
+}
+
+// closeKeywordRef mirrors the forge's own reading of an auto-close
+// reference in a pull request body: one of the default closing
+// keywords, starting at whitespace or a bracket, adjacent to the
+// reference (a colon and exactly one space allowed between), then #N
+// in the pull request's own repository or owner/repo#N across
+// repositories, terminated by a non-word character or the end
+// (https://forgejo.org/docs/latest/user/linked-references/ and
+// https://codeberg.org/forgejo/forgejo/src/branch/main/models/references/references.go).
+// The engine mirrors the forge's **default** keyword set: an instance
+// that reconfigures the keywords reads differently than the predicate
+// does — a known limitation of a read-only client
+// (§forgejo/decisions/sync-set).
+var closeKeywordRef = regexp.MustCompile(
+	`(?i)(?:\s|^|\(|\[)(?:closed|closes|close|fixed|fixes|fix|resolved|resolves|resolve):? (?:([0-9a-zA-Z-_.]+/[0-9a-zA-Z-_.]+))?#([0-9]+)(?:[^0-9A-Za-z]|$)`)
+
+// prAutoClosesIssue reports whether the pull request body auto-closes
+// the given issue — the relation the forge honours by closing the
+// issue when the pull request merges, and the relation the sync
+// predicate reads a member's delivering PR through
+// (§forgejo/decisions/sync-set, s-git/maitred#171). A bare #N
+// resolves in the pull request's own repository; a qualified
+// owner/repo#N in the repository it names.
+func prAutoClosesIssue(body, prRepo, issueRepo string, issueNumber int) bool {
+	for _, m := range closeKeywordRef.FindAllStringSubmatch(body, -1) {
+		number, err := strconv.Atoi(m[2])
+		if err != nil || number != issueNumber {
+			continue
+		}
+		repo := m[1]
+		if repo == "" {
+			repo = prRepo
+		}
+		if strings.EqualFold(repo, issueRepo) {
+			return true
+		}
+	}
+	return false
 }
 
 // graphNode builds the blocker-graph node for issue: its blocks, each

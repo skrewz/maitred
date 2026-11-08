@@ -505,11 +505,30 @@ member carrying `agentic-auto-merge` alongside `agentic-sync-merge`
 is the error state the hold-off exists to contain: it holds off
 whatever sets exist, the reason naming both labels.
 
-A member delivers its change through **one** open pull request —
-the authoring contract the decomposer keeps. Where a member
-nonetheless stands with several open PRs, the engine reads it
-through the first one, the same projection the unblock cascade
-uses; it does not gather reviews across deliveries.
+A member delivers its change through the open pull request that
+**auto-closes** it: an open pull request of the member's own
+repository whose body carries a closing reference to the member —
+`Fixes #N`, `Closes owner/repo#N`, the forge's default keyword set,
+read as the forge itself reads it
+(https://forgejo.org/docs/latest/user/linked-references/). This is
+the relation the forge honours by closing the member when the
+delivery merges, and it sits wholly on the pull-request side. No
+blocking edge between a member and its delivery is required,
+recorded, or consulted: `blocks` keeps its one meaning — *you cannot
+proceed while this is open* — and the edge that would make a pull
+request *deliver* an issue is one no implementer records and no
+author is meant to hand-author; a predicate gated on it strands
+every set in silence (s-git/maitred#171). The instance's configured
+keyword set is a known limitation of a read-only client: the engine
+mirrors the forge's defaults. A member delivers through **one** open
+pull request — the authoring contract the decomposer keeps. Where a
+member nonetheless stands with several auto-closing open pull
+requests, the engine reads it through the first one in the
+repository's listing; it does not gather reviews across deliveries.
+An open member without `agentic-sync-merge` is read no further: the
+label holds the set off whatever its pull requests say, and the read
+the unready member would cost is the read the cascade's gate already
+saves.
 
 A pull request that blocks the grouping issue **directly** is a
 blocking issue too, and the predicate reads it: the row is a member

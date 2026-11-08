@@ -14,9 +14,9 @@ authenticated with a bearer token:
 |---|---|
 | list an org's repositories (with `topics`, and the repository's units) | derive each repository's roles (§forgejo/webhook/repository-roles) and whether it has the pull requests unit (§forgejo/reconciliation/the-sweep) |
 | list open issues in a repo | event filtering and reconciliation enumeration |
-| list open pull requests in a repo | event filtering and reconciliation enumeration |
+| list open pull requests in a repo | event filtering, reconciliation enumeration, and the landing set's delivering-PR lookup (§forgejo/decisions/sync-set) |
 | get a single issue (state, labels, author, `updated_at`, `html_url`) | authoritative issue state |
-| get a single pull request (state, merged, head sha, `mergeable`, author, `html_url`) | authoritative PR state |
+| get a single pull request (state, merged, head sha, `mergeable`, author, body, `html_url`) | authoritative PR state |
 | list the issues an issue **blocks** (`issue-blocks`) | the unblock cascade, including cross-repo blockers |
 | list the issues that block an issue (`issue-dependencies`) | the unblock cascade, including cross-repo blockers |
 | list a pull request's reviews (event + author + commit) | the review transitions |
@@ -47,6 +47,14 @@ it: the landing set's revision digests the grouping issue's body, the
 field that names the order its members must land in, so a restatement of
 the order moves the digest while a comment or a label toggle does not
 (§forgejo/decisions/sync-set).
+
+Pull request responses likewise report the pull request's **body**
+(`body`). One seat reads it: the landing set's predicate resolves a
+member's delivering PR through the auto-close reference the PR body
+carries — the pull-request-side relation the forge honours by closing
+the member when the delivery merges, where no blocking edge between
+the member and its delivery exists to be read
+(§forgejo/decisions/sync-set, s-git/maitred#171).
 
 The repository listing also reports **whether the repository has the
 pull requests unit** (`has_pull_requests`). A repository with the unit

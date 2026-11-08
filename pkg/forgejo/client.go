@@ -104,6 +104,13 @@ type PullRequest struct {
 	// implementer identity (§forgejo/config/implementer-identity,
 	// §forgejo/decisions/loop-prevention, s-git/maitred#143).
 	Author string
+	// Body is the pull request's text. One seat reads it: the landing
+	// set's predicate resolves a member's delivering PR through the
+	// auto-close reference the PR body carries — the same pull-request-
+	// side relation the forge honours when a merged PR closes the member
+	// (§forgejo/client/operations, §forgejo/decisions/sync-set,
+	// s-git/maitred#171).
+	Body string
 	// Labels are the PR's label names.
 	Labels    []string
 	UpdatedAt time.Time
@@ -477,6 +484,7 @@ type wirePullRequest struct {
 	} `json:"head"`
 	User      wireUser    `json:"user"`
 	Labels    []wireLabel `json:"labels"`
+	Body      string      `json:"body"`
 	UpdatedAt time.Time   `json:"updated_at"`
 	HTMLURL   string      `json:"html_url"`
 }
@@ -537,6 +545,7 @@ func toPullRequest(w wirePullRequest) PullRequest {
 		HeadSHA:   w.Head.SHA,
 		Author:    w.User.Login,
 		Labels:    labelNames(w.Labels),
+		Body:      w.Body,
 		UpdatedAt: w.UpdatedAt,
 		HTMLURL:   w.HTMLURL,
 	}
