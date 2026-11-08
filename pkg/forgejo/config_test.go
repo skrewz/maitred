@@ -59,10 +59,6 @@ actions:
     prompt: "/issue-wrapper {{.IssueURL}}"
     persona: s-autonomics-implementer
     timeout: 1h
-  reject-pr:
-    prompt: "/pr-rejector {{.PRURL}}"
-    persona: s-autonomics-reviewer
-    timeout: 30m
   teardown-forest:
     prompt: "/forest-teardown {{.IssueURL}}"
     persona: s-autonomics-decomposer
@@ -516,7 +512,7 @@ func TestAllActions(t *testing.T) {
 	want := []Action{
 		ActionImplement, ActionReassess, ActionReview, ActionReReview,
 		ActionFixFeedback, ActionMergeOrWait, ActionRebase,
-		ActionDecompose, ActionWrapUp, ActionRejectPR, ActionTeardownForest, ActionSync,
+		ActionDecompose, ActionWrapUp, ActionTeardownForest, ActionSync,
 	}
 	if len(AllActions) != len(want) {
 		t.Fatalf("AllActions has %d entries, want %d", len(AllActions), len(want))
@@ -609,7 +605,6 @@ func TestShippedSampleConfigPromptsInvokeCannedPrompts(t *testing.T) {
 		ActionRebase:         "pr-rebase",
 		ActionDecompose:      "issue-decomposer",
 		ActionWrapUp:         "issue-wrapper",
-		ActionRejectPR:       "pr-rejector",
 		ActionTeardownForest: "forest-teardown",
 		ActionSync:           "set-lander",
 	}

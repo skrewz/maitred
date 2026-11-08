@@ -39,9 +39,6 @@ const (
 	// agentic-sync-merge (§forgejo/decisions/sync-set). Its
 	// watermark is a revision derived from the whole set.
 	ActionSync Action = "sync"
-	// ActionRejectPR closes a PR opened against work that is not yet
-	// commissioned (§forgejo/decisions/actions).
-	ActionRejectPR Action = "reject-pr"
 	// ActionTeardownForest deletes the forest an open ideation root
 	// commissioned, on the human's order through the `teardown-forest`
 	// label (§forgejo/decisions/forest-teardown). Its trigger is a state
@@ -170,10 +167,11 @@ type State struct {
 	// ConnectedPRs are the open pull requests connected to State.Issue.
 	ConnectedPRs []PullRequest
 	// ConnectedIssues are the non-PR issues a pull request blocks, each
-	// with its own blockers: the input both to the reject-pr test
-	// (§forgejo/decisions/actions) and to the merge gate
-	// (§forgejo/decisions/merge-gate). Read for PR opened, PR reviewed,
-	// and the sweep's synthetic PR event; empty when the PR's opening
+	// with its own blockers: the input to the merge gate
+	// (§forgejo/decisions/merge-gate) and to the landing-set read
+	// (§forgejo/decisions/sync-set). Read for PR reviewed, PR commented,
+	// the sweep's synthetic PR event, and the unblock cascade's PR leg —
+	// every path that can dispatch a merge; empty when the PR's opening
 	// recorded no dependency.
 	ConnectedIssues []ConnectedIssue
 	// SyncMembers are the blocking issues of the sync issue in
@@ -219,10 +217,9 @@ type State struct {
 }
 
 // ConnectedIssue is one non-PR issue a pull request blocks, with the
-// issues that block it: the input to the reject-pr test and to the
-// merge gate. The relationship is recorded on the blocker graph, never
-// inferred from the PR body (§forgejo/webhook/re-fetch,
-// §forgejo/decisions/actions, §forgejo/decisions/merge-gate).
+// issues that block it: the input to the merge gate. The relationship
+// is recorded on the blocker graph, never inferred from the PR body
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/merge-gate).
 type ConnectedIssue struct {
 	// Issue is the connected issue; its Repository may differ from
 	// the PR's (cross-repo relationships).
@@ -644,12 +641,10 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 	if !prOpen(pr) {
 		return holdOff(fmt.Sprintf("PR %d is not open", pr.Number))
 	}
-	// The reject-pr test precedes review and rebase: reviewing work
-	// that must not exist wastes a reviewer and produces a diff nobody
-	// asked for (§forgejo/decisions/transition-table).
-	if d, rejected := decideRejectPR(pr, s, w); rejected {
-		return d
-	}
+	// Whether the PR's work is commissioned decides nothing here: the
+	// open row dispatches review or rebase on the PR's own state, and a
+	// forest whose gate has not opened is held off upstream, by the
+	// seeding window (§forgejo/decisions/commissioning, s-git/maitred#151).
 	if !pr.Mergeable {
 		if alreadyDispatched(w, ActionRebase, pr.HeadSHA) {
 			return holdOff(fmt.Sprintf("rebase already dispatched at revision %s", pr.HeadSHA))
@@ -660,55 +655,6 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 		return holdOff(fmt.Sprintf("review already dispatched at revision %s", pr.HeadSHA))
 	}
 	return dispatch(ActionReview, fmt.Sprintf("PR %d opened", pr.Number))
-}
-
-// decideRejectPR tests whether a PR is work started before its forest was
-// commissioned, ahead of the review, rebase, fix and merge decisions: one of
-// its connected issues — every non-PR issue the PR blocks is tested,
-// so the decision does not depend on the order the relationships are
-// returned in — blocked by an **open** issue carrying the reserved
-// ideation label (§forgejo/decisions/commissioning,
-// §forgejo/decisions/actions). It is consulted by the PR-opened,
-// PR-reviewed and reconcile paths, the paths that can dispatch review,
-// re-review, fix-feedback or merge-or-wait; the PR synced event decides
-// without it (§forgejo/decisions/transition-table). A PR whose
-// connected issues have no such blocker — or with no connected issue at
-// all, because its opening recorded no dependency — is not rejected: a
-// *closed* ideation blocker means the forest is commissioned, and an
-// unlabelled blocker is ordinary work, both decided on as review or
-// rebase. A connected issue's **own** state is not consulted: the gate
-// is the blocker's, so a PR opened against a closed connected issue
-// still blocked by an open ideation issue is rejected. When the test
-// does not apply, ok is false and the calling path decides on
-// (§forgejo/decisions/transition-table).
-func decideRejectPR(pr *PullRequest, s State, w *Watermark) (Decision, bool) {
-	if len(s.ConnectedIssues) == 0 {
-		return Decision{}, false
-	}
-	for i := range s.ConnectedIssues {
-		c := &s.ConnectedIssues[i]
-		for j := range c.Blockers {
-			b := &c.Blockers[j]
-			if b.State != "open" {
-				continue
-			}
-			labeled := false
-			for _, l := range b.Labels {
-				if l == LabelIdeation {
-					labeled = true
-					break
-				}
-			}
-			if !labeled {
-				continue
-			}
-			if alreadyDispatched(w, ActionRejectPR, pr.HeadSHA) {
-				return holdOff(fmt.Sprintf("reject-pr already dispatched at revision %s", pr.HeadSHA)), true
-			}
-			return dispatch(ActionRejectPR, fmt.Sprintf("PR %d is connected to issue %d, blocked by open ideation issue %d: work started before its forest was commissioned", pr.Number, c.Issue.Number, b.Number)), true
-		}
-	}
-	return Decision{}, false
 }
 
 // decidePRSynced handles new commits on a PR (or the reconciliation
@@ -779,10 +725,10 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 
 // decidePRReconcile handles the reconciliation sweep's synthetic
 // current-state event for a pull request: like PR synced, except that
-// the reject-pr test is applied first — the sweep's re-fetch performs
-// the same one hop, so a blocked PR is rejected rather than reviewed
-// or merge-or-waited by the sweep — and except when the last activity
-// is a review — the latest review is a changes-requested, approved, or
+// the sweep's re-fetch also reads the connected issues and their
+// blockers, so the merge gate is fed wherever the sweep may dispatch a
+// merge — and except when the last activity is a review — the latest
+// review is a changes-requested, approved, or
 // comment review submitted against the PR's current head (no commit
 // has been pushed since) — in which case the decision follows the
 // latest review: changes-requested and comment dispatch fix-feedback,
@@ -808,14 +754,6 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 // event, not the state: only the sweep is exempt.
 func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
-	if pr != nil && prOpen(pr) {
-		// The reject-pr test precedes the whole PR path, review-
-		// following and synced-like alike
-		// (§forgejo/decisions/transition-table).
-		if d, rejected := decideRejectPR(pr, s, w); rejected {
-			return d
-		}
-	}
 	if pr != nil && prOpen(pr) && pr.Mergeable {
 		if latest := latestReview(s.Reviews); latest != nil && latest.CommitID == pr.HeadSHA {
 			switch latest.Event {
@@ -915,9 +853,7 @@ func dispatchOnState(w *Watermark, exempt bool, action Action, revision, reason 
 	return dispatch(action, reason)
 }
 
-// decidePRReviewed handles a submitted review: the reject-pr test is
-// applied first, so a gate that closed after the PR opened cannot be
-// walked through by the review-following decisions; then the
+// decidePRReviewed handles a submitted review: the
 // re-fetched latest review decides — changes-requested dispatches
 // fix-feedback behind the ownership gate (a PR authored by anyone but
 // the configured implementer identity holds off: the human owns that
@@ -932,12 +868,10 @@ func decidePRReviewed(e Event, s State, w *Watermark) Decision {
 	if pr == nil || !prOpen(pr) {
 		return holdOff("PR is not open")
 	}
-	// The reject-pr test precedes the review-following decisions:
-	// merging work that must not exist is the outcome the gate exists
-	// to prevent (§forgejo/decisions/transition-table).
-	if d, rejected := decideRejectPR(pr, s, w); rejected {
-		return d
-	}
+	// A submitted review decides on the review's own content. Work whose
+	// forest has not been commissioned cannot be walked through to a
+	// merge by an approving review: the merge gate holds every such merge
+	// off by naming its open blockers (§forgejo/decisions/merge-gate).
 	latest := latestReview(s.Reviews)
 	if latest == nil {
 		return holdOff("no reviews on re-fetch")
@@ -1181,7 +1115,7 @@ func cascadeActionFitsState(action Action, issue *Issue) (Decision, bool) {
 }
 
 // issueBlockers returns the non-pull-request entries of a blocker
-// list — the issue-side blockers the cascade and the reject-pr test
+// list — the issue-side blockers the cascade tests
 // (§forgejo/decisions/unblock-cascade).
 func issueBlockers(blockers []IssueNode) []IssueNode {
 	var issues []IssueNode
@@ -1610,7 +1544,6 @@ var (
 		ActionFixFeedback: true,
 		ActionMergeOrWait: true,
 		ActionRebase:      true,
-		ActionRejectPR:    true,
 	}
 	outcomesActions = map[Action]bool{
 		ActionDecompose:      true,
