@@ -36,14 +36,6 @@ actions:
     prompt: "/issue-reassess {{.IssueURL}}"
     persona: ui-test
     timeout: 1h
-  review:
-    prompt: "/pr-reviewer {{.PRURL}}"
-    persona: ui-test
-    timeout: 1h
-  re-review:
-    prompt: '/pr-reviewer {{.PRURL}} "re-review"'
-    persona: ui-test
-    timeout: 1h
   fix-feedback:
     prompt: "/pr-feedback-fixer {{.PRURL}}"
     persona: ui-test
@@ -78,3 +70,24 @@ actions:
     prompt: "/set-lander {{.IssueURL}}"
     persona: ui-test
     timeout: 1h
+
+# The review chain, in order: the three lenses every pull request
+# passes through (§forgejo/config/review-lenses). Extending or
+# contracting the chain is an edit here, not a code change. The
+# fan-out dispatches exactly the lenses with no undismissed approval
+# at the head, so at first all three run in parallel, a push re-fires
+# the ones whose approvals went stale, and a fully rejecting round
+# sends everything back through the chain.
+reviews:
+  - identity: reviewer-minimalism
+    prompt: '/pr-minimalism-reviewer {{.PRURL}}'
+    persona: ui-test
+    timeout: 30m
+  - identity: reviewer-maintainability
+    prompt: '/pr-maintainability-reviewer {{.PRURL}}'
+    persona: ui-test
+    timeout: 30m
+  - identity: reviewer-security
+    prompt: '/pr-security-reviewer {{.PRURL}}'
+    persona: ui-test
+    timeout: 30m

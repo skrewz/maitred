@@ -17,10 +17,15 @@ type Action string
 // The actions the decision function dispatches
 // (§forgejo/decisions/actions).
 const (
-	ActionImplement   Action = "implement"
-	ActionReassess    Action = "reassess"
+	ActionImplement Action = "implement"
+	ActionReassess  Action = "reassess"
+	// ActionReview is the review fan-out's dispatch name — one
+	// dispatch per configured lens (§forgejo/decisions/review-lenses).
+	// It is no longer a configured action: the config lists lenses
+	// under `reviews:` instead of the retired `review` and `re-review`
+	// singletons (§forgejo/config/review-lenses). The role tables and
+	// the decision log still read the fan-out as `review`.
 	ActionReview      Action = "review"
-	ActionReReview    Action = "re-review"
 	ActionFixFeedback Action = "fix-feedback"
 	ActionMergeOrWait Action = "merge-or-wait"
 	ActionRebase      Action = "rebase"
@@ -54,7 +59,18 @@ const (
 	ReviewApproved         = "APPROVED"
 	ReviewChangesRequested = "REQUEST_CHANGES"
 	ReviewComment          = "COMMENT"
+	// ReviewDismissed is the state a review listing reports for a
+	// review that stands dismissed — a voided verdict, never one the
+	// lens gates count (§forgejo/decisions/review-lenses).
+	ReviewDismissed = "DISMISSED"
 )
+
+// reviewIsDismissed reports whether a listed review stands dismissed,
+// whichever way the listing says so — the boolean flag or the
+// DISMISSED state (§forgejo/client/operations, §forgejo/decisions/review-lenses).
+func reviewIsDismissed(r *Review) bool {
+	return r.Dismissed || r.Event == ReviewDismissed
+}
 
 // LabelHumanTask marks a ticket claimed by a human: an issue carrying
 // it is never an implement candidate anywhere in the engine
@@ -206,6 +222,15 @@ type State struct {
 	// (§forgejo/decisions/loop-prevention, s-git/maitred#147). When
 	// empty the guard is inert, like the ownership gate above.
 	DecomposerIdentity string
+	// ReviewLenses is the configured ordered list of review lenses
+	// (§forgejo/config/review-lenses). Like ImplementerIdentity it is
+	// a declared configuration input the engine passes verbatim from
+	// its config, not fetched state. The review fan-out dispatches
+	// exactly the lenses with no undismissed approval at the current
+	// head, and the review-following gates (fix-feedback,
+	// merge-or-wait, the sync-set member test) are decided per lens
+	// (§forgejo/decisions/review-lenses).
+	ReviewLenses []ReviewLens
 	// CascadeRoot is the closed issue the unblock cascade walks from,
 	// for close events.
 	CascadeRoot *IssueNode
@@ -314,6 +339,23 @@ type Decision struct {
 	// the log says why wrap-up did not fire
 	// (§forgejo/decisions/unblock-cascade).
 	CascadeHoldOffs []CascadeHoldOff
+	// Lenses lists the review fan-out's dispatches for the event's own
+	// object, in config order: one entry per lens whose approval is
+	// outstanding at the current head (§forgejo/decisions/review-lenses).
+	// Meaningful when Dispatched with Action == ActionReview; the
+	// cascade shape (Cascade) is the precedent for a multi-emission
+	// decision.
+	Lenses []LensDispatch
+}
+
+// LensDispatch is one emission of the review fan-out: the identity of
+// the lens to dispatch and the reason its approval is outstanding at
+// the head (§forgejo/decisions/review-lenses).
+type LensDispatch struct {
+	// Lens is the configured lens identity to dispatch.
+	Lens string
+	// Reason is a human-readable explanation for this lens's dispatch.
+	Reason string
 }
 
 // HoldOff reports whether the decision dispatches nothing for the
@@ -403,7 +445,7 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 		// human closing a member) is found here, evaluated under
 		// the set-revision guard like every other sync row
 		// (§forgejo/decisions/sync-set).
-		return considerSyncIssue(issue, s.SyncMembers, w)
+		return considerSyncIssue(issue, s.SyncMembers, s.ReviewLenses, w)
 	}
 	if hasLabel(issue, LabelIdeation) {
 		if hasLabel(issue, LabelTeardownForest) {
@@ -651,36 +693,30 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 		}
 		return dispatch(ActionRebase, fmt.Sprintf("PR %d opened with merge conflicts", pr.Number))
 	}
-	if alreadyDispatched(w, ActionReview, pr.HeadSHA) {
-		return holdOff(fmt.Sprintf("review already dispatched at revision %s", pr.HeadSHA))
-	}
-	return dispatch(ActionReview, fmt.Sprintf("PR %d opened", pr.Number))
+	return decideReviewFanOut(e, pr, s, w, false)
 }
 
 // decidePRSynced handles new commits on a PR (or the reconciliation
 // sweep's synthetic current-state event): dispatch rebase when the
-// re-fetched PR is not mergeable, re-review when it was already
-// reviewed, review otherwise. A commit pushed by the PR's reviewing
-// author does not re-review the reviewer's own push
+// re-fetched PR is not mergeable, otherwise the review fan-out — the
+// lenses with no undismissed approving review at the current head
+// (§forgejo/decisions/review-lenses). A push invalidates every
+// approval (stale-approval dismissal), so a sync re-fires the whole
+// chain; a lens's own push does not re-fire that lens, while the
+// other lenses' dispatches still go out
 // (§forgejo/decisions/loop-prevention). A PR carrying the
 // trigger-review label is the explicit request for an agentic review:
-// the review is dispatched for the current revision whatever the
-// review state would otherwise produce — the reviewing-author sender
-// guard does not suppress it, since the label is a human request, not
-// the author's own push — while the revision-keyed watermark guard
-// keeps the label merely present from re-firing
-// (§forgejo/decisions/label-triggered-review).
-// The sweep's rows for review and re-review are watermark-exempt:
-// a PR waiting to be reviewed sits at a frozen head sha, so a
-// revision-keyed watermark makes it a fixed point the sweep can never
-// fire on and a review dispatch that went nowhere never recovers. The
-// exempt states are self-limiting — no review at all, or a latest
-// review standing at an older revision, is the state that calls for
-// asking again, and a review landing at head ends the exemption —
-// and the exemption is keyed on the event, not the state: the same
-// rows reached from the PR-synced event keep the revision-keyed guard
-// (§forgejo/reconciliation/watermark-exemptions,
-// §forgejo/decisions/loop-prevention).
+// the fan-out is asked for at the current revision whatever the
+// per-lens sender guard would suppress — the label is a human
+// request, not a lens's own push — while the revision-keyed
+// per-subject watermark guard keeps the label merely present from
+// re-firing (§forgejo/decisions/label-triggered-review).
+// The sweep's fan-out row is watermark-exempt per lens: a lens that
+// has reported nothing at the current head is a lens whose dispatch
+// may have gone nowhere, and a revision-keyed watermark at a frozen
+// head sha would strand the PR (§forgejo/reconciliation/watermark-exemptions).
+// The exemption is keyed on the event, not the state: the same rows
+// reached from the PR-synced event keep the revision-keyed guard.
 func decidePRSynced(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
 	if pr == nil {
@@ -695,117 +731,356 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 		}
 		return dispatch(ActionRebase, fmt.Sprintf("PR %d synced with merge conflicts", pr.Number))
 	}
-	action := ActionReview
-	if len(s.Reviews) > 0 {
-		action = ActionReReview
-	}
-	// The exemption's state: no review has landed at all (the review
-	// the sweep would ask for has still not happened), or the latest
-	// review stands at a revision the head has moved past (the head
-	// carries work no reviewer has looked at). A review at head is
-	// self-limiting and stays under the guard — the review-following
-	// rows own the PR then, and an unknown review type at head must
-	// not read as unreviewed work (§forgejo/reconciliation/watermark-exemptions).
-	latest := latestReview(s.Reviews)
-	exempt := onSweep(e) && (latest == nil || latest.CommitID != pr.HeadSHA)
-	if carriesLabel(pr.Labels, LabelTriggerReview) {
-		if !exempt && alreadyDispatched(w, action, pr.HeadSHA) {
-			return holdOff(fmt.Sprintf("%s already dispatched at revision %s", action, pr.HeadSHA))
+	return decideReviewFanOut(e, pr, s, w, carriesLabel(pr.Labels, LabelTriggerReview))
+}
+
+// decideReviewFanOut is the review dispatch predicate
+// (§forgejo/decisions/review-lenses): the lenses to dispatch are the
+// configured lenses with no undismissed approving review at the PR's
+// current head. Each outstanding lens passes under its own guard —
+// the subject-keyed watermark slot for its identity at this revision,
+// exempt on the sweep while the lens has reported nothing at the head
+// (§forgejo/reconciliation/watermark-exemptions) — and under the
+// per-lens sender guard: a lens's own push does not re-fire that lens
+// (§forgejo/decisions/loop-prevention). A label-requested fan-out
+// overrides the sender guard alone; the revision-keyed per-subject
+// guard still holds the label's mere presence from re-firing
+// (§forgejo/decisions/label-triggered-review). When every lens is
+// satisfied the decision holds off naming that fact — the
+// review-following rows own the PR then; when the outstanding lenses
+// are all suppressed, the hold-off names them.
+func decideReviewFanOut(e Event, pr *PullRequest, s State, w *Watermark, labelRequested bool) Decision {
+	var dispatched []LensDispatch
+	var satisfied, suppressed []string
+	for _, lens := range s.ReviewLenses {
+		st := lensStandingAtHead(s.Reviews, lens, pr.HeadSHA)
+		if st.approved && !labelRequested {
+			satisfied = append(satisfied, lens.Identity)
+			continue
 		}
-		return dispatchOnState(w, exempt, action, pr.HeadSHA, fmt.Sprintf("PR %d carries the %s label: explicit request for a review at head %s", pr.Number, LabelTriggerReview, pr.HeadSHA))
+		if !labelRequested && lens.Identity == e.Sender && lensHasAnyReview(s.Reviews, lens) {
+			// The per-lens sender guard, the per-lens shape of the
+			// retired reviewing-author guard: a lens's own push does
+			// not re-fire that lens, but the other lenses' dispatches
+			// go on (§forgejo/decisions/loop-prevention). Like the
+			// retired guard it speaks only when the lens has actually
+			// reviewed — a push that no lens has looked at yet is
+			// reviewed by everyone.
+			suppressed = append(suppressed, fmt.Sprintf("%s (its own push at head %s)", lens.Identity, pr.HeadSHA))
+			continue
+		}
+		exempt := onSweep(e) && !st.reported
+		guarded := alreadyDispatchedSubject(w, lens.Identity, ActionReview, pr.HeadSHA)
+		if !exempt && guarded {
+			suppressed = append(suppressed, lens.Identity)
+			continue
+		}
+		reason := fmt.Sprintf("lens %s has no undismissed approval at head %s", lens.Identity, pr.HeadSHA)
+		if labelRequested && st.approved {
+			// The label re-asks a lens that already approved at head:
+			// an explicit human request outranks the standing approval
+			// (§forgejo/decisions/label-triggered-review).
+			reason = fmt.Sprintf("lens %s carries the %s label's explicit request over its approval at head %s", lens.Identity, LabelTriggerReview, pr.HeadSHA)
+		}
+		if exempt && guarded {
+			// The stalled shape the exemption exists to recover: the
+			// state fact carries past the recorded revision, and the
+			// log says so rather than "already dispatched".
+			reason += fmt.Sprintf("; the state calls for the lens regardless of revision %s", pr.HeadSHA)
+		}
+		dispatched = append(dispatched, LensDispatch{Lens: lens.Identity, Reason: reason})
 	}
-	if !exempt && alreadyDispatched(w, action, pr.HeadSHA) {
-		return holdOff(fmt.Sprintf("%s already dispatched at revision %s", action, pr.HeadSHA))
+	if len(dispatched) > 0 {
+		reasons := make([]string, len(dispatched))
+		for i, ld := range dispatched {
+			reasons[i] = ld.Reason
+		}
+		d := dispatch(ActionReview, fmt.Sprintf("PR %d at head %s: dispatching review lens(es) %s — %s", pr.Number, pr.HeadSHA, lensNames(dispatched), strings.Join(reasons, "; ")))
+		d.Lenses = dispatched
+		return d
 	}
-	if latest != nil && latest.Author == e.Sender {
-		return holdOff(fmt.Sprintf("PR %d commit pushed by the reviewing author %s; not re-reviewing the reviewer's own push", pr.Number, e.Sender))
+	if len(suppressed) > 0 {
+		return holdOff(fmt.Sprintf("review already dispatched at revision %s for the outstanding lens(es) of PR %d: %s", pr.HeadSHA, pr.Number, strings.Join(suppressed, ", ")))
 	}
-	return dispatchOnState(w, exempt, action, pr.HeadSHA, fmt.Sprintf("PR %d synced (head %s)", pr.Number, pr.HeadSHA))
+	return holdOff(fmt.Sprintf("PR %d: every review lens (%s) holds an undismissed approval at head %s; the review-following rows decide", pr.Number, strings.Join(lensIdentities(s.ReviewLenses), ", "), pr.HeadSHA))
+}
+
+// lensStanding is one lens's standing against a revision.
+type lensStanding struct {
+	// reported is true when the lens has an undismissed review at the
+	// revision.
+	reported bool
+	// approved is true when the lens's latest undismissed review at
+	// the revision is an approval.
+	approved bool
+}
+
+// lensStandingAtHead classifies one lens against head: its latest
+// undismissed review submitted at head decides its standing — an
+// approval the forge has dismissed does not count, and a later
+// non-approval supersedes an earlier approval by the same lens
+// (§forgejo/decisions/review-lenses).
+func lensStandingAtHead(reviews []Review, lens ReviewLens, head string) lensStanding {
+	var st lensStanding
+	var latest *Review
+	for i := range reviews {
+		r := &reviews[i]
+		if reviewIsDismissed(r) || r.Author != lens.Identity || r.CommitID != head {
+			continue
+		}
+		st.reported = true
+		if latest == nil || r.SubmittedAt.After(latest.SubmittedAt) {
+			latest = r
+		}
+	}
+	st.approved = latest != nil && latest.Event == ReviewApproved
+	return st
+}
+
+// lensHasAnyReview reports whether the lens authored any undismissed
+// review of the pull request, at any revision — the standing the
+// per-lens sender guard reads (§forgejo/decisions/loop-prevention).
+func lensHasAnyReview(reviews []Review, lens ReviewLens) bool {
+	for i := range reviews {
+		if !reviewIsDismissed(&reviews[i]) && reviews[i].Author == lens.Identity {
+			return true
+		}
+	}
+	return false
+}
+
+// allLensesApproved reports whether every configured lens holds an
+// undismissed approval at head — the review gate the fix-feedback,
+// merge-or-wait, and landing-set rows consult before dispatching past
+// the chain (§forgejo/decisions/review-lenses).
+func allLensesApproved(reviews []Review, lenses []ReviewLens, head string) bool {
+	for _, lens := range lenses {
+		if !lensStandingAtHead(reviews, lens, head).approved {
+			return false
+		}
+	}
+	return len(lenses) > 0
+}
+
+// outstandingLenses names the lenses with no undismissed approval at
+// head, for the hold-off reasons that name the outstanding lenses
+// (§forgejo/decisions/review-lenses).
+func outstandingLenses(reviews []Review, lenses []ReviewLens, head string) []string {
+	var out []string
+	for _, lens := range lenses {
+		if !lensStandingAtHead(reviews, lens, head).approved {
+			out = append(out, lens.Identity)
+		}
+	}
+	return out
+}
+
+// nonApprovalAtHead reports whether some reviewer's latest undismissed
+// review at head is not an approval, and separately whether one
+// requests changes — the "the reports are not all approvals" half of
+// the fix-feedback gate, split so the event path can act on a
+// changes-requested alone while the sweep also reads comment reports
+// (§forgejo/decisions/review-lenses, §forgejo/decisions/transition-table).
+// It reads every author, not only the lenses, so a human's
+// changes-requested at head keeps the fix loop the fix loop
+// (§forgejo/decisions/loop-prevention). A reviewer whose approval is
+// the latest of its own reviews at head clears its own earlier
+// rejection, exactly as the retired single-reviewer rule did.
+func nonApprovalAtHead(reviews []Review, head string) (nonApproval, changesRequested bool) {
+	latest := map[string]*Review{}
+	for i := range reviews {
+		r := &reviews[i]
+		if reviewIsDismissed(r) || r.CommitID != head {
+			continue
+		}
+		if cur, ok := latest[r.Author]; !ok || r.SubmittedAt.After(cur.SubmittedAt) {
+			latest[r.Author] = r
+		}
+	}
+	for _, r := range latest {
+		if r.Event != ReviewApproved {
+			nonApproval = true
+		}
+		if r.Event == ReviewChangesRequested {
+			changesRequested = true
+		}
+	}
+	return nonApproval, changesRequested
+}
+
+func lensNames(ds []LensDispatch) string {
+	names := make([]string, len(ds))
+	for i, d := range ds {
+		names[i] = d.Lens
+	}
+	return strings.Join(names, ", ")
+}
+
+func lensIdentities(lenses []ReviewLens) []string {
+	ids := make([]string, len(lenses))
+	for i, l := range lenses {
+		ids[i] = l.Identity
+	}
+	return ids
 }
 
 // decidePRReconcile handles the reconciliation sweep's synthetic
 // current-state event for a pull request: like PR synced, except that
 // the sweep's re-fetch also reads the connected issues and their
 // blockers, so the merge gate is fed wherever the sweep may dispatch a
-// merge — and except when the last activity is a review — the latest
-// review is a changes-requested, approved, or
-// comment review submitted against the PR's current head (no commit
-// has been pushed since) — in which case the decision follows the
-// latest review: changes-requested and comment dispatch fix-feedback,
-// approved dispatches merge-or-wait — held off, naming the open
-// blockers, when a connected issue has one
-// (§forgejo/decisions/merge-gate). A comment review holds off on the
-// event path, but the sweep moves the PR along by triggering the
-// implementer, not the reviewer (§forgejo/decisions/transition-table).
+// merge — and except when the chain has reported at the current head.
+// The review-reading branch is per lens
+// (§forgejo/decisions/review-lenses): when every lens holds an
+// undismissed approval at head and no reviewer's latest undismissed
+// review at head is a non-approval, the decision dispatches
+// merge-or-wait — held off, naming the open blockers, when a
+// connected issue has one (§forgejo/decisions/merge-gate); when every
+// lens has reported at head and the reports are not all approvals, it
+// dispatches fix-feedback — a comment report moves the PR along on
+// the sweep, triggering the implementer, not the reviewer
+// (§forgejo/decisions/transition-table). While any lens has not
+// reported at head, fix-feedback holds off and the synced-like
+// fan-out row dispatches the outstanding lenses instead
+// (§forgejo/decisions/review-lenses).
 // Both fix-feedback rows sit behind the ownership gate: a PR whose
 // author is not the configured implementer identity holds off
 // (§forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention,
 // s-git/maitred#143).
-// The changes-requested and comment rows are watermark-exempt on the
-// sweep, and the approved row is exempt only when the PR opts into
-// merging on its own with the agentic-auto-merge label: a PR standing
-// at a review at a frozen head sha is then re-fired whatever its
+// The fix-feedback row is watermark-exempt on the sweep, and the
+// approved row is exempt only when the PR opts into merging on its
+// own with the agentic-auto-merge label: a PR standing at a fully
+// reported chain at a frozen head sha is then re-fired whatever its
 // watermark records (§forgejo/reconciliation/watermark-exemptions).
 // A fix-feedback dispatch that died recovers on the next sweep the
 // same way an approved auto-merge PR's merge does: the state — an
-// open, mergeable PR whose latest review at head asks for changes —
-// is self-limiting, ending the moment the author pushes. Because the
+// open, mergeable PR whose chain reports feedback at head — is
+// self-limiting, ending the moment the author pushes. Because the
 // PR-commented event shares this function, the exemption tests the
 // event, not the state: only the sweep is exempt.
 func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
 	if pr != nil && prOpen(pr) && pr.Mergeable {
-		if latest := latestReview(s.Reviews); latest != nil && latest.CommitID == pr.HeadSHA {
-			switch latest.Event {
-			case ReviewChangesRequested:
-				if d, held := holdOffPRNotOwned(pr, s.ImplementerIdentity); held {
-					return d
-				}
-				if !onSweep(e) && alreadyDispatched(w, ActionFixFeedback, pr.HeadSHA) {
-					return holdOff(fmt.Sprintf("fix-feedback already dispatched at revision %s", pr.HeadSHA))
-				}
-				return dispatchOnState(w, onSweep(e), ActionFixFeedback, pr.HeadSHA, fmt.Sprintf("PR %d stands at a changes-requested review by %s", pr.Number, latest.Author))
-			case ReviewComment:
-				if d, held := holdOffPRNotOwned(pr, s.ImplementerIdentity); held {
-					return d
-				}
-				if !onSweep(e) && alreadyDispatched(w, ActionFixFeedback, pr.HeadSHA) {
-					return holdOff(fmt.Sprintf("fix-feedback already dispatched at revision %s", pr.HeadSHA))
-				}
-				return dispatchOnState(w, onSweep(e), ActionFixFeedback, pr.HeadSHA, fmt.Sprintf("PR %d stands at a comment review by %s", pr.Number, latest.Author))
-			case ReviewApproved:
-				if d, ok := syncMemberSetHoldOff(pr, s); ok {
-					return d
-				}
-				if open := mergeGateOpenBlockers(e, s); len(open) > 0 {
-					return holdOff(fmt.Sprintf("PR %d stands at an approved review, but a connected issue is blocked by %s; not merging", pr.Number, blockerNames(open)))
-				}
-				// The sweep's exempt row. An agentic-auto-merge PR sits at
-				// a frozen head sha once approved, so a revision-keyed
-				// watermark makes it a fixed point the sweep can never
-				// fire on and a labelled PR that failed to merge never
-				// recovers. The state is therefore its watermark: the row
-				// re-fires until the PR closes, and stops the moment it
-				// does, because the sweep enumerates open pull requests
-				// only. The opt-in label is the whole of it — an approved
-				// PR without it waits on a human, revision-keyed as ever
-				// — and the exemption belongs to this row alone: the same
-				// state reached from an event (the review event, a PR
-				// comment) keeps the guard below, so an approving review
-				// never re-fires on its own
-				// (§forgejo/reconciliation/watermark-exemptions,
-				// §forgejo/decisions/loop-prevention).
-				if onSweep(e) && carriesLabel(pr.Labels, LabelAgenticAutoMerge) {
-					return dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d stands at an approved review by %s and carries %s; the state calls for merge-or-wait regardless of revision %s", pr.Number, latest.Author, LabelAgenticAutoMerge, pr.HeadSHA))
-				}
-				if alreadyDispatched(w, ActionMergeOrWait, pr.HeadSHA) {
-					return holdOff(fmt.Sprintf("merge-or-wait already dispatched at revision %s", pr.HeadSHA))
-				}
-				return dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d stands at an approved review by %s", pr.Number, latest.Author))
-			}
+		if d, ok := decideChainReported(e, s, w, true); ok {
+			return d
 		}
 	}
 	return decidePRSynced(e, s, w)
+}
+
+// decideChainReported is the review-reading cluster's shared branch:
+// the gate the lens reports at head impose on fix-feedback and
+// merge-or-wait (§forgejo/decisions/review-lenses). mergeFires is
+// every lens approved at head with no reviewer's latest undismissed
+// review at head a non-approval; fixFires is every lens reported at
+// head with the reports not all approvals — on the sweep a comment
+// report counts (the sweep triggers the implementer, not the
+// reviewer), while the pure review-event path waits for a
+// changes-requested (§forgejo/decisions/transition-table). ok is
+// false when the branch does not apply — some lens has still not
+// reported at head — and the caller falls through to the fan-out
+// row, which names the outstanding lenses in its reason.
+func decideChainReported(e Event, s State, w *Watermark, sweepComments bool) (Decision, bool) {
+	pr := s.PR
+	gate := prReviewGate(s.Reviews, s.ReviewLenses, pr.HeadSHA)
+	if !gate.allReported {
+		return Decision{}, false
+	}
+	if gate.mergeFires() {
+		if d, ok := syncMemberSetHoldOff(pr, s); ok {
+			return d, true
+		}
+		if open := mergeGateOpenBlockers(e, s); len(open) > 0 {
+			return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens, but a connected issue is blocked by %s; not merging", pr.Number, blockerNames(open))), true
+		}
+		// The sweep's exempt row. An agentic-auto-merge PR sits at a
+		// frozen head sha once the chain approves, so a revision-keyed
+		// watermark makes it a fixed point the sweep can never fire on
+		// and a labelled PR that failed to merge never recovers. The
+		// state is therefore its watermark: the row re-fires until the
+		// PR closes, and stops the moment it does, because the sweep
+		// enumerates open pull requests only. The opt-in label is the
+		// whole of it — an approved PR without it waits on a human,
+		// revision-keyed as ever — and the exemption belongs to this
+		// row alone: the same state reached from an event (the review
+		// event, a PR comment) keeps the guard below, so a fully
+		// approved chain never re-fires merge on its own
+		// (§forgejo/reconciliation/watermark-exemptions,
+		// §forgejo/decisions/loop-prevention).
+		if onSweep(e) && carriesLabel(pr.Labels, LabelAgenticAutoMerge) {
+			return dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d stands at approving reviews from every lens and carries %s; the state calls for merge-or-wait regardless of revision %s", pr.Number, LabelAgenticAutoMerge, pr.HeadSHA)), true
+		}
+		if alreadyDispatched(w, ActionMergeOrWait, pr.HeadSHA) {
+			return holdOff(fmt.Sprintf("merge-or-wait already dispatched at revision %s", pr.HeadSHA)), true
+		}
+		return dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d: every lens (%s) holds an undismissed approval at head %s", pr.Number, strings.Join(lensIdentities(s.ReviewLenses), ", "), pr.HeadSHA)), true
+	}
+	if gate.fixFires(sweepComments) {
+		if d, held := holdOffPRNotOwned(pr, s.ImplementerIdentity); held {
+			return d, true
+		}
+		if !onSweep(e) && alreadyDispatched(w, ActionFixFeedback, pr.HeadSHA) {
+			return holdOff(fmt.Sprintf("fix-feedback already dispatched at revision %s", pr.HeadSHA)), true
+		}
+		return dispatchOnState(w, onSweep(e), ActionFixFeedback, pr.HeadSHA, fmt.Sprintf("PR %d stands at reviews at head %s whose reports are not all approvals (lenses without an approval: %s)", pr.Number, pr.HeadSHA, strings.Join(gate.outstanding, ", "))), true
+	}
+	return Decision{}, false
+}
+
+// reviewGate is the state the review-following rows read: how the
+// lens chain and the other reviewers stand against the PR's head
+// (§forgejo/decisions/review-lenses).
+type reviewGate struct {
+	// allReported is true when every configured lens has an
+	// undismissed review at head — the chain has had its say.
+	allReported bool
+	// allApproved is true when every lens holds an undismissed
+	// approval at head.
+	allApproved bool
+	// nonApproval is true when some reviewer's latest undismissed
+	// review at head is not an approval.
+	nonApproval bool
+	// changesRequested is true when some reviewer's latest
+	// undismissed review at head requests changes.
+	changesRequested bool
+	// outstanding names the lenses without an undismissed approval
+	// at head.
+	outstanding []string
+}
+
+func (g reviewGate) mergeFires() bool { return g.allApproved && !g.nonApproval }
+
+// fixFires reports when the reports call for a fix: every lens has
+// reported and the reports are not all approvals. sweepComments
+// widens "not all approvals" to any non-approval (a comment report
+// counts, the sweep triggering the implementer); the event path acts
+// on a changes-requested alone, so a comment-only chain holds off
+// until a verdict or the sweep (§forgejo/decisions/transition-table).
+func (g reviewGate) fixFires(sweepComments bool) bool {
+	if !g.allReported {
+		return false
+	}
+	if sweepComments {
+		return g.nonApproval
+	}
+	return g.changesRequested
+}
+
+// prReviewGate computes the gate from the PR's reviews, the
+// configured lenses, and the head (§forgejo/decisions/review-lenses).
+func prReviewGate(reviews []Review, lenses []ReviewLens, head string) reviewGate {
+	g := reviewGate{allReported: len(lenses) > 0, allApproved: len(lenses) > 0}
+	for _, lens := range lenses {
+		st := lensStandingAtHead(reviews, lens, head)
+		if !st.reported {
+			g.allReported = false
+		}
+		if !st.approved {
+			g.allApproved = false
+			g.outstanding = append(g.outstanding, lens.Identity)
+		}
+	}
+	g.nonApproval, g.changesRequested = nonApprovalAtHead(reviews, head)
+	return g
 }
 
 // onSweep reports whether the event is the reconciliation sweep's
@@ -853,52 +1128,57 @@ func dispatchOnState(w *Watermark, exempt bool, action Action, revision, reason 
 	return dispatch(action, reason)
 }
 
-// decidePRReviewed handles a submitted review: the
-// re-fetched latest review decides — changes-requested dispatches
-// fix-feedback behind the ownership gate (a PR authored by anyone but
-// the configured implementer identity holds off: the human owns that
-// PR and handles the feedback themselves —
+// decidePRReviewed handles a submitted review: the re-fetched lens
+// chain at head decides (§forgejo/decisions/review-lenses). When the
+// chain has reported — every lens holds an undismissed review at the
+// current head — a non-approval anywhere dispatches fix-feedback
+// behind the ownership gate (a PR authored by anyone but the
+// configured implementer identity holds off: the human owns that PR
+// and handles the feedback themselves —
 // §forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention,
-// s-git/maitred#143), approved dispatches merge-or-wait only when the
-// merge gate lets it through, no connected issue having an open
-// blocker (§forgejo/decisions/merge-gate), anything else holds off
-// (§forgejo/decisions/transition-table).
+// s-git/maitred#143), and approvals across the board dispatch
+// merge-or-wait only when the merge gate lets it through, no
+// connected issue having an open blocker (§forgejo/decisions/merge-gate).
+// A comment-only chain holds off here — the sweep is the row that
+// turns comment reports into fix-feedback — and while any lens has
+// not reported at head the decision falls through to the fan-out row
+// so the outstanding lenses are dispatched, the hold-off naming them
+// (§forgejo/decisions/review-lenses).
 func decidePRReviewed(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
 	if pr == nil || !prOpen(pr) {
 		return holdOff("PR is not open")
 	}
-	// A submitted review decides on the review's own content. Work whose
-	// forest has not been commissioned cannot be walked through to a
-	// merge by an approving review: the merge gate holds every such merge
-	// off by naming its open blockers (§forgejo/decisions/merge-gate).
-	latest := latestReview(s.Reviews)
-	if latest == nil {
+	// A submitted review decides on the review chain's content. Work
+	// whose forest has not been commissioned cannot be walked through
+	// to a merge by approving reviews: the merge gate holds every
+	// such merge off by naming its open blockers
+	// (§forgejo/decisions/merge-gate).
+	if len(s.Reviews) == 0 {
 		return holdOff("no reviews on re-fetch")
 	}
-	switch latest.Event {
-	case ReviewChangesRequested:
-		if d, held := holdOffPRNotOwned(pr, s.ImplementerIdentity); held {
-			return d
-		}
-		if alreadyDispatched(w, ActionFixFeedback, pr.HeadSHA) {
-			return holdOff(fmt.Sprintf("fix-feedback already dispatched at revision %s", pr.HeadSHA))
-		}
-		return dispatch(ActionFixFeedback, fmt.Sprintf("PR %d: review by %s requests changes", pr.Number, latest.Author))
-	case ReviewApproved:
-		if d, ok := syncMemberSetHoldOff(pr, s); ok {
-			return d
-		}
-		if open := mergeGateOpenBlockers(e, s); len(open) > 0 {
-			return holdOff(fmt.Sprintf("PR %d stands at an approved review, but a connected issue is blocked by %s; not merging", pr.Number, blockerNames(open)))
-		}
-		if alreadyDispatched(w, ActionMergeOrWait, pr.HeadSHA) {
-			return holdOff(fmt.Sprintf("merge-or-wait already dispatched at revision %s", pr.HeadSHA))
-		}
-		return dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d: review by %s approves", pr.Number, latest.Author))
-	default:
-		return holdOff(fmt.Sprintf("PR %d: latest review is %q; no action", pr.Number, latest.Event))
+	if d, ok := decideChainReported(e, s, w, false); ok {
+		return d
 	}
+	// A fully reported chain that dispatches no merge or fix — the
+	// comment-only report the event path deliberately leaves to the
+	// sweep — is not an unreported lens, and the fan-out row would
+	// ask it again (§forgejo/decisions/transition-table).
+	for _, lens := range s.ReviewLenses {
+		if !lensStandingAtHead(s.Reviews, lens, pr.HeadSHA).reported {
+			// The chain has not finished reporting at head: this
+			// review is one lens's verdict, and dispatching the lenses
+			// still owed is what advances the chain
+			// (§forgejo/decisions/review-lenses). The subject-keyed
+			// guards keep a lens already dispatched at this head from
+			// being duplicated, and the per-lens sender guard keeps the
+			// submitting lens — the event's sender — from being re-fired
+			// by its own verdict reaching the fan-out row
+			// (§forgejo/decisions/loop-prevention).
+			return decidePRSynced(e, s, w)
+		}
+	}
+	return holdOff(fmt.Sprintf("PR %d: every review lens has reported at head %s and the reports do not all approve; the fix waits for a changes-requested or the sweep", pr.Number, pr.HeadSHA))
 }
 
 // decidePRMerged runs the unblock cascade for the connected issue a
@@ -1277,14 +1557,16 @@ func syncMemberSetHoldOff(pr *PullRequest, s State) (Decision, bool) {
 // on re-fetch. An open issue carrying the sync label dispatches sync
 // once every blocking issue is closed — landed, or finished by a
 // human — or stands with its delivering PR approved at head and
-// mergeable while carrying agentic-sync-merge. A pull request that
-// blocks the grouping issue directly is such a blocking issue too, and
-// is held to that same test through its own state: the set does not
-// land past a delivery the graph places in front of it. The dispatch
-// is recorded against a revision derived from the whole set, so the
-// sweep does not re-fire at an unchanged set state
-// (§forgejo/decisions/sync-set).
-func considerSyncIssue(issue *Issue, members []SyncMember, w *Watermark) Decision {
+// mergeable while carrying agentic-sync-merge. "Approved at head" is
+// the lens gate: every configured lens must hold an undismissed
+// approval at the PR's head (§forgejo/decisions/review-lenses). A
+// pull request that blocks the grouping issue directly is such a
+// blocking issue too, and is held to that same test through its own
+// state: the set does not land past a delivery the graph places in
+// front of it. The dispatch is recorded against a revision derived
+// from the whole set, so the sweep does not re-fire at an unchanged
+// set state (§forgejo/decisions/sync-set).
+func considerSyncIssue(issue *Issue, members []SyncMember, lenses []ReviewLens, w *Watermark) Decision {
 	if len(members) == 0 {
 		return holdOff(fmt.Sprintf("issue %d is an open %s issue with no blocking issues; an empty set has nothing to land", issue.Number, LabelSync))
 	}
@@ -1311,7 +1593,7 @@ func considerSyncIssue(issue *Issue, members []SyncMember, w *Watermark) Decisio
 				notReady = append(notReady, fmt.Sprintf("%s has no mergeable open PR", ref))
 			}
 		default:
-			if latest := latestReview(m.Reviews); latest == nil || latest.Event != ReviewApproved || latest.CommitID != m.PR.HeadSHA {
+			if !allLensesApproved(m.Reviews, lenses, m.PR.HeadSHA) {
 				notReady = append(notReady, fmt.Sprintf("%s is not approved at head %s", ref, m.PR.HeadSHA))
 			}
 		}
@@ -1322,7 +1604,7 @@ func considerSyncIssue(issue *Issue, members []SyncMember, w *Watermark) Decisio
 		// (§forgejo/decisions/sync-set, §forgejo/observability/the-decision-log).
 		return holdOff(fmt.Sprintf("sync issue %d held off: %s", issue.Number, strings.Join(notReady, "; ")))
 	}
-	rev := syncSetRevision(issue, members)
+	rev := syncSetRevision(issue, members, lenses)
 	if alreadyDispatched(w, ActionSync, rev) {
 		return holdOff(fmt.Sprintf("sync already dispatched at set revision %s", rev))
 	}
@@ -1360,15 +1642,14 @@ func considerSyncIssue(issue *Issue, members []SyncMember, w *Watermark) Decisio
 // comment, a title fix or an unrelated label toggle: for the members the
 // same narrowing was argued as "activity is not readiness", and the
 // lever this section names is a restatement, not a touch.
-func syncSetRevision(issue *Issue, members []SyncMember) string {
+func syncSetRevision(issue *Issue, members []SyncMember, lenses []ReviewLens) string {
 	lines := make([]string, 0, len(members)+1)
 	lines = append(lines, fmt.Sprintf("set %s#%d body=%s", issue.Repository, issue.Number, bodyRevision(issue)))
 	for i := range members {
 		m := &members[i]
 		line := fmt.Sprintf("%s#%d state=%s %s=%t", m.Issue.Repository, m.Issue.Number, m.Issue.State, LabelAgenticSyncMerge, hasLabel(&m.Issue, LabelAgenticSyncMerge))
 		if m.PR != nil {
-			latest := latestReview(m.Reviews)
-			approvedAtHead := latest != nil && latest.Event == ReviewApproved && latest.CommitID == m.PR.HeadSHA
+			approvedAtHead := allLensesApproved(m.Reviews, lenses, m.PR.HeadSHA)
 			line += fmt.Sprintf(" pr=%d open=%t mergeable=%t head=%s approved-at-head=%t", m.PR.Number, prOpen(m.PR), m.PR.Mergeable, m.PR.HeadSHA, approvedAtHead)
 		}
 		lines = append(lines, line)
@@ -1453,14 +1734,25 @@ func bodyRevision(issue *Issue) string {
 // path: the same (event, state, revision) does not re-dispatch the same
 // action (§forgejo/decisions/loop-prevention). The watermark exemption
 // is not implemented here: it is scoped to the sweep, whose exempt rows
-// in decideIssueReconcile, and the sweep's PR rows — review and
-// re-review in decidePRSynced, fix-feedback and the labelled
-// merge-or-wait row in decidePRReconcile — simply never consult the
+// in decideIssueReconcile, the sweep's per-lens fan-out exemption in
+// decideReviewFanOut, and the sweep's fix-feedback and labelled
+// merge-or-wait rows in decidePRReconcile simply never consult the
 // watermark (§forgejo/reconciliation/watermark-exemptions). Keying the
 // bypass on the action instead of the path would hand every future
 // event row for those actions a suppression-free path by accident.
 func alreadyDispatched(w *Watermark, action Action, revision string) bool {
 	return w != nil && w.Action == string(action) && w.Revision == revision
+}
+
+// alreadyDispatchedSubject is the subject-keyed half of the same
+// guard: whether the watermark's slot for one fan-out subject — a
+// review lens's identity — already records action at revision, so two
+// lenses dispatched at the same revision do not hold each other off
+// and a lens mid-flight is not duplicated (§forgejo/state/watermark,
+// §forgejo/decisions/review-lenses).
+func alreadyDispatchedSubject(w *Watermark, subject string, action Action, revision string) bool {
+	s, ok := w.subjectSlot(subject)
+	return ok && s.Action == string(action) && s.Revision == revision
 }
 
 // hasLabel reports whether the issue carries the label. Label names are
@@ -1540,7 +1832,6 @@ var (
 		ActionImplement:   true,
 		ActionReassess:    true,
 		ActionReview:      true,
-		ActionReReview:    true,
 		ActionFixFeedback: true,
 		ActionMergeOrWait: true,
 		ActionRebase:      true,

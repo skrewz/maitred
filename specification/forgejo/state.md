@@ -12,6 +12,17 @@ A watermark records, for one issue or pull request:
 - the **revision/activity** it was dispatched at (e.g. the PR head sha, or
   the issue's `updated_at`).
 
+Fan-out dispatches — the review lenses (§forgejo/decisions/review-lenses) —
+give the record a **per-subject dimension**: alongside that main
+`(action, revision)` slot sits one `(action, revision)` **slot per
+subject**, keyed by the subject's identity (the lens's configured
+login). The idempotency guard for a fan-out dispatch reads its own
+subject's slot, so two lenses dispatched at the same revision do not
+hold each other off, and a singleton dispatch's write keeps the
+subject slots a previous fan-out left behind (§forgejo/state/storage).
+Storage stays **one file per object**: the slots live in the same
+record, and the per-key lock stays on the object.
+
 ## Storage
 
 The watermark is stored as local JSON under the data directory (e.g.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"sync"
 	"testing"
@@ -59,6 +60,13 @@ func TestStore_NewStore_DirectoryError(t *testing.T) {
 	}
 }
 
+// watermarksEqual compares two watermarks; the record gained a map
+// (the per-subject slots) and lost struct comparability, so the tests
+// compare through DeepEqual (§forgejo/state/watermark).
+func watermarksEqual(a, b Watermark) bool {
+	return reflect.DeepEqual(a, b) || (a.Action == b.Action && a.Revision == b.Revision && len(a.Subjects) == 0 && len(b.Subjects) == 0)
+}
+
 func TestStore_SaveLoad_RoundTrip(t *testing.T) {
 	s, err := NewStore(t.TempDir())
 	if err != nil {
@@ -74,7 +82,7 @@ func TestStore_SaveLoad_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(issue): %v", err)
 	}
-	if *got != issueWM {
+	if !watermarksEqual(*got, issueWM) {
 		t.Errorf("issue watermark = %+v, want %+v", *got, issueWM)
 	}
 
@@ -87,7 +95,7 @@ func TestStore_SaveLoad_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(pr): %v", err)
 	}
-	if *got != prWM {
+	if !watermarksEqual(*got, prWM) {
 		t.Errorf("pr watermark = %+v, want %+v", *got, prWM)
 	}
 }
@@ -113,7 +121,7 @@ func TestStore_Save_Overwrites(t *testing.T) {
 	}
 	k := Key{Repo: "acme/maitred", Kind: KindPR, Number: 7}
 	first := Watermark{Action: "review", Revision: "aaa"}
-	second := Watermark{Action: "re-review", Revision: "bbb"}
+	second := Watermark{Action: "review", Revision: "bbb"}
 	if err := s.Save(k, first); err != nil {
 		t.Fatalf("Save(first): %v", err)
 	}
@@ -124,7 +132,7 @@ func TestStore_Save_Overwrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if *got != second {
+	if !watermarksEqual(*got, second) {
 		t.Errorf("Load = %+v, want %+v", *got, second)
 	}
 }
@@ -158,7 +166,7 @@ func TestStore_RestartSurvival(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Load(%v): %v", k, err)
 		}
-		if *got != w {
+		if !watermarksEqual(*got, w) {
 			t.Errorf("Load(%v) = %+v, want %+v", k, *got, w)
 		}
 	}
@@ -448,5 +456,63 @@ func TestStore_WithKeyLock_ParallelDifferentKeys(t *testing.T) {
 	wg.Wait()
 	if maxConc != 2 {
 		t.Errorf("max concurrency = %d, want 2 (different keys in parallel)", maxConc)
+	}
+}
+
+// TestWatermark_SubjectSlots: the per-subject slots round-trip through
+// storage — one file per object still, the lens slots surviving a
+// restart — and a watermark written before the lens list loads with
+// empty slots (§forgejo/state/watermark, §forgejo/state/persistence).
+func TestWatermark_SubjectSlots(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	k := Key{Repo: "acme/widgets", Kind: KindPR, Number: 3}
+	w := Watermark{
+		Action:   "fix-feedback",
+		Revision: "sha-9",
+		Subjects: map[string]Slot{
+			"lens-a": {Action: "review", Revision: "sha-9"},
+			"lens-b": {Action: "review", Revision: "sha-9"},
+		},
+	}
+	if err := s.Save(k, w); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("store holds %d files for one object, want 1", len(entries))
+	}
+	s2, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore(2): %v", err)
+	}
+	got, err := s2.Load(k)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !watermarksEqual(*got, w) {
+		t.Errorf("round trip = %+v, want %+v", *got, w)
+	}
+
+	// A pre-lens watermark file — main slot only — loads with no
+	// subjects; the fan-out guard reads it as "never dispatched"
+	// (§forgejo/state/lossiness).
+	legacy := Key{Repo: "acme/widgets", Kind: KindPR, Number: 4}
+	if err := os.WriteFile(filepath.Join(dir, legacy.fileName()),
+		[]byte(`{"action":"review","revision":"sha-1"}`), 0o644); err != nil {
+		t.Fatalf("write legacy: %v", err)
+	}
+	got, err = s2.Load(legacy)
+	if err != nil {
+		t.Fatalf("Load(legacy): %v", err)
+	}
+	if got.Action != "review" || got.Revision != "sha-1" || len(got.Subjects) != 0 {
+		t.Errorf("legacy watermark = %+v, want the main slot only", *got)
 	}
 }

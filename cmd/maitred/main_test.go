@@ -141,6 +141,9 @@ func writeForgejoConfig(t *testing.T, dir string) {
 	for _, a := range forgejo.AllActions {
 		fmt.Fprintf(&b, "  %s:\n    prompt: \"do {{.IssueURL}}\"\n    persona: persona\n    timeout: 1h\n", a)
 	}
+	// The lens list joins the action map as the other half of what
+	// the binary needs to start (§forgejo/config/review-lenses).
+	b.WriteString("reviews:\n  - identity: lens\n    prompt: \"do {{.PRURL}}\"\n    persona: persona\n    timeout: 1h\n")
 	if err := os.WriteFile(filepath.Join(dir, "forgejoeng.yaml"), []byte(b.String()), 0o644); err != nil {
 		t.Fatalf("write engine config: %v", err)
 	}
@@ -284,6 +287,7 @@ func writeForgejoConfigVariant(t *testing.T, dir, omit, extra string) {
 		fmt.Fprintf(&b, "  %s:\n    prompt: \"do {{.IssueURL}}\"\n    persona: persona\n    timeout: 1h\n", a)
 	}
 	b.WriteString(extra)
+	b.WriteString("reviews:\n  - identity: lens\n    prompt: \"do {{.PRURL}}\"\n    persona: persona\n    timeout: 1h\n")
 	if err := os.WriteFile(filepath.Join(dir, "forgejoeng.yaml"), []byte(b.String()), 0o644); err != nil {
 		t.Fatalf("write engine config: %v", err)
 	}

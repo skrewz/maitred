@@ -92,7 +92,7 @@ func TestReconcile_FreshWatermarkNoRedispatch(t *testing.T) {
 }
 
 // TestReconcile_PullRequests reconciles open pull requests through the
-// same decision function: review, re-review, or rebase
+// same decision function: the review fan-out, its review-following rows, or rebase
 // (§forgejo/reconciliation/the-sweep).
 func TestReconcile_PullRequests(t *testing.T) {
 	cases := []struct {
@@ -111,7 +111,7 @@ func TestReconcile_PullRequests(t *testing.T) {
 			name:    "mergeable, has a review",
 			pr:      PullRequest{Number: 2, State: "open", Mergeable: true, HeadSHA: "sha-2"},
 			reviews: []Review{{Event: ReviewApproved, Author: "bob", SubmittedAt: testUpdatedAt}},
-			want:    "action=re-review",
+			want:    "action=review",
 		},
 		{
 			name: "not mergeable",
@@ -667,7 +667,7 @@ func TestReconcile_OtherAuthorIssueDispatches(t *testing.T) {
 }
 
 // TestReconcile_ReviewRowsRefireAtUnchangedRevision: the sweep's rows
-// for review, re-review and fix-feedback are watermark-exempt — the
+// for the lens fan-out and fix-feedback are watermark-exempt — the
 // state is the watermark, so a dispatch the queue lost, a task that
 // died, or a reviewer that finished without posting recovers on the
 // next sweep while the head stands frozen at the recorded revision
@@ -681,14 +681,14 @@ func TestReconcile_ReviewRowsRefireAtUnchangedRevision(t *testing.T) {
 	}{
 		{
 			name:      "no reviews at all re-fires review",
-			watermark: Watermark{Action: string(ActionReview), Revision: "sha-1"},
+			watermark: Watermark{Subjects: map[string]Slot{"lens": {Action: string(ActionReview), Revision: "sha-1"}}},
 			want:      "action=review",
 		},
 		{
-			name:      "latest review at an older revision re-fires re-review",
+			name:      "latest review at an older revision re-fires the lens review",
 			reviews:   []Review{{Event: ReviewApproved, Author: "bob", CommitID: "sha-0", SubmittedAt: testUpdatedAt}},
-			watermark: Watermark{Action: string(ActionReReview), Revision: "sha-1"},
-			want:      "action=re-review",
+			watermark: Watermark{Subjects: map[string]Slot{"lens": {Action: string(ActionReview), Revision: "sha-1"}}},
+			want:      "action=review",
 		},
 		{
 			name:      "changes-requested at head re-fires fix-feedback",

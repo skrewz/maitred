@@ -31,14 +31,6 @@ actions:
     prompt: "/issue-reassess {{.IssueURL}}"
     persona: s-autonomics-implementer
     timeout: 1h
-  review:
-    prompt: "/pr-reviewer {{.PRURL}}"
-    persona: s-autonomics-reviewer
-    timeout: 1h
-  re-review:
-    prompt: "/pr-reviewer {{.PRURL}} (re-review)"
-    persona: s-autonomics-reviewer
-    timeout: 1h
   fix-feedback:
     prompt: "/pr-feedback-fixer {{.PRURL}}"
     persona: s-autonomics-implementer
@@ -67,6 +59,19 @@ actions:
     prompt: "/set-lander {{.IssueURL}}"
     persona: s-autonomics-implementer
     timeout: 1h
+reviews:
+  - identity: reviewer-minimalism
+    prompt: "/pr-minimalism-reviewer {{.PRURL}}"
+    persona: s-autonomics-reviewer
+    timeout: 30m
+  - identity: reviewer-maintainability
+    prompt: "/pr-maintainability-reviewer {{.PRURL}}"
+    persona: s-autonomics-reviewer
+    timeout: 30m
+  - identity: reviewer-security
+    prompt: "/pr-security-reviewer {{.PRURL}}"
+    persona: s-autonomics-reviewer
+    timeout: 30m
 `
 
 // writeConfig writes content to a file named name in dir and returns the
@@ -272,8 +277,10 @@ func TestLoadConfigValidation(t *testing.T) {
 			wantSub: "template",
 		},
 		{
-			name:    "unknown action",
-			mutate:  func(y string) string { return y + "  bogus:\n    prompt: x\n    persona: p\n    timeout: 1h\n" },
+			name: "unknown action",
+			mutate: func(y string) string {
+				return strings.Replace(y, "actions:", "actions:\n  bogus:\n    prompt: x\n    persona: p\n    timeout: 1h", 1)
+			},
 			wantSub: "bogus",
 		},
 		{
@@ -413,7 +420,7 @@ func TestLoadConfigSentinels(t *testing.T) {
 	})
 
 	t.Run("action the binary does not know has an entry", func(t *testing.T) {
-		_, err := LoadConfig(validateFixturePath(t, validConfigYAML+"  bogus:\n    prompt: x\n    persona: p\n    timeout: 1h\n"))
+		_, err := LoadConfig(validateFixturePath(t, strings.Replace(validConfigYAML, "actions:", "actions:\n  bogus:\n    prompt: x\n    persona: p\n    timeout: 1h", 1)))
 		if !errors.Is(err, ErrActionSetMismatch) {
 			t.Fatalf("err = %v, want one wrapping ErrActionSetMismatch", err)
 		}
@@ -443,15 +450,20 @@ func validateFixturePath(t *testing.T, content string) string {
 }
 
 // TestPromptFor looks up a prompt by action
-// (§forgejo/config/canned-prompts).
+// (§forgejo/config/canned-prompts), and pins that the retired review
+// singletons are no longer configured actions — the lens list
+// replaces them (§forgejo/config/review-lenses).
 func TestPromptFor(t *testing.T) {
 	cfg := loadValid(t)
-	pc, err := cfg.PromptFor(ActionReview)
+	pc, err := cfg.PromptFor(ActionMergeOrWait)
 	if err != nil {
-		t.Fatalf("PromptFor(review): %v", err)
+		t.Fatalf("PromptFor(merge-or-wait): %v", err)
 	}
 	if pc.Persona != "s-autonomics-reviewer" {
 		t.Errorf("persona = %q", pc.Persona)
+	}
+	if _, err := cfg.PromptFor(ActionReview); err == nil {
+		t.Error("PromptFor(review): expected error — review is configured through the lens list, not an action entry")
 	}
 	if _, err := cfg.PromptFor(Action("nope")); err == nil {
 		t.Error("PromptFor(unknown): expected error, got nil")
@@ -510,7 +522,7 @@ func TestRenderPlaceholders(t *testing.T) {
 // §forgejo/decisions/actions).
 func TestAllActions(t *testing.T) {
 	want := []Action{
-		ActionImplement, ActionReassess, ActionReview, ActionReReview,
+		ActionImplement, ActionReassess,
 		ActionFixFeedback, ActionMergeOrWait, ActionRebase,
 		ActionDecompose, ActionWrapUp, ActionTeardownForest, ActionSync,
 	}
@@ -541,6 +553,12 @@ func TestShippedSampleConfigIsValid(t *testing.T) {
 		if _, ok := cfg.Actions[string(a)]; !ok {
 			t.Errorf("sample config has no %q block", a)
 		}
+	}
+	// The lens list is the other half of the contract the binary
+	// needs: a config without lenses loads no engine
+	// (§forgejo/config/review-lenses).
+	if len(cfg.Reviews) == 0 {
+		t.Error("sample config carries no review lenses")
 	}
 }
 
@@ -598,8 +616,6 @@ func TestShippedSampleConfigPromptsInvokeCannedPrompts(t *testing.T) {
 	command := map[Action]string{
 		ActionImplement:      "issue-implementer",
 		ActionReassess:       "issue-reassess",
-		ActionReview:         "pr-reviewer",
-		ActionReReview:       "pr-reviewer",
 		ActionFixFeedback:    "pr-feedback-fixer",
 		ActionMergeOrWait:    "pr-merger",
 		ActionRebase:         "pr-rebase",
@@ -637,12 +653,34 @@ func TestShippedSampleConfigPromptsInvokeCannedPrompts(t *testing.T) {
 		}
 	}
 
-	// A re-review has to say so in text the template can render: an
-	// unquoted marker splits into two positionals a template reading only
-	// $1 drops, leaving a re-review indistinguishable from a first review.
-	reReview := cfg.Actions[string(ActionReReview)].Prompt
-	if !strings.Contains(reReview, `"re-review"`) {
-		t.Errorf("re-review prompt %q does not pass the marker as one quoted argument", reReview)
+	// The lens prompts are held to the same invocation shape, and
+	// the three template names are the ones §forgejo/config/canned-prompts
+	// pins now that /pr-reviewer is retired (§forgejo/config/review-lenses).
+	lensCommands := map[string]string{
+		"reviewer-minimalism":      "pr-minimalism-reviewer",
+		"reviewer-maintainability": "pr-maintainability-reviewer",
+		"reviewer-security":        "pr-security-reviewer",
+	}
+	if len(cfg.Reviews) != len(lensCommands) {
+		t.Errorf("sample config carries %d lenses, the spec pins %d", len(cfg.Reviews), len(lensCommands))
+	}
+	for _, lens := range cfg.Reviews {
+		want, ok := lensCommands[lens.Identity]
+		if !ok {
+			t.Errorf("lens %q: identity not pinned by the spec", lens.Identity)
+			continue
+		}
+		rest := cannedPromptInvocation.FindStringSubmatch(lens.Prompt)
+		if rest == nil {
+			t.Errorf("lens %q: prompt %q is not a slash invocation with a URL placeholder as its argument", lens.Identity, lens.Prompt)
+			continue
+		}
+		if !strings.Contains(lens.Prompt, "{{.PRURL}}") {
+			t.Errorf("lens %q: prompt %q carries no {{.PRURL}} — the dispatch would name no object", lens.Identity, lens.Prompt)
+		}
+		if head := "/" + want + " "; !strings.HasPrefix(lens.Prompt, head) {
+			t.Errorf("lens %q: prompt %q does not invoke %s — the spec pins that name", lens.Identity, lens.Prompt, head)
+		}
 	}
 
 	// The decompose template is held to naming the fan-out cap
@@ -662,4 +700,150 @@ func TestShippedSampleConfigPromptsInvokeCannedPrompts(t *testing.T) {
 	if !quoted {
 		t.Errorf("decompose prompt %q states the fan-out cap outside quotes, where Pi's argument splitting can drop it", decompose)
 	}
+}
+
+// TestReviewLensesValid pins the accepted shape of the lens list:
+// identity, prompt, persona, and positive timeout per lens, order
+// preserved (§forgejo/config/review-lenses, §forgejo/config/validation).
+func TestReviewLensesValid(t *testing.T) {
+	cfg := loadValid(t)
+	if len(cfg.Reviews) != 3 {
+		t.Fatalf("loaded %d lenses, want 3", len(cfg.Reviews))
+	}
+	if cfg.Reviews[0].Identity != "reviewer-minimalism" {
+		t.Errorf("first lens = %q, want reviewer-minimalism — the list is ordered", cfg.Reviews[0].Identity)
+	}
+	if cfg.Reviews[0].Timeout != 30*time.Minute {
+		t.Errorf("lens timeout = %s, want 30m", cfg.Reviews[0].Timeout)
+	}
+}
+
+// TestReviewLensesRejected pins the load-time refusals: an empty list,
+// a lens missing a field, a duplicate identity, an unparseable
+// template or an unknown placeholder (§forgejo/config/validation).
+func TestReviewLensesRejected(t *testing.T) {
+	cases := []struct {
+		name    string
+		reviews string
+		want    string
+	}{
+		{"empty", "reviews: []\n", "at least one"},
+		{"missing identity", "reviews:\n  - prompt: \"/pr-review {{.PRURL}}\"\n    persona: p\n    timeout: 30m\n", "identity is required"},
+		{"duplicate identity", "reviews:\n  - identity: r\n    prompt: \"/a {{.PRURL}}\"\n    persona: p\n    timeout: 30m\n  - identity: r\n    prompt: \"/b {{.PRURL}}\"\n    persona: p\n    timeout: 30m\n", "duplicate lens identity"},
+		{"missing prompt", "reviews:\n  - identity: r\n    persona: p\n    timeout: 30m\n", "prompt is required"},
+		{"missing persona", "reviews:\n  - identity: r\n    prompt: \"/a {{.PRURL}}\"\n    timeout: 30m\n", "persona is required"},
+		{"zero timeout", "reviews:\n  - identity: r\n    prompt: \"/a {{.PRURL}}\"\n    persona: p\n    timeout: 0s\n", "timeout must be positive"},
+		{"bad template", "reviews:\n  - identity: r\n    prompt: \"/a {{.Nope}}\"\n    persona: p\n    timeout: 30m\n", "reviews"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := validConfigYAML
+			// Drop the fixture's own reviews block, append the case's.
+			if i := strings.Index(body, "reviews:"); i >= 0 {
+				body = body[:i]
+			}
+			path := validateFixturePath(t, body+tc.reviews)
+			_, err := LoadConfig(path)
+			if err == nil {
+				t.Fatalf("LoadConfig: expected error %q, got nil", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestRetiredReviewSingletonsRejected pins the config-or-binary
+// mismatch when a deployment still names the retired singletons: the
+// binary no longer dispatches them, so the config must stop naming
+// them first (§forgejo/config/validation, §forgejo/config/review-lenses).
+func TestRetiredReviewSingletonsRejected(t *testing.T) {
+	for _, retired := range []string{"review", "re-review"} {
+		t.Run(retired, func(t *testing.T) {
+			body := strings.Replace(validConfigYAML,
+				"  fix-feedback:",
+				"  "+retired+":\n    prompt: \"/pr-reviewer {{.PRURL}}\"\n    persona: s-autonomics-reviewer\n    timeout: 1h\n  fix-feedback:", 1)
+			path := validateFixturePath(t, body)
+			_, err := LoadConfig(path)
+			if err == nil {
+				t.Fatalf("LoadConfig with retired %q action: expected error, got nil", retired)
+			}
+			if !errors.Is(err, ErrActionSetMismatch) {
+				t.Errorf("error = %v, want ErrActionSetMismatch", err)
+			}
+		})
+	}
+}
+
+// TestMissingReviewLensesIsMismatch pins the other direction: a binary
+// that reviews through lenses refuses to start over a config that has
+// not gained the list yet — the loud config-before-binary failure
+// (§forgejo/config/validation).
+func TestMissingReviewLensesIsMismatch(t *testing.T) {
+	body := validConfigYAML
+	if i := strings.Index(body, "reviews:"); i >= 0 {
+		body = body[:i]
+	}
+	path := validateFixturePath(t, body)
+	_, err := LoadConfig(path)
+	if !errors.Is(err, ErrActionSetMismatch) {
+		t.Errorf("error = %v, want ErrActionSetMismatch", err)
+	}
+}
+
+// TestReviewLensesDirectoryMerge concatenates lenses across files in
+// sorted order and refuses a lens identity defined twice
+// (§forgejo/config/review-lenses, §forgejo/config/loading).
+func TestReviewLensesDirectoryMerge(t *testing.T) {
+	rest := validConfigYAML
+	if j := strings.Index(rest, "reviews:"); j >= 0 {
+		rest = rest[:j]
+	}
+	t.Run("concatenates in sorted order", func(t *testing.T) {
+		dir := t.TempDir()
+		writeConfig(t, dir, "02-actions.yaml", rest)
+		writeConfig(t, dir, "03-lenses-a.yaml", `
+reviews:
+  - identity: lens-one
+    prompt: "/pr-review-one {{.PRURL}}"
+    persona: p
+    timeout: 30m
+`)
+		writeConfig(t, dir, "04-lenses-b.yaml", `
+reviews:
+  - identity: lens-two
+    prompt: "/pr-review-two {{.PRURL}}"
+    persona: p
+    timeout: 30m
+`)
+		cfg, err := LoadConfig(dir)
+		if err != nil {
+			t.Fatalf("LoadConfig(dir): %v", err)
+		}
+		if len(cfg.Reviews) != 2 || cfg.Reviews[0].Identity != "lens-one" || cfg.Reviews[1].Identity != "lens-two" {
+			t.Errorf("lenses = %+v, want lens-one then lens-two in file order", cfg.Reviews)
+		}
+	})
+	t.Run("duplicate identity across files", func(t *testing.T) {
+		dir := t.TempDir()
+		writeConfig(t, dir, "02-actions.yaml", rest)
+		writeConfig(t, dir, "03-lenses-a.yaml", `
+reviews:
+  - identity: lens-one
+    prompt: "/pr-review-one {{.PRURL}}"
+    persona: p
+    timeout: 30m
+`)
+		writeConfig(t, dir, "04-lenses-b.yaml", `
+reviews:
+  - identity: lens-one
+    prompt: "/pr-review-two {{.PRURL}}"
+    persona: p
+    timeout: 30m
+`)
+		if _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), "already defined") {
+			t.Fatalf("LoadConfig(dir): error = %v, want duplicate identity conflict", err)
+		}
+	})
 }
