@@ -228,8 +228,11 @@ func main() {
 		engine.Start()
 	}
 
-	// Start the web dashboard
-	webSrv := web.New(port, eng, Version, fjEngine, webhookProviders)
+	// Start the web dashboard. The dashboard receives the engine's
+	// state as the sentinel classification produced it at startup, so
+	// its Forgejo view never has to guess from a nil
+	// (§forgejo/observability/the-dashboard-view).
+	webSrv := web.New(port, eng, Version, fjEngine, forgejo.EngineStateWord(fjEngine != nil, forgejoDisabledCause), webhookProviders)
 	if err := webSrv.Start(); err != nil {
 		log.Printf("web server error: %v (continuing without dashboard)", err)
 	}

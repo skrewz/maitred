@@ -2,10 +2,12 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,7 +92,7 @@ func testForgejoEngine(t *testing.T) *forgejo.Engine {
 	return eng
 }
 
-// trackedJSON mirrors the /api/forgejo response shape
+// trackedJSON mirrors one tracked entry of the /api/forgejo response
 // (§forgejo/observability/the-dashboard-view).
 type trackedJSON struct {
 	Repo      string `json:"repo"`
@@ -109,6 +111,14 @@ type trackedJSON struct {
 	} `json:"decision"`
 }
 
+// forgejoViewJSON mirrors the /api/forgejo response shape: the tracked
+// list alongside the one engine-status field
+// (§forgejo/observability/the-dashboard-view).
+type forgejoViewJSON struct {
+	EngineStatus string        `json:"engine_status"`
+	Items        []trackedJSON `json:"items"`
+}
+
 func getForgejo(t *testing.T, srv *Server) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/api/forgejo", nil)
@@ -121,16 +131,20 @@ func getForgejo(t *testing.T, srv *Server) *httptest.ResponseRecorder {
 // their state, watermark, and last decision
 // (§forgejo/observability/the-dashboard-view).
 func TestForgejoEndpoint(t *testing.T) {
-	srv := New(0, nil, "test", testForgejoEngine(t))
+	srv := New(0, nil, "test", testForgejoEngine(t), forgejo.EngineStateWord(true, nil))
 	rec := getForgejo(t, srv)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	var tracked []trackedJSON
-	if err := json.Unmarshal(rec.Body.Bytes(), &tracked); err != nil {
+	var view forgejoViewJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	if view.EngineStatus != forgejo.EngineUpWord {
+		t.Errorf("engine_status = %q, want %q", view.EngineStatus, forgejo.EngineUpWord)
+	}
+	tracked := view.Items
 	if len(tracked) != 1 {
 		t.Fatalf("tracked has %d entries, want 1", len(tracked))
 	}
@@ -155,27 +169,93 @@ func TestForgejoEndpoint(t *testing.T) {
 	}
 }
 
-// TestForgejoEndpoint_Disabled: without the engine the endpoint serves an
-// empty view (§forgejo/observability/the-dashboard-view).
+// TestForgejoEndpoint_Disabled: with no engine and no cause in hand,
+// the endpoint serves an empty view naming the not-configured state
+// (§forgejo/observability/the-dashboard-view).
 func TestForgejoEndpoint_Disabled(t *testing.T) {
-	srv := New(0, nil, "test", nil)
+	srv := New(0, nil, "test", nil, forgejo.EngineStateWord(false, nil))
 	rec := getForgejo(t, srv)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	var tracked []trackedJSON
-	if err := json.Unmarshal(rec.Body.Bytes(), &tracked); err != nil {
+	var view forgejoViewJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(tracked) != 0 {
-		t.Errorf("tracked has %d entries, want 0", len(tracked))
+	if view.EngineStatus != forgejo.CategoryNotConfigured.String() {
+		t.Errorf("engine_status = %q, want %q", view.EngineStatus, forgejo.CategoryNotConfigured.String())
+	}
+	if len(view.Items) != 0 {
+		t.Errorf("tracked has %d entries, want 0", len(view.Items))
+	}
+}
+
+// TestForgejoEndpoint_EngineStates: the one engine-status field renders
+// the engine's state in the category's words, keeps the two nil-engine
+// states distinguishable, and never leaks the raw error text
+// (§forgejo/observability/the-dashboard-view,
+// §forgejo/observability/why-the-engine-is-off).
+func TestForgejoEndpoint_EngineStates(t *testing.T) {
+	constructionFailure := fmt.Errorf("new forgejo engine: %w", forgejo.ErrEnvironmentIncomplete)
+	cases := []struct {
+		name    string
+		fjEng   *forgejo.Engine
+		state   string
+		want    string
+		mustNot []string
+	}{
+		{
+			name:  "engine healthy",
+			fjEng: nil,
+			state: forgejo.EngineStateWord(true, nil),
+			want:  forgejo.EngineUpWord,
+		},
+		{
+			name:  "nil because nothing is configured",
+			fjEng: nil,
+			state: forgejo.EngineStateWord(false, nil),
+			want:  forgejo.CategoryNotConfigured.String(),
+		},
+		{
+			name:    "nil because construction failed",
+			fjEng:   nil,
+			state:   forgejo.EngineStateWord(false, constructionFailure),
+			want:    forgejo.CategoryCredentialsMissing.String(),
+			mustNot: []string{forgejo.ErrEnvironmentIncomplete.Error(), constructionFailure.Error(), forgejo.URLEnvVar},
+		},
+	}
+	statuses := map[string]string{}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := New(0, nil, "test", tc.fjEng, tc.state)
+			rec := getForgejo(t, srv)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			var view forgejoViewJSON
+			if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if view.EngineStatus != tc.want {
+				t.Errorf("engine_status = %q, want %q", view.EngineStatus, tc.want)
+			}
+			for _, leak := range tc.mustNot {
+				if strings.Contains(rec.Body.String(), leak) {
+					t.Errorf("payload leaks raw error text %q: %s", leak, rec.Body.String())
+				}
+			}
+			statuses[tc.name] = view.EngineStatus
+		})
+	}
+	if statuses["nil because nothing is configured"] == statuses["nil because construction failed"] {
+		t.Error("a configured-but-broken engine must not read as a healthy one with nothing tracked")
 	}
 }
 
 // TestForgejoEndpoint_Method: only GET is allowed.
 func TestForgejoEndpoint_Method(t *testing.T) {
-	srv := New(0, nil, "test", nil)
+	srv := New(0, nil, "test", nil, forgejo.EngineStateWord(false, nil))
 	req := httptest.NewRequest(http.MethodPost, "/api/forgejo", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)

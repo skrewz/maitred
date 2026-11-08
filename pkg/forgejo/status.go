@@ -60,6 +60,26 @@ func (c Category) String() string {
 // (§forgejo/observability/why-the-engine-is-off).
 func (c Category) IsFault() bool { return c != CategoryNotConfigured }
 
+// EngineUpWord is what a surface says about an engine that is running.
+// No category names that state — a category is only ever printed
+// alongside the cause it came from — so the surface speaks in its own
+// words (§forgejo/observability/why-the-engine-is-off).
+const EngineUpWord = "enabled"
+
+// EngineStateWord renders the engine's state as the one word the
+// dashboard's Forgejo view carries
+// (§forgejo/observability/the-dashboard-view): the up word while the
+// engine runs, naming no category, and the category of the startup
+// cause when it does not, so a configured-but-broken engine cannot
+// read as a healthy one with nothing tracked. The raw error text stays
+// in the log (§forgejo/observability/why-the-engine-is-off).
+func EngineStateWord(up bool, cause error) string {
+	if up {
+		return EngineUpWord
+	}
+	return CategoryOf(cause).String()
+}
+
 // The environment variables that enable the engine
 // (§forgejo/webhook/configuration). They are named here so the startup
 // path and the classifier read the same set.

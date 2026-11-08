@@ -442,3 +442,75 @@ func TestCheckEnvironment(t *testing.T) {
 		})
 	}
 }
+
+// TestEngineStateWord pins the one-word engine state a surface that
+// carries no cause text renders
+// (§forgejo/observability/the-dashboard-view,
+// §forgejo/observability/why-the-engine-is-off): an engine that
+// is up is named with the up word and no category, an engine that is
+// off with a cause is named by its category alone, and the nil-engine
+// states — never configured versus a failed construction — stay
+// distinguishable.
+func TestEngineStateWord(t *testing.T) {
+	cases := []struct {
+		name  string
+		up    bool
+		cause error
+		want  string
+	}{
+		{"up", true, nil, EngineUpWord},
+		{"off, nothing configured", false, fmt.Errorf("stat config %q: %w", "/x", ErrConfigNotFound), CategoryNotConfigured.String()},
+		{"off, no cause in hand", false, nil, CategoryNotConfigured.String()},
+		{"off, unreadable config", false, fmt.Errorf("read config: %w", ErrConfigUnreadable), CategoryConfigUnreadable.String()},
+		{"off, half a landing set", false, fmt.Errorf("validate config: %w", ErrActionSetMismatch), CategoryConfigBinaryMismatch.String()},
+		{"off, credentials missing", false, fmt.Errorf("new engine: %w", ErrEnvironmentIncomplete), CategoryCredentialsMissing.String()},
+		{"off, unnamed fault", false, errors.New("mkdir /nonexistent: boom"), CategoryOther.String()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := EngineStateWord(tc.up, tc.cause)
+			if got != tc.want {
+				t.Errorf("EngineStateWord(%t, %v) = %q, want %q", tc.up, tc.cause, got, tc.want)
+			}
+			if tc.up && got == CategoryNotConfigured.String() {
+				t.Errorf("a running engine must not be named by the zero-value category: %q", got)
+			}
+		})
+	}
+}
+
+// TestNonFaultWords pins the words a surface must not read as a fault:
+// the up word and the not-configured word, exactly
+// (§forgejo/observability/why-the-engine-is-off). The dashboard's
+// Forgejo view compares the state it is served against those two words
+// in JavaScript, in a file no Go test executes, so the words can only
+// move together with this test. A reworded category, or a new state
+// that is not a fault, has to fail here before it can quietly make the
+// dashboard call a healthy engine a fault — or hide a real one.
+func TestNonFaultWords(t *testing.T) {
+	want := map[string]bool{EngineUpWord: true, CategoryNotConfigured.String(): true}
+	if EngineUpWord == CategoryNotConfigured.String() {
+		t.Fatalf("the up word and the not-configured word are both %q; a surface cannot tell them apart", EngineUpWord)
+	}
+
+	got := map[string]bool{EngineUpWord: true}
+	for _, c := range []Category{CategoryNotConfigured, CategoryConfigUnreadable, CategoryConfigBinaryMismatch, CategoryCredentialsMissing, CategoryOther} {
+		if !c.IsFault() {
+			got[c.String()] = true
+		}
+	}
+
+	if len(got) != len(want) {
+		t.Errorf("non-fault words = %d words %v, want %d words %v — the fault test in pkg/web/static/index.html must move with it", len(got), got, len(want), want)
+	}
+	for word := range want {
+		if !got[word] {
+			t.Errorf("non-fault word %q is missing from the enum's words %v", word, got)
+		}
+	}
+	for word := range got {
+		if !want[word] {
+			t.Errorf("word %q is not a fault in Go but is not one of the words the dashboard knows (%v)", word, want)
+		}
+	}
+}

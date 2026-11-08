@@ -25,31 +25,40 @@ var staticFS embed.FS
 
 // Server is the HTTP server for the maitred dashboard.
 type Server struct {
-	port         int
-	log          *log.Logger
-	engine       *engine.Engine
-	version      string
-	forgejoEng   *forgejo.Engine
-	webhookProvs []webhook.ProviderConfig
-	mux          *http.ServeMux
+	port          int
+	log           *log.Logger
+	engine        *engine.Engine
+	version       string
+	forgejoEng    *forgejo.Engine
+	forgejoStatus string
+	webhookProvs  []webhook.ProviderConfig
+	mux           *http.ServeMux
 }
 
 // New creates a new web server. The Forgejo engine, when non-nil, is
-// shown in the dashboard's tracked view
-// (§forgejo/observability/the-dashboard-view).
-func New(port int, eng *engine.Engine, version string, fjEng *forgejo.Engine, webhookProvs ...[]webhook.ProviderConfig) *Server {
+// shown in the dashboard's tracked view; fjState is the engine's state
+// in the words of the category enum, as the startup classification
+// produced it (§forgejo/observability/the-dashboard-view). The server
+// never derives the state from the engine it is handed: a nil engine
+// says nothing about whether the deployment is misconfigured or
+// broken, so the caller states the classification —
+// forgejo.EngineStateWord(fjEng != nil, cause) at startup, and
+// forgejo.EngineStateWord(false, nil) where there is no engine and no
+// cause in hand.
+func New(port int, eng *engine.Engine, version string, fjEng *forgejo.Engine, fjState string, webhookProvs ...[]webhook.ProviderConfig) *Server {
 	var providers []webhook.ProviderConfig
 	if len(webhookProvs) > 0 {
 		providers = webhookProvs[0]
 	}
 	s := &Server{
-		port:         port,
-		log:          log.Default(),
-		engine:       eng,
-		version:      version,
-		forgejoEng:   fjEng,
-		webhookProvs: providers,
-		mux:          http.NewServeMux(),
+		port:          port,
+		log:           log.Default(),
+		engine:        eng,
+		version:       version,
+		forgejoEng:    fjEng,
+		forgejoStatus: fjState,
+		webhookProvs:  providers,
+		mux:           http.NewServeMux(),
 	}
 	s.registerRoutes()
 	return s
@@ -210,9 +219,12 @@ func (s *Server) handleWebhooks(w http.ResponseWriter, r *http.Request) {
 
 // handleForgejo serves the dashboard view of the issues and pull
 // requests the Forgejo engine tracks: each with its current state,
-// watermark, and last decision
-// (§forgejo/observability/the-dashboard-view). Without the engine (or
-// with no decisions yet) the view is an empty list.
+// watermark, and last decision. The response is an object carrying
+// that list alongside one engine-status field, so a configured-but-
+// broken engine does not read like a healthy one with nothing tracked
+// (§forgejo/observability/the-dashboard-view,
+// §forgejo/observability/why-the-engine-is-off). Without the engine
+// (or with no decisions yet) the list is empty.
 func (s *Server) handleForgejo(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -225,7 +237,14 @@ func (s *Server) handleForgejo(w http.ResponseWriter, r *http.Request) {
 	if tracked == nil {
 		tracked = []forgejo.Tracked{}
 	}
-	json.NewEncoder(w).Encode(tracked)
+	response := struct {
+		EngineStatus string            `json:"engine_status"`
+		Items        []forgejo.Tracked `json:"items"`
+	}{
+		EngineStatus: s.forgejoStatus,
+		Items:        tracked,
+	}
+	json.NewEncoder(w).Encode(response)
 }
 
 func (s *Server) handleTriggerAPI(w http.ResponseWriter, r *http.Request, path string) {
