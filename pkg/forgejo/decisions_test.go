@@ -3693,3 +3693,60 @@ func TestDecide_ReviewLenses(t *testing.T) {
 		}
 	})
 }
+
+// blockedTracker is the tracker's membership edge out of the root: the
+// tracker stands by the order's own rule, so this edge is a standing edge
+// that says nothing about whether a forest remains
+// (§forgejo/decisions/forest-teardown, s-git/maitred#173).
+func blockedTracker() Issue {
+	return Issue{Number: 30, State: "open", Labels: []string{LabelOutcome}, Repository: "o/r"}
+}
+
+// TestDecide_TeardownSparesTheTrackerInCount pins the exclusion: the
+// engine counts what the order can delete, and a tracker is never
+// deleted — so a root whose only downstream edge reaches its tracker
+// holds off on the event path and on the sweep, naming the state fact,
+// while a root still blocking a work item dispatches on both paths
+// (§forgejo/decisions/forest-teardown,
+// §forgejo/reconciliation/watermark-exemptions, s-git/maitred#173).
+func TestDecide_TeardownSparesTheTrackerInCount(t *testing.T) {
+	sweep := func(root *Issue, blocked []Issue, w *Watermark) Decision {
+		return Decide(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: root.Number},
+			State{Issue: root, Blocked: blocked}, w)
+	}
+
+	t.Run("a root blocking only its tracker holds off on both paths", func(t *testing.T) {
+		root := teardownRoot()
+		d := Decide(issueEvent(EventIssueLabelsChanged), State{Issue: root, Blocked: []Issue{blockedTracker()}}, nil)
+		if d.Action != "" {
+			t.Errorf("event path dispatched %q (%s), want the hold-off", d.Action, d.Reason)
+		}
+		if !strings.Contains(d.Reason, LabelOutcome) {
+			t.Errorf("reason = %q, want the spared tracker named", d.Reason)
+		}
+		w := &Watermark{Action: string(ActionTeardownForest), Revision: issueRevision(root)}
+		sd := sweep(root, []Issue{blockedTracker()}, w)
+		if sd.Action != "" {
+			t.Errorf("sweep dispatched %q (%s), want the hold-off whatever the watermark", sd.Action, sd.Reason)
+		}
+		if strings.Contains(sd.Reason, "already dispatched") {
+			t.Errorf("reason = %q, want the state fact, not a revision guard", sd.Reason)
+		}
+		if !strings.Contains(sd.Reason, LabelOutcome) {
+			t.Errorf("reason = %q, want the spared tracker named", sd.Reason)
+		}
+	})
+
+	t.Run("a root blocking a tracker and a work item still dispatches on both paths", func(t *testing.T) {
+		root := teardownRoot()
+		blocked := []Issue{blockedTracker(), {Number: 9, State: "open", Repository: "o/r"}}
+		d := Decide(issueEvent(EventIssueLabelsChanged), State{Issue: root, Blocked: blocked}, nil)
+		if d.Action != ActionTeardownForest {
+			t.Errorf("event path action = %q, want %q (%s)", d.Action, ActionTeardownForest, d.Reason)
+		}
+		sd := sweep(root, blocked, nil)
+		if sd.Action != ActionTeardownForest {
+			t.Errorf("sweep action = %q, want %q (%s)", sd.Action, ActionTeardownForest, sd.Reason)
+		}
+	})
+}

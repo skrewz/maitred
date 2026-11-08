@@ -236,8 +236,9 @@ type State struct {
 	CascadeRoot *IssueNode
 	// Blocked is what the issue under consideration blocks: its
 	// downstream edges. Fetched only for a root under a teardown order,
-	// where it is the emptiness test — an issue blocking nothing has no
-	// forest to delete (§forgejo/decisions/forest-teardown).
+	// where it is the emptiness test — a root blocking nothing but a
+	// spared tracker has no forest left to delete
+	// (§forgejo/decisions/forest-teardown).
 	Blocked []Issue
 }
 
@@ -455,10 +456,13 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 			// standing is the state that calls for the deletion — which
 			// is also what ends the re-firing: once the root blocks
 			// nothing, the sweep stops asking.
-			if len(s.Blocked) == 0 {
+			if remaining := deletableMembers(s.Blocked); len(remaining) == 0 {
+				if len(s.Blocked) > 0 {
+					return holdOff(fmt.Sprintf("issue %d is an open %s root carrying %s and blocks only its %s tracker: the state calls for no teardown", issue.Number, LabelIdeation, LabelTeardownForest, LabelOutcome))
+				}
 				return holdOff(fmt.Sprintf("issue %d is an open %s root carrying %s but blocking no issue: the state calls for no teardown", issue.Number, LabelIdeation, LabelTeardownForest))
 			}
-			return dispatch(ActionTeardownForest, fmt.Sprintf("issue %d is an open %s root carrying %s and still blocking %d issue(s); the state calls for teardown regardless of revision %s", issue.Number, LabelIdeation, LabelTeardownForest, len(s.Blocked), issueRevision(issue)))
+			return dispatch(ActionTeardownForest, fmt.Sprintf("issue %d is an open %s root carrying %s and still blocking %d issue(s) the order would delete; the state calls for teardown regardless of revision %s", issue.Number, LabelIdeation, LabelTeardownForest, len(deletableMembers(s.Blocked)), issueRevision(issue)))
 		}
 		// A root is decomposed even when a tracker's wrap-up would
 		// also apply: decompose wins over wrap-up
@@ -638,10 +642,16 @@ func decideDecompose(e Event, issue *Issue, s State, w *Watermark) Decision {
 // §forgejo/decisions/forest-teardown).
 func decideTeardown(issue *Issue, s State, w *Watermark) Decision {
 	// The engine can see whether there is anything to delete, so it does
-	// not ask for an agent to find out: an empty forest dispatches
-	// nothing, on the event path or the sweep, and the label standing
-	// over it decides no work (§forgejo/decisions/forest-teardown).
-	if len(s.Blocked) == 0 {
+	// not ask for an agent to find out: a forest with nothing left to
+	// delete dispatches nothing, on the event path or the sweep, and the
+	// label standing over it decides no work. The spared tracker is the
+	// one member whose edge says nothing about whether a forest remains,
+	// so it is excluded from the count here exactly as on the sweep
+	// (§forgejo/decisions/forest-teardown, s-git/maitred#173).
+	if remaining := deletableMembers(s.Blocked); len(remaining) == 0 {
+		if len(s.Blocked) > 0 {
+			return holdOff(fmt.Sprintf("issue %d carries %s but blocks only its %s tracker: the order spares trackers, so there is nothing to delete", issue.Number, LabelTeardownForest, LabelOutcome))
+		}
 		return holdOff(fmt.Sprintf("issue %d carries %s but blocks no issue: its forest is empty, so there is nothing to delete", issue.Number, LabelTeardownForest))
 	}
 	rev := issueRevision(issue)
@@ -649,6 +659,30 @@ func decideTeardown(issue *Issue, s State, w *Watermark) Decision {
 		return holdOff(fmt.Sprintf("teardown-forest already dispatched at revision %s", rev))
 	}
 	return dispatch(ActionTeardownForest, fmt.Sprintf("issue %d is an open %s root carrying %s: the forest it commissioned is to be deleted", issue.Number, LabelIdeation, LabelTeardownForest))
+}
+
+// isTracker reports whether the issue is an outcome tracker: the
+// reserved `outcome` label makes it one, except beside `ideation`, where
+// the issue is a root and decompose wins over wrap-up — the same reading
+// the cascade's rows apply (§forgejo/decisions/unblock-cascade).
+func isTracker(issue *Issue) bool {
+	return hasLabel(issue, LabelOutcome) && !hasLabel(issue, LabelIdeation)
+}
+
+// deletableMembers is the teardown's count: the issues downstream of a
+// root that the order would delete. A tracker is never deleted, by this
+// order or by any walk that reaches it, so its membership edge is a
+// standing edge that says nothing about whether a forest remains —
+// counting it would re-fire the order on every sweep for ever
+// (§forgejo/decisions/forest-teardown, s-git/maitred#173).
+func deletableMembers(blocked []Issue) []Issue {
+	remaining := make([]Issue, 0, len(blocked))
+	for i := range blocked {
+		if !isTracker(&blocked[i]) {
+			remaining = append(remaining, blocked[i])
+		}
+	}
+	return remaining
 }
 
 // holdOffTeardownWithoutRoot names the misapplied order: the label
