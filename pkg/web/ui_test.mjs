@@ -22,6 +22,12 @@ const apiUrl = args.find(a => a.startsWith('--api-url='))?.split('=')[1]
 const forgejoPort = parseInt(args.find(a => a.startsWith('--forgejo-port='))?.split('=')[1] ?? '18092', 10);
 const forgejoSecret = args.find(a => a.startsWith('--forgejo-secret='))?.split('=')[1]
     ?? 'ui-test-secret';
+// Base URLs of the two disabled-engine instances the Makefile starts
+// alongside the main one: one configured but unable to serve, one with
+// nothing configured at all. The engine-states suite is skipped when
+// they are absent, so a hand-started single instance still runs.
+const faultUrl = args.find(a => a.startsWith('--fault-url='))?.split('=')[1] ?? null;
+const unconfiguredUrl = args.find(a => a.startsWith('--unconfigured-url='))?.split('=')[1] ?? null;
 
 // ─── Mock Forgejo API ────────────────────────────────────────────────
 
@@ -576,6 +582,68 @@ async function testPromptSection(page, results) {
   await page.waitForTimeout(500);
 }
 
+// testForgejoEngineStates exercises the fault render of the
+// dashboard's Forgejo view — the one user-visible behaviour this view
+// adds — against the two disabled-engine instances the Makefile starts
+// alongside the running one: a configured engine that could not be
+// constructed must name its category, and an engine nothing configured
+// must leave the view hidden (§forgejo/observability/the-dashboard-view,
+// §forgejo/observability/why-the-engine-is-off).
+async function testForgejoEngineStates(page, results) {
+  console.log('  Forgejo engine states on the dashboard');
+
+  // Configured but broken: the config is there, the credentials are
+  // not, so construction fails with the credentials category.
+  const faultView = await (await fetch(`${faultUrl}/api/forgejo`)).json();
+  results.push(assert(
+    faultView.engine_status === 'credentials missing',
+    `Fault instance reports "credentials missing" (got: "${faultView.engine_status}")`
+  ));
+  results.push(assert(
+    (faultView.items ?? []).length === 0,
+    `Fault instance tracks nothing (got: ${(faultView.items ?? []).length})`
+  ));
+
+  await page.goto(faultUrl);
+  await page.waitForSelector('#forgejo-section', { state: 'visible', timeout: 20000 })
+    .catch(() => {});
+  const faultVisible = await page.locator('#forgejo-section').isVisible();
+  results.push(assert(faultVisible, 'Fault instance shows the Forgejo section with nothing tracked'));
+  if (faultVisible) {
+    const faultText = await page.locator('#forgejo-section').textContent();
+    results.push(assert(
+      faultText.includes('credentials missing'),
+      `Fault instance names the category on the dashboard (got: "${faultText?.trim()}")`
+    ));
+    results.push(assert(
+      !faultText.includes('MAITRED_FORGEJO') && !faultText.includes('environment incomplete'),
+      'Fault instance names no raw error text or env var'
+    ));
+  }
+
+  // Nothing configured at all: the view stays hidden, so the fault
+  // render is not just "the section is always there".
+  const noneView = await (await fetch(`${unconfiguredUrl}/api/forgejo`)).json();
+  results.push(assert(
+    noneView.engine_status === 'not configured',
+    `Unconfigured instance reports "not configured" (got: "${noneView.engine_status}")`
+  ));
+  results.push(assert(
+    noneView.engine_status !== faultView.engine_status,
+    'A broken engine does not read as an unconfigured one on the API'
+  ));
+
+  await page.goto(unconfiguredUrl);
+  await page.waitForTimeout(1500);
+  const noneHidden = await page.evaluate(() =>
+    getComputedStyle(document.getElementById('forgejo-section')).display === 'none');
+  results.push(assert(noneHidden, 'Unconfigured instance keeps the Forgejo section hidden'));
+
+  // Return to the main instance for anything that follows.
+  await page.goto(baseUrl);
+  await page.waitForLoadState('networkidle').catch(() => {});
+}
+
 // ─── Main ────────────────────────────────────────────────────────────
 
 async function main() {
@@ -620,6 +688,9 @@ async function main() {
   await testPersonaDisplay(page, results);
   await testPromptSection(page, results);
   await testForgejoTracking(page, results);
+  if (faultUrl && unconfiguredUrl) {
+    await testForgejoEngineStates(page, results);
+  }
 
   await browser.close();
   mockForgejo.close();
