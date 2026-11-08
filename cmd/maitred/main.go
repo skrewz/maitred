@@ -216,7 +216,6 @@ func main() {
 	var fjEngine *forgejo.Engine
 	var forgejoHandler http.Handler
 	var forgejoDisabledCause error
-	fjUp := false
 	forgejoLog := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if engine, fh, err := newForgejoEngine(dataDirStr, qe, forgejoLog); err != nil {
 		forgejoDisabledCause = err
@@ -225,7 +224,6 @@ func main() {
 	} else if fh != nil {
 		fjEngine = engine
 		forgejoHandler = fh
-		fjUp = true
 		log.Printf("  forgejo engine:   enabled (route %s)", forgejo.WebhookPath)
 		engine.Start()
 	}
@@ -234,7 +232,7 @@ func main() {
 	// state as the sentinel classification produced it at startup, so
 	// its Forgejo view never has to guess from a nil
 	// (§forgejo/observability/the-dashboard-view).
-	webSrv := web.New(port, eng, Version, fjEngine, forgejo.EngineStateWord(fjUp, forgejoDisabledCause), webhookProviders)
+	webSrv := web.New(port, eng, Version, fjEngine, forgejo.EngineStateWord(fjEngine != nil, forgejoDisabledCause), webhookProviders)
 	if err := webSrv.Start(); err != nil {
 		log.Printf("web server error: %v (continuing without dashboard)", err)
 	}

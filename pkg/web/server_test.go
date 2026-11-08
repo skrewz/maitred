@@ -169,12 +169,11 @@ func TestForgejoEndpoint(t *testing.T) {
 	}
 }
 
-// TestForgejoEndpoint_Disabled: without the engine, and with no state
-// handed over beyond the nil, the endpoint serves an empty view that
-// names the not-configured state
+// TestForgejoEndpoint_Disabled: with no engine and no cause in hand,
+// the endpoint serves an empty view naming the not-configured state
 // (§forgejo/observability/the-dashboard-view).
 func TestForgejoEndpoint_Disabled(t *testing.T) {
-	srv := New(0, nil, "test", nil, "")
+	srv := New(0, nil, "test", nil, forgejo.EngineStateWord(false, nil))
 	rec := getForgejo(t, srv)
 
 	if rec.Code != http.StatusOK {
@@ -256,7 +255,7 @@ func TestForgejoEndpoint_EngineStates(t *testing.T) {
 
 // TestForgejoEndpoint_Method: only GET is allowed.
 func TestForgejoEndpoint_Method(t *testing.T) {
-	srv := New(0, nil, "test", nil, "")
+	srv := New(0, nil, "test", nil, forgejo.EngineStateWord(false, nil))
 	req := httptest.NewRequest(http.MethodPost, "/api/forgejo", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)

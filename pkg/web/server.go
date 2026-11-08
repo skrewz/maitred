@@ -38,16 +38,17 @@ type Server struct {
 // New creates a new web server. The Forgejo engine, when non-nil, is
 // shown in the dashboard's tracked view; fjState is the engine's state
 // in the words of the category enum, as the startup classification
-// produced it (§forgejo/observability/the-dashboard-view) — pass an
-// empty string to let the server state the obvious about the engine it
-// was handed (up when non-nil, not configured when nil).
+// produced it (§forgejo/observability/the-dashboard-view). The server
+// never derives the state from the engine it is handed: a nil engine
+// says nothing about whether the deployment is misconfigured or
+// broken, so the caller states the classification —
+// forgejo.EngineStateWord(fjEng != nil, cause) at startup, and
+// forgejo.EngineStateWord(false, nil) where there is no engine and no
+// cause in hand.
 func New(port int, eng *engine.Engine, version string, fjEng *forgejo.Engine, fjState string, webhookProvs ...[]webhook.ProviderConfig) *Server {
 	var providers []webhook.ProviderConfig
 	if len(webhookProvs) > 0 {
 		providers = webhookProvs[0]
-	}
-	if fjState == "" {
-		fjState = forgejo.EngineStateWord(fjEng != nil, nil)
 	}
 	s := &Server{
 		port:          port,
