@@ -392,11 +392,15 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 // other than the pull request's pays the same admission test every
 // other cross-repository read pays (§forgejo/webhook/repository-roles):
 // outside the engine's remit it connects nothing, and an unknown scope
-// fails the re-fetch. The distinct references resolved are capped
-// (maxAutoCloseRefs), and every skip leaves a debug line naming the
-// resolved reference, so a dropped relation is visible rather than
-// silent. A pull request is never a connected issue: it is a delivery,
-// so a reference naming one is skipped.
+// fails the re-fetch. A reference whose repository names a path segment
+// is refused before any URL is built, and the references resolved here
+// are capped (maxAutoCloseRefs) where the per-reference cost is paid —
+// the grammar itself stays uncapped, a faithful mirror for the
+// predicate's pure in-memory read. Every drop, the cap's truncation
+// included, leaves a debug line naming the resolved reference, so a
+// dropped relation is visible rather than silent. A pull request is
+// never a connected issue: it is a delivery, so a reference naming one
+// is skipped.
 func (e *Engine) connectedIssues(owner, name string, number int, body string) ([]ConnectedIssue, error) {
 	prRepo := owner + "/" + name
 	blocks, err := e.api.IssueBlocks(owner, name, number)
@@ -417,7 +421,25 @@ func (e *Engine) connectedIssues(owner, name string, number int, body string) ([
 		seen[connectedKey(blocks[i].Repository, blocks[i].Number)] = true
 		connected = append(connected, ConnectedIssue{Issue: blocks[i], Blockers: blockers})
 	}
+	resolved := 0
 	for _, ref := range autoCloseRefs(body, prRepo) {
+		if resolved == maxAutoCloseRefs {
+			// The cap lives here, where the per-reference API fan-out
+			// is paid, not in the grammar — the predicate's read of the
+			// same body is pure in-memory matching that costs nothing
+			// per reference and stays uncapped (§forgejo/webhook/re-fetch).
+			e.logSkippedRef(prRepo, number, ref, "beyond the reference cap; every reference after it is dropped too")
+			break
+		}
+		resolved++
+		if !validRepoRef(ref.repo) {
+			// A reference whose repository names a path segment — "." or
+			// "..", which the grammar's character class admits — names
+			// no repository; it is refused here, before any URL is built
+			// (§forgejo/webhook/re-fetch).
+			e.logSkippedRef(prRepo, number, ref, "whose repository names a path segment")
+			continue
+		}
 		if seen[ref.key()] {
 			continue // the blocking-edge row already carries this issue
 		}
@@ -434,8 +456,7 @@ func (e *Engine) connectedIssues(owner, name string, number int, body string) ([
 				return nil, err
 			}
 			if !r.any() {
-				e.log.Debug("connected issues: skipping a closing reference into a repository outside the engine's remit",
-					"pr", prRepo+"#"+strconv.Itoa(number), "reference", ref.repo+"#"+strconv.Itoa(ref.number))
+				e.logSkippedRef(prRepo, number, ref, "into a repository outside the engine's remit")
 				continue
 			}
 		}
@@ -447,15 +468,13 @@ func (e *Engine) connectedIssues(owner, name string, number int, body string) ([
 				// answer arrives from a repository the token cannot see,
 				// so the line names the resolved reference — identifiers
 				// only, never the body (§forgejo/webhook/re-fetch).
-				e.log.Debug("connected issues: skipping a dangling closing reference",
-					"pr", prRepo+"#"+strconv.Itoa(number), "reference", ref.repo+"#"+strconv.Itoa(ref.number))
+				e.logSkippedRef(prRepo, number, ref, "whose issue answers not found")
 				continue
 			}
 			return nil, err
 		}
 		if issue.IsPull {
-			e.log.Debug("connected issues: skipping a closing reference naming a pull request",
-				"pr", prRepo+"#"+strconv.Itoa(number), "reference", ref.repo+"#"+strconv.Itoa(ref.number))
+			e.logSkippedRef(prRepo, number, ref, "naming a pull request")
 			continue // a pull request delivers; it never sits as a connected issue
 		}
 		if issue.Repository == "" {
@@ -486,6 +505,16 @@ func (r issueRef) key() Key {
 	return connectedKey(r.repo, r.number)
 }
 
+// logSkippedRef records one dropped closing reference — identifiers
+// only, never the body — in one place, so the wording a reader greps
+// for when a relation went missing cannot drift between its sites
+// (§forgejo/webhook/re-fetch).
+func (e *Engine) logSkippedRef(prRepo string, prNumber int, ref issueRef, why string) {
+	e.log.Debug("connected issues: skipping a closing reference "+why,
+		"pr", prRepo+"#"+strconv.Itoa(prNumber),
+		"reference", ref.repo+"#"+strconv.Itoa(ref.number))
+}
+
 // connectedKey is the dedup key of a connected issue, matching a
 // reference's identity so the same issue reached through either relation
 // is read once (§forgejo/webhook/re-fetch).
@@ -503,30 +532,38 @@ func isNotFound(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
 }
 
-// maxAutoCloseRefs caps the number of distinct references a body
+// maxAutoCloseRefs caps the number of references connectedIssues
 // resolves. The authoring contract needs one or two; the cap bounds
 // the per-reference fan-out the approval path pays (one issue read and
 // one blockers row per resolved reference) against a body written to
 // cost the engine the delivery (§forgejo/webhook/re-fetch). The cap
-// bounds both readers: the predicate's body match tests these same
-// refs, so one number decides the cost wherever the grammar is read.
+// belongs to that resolving loop, not to the grammar: the predicate's
+// read of the same body is pure in-memory matching that costs nothing
+// per reference, and #180 asks nothing of it.
 const maxAutoCloseRefs = 8
 
 // autoCloseRefs lists the issues a pull request body auto-closes, in
-// order of first appearance, without duplicates and no more than
-// maxAutoCloseRefs strong. The grammar is the one prAutoClosesIssue applies and the forge itself honours: the
-// default closing keywords, a bare #N resolved in the pull request's own
-// repository and an owner/repo#N in the repository it names
-// (https://forgejo.org/docs/latest/user/linked-references/,
+// order of first appearance and without duplicates — the grammar read,
+// with no decision about what the engine can afford to resolve: every
+// distinct reference the body names is returned, and what to do with
+// the ninth is its caller's, taken where the cost is paid. The grammar
+// is the one prAutoClosesIssue applies and the forge itself honours:
+// the default closing keywords, a bare #N resolved in the pull
+// request's own repository and an owner/repo#N in the repository it
+// names (https://forgejo.org/docs/latest/user/linked-references/,
 // §forgejo/decisions/sync-set). Go's RE2 has no lookahead, so the
 // pattern consumes the character that terminates a match; the scan
 // rewinds to that character's start the way the forge's scanner rewinds
 // over the whitespace its match ate
 // (https://codeberg.org/forgejo/forgejo/src/branch/main/modules/references/references.go),
 // so two references separated by nothing but a newline both resolve.
-// A reference whose repository names a path segment — "." or "..", the
-// grammar's class admits dots — names no repository and is dropped
-// before it can reach an API URL.
+// A reference's repository carries its canonical identity, lowercased:
+// the grammar matches repository names case-insensitively, the dedup
+// key (issueRef.key) lowercases, and the scope lookup matches
+// case-insensitively, so one casing decides the identity everywhere.
+// A qualified reference whose repository names a path segment — "." or
+// "..", the grammar's class admits dots — is carried like any other;
+// connectedIssues refuses it before any URL is built.
 func autoCloseRefs(body, prRepo string) []issueRef {
 	var refs []issueRef
 	seen := make(map[Key]bool)
@@ -546,12 +583,12 @@ func autoCloseRefs(body, prRepo string) []issueRef {
 			continue
 		}
 		// m[6] bounds the start of the terminator the match consumed —
-		// one character, or the empty end of the body. Either way the
+		// one character, or the empty end of the body. The terminator
+		// group always participates (its $ alternative matches empty at
+		// the end) and always starts at least one byte past the match
+		// start (the keyword and #N sit between), so either way the
 		// cursor advances.
 		pos = match + m[6]
-		if m[6] < 0 || pos <= match {
-			pos = match + m[1]
-		}
 		number, err := strconv.Atoi(body[match+m[4] : match+m[5]])
 		if err != nil {
 			continue
@@ -559,19 +596,13 @@ func autoCloseRefs(body, prRepo string) []issueRef {
 		repo := prRepo
 		if m[2] >= 0 {
 			repo = body[match+m[2] : match+m[3]]
-			if !validRepoRef(repo) {
-				continue
-			}
 		}
-		ref := issueRef{repo: repo, number: number}
+		ref := issueRef{repo: strings.ToLower(repo), number: number}
 		if seen[ref.key()] {
 			continue
 		}
 		seen[ref.key()] = true
 		refs = append(refs, ref)
-		if len(refs) == maxAutoCloseRefs {
-			break
-		}
 	}
 	return refs
 }

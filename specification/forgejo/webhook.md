@@ -228,7 +228,11 @@ snapshot. The reconciliation sweep refreshes it from the
 listing it already enumerates (§forgejo/reconciliation/the-sweep), and an
 event path that finds the cache empty or older than one
 `reconcile_interval` refreshes it with a single repository listing before
-deciding (§forgejo/client/operations). Entries are therefore never older
+deciding (§forgejo/client/operations). The snapshot is looked up by
+name **case-insensitively** — the way the forge addresses a repository
+and the way the closing-reference grammar matches one — so a
+reference's spelling and a listing's full name agree on the roles.
+Entries are therefore never older
 than one interval: a repository whose topic has just been removed is not
 acted on for longer than that. A repository absent from the snapshot holds
 no role — the test **fails closed**. Deliveries that find the cache
@@ -354,8 +358,10 @@ For each decision event, the re-fetch assembles the state
   references separated by nothing but a newline both resolve
   (s-git/maitred#185). A reference whose repository names a path
   segment — `.` or `..`, which the grammar's character class admits —
-  resolves nowhere; no body-derived string reaches the API URL
-  unvalidated. A reference naming a pull request connects
+  is carried by the grammar like any other and **refused at
+  resolution**, before any URL is built and with a debug line naming
+  it: no body-derived string reaches the API URL unvalidated
+  (s-git/maitred#185 review 1304). A reference naming a pull request connects
   nothing, a pull request being a delivery and never a connected issue,
   and a reference whose issue answers **not found** — a deleted issue, a
   mistyped number, an illustrative one in prose — is skipped the same
@@ -366,19 +372,31 @@ For each decision event, the re-fetch assembles the state
   read** — Forgejo guards private repositories with a 404 — so a
   reference into such a repository reads as connecting nothing. That is
   a defensible reading for a read-only client, but it is the case where
-  a real relation goes unseen, so every skipped reference leaves a
-  debug line naming the resolved repository and number — identifiers
-  only, never the body. A cross-repository reference additionally pays
+  a real relation goes unseen, so every drop — a skip, a refusal, a
+  truncation — leaves a debug line naming the resolved repository and
+  number — identifiers only, never the body. A cross-repository
+  reference additionally pays
   the **remit** test every other cross-repository read pays
   (§forgejo/webhook/repository-roles): the engine's token must hold a
   role in the named repository, or the reference connects nothing and a
   stranger's prose directs no privileged read; an unknown scope fails
-  the re-fetch rather than reading on. The distinct references a body
-  resolves are **capped** (eight): the authoring contract needs one or
-  two, and the cap bounds the per-reference fan-out against a body
-  written to cost the engine the delivery; the cap bounds both readers,
-  the approval path's and the predicate's, and a body exceeding it
-  resolves no more. An issue reachable both ways is
+  the re-fetch rather than reading on. The repository name a reference
+  resolved to carries one canonical identity — lowercased — matching
+  the grammar's case-insensitive name test, the dedup key and the
+  scope cache's case-insensitive lookup, so a mixed-case spelling of a
+  repository inside the remit is neither read twice nor logged as
+  outside it (s-git/maitred#185 review 1304). The references the
+  approval path resolves are **capped** (eight), capped in the
+  resolving loop where the per-reference cost is paid and not in the
+  grammar: the authoring contract needs one or two, and the cap bounds
+  the fan-out against a body written to cost the engine the delivery;
+  the predicate's read of the same body is pure in-memory matching
+  that costs nothing per reference and stays uncapped, a faithful
+  mirror of the forge. The cap's drop is not silent: the first dropped
+  reference leaves a debug line naming the truncation and the
+  references after it, so a delivery the cap renders disconnected is
+  visible rather than a fail-open replay of the bug #180 exists to
+  fix. An issue reachable both ways is
   read once, the blocking-edge rows first, so it is counted once.
   Every entry is resolved: the gate's decision is
   never left to the order the listing happens to return; a failed read

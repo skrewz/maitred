@@ -3585,6 +3585,18 @@ func TestConnectedIssuesUnionsTheTwoRelations(t *testing.T) {
 			wantCalls: []string{"GetIssue:outcomes/11", "IssueDependencies:outcomes/11"},
 		},
 		{
+			// The grammar matches repository names case-insensitively and
+			// so must the remit test: a mixed-case spelling of a repository
+			// inside the remit resolves like its canonical casing, not a
+			// silent out-of-remit skip (s-git/maitred#185 review 1304).
+			name:      "a cross-repository reference in a different casing",
+			body:      "Also lands O/Outcomes#11.\n\nCloses O/Outcomes#11",
+			repos:     syncOutcomesRepos(),
+			want:      []Key{{Repo: "o/outcomes", Kind: KindIssue, Number: 11}},
+			wantGet:   1,
+			wantCalls: []string{"GetIssue:outcomes/11", "IssueDependencies:outcomes/11"},
+		},
+		{
 			name:    "a reference into a repository outside the remit reads nothing",
 			body:    "Probe.\n\nCloses o/elsewhere#5",
 			want:    nil,
@@ -3724,24 +3736,35 @@ func TestConnectedIssuesSkipsAreLogged(t *testing.T) {
 	prAsIssue.IsPull = true
 	api.issues[9] = prAsIssue
 
-	if _, err := eng.connectedIssues("o", "r", 5, "Fixes #99.\n\nFixes #9."); err != nil {
+	if _, err := eng.connectedIssues("o", "r", 5, "Fixes #99.\n\nFixes #9.\n\nCloses ../x#5"); err != nil {
 		t.Fatalf("connectedIssues: %v", err)
 	}
 	out := log.String()
-	for _, want := range []string{"skipping a dangling closing reference", "o/r#99", "skipping a closing reference naming a pull request", "o/r#9"} {
+	for _, want := range []string{"skipping a closing reference whose issue answers not found", "o/r#99", "skipping a closing reference naming a pull request", "o/r#9", "skipping a closing reference whose repository names a path segment", "../x#5"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log %q does not contain %q", out, want)
 		}
 	}
 }
 
-// TestConnectedIssuesReferenceCap: the per-reference fan-out is bounded.
-// A body written to cost the engine one read per line resolves at most
-// maxAutoCloseRefs distinct references; the rest are never read
-// (§forgejo/webhook/re-fetch, s-git/maitred#185).
+// TestConnectedIssuesReferenceCap: the per-reference fan-out is
+// bounded. A body written to cost the engine one read per line resolves
+// at most maxAutoCloseRefs distinct references, and the truncation is
+// not silent: the first dropped reference — naming every reference
+// after it too — leaves a debug line, so a delivery rendered
+// disconnected by the cap is visible in the log (§forgejo/webhook/re-fetch,
+// s-git/maitred#185).
 func TestConnectedIssuesReferenceCap(t *testing.T) {
-	eng, api, _, _ := newTestEngine(t)
+	api := newFakeAPI()
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	var log bytes.Buffer
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewJSONHandler(&log, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	body := "Delivers a great many things."
+	dropped := 20 + maxAutoCloseRefs
 	for n := 20; n < 20+maxAutoCloseRefs+2; n++ {
 		api.issues[n] = testIssue(n, "open")
 		body += "\n\nFixes #" + strconv.Itoa(n)
@@ -3755,6 +3778,12 @@ func TestConnectedIssuesReferenceCap(t *testing.T) {
 	}
 	if n := api.callCount("GetIssue"); n != maxAutoCloseRefs {
 		t.Errorf("GetIssue called %d time(s), want the cap %d", n, maxAutoCloseRefs)
+	}
+	out := log.String()
+	for _, want := range []string{"skipping a closing reference beyond the reference cap", "o/r#" + strconv.Itoa(dropped)} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log %q does not contain %q", out, want)
+		}
 	}
 }
 

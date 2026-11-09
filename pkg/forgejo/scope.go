@@ -2,6 +2,7 @@ package forgejo
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -63,11 +64,14 @@ func (e *Engine) scopeRetry() time.Duration {
 // given repository listing — one listing feeds both roles
 // (§forgejo/webhook/repository-roles) — recording the moment of the
 // snapshot so the staleness bound can be applied and clearing any
-// failure backoff.
+// failure backoff. The cache is keyed on the lowercased full name, so
+// the lookup matches repository names case-insensitively — the way the
+// forge addresses a repository and the way the closing-reference
+// grammar matches one (§forgejo/webhook/re-fetch).
 func (e *Engine) refreshScopeCache(repos []Repository) {
 	scoped := make(map[string]roles, len(repos))
 	for i := range repos {
-		scoped[repos[i].FullName] = rolesFromTopics(repos[i].Topics)
+		scoped[strings.ToLower(repos[i].FullName)] = rolesFromTopics(repos[i].Topics)
 	}
 	e.scopeMu.Lock()
 	e.scope = scoped
@@ -109,7 +113,11 @@ func (e *Engine) tryRefreshScopeCache() error {
 
 // repoRoles reports the roles the repository holds
 // (§forgejo/webhook/repository-roles), according to the scope cache
-// (§forgejo/webhook/the-scope-cache). The cache is refreshed when it
+// (§forgejo/webhook/the-scope-cache). The name is matched
+// case-insensitively: the cache is keyed on lowercased full names, so a
+// caller holding a reference's spelling, a listing's or any other
+// casing of the same repository gets the same answer. The cache is
+// refreshed when it
 // has never been taken or is older than one reconcile interval;
 // concurrent deliveries finding it stale share one listing — they wait
 // on refreshMu and re-check staleness under it. A repository absent
@@ -129,7 +137,7 @@ func (e *Engine) repoRoles(repo string) (roles, error) {
 		}
 	}
 	e.scopeMu.Lock()
-	r := e.scope[repo]
+	r := e.scope[strings.ToLower(repo)]
 	stale := time.Since(e.scopeAt) > e.cfg.ReconcileInterval
 	e.scopeMu.Unlock()
 	if stale {
