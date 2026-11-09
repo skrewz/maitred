@@ -3577,7 +3577,7 @@ func TestDecide_FanOutReasonFlagsNeverSeenLensIdentity(t *testing.T) {
 // nothing once every lens approves at head (§forgejo/decisions/review-lenses).
 func TestDecide_ReviewLenses(t *testing.T) {
 	lenses := []ReviewLens{{Identity: "lens-min"}, {Identity: "lens-maint"}, {Identity: "lens-sec"}}
-	pr := openPR("head-1")
+	pr := optedIntoMerge(openPR("head-1"))
 	at := func(lens, event, sha string, minute int) Review {
 		return Review{
 			Event:       event,
@@ -3653,11 +3653,6 @@ func TestDecide_ReviewLenses(t *testing.T) {
 			at("lens-maint", ReviewApproved, "head-1", 2),
 			at("lens-sec", ReviewApproved, "head-1", 3),
 		)
-		// The merge opt-in is a precondition of the dispatch: the
-		// fan-out fixture's shared PR opts in, so what decides here is
-		// merge-or-wait and not the missing-label hold-off
-		// (§forgejo/decisions/merge-gate, s-git/maitred#179).
-		st.PR = optedIntoMerge(openPR("head-1"))
 		d := Decide(prEvent(EventPRReviewed, "lens-sec"), st, nil)
 		if d.Action != ActionMergeOrWait {
 			t.Fatalf("decision = %+v, want merge-or-wait once every lens approves at head", d)
@@ -3856,6 +3851,9 @@ func TestDecide_ApprovedPRWithoutMergeOptInHoldsOff(t *testing.T) {
 		}
 		if !strings.Contains(d.Reason, LabelAgenticAutoMerge) {
 			t.Errorf("reason = %q, want it to name the missing opt-in label", d.Reason)
+		}
+		if !strings.Contains(d.Reason, "connected issues: none") {
+			t.Errorf("reason = %q, want it to say the PR is connected to no issue", d.Reason)
 		}
 	})
 }

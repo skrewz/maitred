@@ -595,7 +595,7 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 		return holdOffTeardownWithoutRoot(issue.Number)
 	}
 	if open := openBlockers(s.Blockers); len(open) > 0 {
-		return holdOff(fmt.Sprintf("issue %d is blocked by %s; not reassessing", issue.Number, blockerNames(open)))
+		return holdOff(fmt.Sprintf("issue %d is blocked by %s; not reassessing", issue.Number, issueRefs(open)))
 	}
 	rev := issueRevision(issue)
 	if alreadyDispatched(w, ActionReassess, rev) {
@@ -1033,17 +1033,11 @@ func decideChainReported(e Event, s State, w *Watermark, sweepComments bool) (De
 			return d, true
 		}
 		if open := mergeGateOpenBlockers(e, s); len(open) > 0 {
-			return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens, but a connected issue is blocked by %s; not merging", pr.Number, blockerNames(open))), true
+			return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens, but a connected issue is blocked by %s; not merging", pr.Number, issueRefs(open))), true
 		}
-		// The merge opt-in is a precondition of the dispatch on every
-		// path that reaches here — the review event, PR commented, the
-		// sweep's approved row, and the cascade's PR leg, which decides
-		// through this branch on the PR's own re-fetch: an approved,
-		// mergeable PR with no agentic-auto-merge label waits on a
-		// human, and the hold-off names the missing label and the
-		// connected issues so the state is visible on the dashboard
-		// rather than merely unwitnessed (§forgejo/decisions/merge-gate,
-		// s-git/maitred#179).
+		// The merge opt-in is a precondition on every path that
+		// reaches here, the cascade's PR leg included: it decides
+		// through this branch on the PR's own re-fetch.
 		if !carriesLabel(pr.Labels, LabelAgenticAutoMerge) {
 			return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens but carries no %s label; an approved PR with no merge opt-in waits on a human (connected issues: %s)", pr.Number, LabelAgenticAutoMerge, connectedIssueNames(s))), true
 		}
@@ -1411,10 +1405,10 @@ func trackerStillBlocked(issue *Issue, blockers []IssueNode) (CascadeHoldOff, bo
 			open = append(open, blockers[i].Issue)
 		}
 	}
-	reason := fmt.Sprintf("issue %d is an open %s tracker still blocked by %s", issue.Number, LabelOutcome, blockerNames(open))
+	reason := fmt.Sprintf("issue %d is an open %s tracker still blocked by %s", issue.Number, LabelOutcome, issueRefs(open))
 	if gate := ideationGate(every); gate != nil && gate.State != "open" {
 		reason = fmt.Sprintf("issue %d is an open %s tracker commissioned by %s %d and still blocked by %s; the sweep curates the forest",
-			issue.Number, LabelOutcome, LabelIdeation, gate.Number, blockerNames(open))
+			issue.Number, LabelOutcome, LabelIdeation, gate.Number, issueRefs(open))
 	} else {
 		reason += "; wrap-up held off"
 	}
@@ -1740,28 +1734,28 @@ func mergeGateOpenBlockers(ev Event, s State) []Issue {
 	return open
 }
 
-// connectedIssueNames renders a PR's connected issues as
-// "repo#number" references for a hold-off reason; a PR connected to
-// no issue says so, so the reason never ends in an empty list
-// (§forgejo/decisions/merge-gate, s-git/maitred#179).
+// connectedIssueNames renders a PR's connected issues as references
+// for a hold-off reason; a PR connected to no issue says so, so the
+// reason never ends in an empty list (§forgejo/decisions/merge-gate,
+// s-git/maitred#179).
 func connectedIssueNames(s State) string {
 	if len(s.ConnectedIssues) == 0 {
 		return "none"
 	}
-	refs := make([]string, len(s.ConnectedIssues))
+	issues := make([]Issue, len(s.ConnectedIssues))
 	for i := range s.ConnectedIssues {
-		refs[i] = fmt.Sprintf("%s#%d", s.ConnectedIssues[i].Issue.Repository, s.ConnectedIssues[i].Issue.Number)
+		issues[i] = s.ConnectedIssues[i].Issue
 	}
-	return strings.Join(refs, ", ")
+	return issueRefs(issues)
 }
 
-// blockerNames renders blockers as a comma-separated list of
+// issueRefs renders issues as a comma-separated list of
 // "repo#number" references, so a hold-off reason can name them —
-// cross-repo blockers included (§forgejo/decisions/transition-table).
-func blockerNames(blockers []Issue) string {
-	names := make([]string, len(blockers))
-	for i := range blockers {
-		names[i] = fmt.Sprintf("%s#%d", blockers[i].Repository, blockers[i].Number)
+// cross-repo references included (§forgejo/decisions/transition-table).
+func issueRefs(issues []Issue) string {
+	names := make([]string, len(issues))
+	for i := range issues {
+		names[i] = fmt.Sprintf("%s#%d", issues[i].Repository, issues[i].Number)
 	}
 	return strings.Join(names, ", ")
 }
