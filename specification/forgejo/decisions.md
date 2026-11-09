@@ -920,7 +920,9 @@ conditions; the PR's reviews, for the review transitions; the PR's labels,
 for the label-triggered review override
 (§forgejo/decisions/label-triggered-review); for PR reviewed, PR
 commented, the sweep's PR path and the unblock cascade's PR leg, the
-issues the PR blocks and each issue's blockers, for the merge gate
+**connected issues** — the union of the issues the PR's body
+auto-closes and the issues it blocks, each with its blockers
+(§forgejo/webhook/re-fetch) — for the merge gate
 (§forgejo/decisions/merge-gate) and the landing-set read
 (§forgejo/decisions/sync-set); and, for close events, the blocker-graph
 root — the closed issue — with
