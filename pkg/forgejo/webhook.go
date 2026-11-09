@@ -715,16 +715,15 @@ func taskURL(st State) string {
 }
 
 // taskTitle composes the dispatched task's human-readable name — the
-// action's verb, the subject's title where the state carries one, and
-// the `repo#number` reference — in the one helper both event kinds go
-// through, so a queue system's row reads the same whichever object
-// dispatched, e.g. "Review: Make everything awesome and pink (o/r#1337)"
-// (§forgejo/webhook/the-pipeline).
-func taskTitle(action Action, ev Event, st State) string {
-	verb := string(action)
-	if r := []rune(verb); len(r) > 0 {
-		verb = string(unicode.ToUpper(r[0])) + string(r[1:])
-	}
+// dispatch's verb, the subject's title where the state carries one,
+// and the `repo#number` reference — in the one helper every dispatch
+// path goes through, so a queue system's row reads the same whichever
+// object or lens dispatched, e.g. "Review: Make everything awesome
+// and pink (o/r#1337)" (§forgejo/webhook/the-pipeline). The verb
+// names the dispatch: the action's own verb for a singleton, the
+// action with its subject for a fan-out ("Review as lens-a"), so the
+// title budget lives in exactly one function.
+func taskTitle(verb string, ev Event, st State) string {
 	ref := fmt.Sprintf("%s#%d", ev.Repo, ev.Number)
 	if subject := taskSubject(st); subject != "" {
 		// The subject takes what is left of the line's budget once the
@@ -741,20 +740,50 @@ func taskTitle(action Action, ev Event, st State) string {
 	return trimRunes(fmt.Sprintf("%s (%s)", verb, ref), maxTaskTitleRunes)
 }
 
-// dispatch fills the action's canned prompt and enqueues the task, with
-// the dedup key of the dispatch identity — the key's repo, kind, and
-// number, the action, and the revision — so a queue system with
-// de-duplication (hotelier's dedup_key) squelches a re-dispatch of the
-// same (action, revision) while the first task is still pending
-// (§forgejo/webhook/the-pipeline). The key carries the repo verbatim
-// (slash retained — it is opaque to the queue system), so two distinct
-// repos never produce the same key. The task ID, by contrast, keeps its
-// "-"-replaced repo: there the ambiguity is only a traceability concern.
+// dispatchVerb is the title verb of one dispatch: the action's verb,
+// capitalised, with the fan-out's subject named alongside it where
+// there is one — "Implement" for a singleton, "Review as lens-a" for
+// a lens (§forgejo/webhook/the-pipeline).
+func dispatchVerb(action Action, subject string) string {
+	verb := string(action)
+	if r := []rune(verb); len(r) > 0 {
+		verb = string(unicode.ToUpper(r[0])) + string(r[1:])
+	}
+	if subject != "" {
+		verb += " as " + subject
+	}
+	return verb
+}
+
+// dispatch fills the action's canned prompt and enqueues the task
+// through dispatchPrompt with no subject — the singleton shape
+// (§forgejo/webhook/the-pipeline).
 func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	pc, err := e.cfg.PromptFor(action)
 	if err != nil {
 		return err
 	}
+	return e.dispatchPrompt(ev, st, *pc, "", action, revisionFor(ev, st))
+}
+
+// dispatchPrompt is the one dispatch pipeline: it fills the canned
+// prompt, refuses an invocation that names no object, and enqueues
+// the task with the dedup key of the dispatch identity — the key's
+// repo, kind, and number, the action, the subject where the dispatch
+// names one (a fan-out lens's identity), and the revision — so a
+// queue system with de-duplication (hotelier's dedup_key) squelches a
+// re-dispatch of the same (action, subject, revision) while the first
+// task is still pending (§forgejo/webhook/the-pipeline,
+// §forgejo/decisions/review-lenses). The subject is what keeps one
+// lens's task from squelching a sibling's at the same revision; the
+// singleton path carries none. The key carries the repo verbatim
+// (slash retained — it is opaque to the queue system), so two
+// distinct repos never produce the same key. The task ID, by
+// contrast, keeps its "-"-replaced repo: there the ambiguity is only
+// a traceability concern. The prompt contract, the URL-placeholder
+// refusal, and the task shape all live here, so the singleton and
+// the fan-out cannot drift apart (§forgejo/config/canned-prompts).
+func (e *Engine) dispatchPrompt(ev Event, st State, pc PromptConfig, subject string, action Action, rev string) error {
 	p := Placeholders{
 		Repo:   ev.Repo,
 		Kind:   string(ev.Kind),
@@ -773,20 +802,23 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 		return err
 	}
 	if referenced, filled := urlArguments(pc.Prompt, p); referenced > 0 && filled == 0 {
-		return fmt.Errorf("dispatch %s for %s: the canned prompt references a URL placeholder but the state carries no URL — refusing to enqueue an invocation that names no object", action, ev.KeyOf())
+		return fmt.Errorf("dispatch %s for %s: the canned prompt references a URL placeholder but the state carries no URL — refusing to enqueue an invocation that names no object", dispatchVerb(action, subject), ev.KeyOf())
 	}
-	rev := revisionFor(ev, st)
+	identity := string(action)
+	if subject != "" {
+		identity += "-" + subject
+	}
 	task := &queue.Task{
-		ID:       fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%d", strings.ReplaceAll(ev.Repo, "/", "-"), ev.Kind, ev.Number, action, time.Now().UnixNano()),
+		ID:       fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%d", strings.ReplaceAll(ev.Repo, "/", "-"), ev.Kind, ev.Number, identity, time.Now().UnixNano()),
 		Prompt:   prompt,
 		Persona:  pc.Persona,
 		Timeout:  int(pc.Timeout.Seconds()),
-		DedupKey: fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%s", ev.Repo, ev.Kind, ev.Number, action, rev),
-		Title:    taskTitle(action, ev, st),
+		DedupKey: fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%s", ev.Repo, ev.Kind, ev.Number, identity, rev),
+		Title:    taskTitle(dispatchVerb(action, subject), ev, st),
 		URL:      taskURL(st),
 	}
 	if err := e.queue.AddTask(task); err != nil {
-		return fmt.Errorf("enqueue %s for %s: %w", action, ev.KeyOf(), err)
+		return fmt.Errorf("enqueue %s for %s: %w", dispatchVerb(action, subject), ev.KeyOf(), err)
 	}
 	e.log.Info("dispatched", "key", ev.KeyOf().String(), "task", task.ID)
 	return nil
@@ -867,63 +899,15 @@ func watermarkKeepSlots(prev *Watermark, slots map[string]Slot) Watermark {
 	return next
 }
 
-// dispatchLens fills one lens's canned prompt and enqueues its task.
-// The dedup key carries the lens identity alongside the action and
-// the revision, so three review tasks over one head are three tasks,
-// not one squelched trio, while a re-dispatch of the same
-// (lens, revision) still squelches while pending
+// dispatchLens dispatches one review lens through the same
+// dispatchPrompt as the singleton paths, with the lens identity as
+// the subject: three review tasks over one head are three tasks, not
+// one squelched trio, while a re-dispatch of the same (lens,
+// revision) still squelches while pending
 // (§forgejo/webhook/the-pipeline, §forgejo/decisions/review-lenses).
 func (e *Engine) dispatchLens(ev Event, st State, lens ReviewLens, rev string) error {
-	p := Placeholders{
-		Repo:   ev.Repo,
-		Kind:   string(ev.Kind),
-		Number: ev.Number,
-		Sender: ev.Sender,
-		Action: string(ActionReview),
-	}
-	if st.Issue != nil {
-		p.IssueURL = st.Issue.HTMLURL
-	}
-	if st.PR != nil {
-		p.PRURL = st.PR.HTMLURL
-	}
-	pc := &PromptConfig{Prompt: lens.Prompt}
-	prompt, err := pc.Render(p)
-	if err != nil {
-		return err
-	}
-	if referenced, filled := urlArguments(pc.Prompt, p); referenced > 0 && filled == 0 {
-		return fmt.Errorf("dispatch review lens %s for %s: the canned prompt references a URL placeholder but the state carries no URL — refusing to enqueue an invocation that names no object", lens.Identity, ev.KeyOf())
-	}
-	task := &queue.Task{
-		ID:       fmt.Sprintf("forgejoeng-%s-%s-%d-review-%s-%d", strings.ReplaceAll(ev.Repo, "/", "-"), ev.Kind, ev.Number, lens.Identity, time.Now().UnixNano()),
-		Prompt:   prompt,
-		Persona:  lens.Persona,
-		Timeout:  int(lens.Timeout.Seconds()),
-		DedupKey: fmt.Sprintf("forgejoeng-%s-%s-%d-review-%s-%s", ev.Repo, ev.Kind, ev.Number, lens.Identity, rev),
-		Title:    lensTaskTitle(lens, ev, st),
-		URL:      taskURL(st),
-	}
-	if err := e.queue.AddTask(task); err != nil {
-		return fmt.Errorf("enqueue review lens %s for %s: %w", lens.Identity, ev.KeyOf(), err)
-	}
-	e.log.Info("dispatched", "key", ev.KeyOf().String(), "task", task.ID)
-	return nil
-}
-
-// lensTaskTitle names a lens's task so three fan-out rows on one pull
-// request read as three rows, the lens standing in for the verb
-// (§forgejo/webhook/the-pipeline).
-func lensTaskTitle(lens ReviewLens, ev Event, st State) string {
-	ref := fmt.Sprintf("%s#%d", ev.Repo, ev.Number)
-	verb := "Review as " + lens.Identity
-	if subject := taskSubject(st); subject != "" {
-		overhead := utf8.RuneCountInString(verb) + utf8.RuneCountInString(ref) + utf8.RuneCountInString(": ()") + 1
-		if budget := min(maxTaskSubjectRunes, maxTaskTitleRunes-overhead); budget >= 6 {
-			return fmt.Sprintf("%s: %s (%s)", verb, trimRunes(subject, budget), ref)
-		}
-	}
-	return trimRunes(fmt.Sprintf("%s (%s)", verb, ref), maxTaskTitleRunes)
+	pc := PromptConfig{Prompt: lens.Prompt, Persona: lens.Persona, Timeout: lens.Timeout}
+	return e.dispatchPrompt(ev, st, pc, lens.Identity, ActionReview, rev)
 }
 
 // cascadeHoldOffReason qualifies a cascade hold-off with the roles of
