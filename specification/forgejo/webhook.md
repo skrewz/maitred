@@ -348,7 +348,11 @@ For each decision event, the re-fetch assembles the state
   (s-git/maitred#180). A bare `#N` resolves in the PR's own repository,
   an `owner/repo#N` in the repository it names, exactly as the forge
   resolves it
-  (https://forgejo.org/docs/latest/user/linked-references/); a reference
+  (https://forgejo.org/docs/latest/user/linked-references/); because
+  Go's regexp engine has no lookahead, the scan rewinds over the
+  terminator a match consumes, as the forge's scanner does, so two
+  references separated by nothing but a newline both resolve
+  (s-git/maitred#185). A reference
   naming a pull request connects nothing, a pull request being a
   delivery and never a connected issue, and a reference whose issue
   answers **not found** — a deleted issue, a mistyped number, an

@@ -476,18 +476,44 @@ func isNotFound(err error) bool {
 // default closing keywords, a bare #N resolved in the pull request's own
 // repository and an owner/repo#N in the repository it names
 // (https://forgejo.org/docs/latest/user/linked-references/,
-// §forgejo/decisions/sync-set).
+// §forgejo/decisions/sync-set). Go's RE2 has no lookahead, so the
+// pattern consumes the character that terminates a match; the scan
+// rewinds to that character's start the way the forge's scanner rewinds
+// over the whitespace its match ate
+// (https://codeberg.org/forgejo/forgejo/src/branch/main/modules/references/references.go),
+// so two references separated by nothing but a newline both resolve.
 func autoCloseRefs(body, prRepo string) []issueRef {
 	var refs []issueRef
 	seen := make(map[Key]bool)
-	for _, m := range closeKeywordRef.FindAllStringSubmatch(body, -1) {
-		number, err := strconv.Atoi(m[2])
+	for pos := 0; pos < len(body); {
+		m := closeKeywordRef.FindStringSubmatchIndex(body[pos:])
+		if m == nil {
+			break
+		}
+		match := pos
+		if m[0] == 0 && pos > 0 && !isRefLead(body[pos]) {
+			// The pattern's ^ alternative matches at the start of every
+			// rewound slice, but the forge reads a reference's lead
+			// against the whole message: no whitespace or bracket
+			// before the keyword means no reference here. Step one byte
+			// and let the next scan find the real lead, if any.
+			pos++
+			continue
+		}
+		// m[6] bounds the start of the terminator the match consumed —
+		// one character, or the empty end of the body. Either way the
+		// cursor advances.
+		pos = match + m[6]
+		if m[6] < 0 || pos <= match {
+			pos = match + m[1]
+		}
+		number, err := strconv.Atoi(body[match+m[4] : match+m[5]])
 		if err != nil {
 			continue
 		}
-		repo := m[1]
-		if repo == "" {
-			repo = prRepo
+		repo := prRepo
+		if m[2] >= 0 {
+			repo = body[match+m[2] : match+m[3]]
 		}
 		ref := issueRef{repo: repo, number: number}
 		if seen[ref.key()] {
@@ -497,6 +523,13 @@ func autoCloseRefs(body, prRepo string) []issueRef {
 		refs = append(refs, ref)
 	}
 	return refs
+}
+
+// isRefLead reports whether b can stand at the start of a closing
+// reference: whitespace or an opening bracket, the forge's leading
+// context (https://forgejo.org/docs/latest/user/linked-references/).
+func isRefLead(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\f' || b == '(' || b == '['
 }
 
 // fetchPRSetState assembles the state the approval path's sync-set
@@ -674,12 +707,15 @@ func (e *Engine) syncMembers(blockers []Issue) ([]SyncMember, error) {
 // repositories, terminated by a non-word character or the end
 // (https://forgejo.org/docs/latest/user/linked-references/ and
 // https://codeberg.org/forgejo/forgejo/src/branch/main/models/references/references.go).
-// The engine mirrors the forge's **default** keyword set: an instance
-// that reconfigures the keywords reads differently than the predicate
-// does — a known limitation of a read-only client
-// (§forgejo/decisions/sync-set).
+// The terminator is captured so autoCloseRefs can rewind to it: Go's
+// RE2 has no lookahead, and without the rewind a reference terminated
+// by nothing but a newline would eat the next reference's leading
+// whitespace and the pair would resolve to one. The engine mirrors the
+// forge's **default** keyword set: an instance that reconfigures the
+// keywords reads differently than the predicate does — a known
+// limitation of a read-only client (§forgejo/decisions/sync-set).
 var closeKeywordRef = regexp.MustCompile(
-	`(?i)(?:\s|^|\(|\[)(?:closed|closes|close|fixed|fixes|fix|resolved|resolves|resolve):? (?:([0-9a-zA-Z-_.]+/[0-9a-zA-Z-_.]+))?#([0-9]+)(?:[^0-9A-Za-z]|$)`)
+	`(?i)(?:\s|^|\(|\[)(?:closed|closes|close|fixed|fixes|fix|resolved|resolves|resolve):? (?:([0-9a-zA-Z-_.]+/[0-9a-zA-Z-_.]+))?#([0-9]+)([^0-9A-Za-z]|$)`)
 
 // prAutoClosesIssue reports whether the pull request body auto-closes
 // the given issue — the relation the forge honours by closing the

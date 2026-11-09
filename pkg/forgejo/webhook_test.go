@@ -3562,6 +3562,16 @@ func TestConnectedIssuesUnionsTheTwoRelations(t *testing.T) {
 			wantGet: 0,
 		},
 		{
+			name:   "references on consecutive lines, no shared row",
+			blocks: nil,
+			body:   "Delivers both.\n\nCloses #4\nCloses #7",
+			want: []Key{
+				{Repo: "o/r", Kind: KindIssue, Number: 4},
+				{Repo: "o/r", Kind: KindIssue, Number: 7},
+			},
+			wantGet: 2,
+		},
+		{
 			name:    "cross-repository reference",
 			body:    "Also lands o/outcomes#11.\n\nCloses o/outcomes#11",
 			want:    []Key{{Repo: "o/outcomes", Kind: KindIssue, Number: 11}},
@@ -4036,6 +4046,7 @@ func TestPRAutoClosesIssue(t *testing.T) {
 		{"case insensitive", "FIXES #4", true},
 		{"colon form", "Fixes: #4", true},
 		{"reference later in body", "See #9 for context.\n\nThis branch fixes #4 in passing.", true},
+		{"reference on the next line", "Fixes #5\nFixes #4", true},
 		{"other issue", "Fixes #5", false},
 		{"other repository", "Fixes o/other#4", false},
 		{"no keyword", "Delivers #4", false},
