@@ -509,8 +509,9 @@ error the set's hold-off names (§forgejo/decisions/sync-set). The
 gate is
 the merge-path twin of the open-blocker rule that holds off `reassess`
 (§forgejo/decisions/transition-table), and every path that dispatches
-`merge-or-wait` consults it through one shared test: the review event,
-the sweep's PR path, and the held PR the unblock cascade unblocks.
+`merge-or-wait` consults both halves of the gate through one shared
+branch (`decideChainReported`): the review event, a PR comment, the
+sweep's PR path, and the held PR the unblock cascade unblocks.
 
 The PR's **own entry** in a connected issue's blocker list is not a
 blocker: the PR *is* the connected issue's delivery vehicle (the
