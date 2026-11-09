@@ -138,6 +138,12 @@ type fakeAPI struct {
 	// reads (§forgejo/decisions/unblock-cascade).
 	pullErr error
 
+	// getIssueErr, when set, fails only GetIssue — so a test can break
+	// the resolution of an issue the pull request's body auto-closes
+	// without breaking the object re-fetches
+	// (§forgejo/webhook/re-fetch, s-git/maitred#180).
+	getIssueErr error
+
 	// GetIssue blocking hooks for the concurrency tests: GetIssue
 	// closes getIssueEntered (once) on entry, then waits on
 	// blockGetIssue when it is set.
@@ -216,6 +222,9 @@ func (f *fakeAPI) GetIssue(owner, repo string, number int) (*Issue, error) {
 	}
 	if f.blockGetIssue != nil {
 		<-f.blockGetIssue
+	}
+	if f.getIssueErr != nil {
+		return nil, f.getIssueErr
 	}
 	if f.err != nil {
 		return nil, f.err
@@ -3318,6 +3327,309 @@ func TestHandler_PRReviewed_SyncSetNotReadyStaysSilent(t *testing.T) {
 	}
 }
 
+// autoCloseSetFixtures wires the shape s-git/maitred#180 reports: the
+// member delivers through the pull request whose body auto-closes it and
+// **no blocking edge** connects the member and its delivery — the edge
+// §decisions/sync-set retired on the member side (s-git/maitred#171).
+// The pull request therefore blocks nothing, so the approval path finds
+// the landing set through the reference the body carries, exactly as the
+// predicate does, rather than through an edge no implementer records
+// (§forgejo/decisions/sync-set, §forgejo/webhook/re-fetch).
+func autoCloseSetFixtures(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store, *bytes.Buffer) {
+	t.Helper()
+	api := newFakeAPI()
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	var log bytes.Buffer
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewJSONHandler(&log, nil)))
+	api.repos = syncOutcomesRepos()
+
+	member := testIssue(4, "open")
+	member.Labels = []string{LabelAgenticSyncMerge} // opted into the set, never into merging alone
+	closedMember := testIssue(5, "closed")
+	syncIssue := testIssue(11, "open")
+	syncIssue.Labels = []string{LabelSync}
+	syncIssue.Repository = "o/outcomes"
+	pr := testPR(9, "open", true)
+	pr.Body = "Deliver member 4.\n\nCloses #4"
+	api.issues[4] = member
+	api.issues[5] = closedMember
+	api.issues[11] = syncIssue
+	api.pulls[9] = pr
+	api.openPulls["r"] = []PullRequest{*pr}
+	api.reviews[9] = []Review{{Event: ReviewApproved, Author: "bob", CommitID: pr.HeadSHA, SubmittedAt: testUpdatedAt}}
+	api.blocks[4] = []Issue{*syncIssue} // the member's membership edge
+	api.deps[11] = []Issue{*member, *closedMember}
+	return eng, api, q, store, &log
+}
+
+// TestHandler_PRReviewed_AutoCloseReferenceFindsTheSet: the reported
+// shape, end to end and with no sweep in sight. An open member carrying
+// agentic-sync-merge blocks an open sync issue whose other member is
+// closed, and the delivery is an open pull request whose body reads
+// Closes #N — the member records no blocking edge, so the old read saw
+// nothing and the approval merged the delivery on its own. The approval
+// now holds merge-or-wait off and enqueues sync against the grouping
+// issue at the set revision (§forgejo/decisions/sync-set,
+// §forgejo/webhook/re-fetch, s-git/maitred#180).
+func TestHandler_PRReviewed_AutoCloseReferenceFindsTheSet(t *testing.T) {
+	eng, _, q, store, log := autoCloseSetFixtures(t)
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want the one sync dispatch for 11 (the member PR must not merge): %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=sync repo=o/outcomes kind=issue number=11") {
+		t.Errorf("prompt = %q, want the sync dispatch for o/outcomes issue 11", tasks[0].Prompt)
+	}
+	if strings.Contains(tasks[0].Prompt, string(ActionMergeOrWait)) {
+		t.Errorf("prompt = %q, want no merge-or-wait: the set's decision lands its delivery", tasks[0].Prompt)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("PR watermark = %+v, want none: the approval held off", w)
+	}
+	w, err = store.Load(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 11})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w == nil || w.Action != string(ActionSync) || w.Revision == "" {
+		t.Fatalf("sync watermark = %+v, want sync at the set revision", w)
+	}
+	if reason := reasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "sync set") {
+		t.Errorf("approval hold-off %q does not name the landing set it is waiting for", reason)
+	}
+}
+
+// TestHandler_PRReviewed_AutoCloseReferenceUnreadySetDispatchesNothing:
+// the mirror case. The same delivery, the same reference, and one member
+// of the set standing unapproved: nothing dispatches, the queue stays
+// empty and the PR stays unmerged — the hold-off fires on membership,
+// and the set's own re-fetch is what decides it is not ready
+// (§forgejo/decisions/sync-set, §forgejo/webhook/re-fetch).
+func TestHandler_PRReviewed_AutoCloseReferenceUnreadySetDispatchesNothing(t *testing.T) {
+	eng, api, q, store, log := autoCloseSetFixtures(t)
+	stray := testIssue(12, "open")
+	stray.Labels = []string{LabelAgenticSyncMerge}
+	strayPR := testPR(13, "open", true)
+	strayPR.Body = "Deliver member 12.\n\nFixes #12"
+	api.issues[12] = stray
+	api.pulls[13] = strayPR
+	api.openPulls["r"] = append(api.openPulls["r"], *strayPR)
+	api.reviews[13] = []Review{{Event: ReviewComment, Author: "carol", CommitID: strayPR.HeadSHA, SubmittedAt: testUpdatedAt}}
+	api.deps[11] = append(api.deps[11], *stray)
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Errorf("got %d tasks, want none: an unready set dispatches nothing and merges nothing: %+v", len(tasks), tasks)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("PR watermark = %+v, want none: the approval held off", w)
+	}
+	if reason := reasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "sync set") {
+		t.Errorf("approval hold-off %q does not name the landing set it is waiting for", reason)
+	}
+}
+
+// TestHandler_PRReviewed_AutoCloseReferenceBlockerHoldsOffMerge: the
+// union decides the merge gate too. A pull request whose body closes an
+// issue with an open blocker is held off by name even though it blocks
+// nothing on the graph — one relation for the delivery, read the same
+// way by both the gate and the set hold-off
+// (§forgejo/decisions/merge-gate, §forgejo/webhook/re-fetch).
+func TestHandler_PRReviewed_AutoCloseReferenceBlockerHoldsOffMerge(t *testing.T) {
+	eng, api, q, store, log := mergeGateFixtures(t)
+	api.blocks[9] = nil // the PR blocks nothing: only the body connects it
+	api.issues[7] = testIssue(7, "open")
+	api.pulls[9].Body = "Delivers issue 7.\n\nCloses #7"
+	h := NewHandler(eng, "s3cret", nil)
+
+	serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none: the issue the body closes has an open blocker: %+v", len(tasks), tasks)
+	}
+	if reason := reasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "o/r#3") {
+		t.Errorf("reason %q does not name the open blocker o/r#3 of the issue the body closes", reason)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none: the merge gate held off", w)
+	}
+}
+
+// TestHandler_PRReviewed_AutoCloseReferenceFetchFailureHoldsOff: the
+// extra read fails closed like every other hop — a body whose reference
+// cannot be resolved is a re-fetch failure named in the log, never
+// "nothing connected" and never the path's default
+// (§forgejo/webhook/re-fetch).
+func TestHandler_PRReviewed_AutoCloseReferenceFetchFailureHoldsOff(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	api.pulls[9].Body = "Delivers issue 4.\n\nFixes #4"
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
+	api.getIssueErr = errors.New("issue unavailable")
+
+	serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
+	if n := api.callCount("GetIssue"); n != 1 {
+		t.Errorf("GetIssue called %d time(s), want 1: the delivery must reach the reference read for this test to test it", n)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Errorf("task dispatched despite failed reference read: %+v", tasks)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark recorded after failed re-fetch: %+v", w)
+	}
+}
+
+// TestConnectedIssuesUnionsTheTwoRelations pins the read itself: the
+// issues the body auto-closes and the issues the blocking edges name are
+// one list, each carrying its blockers, deduplicated when an issue is
+// reachable both ways; a reference naming a pull request is not a
+// connected issue, and a body carrying no reference costs no read at all
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/sync-set).
+func TestConnectedIssuesUnionsTheTwoRelations(t *testing.T) {
+	blocked := testIssue(7, "open")
+	member := testIssue(4, "open")
+	member.Labels = []string{LabelAgenticSyncMerge}
+	outcomesIssue := testIssue(11, "open")
+	outcomesIssue.Repository = "o/outcomes"
+	prAsIssue := testIssue(9, "open")
+	prAsIssue.IsPull = true
+
+	cases := []struct {
+		name    string
+		blocks  []Issue
+		body    string
+		want    []Key
+		wantGet int
+	}{
+		{
+			name:    "blocking edge alone",
+			blocks:  []Issue{*blocked},
+			body:    "No references here, not even #4.",
+			want:    []Key{{Repo: "o/r", Kind: KindIssue, Number: 7}},
+			wantGet: 0,
+		},
+		{
+			name:    "auto-close reference alone",
+			body:    "Delivers the member.\n\nCloses #4",
+			want:    []Key{{Repo: "o/r", Kind: KindIssue, Number: 4}},
+			wantGet: 1,
+		},
+		{
+			name:   "both relations, one row each",
+			blocks: []Issue{*blocked},
+			body:   "Delivers the member and issue 7 too.\n\nFixes #4\nFixes #7",
+			want: []Key{
+				{Repo: "o/r", Kind: KindIssue, Number: 7},
+				{Repo: "o/r", Kind: KindIssue, Number: 4},
+			},
+			wantGet: 1,
+		},
+		{
+			name:    "an issue reachable both ways is read once",
+			blocks:  []Issue{*member},
+			body:    "Delivers the member.\n\nFixes #4\nAnd again, fixes #4.",
+			want:    []Key{{Repo: "o/r", Kind: KindIssue, Number: 4}},
+			wantGet: 0,
+		},
+		{
+			name:    "cross-repository reference",
+			body:    "Also lands o/outcomes#11.\n\nCloses o/outcomes#11",
+			want:    []Key{{Repo: "o/outcomes", Kind: KindIssue, Number: 11}},
+			wantGet: 1,
+		},
+		{
+			name:    "a reference to a pull request is not a connected issue",
+			body:    "Follows the shape of #8.\n\nFixes #9.",
+			want:    nil,
+			wantGet: 1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, _, _ := newTestEngine(t)
+			api.issues[4] = member
+			api.issues[7] = blocked
+			api.issues[9] = prAsIssue
+			api.issues[11] = outcomesIssue
+			api.deps[4] = []Issue{*testIssue(3, "open")}
+			api.deps[7] = []Issue{*testIssue(6, "closed")}
+			api.blocks[9] = tc.blocks
+
+			got, err := eng.connectedIssues("o", "r", 9, tc.body)
+			if err != nil {
+				t.Fatalf("connectedIssues: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d connected issues, want %d: %+v", len(got), len(tc.want), got)
+			}
+			for i := range got {
+				if got[i].Issue.Repository != tc.want[i].Repo || got[i].Issue.Number != tc.want[i].Number {
+					t.Errorf("row %d = %s#%d, want %s#%d", i, got[i].Issue.Repository, got[i].Issue.Number, tc.want[i].Repo, tc.want[i].Number)
+				}
+			}
+			if n := api.callCount("GetIssue"); n != tc.wantGet {
+				t.Errorf("GetIssue called %d time(s), want %d", n, tc.wantGet)
+			}
+			// One hop per connected issue, no recursion — the referenced
+			// issue's blockers are read, its blockers' blockers are not.
+			if n := api.callCount("IssueDependencies:r/3"); n != 0 {
+				t.Errorf("IssueDependencies on a blocker called %d time(s), want 0", n)
+			}
+		})
+	}
+}
+
+// TestConnectedIssuesReferencedIssueReadFailure: a referenced issue whose
+// read — the issue itself or its blockers — fails fails the whole read,
+// so the caller holds off naming the failure rather than deciding on an
+// empty graph (§forgejo/webhook/re-fetch).
+func TestConnectedIssuesReferencedIssueReadFailure(t *testing.T) {
+	t.Run("issue read", func(t *testing.T) {
+		eng, api, _, _ := newTestEngine(t)
+		api.getIssueErr = errors.New("issue unavailable")
+		if _, err := eng.connectedIssues("o", "r", 9, "Fixes #4"); err == nil {
+			t.Error("connectedIssues succeeded, want the failed issue read reported")
+		}
+	})
+	t.Run("blockers read", func(t *testing.T) {
+		eng, api, _, _ := newTestEngine(t)
+		api.issues[4] = testIssue(4, "open")
+		api.issueDepsErr = errors.New("dependencies unavailable")
+		if _, err := eng.connectedIssues("o", "r", 9, "Fixes #4"); err == nil {
+			t.Error("connectedIssues succeeded, want the failed blockers read reported")
+		}
+	})
+}
+
 // TestHandler_Reconcile_SyncIssueDispatchesTheSet: the sweep is the
 // backstop — reconciling an open sync issue whose members are all
 // closed or approved-and-opted-in dispatches sync, recorded against
@@ -3455,6 +3767,12 @@ func cascadePRSetFixtures(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store, 
 	api.issues[5] = testIssue(5, "open") // open, unlabelled: a member awaiting a human
 	api.deps[11] = []Issue{*member, *api.issues[5]}
 	api.blocks[9] = []Issue{*member} // PR 9 delivers issue 10, not fixture member 4
+	// The delivery names the member it auto-closes. Fixture member 4
+	// stands outside this set here, so the body names issue 10: a body
+	// still reading "Fixes #4" would connect 4 to this PR through the
+	// reference the approval path now reads as well
+	// (§forgejo/webhook/re-fetch).
+	api.pulls[9].Body = "Delivers issue 10.\n\nCloses #10"
 	api.blocks[10] = []Issue{*api.issues[11]}
 	return eng, api, q, store, log
 }
@@ -3476,6 +3794,38 @@ func TestHandler_IssueClosed_CascadePRLegNeverMergesSetMember(t *testing.T) {
 	}
 	if tasks := q.all(); len(tasks) != 0 {
 		t.Fatalf("got %d tasks, want none: an open set lands its member PR, not the cascade %+v", len(tasks), tasks)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w != nil {
+		t.Errorf("PR watermark = %+v, want none: the cascade's PR leg held off", w)
+	}
+	if reason := reasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "sync set") {
+		t.Errorf("cascade PR hold-off %q does not name the landing set it is waiting for", reason)
+	}
+}
+
+// TestHandler_IssueClosed_CascadePRLegFindsTheSetThroughTheBody: the
+// third path to merge-or-wait reads the delivery the same way. Closing
+// the last issue-side blocker unblocks the member's PR — and that PR
+// records no blocking edge anywhere, being connected to its member only
+// by the reference in its body. The cascade's PR leg still sees the open
+// set, holds the merge off and emits the set instead
+// (§forgejo/decisions/unblock-cascade, §forgejo/webhook/re-fetch,
+// s-git/maitred#180).
+func TestHandler_IssueClosed_CascadePRLegFindsTheSetThroughTheBody(t *testing.T) {
+	eng, api, q, store, log := cascadePRSetFixtures(t)
+	api.blocks[9] = nil // the PR blocks nothing: the body carries the delivery
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none: an open set lands its member PR, not the cascade: %+v", len(tasks), tasks)
 	}
 	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
 	if err != nil {

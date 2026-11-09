@@ -321,15 +321,38 @@ For each decision event, the re-fetch assembles the state
 - **PR events** — the PR itself, and its reviews, for the review
   transitions and for PR comments (which decide as reconcile). For PR
   reviewed, PR commented, and the sweep's synthetic
-  current-state event for a PR, the connected issues — the non-PR issues
-  the PR blocks, read from the issue-blocks surface, each carrying its
-  own repository, which may differ from the PR's — and each issue's
+  current-state event for a PR, the connected issues — the issues the
+  PR's **body auto-closes** and the non-PR issues it **blocks**, read
+  through the forge's closing-keyword grammar and the issue-blocks
+  surface respectively, each carrying its own repository, which may
+  differ from the PR's — and each issue's
   blockers as well: one hop per connected issue, no recursion, the input
   to the merge gate (§forgejo/decisions/merge-gate,
   §forgejo/decisions/inputs), consulted wherever a merge may be
   dispatched — the PR
   reviewed event and the sweep's PR path (which PR commented also
-  decides as). Every non-PR entry is resolved: the gate's decision is
+  decides as).
+
+  Two relations connect an issue to a delivery, and **both are read**.
+  The body's auto-close references are the relation the authoring
+  contract writes: a landing-set member delivers through the pull
+  request whose body closes it, and no blocking edge between the member
+  and its delivery is recorded (§forgejo/decisions/sync-set,
+  s-git/maitred#171). The blocking edges still carry the **direct**
+  shape below, where a pull request stands in a grouping issue's own
+  blockers. Reading one relation alone leaves a path blind to what the
+  other sees, and the predicate and the gate must decide on the same
+  membership: an approval path that could see only the edges found a
+  member's delivery connected to nothing, merged it through
+  `merge-or-wait`, and left the set to the next sweep
+  (s-git/maitred#180). A bare `#N` resolves in the PR's own repository,
+  an `owner/repo#N` in the repository it names, exactly as the forge
+  resolves it
+  (https://forgejo.org/docs/latest/user/linked-references/); a reference
+  naming a pull request connects nothing, a pull request being a
+  delivery and never a connected issue. An issue reachable both ways is
+  read once, the blocking-edge rows first, so it is counted once.
+  Every entry is resolved: the gate's decision is
   never left to the order the listing happens to return; a failed read
   fails the re-fetch — a hold-off naming the failure, never "no
   blockers". The hop is performed wherever a merge may be dispatched,
@@ -338,7 +361,11 @@ For each decision event, the re-fetch assembles the state
   gate's rows. An opened pull request therefore costs one graph walk
   fewer than it did, and the sweep's PR path performs exactly the one
   hop the merge gate needs — no walk that served only the retired
-  action (§forgejo/decisions/commissioning, s-git/maitred#151). A pull
+  action (§forgejo/decisions/commissioning, s-git/maitred#151). The body
+  the references are read from is the PR's own, already fetched, so a
+  delivery naming no issue costs no read beyond the hop it always did,
+  and the reads an added reference costs are one issue and one blockers
+  row — never a listing. A pull
   request opened against a connected issue blocked by an open
   `ideation` issue is decided on its own state — `review` or `rebase` —
   and no graph walk runs for it at all (§forgejo/decisions/transition-table).

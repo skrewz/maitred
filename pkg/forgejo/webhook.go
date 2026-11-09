@@ -319,14 +319,15 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 			// The one hop performed wherever a merge may be dispatched —
 			// the PR reviewed event, PR commented (which decides as the
 			// sweep's PR path), and the sweep's synthetic current-state
-			// event: every non-PR issue the PR blocks — relationships
-			// recorded on the blocker graph rather than inferred from the
-			// PR body — and each issue's blockers, read from that issue's
-			// own repository, no recursion. Every non-PR entry is
-			// resolved: the merge gate is not left to API ordering. A
-			// failure to resolve any connected issue is a re-fetch
-			// failure — a hold-off naming the failure, never the path's
-			// default (§forgejo/webhook/re-fetch,
+			// event: every issue connected to the PR — those its body
+			// auto-closes and those its blocking edges name, the two
+			// relations that can carry a delivery — each with its
+			// blockers, read from that issue's own repository, no
+			// recursion. Every entry is resolved: the merge gate is not
+			// left to API ordering. A failure to resolve any connected
+			// issue is a re-fetch failure — a hold-off naming the
+			// failure, never the path's default
+			// (§forgejo/webhook/re-fetch,
 			// §forgejo/decisions/merge-gate).
 			if err := e.fetchPRSetState(owner, name, ev.Number, &st); err != nil {
 				return ev, State{}, err
@@ -362,18 +363,35 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 	return ev, State{}, fmt.Errorf("unknown kind %q", ev.Kind)
 }
 
-// connectedIssues fetches the one hop the merge gate reads: every
-// non-PR issue the PR blocks — its connected issues — each carrying the
-// issues that block it. The hop is read in the connected issue's own
-// repository (cross-repo aware), one hop per connected issue, no
-// recursion; a failed read fails the whole re-fetch
-// (§forgejo/webhook/re-fetch, §forgejo/decisions/merge-gate).
-func (e *Engine) connectedIssues(owner, name string, number int) ([]ConnectedIssue, error) {
+// connectedIssues fetches the one hop the merge gate and the landing-set
+// read share: the issues connected to a pull request, each carrying the
+// issues that block it. Two relations connect them, and both are read.
+// The issues the pull request's body **auto-closes**, resolved through
+// the forge's own closing-keyword grammar, are the delivery relation the
+// authoring contract writes: a member delivers through the pull request
+// whose body closes it, and no blocking edge between the two is recorded
+// any more (§forgejo/decisions/sync-set, s-git/maitred#171). The issues
+// the pull request **blocks** are still read, because that edge carries
+// the shape a grouping issue's own PR member stands in. A read of one
+// relation alone leaves a path blind to the delivery the other sees: the
+// approval path that could not see a member's set merged its delivery
+// through merge-or-wait and left the set to the next sweep
+// (s-git/maitred#180). An issue reachable through either relation is
+// read the same way — its blockers, in its own repository (cross-repo
+// aware), one hop per connected issue, no recursion — and the rows are
+// deduplicated by repository and number, the blocking-edge rows first,
+// so an issue reachable both ways is read and counted once. A failed
+// read fails the whole re-fetch (§forgejo/webhook/re-fetch,
+// §forgejo/decisions/merge-gate). A pull request is never a connected
+// issue: it is a delivery, so a reference naming one is skipped.
+func (e *Engine) connectedIssues(owner, name string, number int, body string) ([]ConnectedIssue, error) {
+	prRepo := owner + "/" + name
 	blocks, err := e.api.IssueBlocks(owner, name, number)
 	if err != nil {
 		return nil, err
 	}
 	var connected []ConnectedIssue
+	seen := make(map[Key]bool)
 	for i := range blocks {
 		if blocks[i].IsPull {
 			continue // only issues connect a PR to the graph this way
@@ -383,25 +401,106 @@ func (e *Engine) connectedIssues(owner, name string, number int) ([]ConnectedIss
 		if err != nil {
 			return nil, err
 		}
+		seen[connectedKey(blocks[i].Repository, blocks[i].Number)] = true
 		connected = append(connected, ConnectedIssue{Issue: blocks[i], Blockers: blockers})
+	}
+	for _, ref := range autoCloseRefs(body, prRepo) {
+		if seen[ref.key()] {
+			continue // the blocking-edge row already carries this issue
+		}
+		ro, rn := splitRepo(ref.repo)
+		issue, err := e.api.GetIssue(ro, rn, ref.number)
+		if err != nil {
+			return nil, err
+		}
+		if issue.IsPull {
+			continue // a pull request delivers; it never sits as a connected issue
+		}
+		if issue.Repository == "" {
+			// The single-issue endpoint names no repository; the reference does.
+			issue.Repository = ref.repo
+		}
+		blockers, err := e.api.IssueDependencies(ro, rn, ref.number)
+		if err != nil {
+			return nil, err
+		}
+		connected = append(connected, ConnectedIssue{Issue: *issue, Blockers: blockers})
 	}
 	return connected, nil
 }
 
+// issueRef is an issue a pull request body names: the repository the
+// reference resolved to — the pull request's own for a bare #N — and the
+// number it carried.
+type issueRef struct {
+	repo   string
+	number int
+}
+
+// key is the reference's identity, compared case-insensitively on the
+// repository — the reference grammar matches a repository name that way
+// — and exactly on the number.
+func (r issueRef) key() Key {
+	return connectedKey(r.repo, r.number)
+}
+
+// connectedKey is the dedup key of a connected issue, matching a
+// reference's identity so the same issue reached through either relation
+// is read once (§forgejo/webhook/re-fetch).
+func connectedKey(repo string, number int) Key {
+	return Key{Repo: strings.ToLower(repo), Kind: KindIssue, Number: number}
+}
+
+// autoCloseRefs lists the issues a pull request body auto-closes, in
+// order of first appearance and without duplicates. The grammar is the
+// one prAutoClosesIssue applies and the forge itself honours: the
+// default closing keywords, a bare #N resolved in the pull request's own
+// repository and an owner/repo#N in the repository it names
+// (https://forgejo.org/docs/latest/user/linked-references/,
+// §forgejo/decisions/sync-set).
+func autoCloseRefs(body, prRepo string) []issueRef {
+	var refs []issueRef
+	seen := make(map[Key]bool)
+	for _, m := range closeKeywordRef.FindAllStringSubmatch(body, -1) {
+		number, err := strconv.Atoi(m[2])
+		if err != nil {
+			continue
+		}
+		repo := m[1]
+		if repo == "" {
+			repo = prRepo
+		}
+		ref := issueRef{repo: repo, number: number}
+		if seen[ref.key()] {
+			continue
+		}
+		seen[ref.key()] = true
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
 // fetchPRSetState assembles the state the approval path's sync-set
-// hold-off and the merge gate read for a pull request: every non-PR
-// issue the PR blocks, each with its blockers, and the landing-set
-// membership — the open sync issues it belongs to, read through a
-// connected member's membership edges or, where the PR stands in a
-// grouping issue's own blockers, through that edge. Both paths that can
-// dispatch merge-or-wait for a PR build this state here, the event's
-// re-fetch and the unblock cascade's PR leg, so the hold-off cannot see
-// membership on one and be blind to it on the other: a member of an
-// open set never merges on its own, whichever direction the approval
-// arrived from (§forgejo/webhook/re-fetch, §forgejo/decisions/sync-set,
-// §forgejo/decisions/unblock-cascade).
+// hold-off and the merge gate read for a pull request: its connected
+// issues — those its body auto-closes and those its blocking edges name
+// — each with its blockers, and the landing-set membership, the open
+// sync issues it belongs to, read through a connected member's
+// membership edges or, where the PR stands in a grouping issue's own
+// blockers, through that edge. Both paths that can dispatch
+// merge-or-wait for a PR build this state here, the event's re-fetch and
+// the unblock cascade's PR leg, so the hold-off cannot see membership on
+// one and be blind to it on the other: a member of an open set never
+// merges on its own, whichever direction the approval arrived from. The
+// body the references are read from is the pull request's own, already
+// fetched, so a delivery that names no issue costs no read beyond the
+// edge hop it always did (§forgejo/webhook/re-fetch,
+// §forgejo/decisions/sync-set, §forgejo/decisions/unblock-cascade).
 func (e *Engine) fetchPRSetState(owner, name string, number int, st *State) error {
-	connected, err := e.connectedIssues(owner, name, number)
+	var body string
+	if st.PR != nil {
+		body = st.PR.Body
+	}
+	connected, err := e.connectedIssues(owner, name, number, body)
 	if err != nil {
 		return err
 	}
