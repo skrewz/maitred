@@ -862,19 +862,6 @@ func allLensesApproved(reviews []Review, lenses []ReviewLens, head string) bool 
 	return len(lenses) > 0
 }
 
-// outstandingLenses names the lenses with no undismissed approval at
-// head, for the hold-off reasons that name the outstanding lenses
-// (§forgejo/decisions/review-lenses).
-func outstandingLenses(reviews []Review, lenses []ReviewLens, head string) []string {
-	var out []string
-	for _, lens := range lenses {
-		if !lensStandingAtHead(reviews, lens, head).approved {
-			out = append(out, lens.Identity)
-		}
-	}
-	return out
-}
-
 // nonApprovalAtHead reports whether some reviewer's latest undismissed
 // review at head is not an approval, and separately whether one
 // requests changes — the "the reports are not all approvals" half of
@@ -1700,18 +1687,6 @@ func blockerNames(blockers []Issue) string {
 // merged).
 func prOpen(pr *PullRequest) bool {
 	return pr.State == "open" && !pr.Merged
-}
-
-// latestReview returns the PR's most recently submitted review, or nil
-// when it has none.
-func latestReview(reviews []Review) *Review {
-	var latest *Review
-	for i := range reviews {
-		if latest == nil || reviews[i].SubmittedAt.After(latest.SubmittedAt) {
-			latest = &reviews[i]
-		}
-	}
-	return latest
 }
 
 // issueRevision is the issue's activity revision: its updated_at in
