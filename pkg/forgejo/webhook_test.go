@@ -3787,6 +3787,58 @@ func TestConnectedIssuesReferenceCap(t *testing.T) {
 	}
 }
 
+// TestConnectedIssuesCapChargesOnlyPaidReferences: the budget buys API
+// calls, so a reference that costs nothing — one a blocking-edge row
+// already carries, or one refused before any URL is built — must not
+// spend it. Otherwise a body whose first references all arrive as edges
+// resolves nothing new and drops the first genuinely-new reference as
+// "beyond the reference cap": the delivery reads as disconnected and
+// merge-or-wait lands it out of turn, the fail-open #180 exists to fix
+// (§forgejo/webhook/re-fetch, s-git/maitred#185 review 1338).
+func TestConnectedIssuesCapChargesOnlyPaidReferences(t *testing.T) {
+	api := newFakeAPI()
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	var log bytes.Buffer
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewJSONHandler(&log, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	// Eight blocking-edge rows, the same eight named in the body, and
+	// one reference the edges do not carry.
+	var edges []Issue
+	body := "Delivers eight members and one more."
+	for n := 20; n < 20+maxAutoCloseRefs; n++ {
+		api.issues[n] = testIssue(n, "open")
+		edges = append(edges, *testIssue(n, "open"))
+		body += "\n\nFixes #" + strconv.Itoa(n)
+	}
+	api.issues[100] = testIssue(100, "open")
+	body += "\n\nFixes #100"
+	api.blocks[9] = edges
+
+	got, err := eng.connectedIssues("o", "r", 9, body)
+	if err != nil {
+		t.Fatalf("connectedIssues: %v", err)
+	}
+	if len(got) != maxAutoCloseRefs+1 {
+		t.Fatalf("got %d connected issues, want the %d edge rows plus the new reference: %+v", len(got), maxAutoCloseRefs, got)
+	}
+	last := got[len(got)-1]
+	if last.Issue.Number != 100 {
+		t.Errorf("last row = %s#%d, want o/r#100: the new reference must be resolved, not dropped by the cap", last.Issue.Repository, last.Issue.Number)
+	}
+	// The eight references dedup against the edge rows and pay nothing;
+	// only the new reference costs a read.
+	if n := api.callCount("GetIssue"); n != 1 {
+		t.Errorf("GetIssue called %d time(s), want 1", n)
+	}
+	if out := log.String(); strings.Contains(out, "beyond the reference cap") {
+		t.Errorf("log %q records a cap truncation, want none: no reference here costs a read", out)
+	}
+}
+
 // TestHandler_Reconcile_SyncIssueDispatchesTheSet: the sweep is the
 // backstop — reconciling an open sync issue whose members are all
 // closed or approved-and-opted-in dispatches sync, recorded against

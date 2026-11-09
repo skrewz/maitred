@@ -393,10 +393,12 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 // other cross-repository read pays (§forgejo/webhook/repository-roles):
 // outside the engine's remit it connects nothing, and an unknown scope
 // fails the re-fetch. A reference whose repository names a path segment
-// is refused before any URL is built, and the references resolved here
-// are capped (maxAutoCloseRefs) where the per-reference cost is paid —
-// the grammar itself stays uncapped, a faithful mirror for the
-// predicate's pure in-memory read. Every drop, the cap's truncation
+// is refused before any URL is built, and the reads this loop makes are
+// capped (maxAutoCloseRefs): the budget is charged beside the call it
+// bounds, so a reference that costs no read — deduped against an edge
+// row, refused as a path segment, turned away by the remit test —
+// spends none of it. The grammar itself stays uncapped, a faithful
+// mirror for the predicate's pure in-memory read. Every drop, the cap's truncation
 // included, leaves a debug line naming the resolved reference, so a
 // dropped relation is visible rather than silent. A pull request is
 // never a connected issue: it is a delivery, so a reference naming one
@@ -431,7 +433,6 @@ func (e *Engine) connectedIssues(owner, name string, number int, body string) ([
 			e.logSkippedRef(prRepo, number, ref, "beyond the reference cap; every reference after it is dropped too")
 			break
 		}
-		resolved++
 		if !validRepoRef(ref.repo) {
 			// A reference whose repository names a path segment — "." or
 			// "..", which the grammar's character class admits — names
@@ -460,6 +461,11 @@ func (e *Engine) connectedIssues(owner, name string, number int, body string) ([
 				continue
 			}
 		}
+		// The budget is charged here, beside the fan-out it bounds: a
+		// reference deduped against an edge row, refused as a path
+		// segment or turned away by the remit test costs no read and so
+		// spends none of it (§forgejo/webhook/re-fetch).
+		resolved++
 		ro, rn := splitRepo(ref.repo)
 		issue, err := e.api.GetIssue(ro, rn, ref.number)
 		if err != nil {
@@ -536,8 +542,12 @@ func isNotFound(err error) bool {
 // resolves. The authoring contract needs one or two; the cap bounds
 // the per-reference fan-out the approval path pays (one issue read and
 // one blockers row per resolved reference) against a body written to
-// cost the engine the delivery (§forgejo/webhook/re-fetch). The cap
-// belongs to that resolving loop, not to the grammar: the predicate's
+// cost the engine the delivery (§forgejo/webhook/re-fetch). It is
+// charged where that fan-out happens — beside the issue read — so a
+// reference the loop drops before reaching the API spends none of the
+// budget, and eight means eight reads rather than eight references the
+// body happened to name first. The cap belongs to that resolving loop,
+// not to the grammar: the predicate's
 // read of the same body is pure in-memory matching that costs nothing
 // per reference, and #180 asks nothing of it.
 const maxAutoCloseRefs = 8

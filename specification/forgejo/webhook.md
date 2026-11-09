@@ -385,14 +385,20 @@ For each decision event, the re-fetch assembles the state
   the grammar's case-insensitive name test, the dedup key and the
   scope cache's case-insensitive lookup, so a mixed-case spelling of a
   repository inside the remit is neither read twice nor logged as
-  outside it (s-git/maitred#185 review 1304). The references the
-  approval path resolves are **capped** (eight), capped in the
+  outside it (s-git/maitred#185 review 1304). The reads the approval
+  path makes are **capped** (eight), capped in the
   resolving loop where the per-reference cost is paid and not in the
   grammar: the authoring contract needs one or two, and the cap bounds
   the fan-out against a body written to cost the engine the delivery;
   the predicate's read of the same body is pure in-memory matching
   that costs nothing per reference and stays uncapped, a faithful
-  mirror of the forge. The cap's drop is not silent: the first dropped
+  mirror of the forge. The budget is charged beside the call it bounds,
+  so a reference that costs no read — deduped against a blocking-edge
+  row, refused as a path segment, turned away by the remit test —
+  spends none of it, and a body of repeats followed by genuinely-new
+  references resolves what it names rather than reading as
+  disconnected (s-git/maitred#185 review 1338). The cap's drop is not
+  silent: the first dropped
   reference leaves a debug line naming the truncation and the
   references after it, so a delivery the cap renders disconnected is
   visible rather than a fail-open replay of the bug #180 exists to
