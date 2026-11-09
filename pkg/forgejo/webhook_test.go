@@ -3512,7 +3512,8 @@ func TestHandler_PRReviewed_AutoCloseReferenceFetchFailureHoldsOff(t *testing.T)
 // issues the body auto-closes and the issues the blocking edges name are
 // one list, each carrying its blockers, deduplicated when an issue is
 // reachable both ways; a reference naming a pull request is not a
-// connected issue, and a body carrying no reference costs no read at all
+// connected issue, a dangling reference is skipped as the forge skips
+// it, and a body carrying no reference costs no read at all
 // (§forgejo/webhook/re-fetch, §forgejo/decisions/sync-set).
 func TestConnectedIssuesUnionsTheTwoRelations(t *testing.T) {
 	blocked := testIssue(7, "open")
@@ -3572,6 +3573,16 @@ func TestConnectedIssuesUnionsTheTwoRelations(t *testing.T) {
 			want:    nil,
 			wantGet: 1,
 		},
+		{
+			name:   "a dangling reference is skipped, the rest of the body still reads",
+			blocks: []Issue{*blocked},
+			body:   "Delivers the member and issue 7.\n\nFixes #4 and Fixes #99.",
+			want: []Key{
+				{Repo: "o/r", Kind: KindIssue, Number: 7},
+				{Repo: "o/r", Kind: KindIssue, Number: 4},
+			},
+			wantGet: 2,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3626,6 +3637,20 @@ func TestConnectedIssuesReferencedIssueReadFailure(t *testing.T) {
 		api.issueDepsErr = errors.New("dependencies unavailable")
 		if _, err := eng.connectedIssues("o", "r", 9, "Fixes #4"); err == nil {
 			t.Error("connectedIssues succeeded, want the failed blockers read reported")
+		}
+	})
+	t.Run("not found is not a failed read", func(t *testing.T) {
+		// A 404 is the forge's definitive "no such issue" answer, which
+		// the forge itself ignores for a linked reference — it must not
+		// hold the re-fetch off the way an unavailable read does.
+		eng, api, _, _ := newTestEngine(t)
+		api.getIssueErr = &APIError{StatusCode: http.StatusNotFound, Message: "issue not found"}
+		got, err := eng.connectedIssues("o", "r", 9, "Fixes #4")
+		if err != nil {
+			t.Fatalf("connectedIssues: a not-found answer failed the read: %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("got %d connected issues, want none", len(got))
 		}
 	})
 }

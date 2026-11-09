@@ -350,7 +350,13 @@ For each decision event, the re-fetch assembles the state
   resolves it
   (https://forgejo.org/docs/latest/user/linked-references/); a reference
   naming a pull request connects nothing, a pull request being a
-  delivery and never a connected issue. An issue reachable both ways is
+  delivery and never a connected issue, and a reference whose issue
+  answers **not found** — a deleted issue, a mistyped number, an
+  illustrative one in prose — is skipped the same way: the forge itself
+  silently ignores a reference whose target does not exist, and a
+  definitive "no such issue" is a read that succeeded in learning there
+  is nothing there, not a failed read to fail closed on. An issue
+  reachable both ways is
   read once, the blocking-edge rows first, so it is counted once.
   Every entry is resolved: the gate's decision is
   never left to the order the listing happens to return; a failed read

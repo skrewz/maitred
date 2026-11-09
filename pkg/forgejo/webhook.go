@@ -382,8 +382,14 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 // deduplicated by repository and number, the blocking-edge rows first,
 // so an issue reachable both ways is read and counted once. A failed
 // read fails the whole re-fetch (§forgejo/webhook/re-fetch,
-// §forgejo/decisions/merge-gate). A pull request is never a connected
-// issue: it is a delivery, so a reference naming one is skipped.
+// §forgejo/decisions/merge-gate) — but a reference whose issue answers
+// "not found" is a definitive answer, not a failed read: the forge
+// itself silently ignores a reference whose target does not exist, so a
+// dangling reference — a deleted issue, a mistyped number, an
+// illustrative one in prose — is skipped like a reference naming a pull
+// request, and only a genuine read failure holds the re-fetch off.
+// A pull request is never a connected issue: it is a delivery, so a
+// reference naming one is skipped.
 func (e *Engine) connectedIssues(owner, name string, number int, body string) ([]ConnectedIssue, error) {
 	prRepo := owner + "/" + name
 	blocks, err := e.api.IssueBlocks(owner, name, number)
@@ -411,6 +417,9 @@ func (e *Engine) connectedIssues(owner, name string, number int, body string) ([
 		ro, rn := splitRepo(ref.repo)
 		issue, err := e.api.GetIssue(ro, rn, ref.number)
 		if err != nil {
+			if isNotFound(err) {
+				continue // dangling reference: the forge ignores it too
+			}
 			return nil, err
 		}
 		if issue.IsPull {
@@ -449,6 +458,16 @@ func (r issueRef) key() Key {
 // is read once (§forgejo/webhook/re-fetch).
 func connectedKey(repo string, number int) Key {
 	return Key{Repo: strings.ToLower(repo), Kind: KindIssue, Number: number}
+}
+
+// isNotFound reports whether err is the forge's definitive "no such
+// object" answer — an HTTP 404 — as opposed to a failed read. The forge
+// ignores a linked reference whose target does not exist, so a read
+// told an issue is not found has succeeded in learning there is nothing
+// there (§forgejo/webhook/re-fetch).
+func isNotFound(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
 }
 
 // autoCloseRefs lists the issues a pull request body auto-closes, in
