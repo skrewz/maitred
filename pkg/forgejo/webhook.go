@@ -687,18 +687,12 @@ var closeKeywordRef = regexp.MustCompile(
 // predicate reads a member's delivering PR through
 // (§forgejo/decisions/sync-set, s-git/maitred#171). A bare #N
 // resolves in the pull request's own repository; a qualified
-// owner/repo#N in the repository it names.
+// owner/repo#N in the repository it names. The resolution itself lives
+// in autoCloseRefs, so the predicate's read and the approval path's
+// read cannot drift apart on how the grammar resolves a reference.
 func prAutoClosesIssue(body, prRepo, issueRepo string, issueNumber int) bool {
-	for _, m := range closeKeywordRef.FindAllStringSubmatch(body, -1) {
-		number, err := strconv.Atoi(m[2])
-		if err != nil || number != issueNumber {
-			continue
-		}
-		repo := m[1]
-		if repo == "" {
-			repo = prRepo
-		}
-		if strings.EqualFold(repo, issueRepo) {
+	for _, ref := range autoCloseRefs(body, prRepo) {
+		if ref.number == issueNumber && strings.EqualFold(ref.repo, issueRepo) {
 			return true
 		}
 	}
