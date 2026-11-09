@@ -289,8 +289,13 @@ For each decision event, the re-fetch assembles the state
 
   An issue carrying both the `ideation` and the `teardown-forest` label
   has its **downstream** edges read too — the issues it blocks — because
-  the teardown order is actionable only while the forest stands, and the
-  engine counts rather than asking an agent to discover it
+  the teardown order is actionable only while a member it would delete
+  still stands, and the engine counts rather than asking an agent to
+  discover it (§forgejo/decisions/forest-teardown). The count is a label
+  test — an `outcome` issue the hop names is a tracker the order spares and
+  therefore counts for nothing — so this hop must return each blocked issue
+  **with its labels**: a projection that carried only numbers would read a
+  spared tracker as a deletable member and re-fire the order on every sweep
   (§forgejo/decisions/forest-teardown). That hop belongs to the teardown
   rows alone: a root under no order performs no `IssueBlocks` call, so the
   curation path costs what it always did. A failure of the hop fails the
