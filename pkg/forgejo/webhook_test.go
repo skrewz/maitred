@@ -3975,6 +3975,14 @@ func forestMember(repo string, number int) Issue {
 	return Issue{Number: number, State: "open", Repository: repo}
 }
 
+// forestTracker is the root's tracker: a member by the root's membership
+// edge, and the one member the teardown order spares — so its edge keeps
+// standing after every deletable member is gone
+// (§forgejo/decisions/forest-teardown, s-git/maitred#173).
+func forestTracker(repo string, number int) Issue {
+	return Issue{Number: number, State: "open", Repository: repo, Labels: []string{LabelOutcome}}
+}
+
 // TestHandler_TeardownEventPath_DispatchesTeardown: opening, editing or
 // labelling an open root that carries the teardown label dispatches
 // teardown-forest and records the watermark — the teardown row wins over
@@ -4079,6 +4087,59 @@ func TestHandler_TeardownEmptyForestCostsNoAgentRun(t *testing.T) {
 	}
 	if n := api.callCount("IssueBlocks:out/7"); n != 2 {
 		t.Errorf("IssueBlocks on the root called %d time(s), want one hop per sweep", n)
+	}
+}
+
+// TestHandler_TeardownSparedTrackerCostsNoAgentRun: a teardown that
+// deleted every member leaves the tracker standing by the order's own
+// rule, and that spared member must not re-fire the order — the count
+// the engine reads excludes trackers, so a forest reduced to its tracker
+// costs no further agent runs on the sweep or the event path
+// (§forgejo/decisions/forest-teardown, s-git/maitred#173).
+func TestHandler_TeardownSparedTrackerCostsNoAgentRun(t *testing.T) {
+	eng, api, q, store := newOutcomesEngine(t)
+	api.issues[7] = teardownRootIssue("o/out", 7)
+	api.blocks[7] = []Issue{forestTracker("o/out", 30)}
+
+	for i := 0; i < 2; i++ {
+		eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "maitred"})
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none: a spared tracker is not a forest to delete: %v", len(tasks), tasks)
+	}
+	w, err := store.Load(Key{Repo: "o/out", Kind: KindIssue, Number: 7})
+	if err != nil {
+		t.Fatalf("load watermark: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want none: a hold-off marks nothing done", w)
+	}
+
+	// The event path decides identically: an edit to a root whose only
+	// remaining member is the spared tracker dispatches nothing.
+	eng.HandleEvent(Event{Type: EventIssueEdited, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "alice"})
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks after an edit, want none: %v", len(tasks), tasks)
+	}
+}
+
+// TestHandler_TeardownStillDispatchesBesideTheTracker: the exclusion is
+// an exclusion, not a veto — a member the order would delete beside the
+// spared tracker is still a standing forest, and the sweep dispatches
+// (§forgejo/decisions/forest-teardown, s-git/maitred#173).
+func TestHandler_TeardownStillDispatchesBesideTheTracker(t *testing.T) {
+	eng, api, q, _ := newOutcomesEngine(t)
+	api.issues[7] = teardownRootIssue("o/out", 7)
+	api.blocks[7] = []Issue{forestTracker("o/out", 30), forestMember("o/out", 8)}
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "maitred"})
+
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1: a deletable member beside the tracker is a standing forest: %v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action="+string(ActionTeardownForest)) {
+		t.Errorf("prompt = %q, want the teardown-forest action", tasks[0].Prompt)
 	}
 }
 

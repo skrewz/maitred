@@ -61,9 +61,11 @@ human's hold, unblocking says a blocker closed.
 modifier of the root row and nothing else: an open `ideation` issue that
 also carries it dispatches `teardown-forest` where it would otherwise
 dispatch `decompose`, and the decomposer deletes the member issues and
-sets that root created, retracting the edges as it goes. The root itself
-is never deleted — it is the human's issue, and the human closes it once
-the teardown is reported.
+sets that root created, retracting the edges as it goes. **No tracker is
+deleted**: the order tears down every other member and leaves any tracker it
+reaches standing, its own forest's included. The root itself is never deleted
+— it is the human's issue, and the human closes it once the teardown is
+reported.
 
 **A switch, not a message.** The label states what to do *now*; it
 carries no history and no verdict on the idea, and both of its
@@ -99,48 +101,63 @@ the root row, so a misapplied teardown reads in the decision log as a
 misapplied teardown rather than waking the implementer on the very
 ticket the human meant to retire.
 
-**One root names the forest, and only through the edges.** The dispatch
-carries a single issue, so the forest is the transitive closure of the
-recorded blocker edges out of that root and the issues blocked by its
-tracker. The repository names nothing — other roots share it; the labels
-name nothing — they are shared vocabulary, not a membership test; and the
-root's prose names nothing, however many numbers it cites. An issue that
-another root also blocks belongs to that forest: this order retracts the
-edge and leaves the issue, because deletion is the one act no cascade
-rehearses and no watermark can undo. The traversal rules live in the
-canned prompt (§forgejo/config/canned-prompts); the boundary belongs here
-so the contract the engine offers — one root, its edges, nothing inferred
-— is specified rather than implied.
+**One root names the forest, and only through its membership edges.** The
+dispatch carries a single issue, so the forest is **exactly** the issues the
+recorded `blocks` edges out of that root reach — a membership edge is what
+makes a member, and the enumeration is one hop, not a closure. A work-order
+edge between two members orders work and admits no member; an edge out of a
+tracker gates work belonging to whichever forest asked for that dependency,
+and admits no member either. The repository names nothing — other roots share
+it; the labels name nothing — they are shared vocabulary, not a membership
+test; and the root's prose names nothing, however many numbers it cites. An
+issue that another root also blocks belongs to that forest: this order
+retracts the edge and leaves the issue, because deletion is the one act no
+cascade rehearses and no watermark can undo. The traversal rules live in the
+canned prompt (§forgejo/config/canned-prompts); the boundary belongs here so
+the contract the engine offers — one root, its membership edges, nothing
+inferred — is specified rather than implied.
 
-**The engine counts before it asks.** Whether a forest stands is not a
-matter of opinion: the root blocks issues, or it blocks none. A root
-carrying the order therefore has its **downstream** edges read on the
-re-fetch — one `IssueBlocks` hop, and only when both labels are present,
-so an ordinary root pays nothing — and a root blocking nothing dispatches
-no agent, naming the empty forest as the state fact. This is what ends
-the re-firing: the exemption asks again while the forest stands, and a
-forest an earlier run deleted, or one never made, stops the asking by
-itself. Without the count the label would summon a silent agent every
-sweep forever, which is the waste the test exists to avoid — and a root
-labelled before it was ever decomposed, the common case, would cost a run
-per sweep to report that there is nothing to report. The empty forest is
-not a defect and not a hold-off worth an agent; the closed member is
-neither, since a member that landed still owes the report the run makes
-for it.
+**The engine counts what the order can delete.** Whether a forest still stands
+is not a matter of opinion: the root blocks members the order would delete, or
+it blocks none. A root carrying the order therefore has its **downstream**
+edges read on the re-fetch — one `IssueBlocks` hop, and only when both labels
+are present, so an ordinary root pays nothing — and the count is of the issues
+that hop names **other than an `outcome` tracker**: a tracker survives the
+order, so its membership edge is a standing edge that says nothing about
+whether a forest remains. A root whose only downstream edge reaches its tracker
+dispatches no agent, naming what it still blocks. This is what ends the
+re-firing: the exemption asks again while a deletable member stands, and a
+forest an earlier run tore down, or one never made, stops the asking by itself.
+The spared tracker is why the count excludes trackers at all: it keeps the root
+blocking one issue for the life of that root, so a count that included it would
+re-fire the order on every sweep for ever — the waste this paragraph exists to
+prevent. A root labelled before it was ever decomposed, the common case, would
+likewise cost a run per sweep to report that there is nothing to report. The
+empty forest is not a defect and not a hold-off worth an agent; the closed
+member is neither, since a member that landed still owes the report the run
+makes for it.
 
-**The tracker needs no rule of its own.** Deleting members empties the
-tracker's blocker list, and an emptied tracker looks finished to the
-`wrap-up` row — so the protection matters, but it comes from the graph:
-the order is pre-closure, which means the root is *open* while a teardown
-runs, and an open root is an open blocker of its tracker. Both the
-tracker's rows already hold off on an open root
-(§forgejo/reconciliation/watermark-exemptions), and deleting every member
-cannot empty the list while that edge stands. A label that reaches a
-**closed** root therefore changes nothing anywhere — which is the point:
-a stale label must not freeze its tracker's `wrap-up` or its curation
-rows forever, naming a terminal state as though it were transient. If a
-commissioned forest must be retired, the human reopens the root or the
-label is removed; the label has no power past the gate.
+**A tracker is left in peace.** The order deletes the members that deliver
+something and spares every tracker it reaches, because a tracker's outbound
+edges are not this forest's. Once an outcome is worth waiting on, other graphs
+point at it — an initiative, a small fix, or a member of another root blocked
+by the tracker before that forest was commissioned — and deleting the issue
+beneath those edges retracts them without asking, opening a gate another forest
+is standing on. A tracker is therefore never deleted, by this order or by any
+walk that reaches it: the record, and whatever waits behind it, stay where the
+human can read them. The spared tracker stays **gated**, not finished: its
+membership edge from the root survives, the order is pre-closure so that root
+is open, and an open root is an open blocker — so `wrap-up` does not fire on the
+emptiness the teardown just caused, and nothing downstream of the tracker moves
+(§forgejo/reconciliation/watermark-exemptions). The human's next act decides:
+closing the root lets the cascade unblock the tracker and dispatch its
+`wrap-up`; removing the label lets the next curation run rebuild the forest
+onto the tracker already standing, rather than making a second one. A label
+that reaches a **closed** root therefore changes nothing anywhere — a stale
+label must not freeze its tracker's `wrap-up` or its curation rows forever,
+naming a terminal state as though it were transient. If a commissioned forest
+must be retired, the human reopens the root or the label is removed; the label
+has no power past the gate.
 
 **Deletion is a right the engine does not hold, and cannot check.** Deleting an
 issue is not the same right as creating one: a forge grants it to owners, and to
@@ -173,7 +190,7 @@ prompts:
 | `rebase` | an open PR is not mergeable (conflicts) |
 | `decompose` | an open issue carrying the `ideation` label was opened, edited, had its labels changed, or received a comment authored by anyone other than the configured decomposer identity (§forgejo/decisions/loop-prevention, s-git/maitred#147); or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions); or the unblock cascade newly unblocks an open issue carrying the `outcome` label (§forgejo/decisions/unblock-cascade) |
-| `teardown-forest` | an open issue carrying the `ideation` label **also** carries the `teardown-forest` label, **and blocks at least one issue**: the human has ordered the forest that root commissioned to be deleted, and there is a forest to delete (§forgejo/decisions/forest-teardown); watermark-exempt on the sweep while the forest stands (§forgejo/reconciliation/watermark-exemptions) |
+| `teardown-forest` | an open issue carrying the `ideation` label **also** carries the `teardown-forest` label, **and blocks at least one issue that is not an `outcome` tracker**: the human has ordered the forest that root commissioned to be deleted, and a member the order would delete remains to delete (§forgejo/decisions/forest-teardown); watermark-exempt on the sweep while such a member stands (§forgejo/reconciliation/watermark-exemptions) |
 | `sync` | an open issue carrying the `sync` label — a **landing set**: changes that must land together — has every blocking issue either closed or standing with its delivering PR approved at head and mergeable while carrying `agentic-sync-merge`; "approved at head" is the lens gate — every configured lens holds an undismissed approval at that PR's head (§forgejo/decisions/review-lenses) (a blocking issue that is itself a pull request is held to that test through its own state); dispatched from the reconciliation sweep, from the unblock cascade's sync-set candidate, and from the approval path's emission re-checked on re-fetch; the watermark is a revision derived from the whole set (§forgejo/decisions/sync-set) |
 
 Reviews are the fan-out over the configured lenses, not a configured
@@ -250,8 +267,8 @@ re-firing (§forgejo/decisions/label-triggered-review).
 |---|---|
 | issue opened (open, all blockers closed, no connected PR) | `implement` |
 | issue opened (blocked, or a connected open PR, or not open) | hold off |
-| issue opened / edited / labels changed / comment not authored by the configured decomposer identity (issue open, carries both the `ideation` and the `teardown-forest` label, blocks at least one issue) | `teardown-forest` — the teardown row wins over the root's `decompose` row, so a forest under teardown is never re-commissioned while it is being deleted (§forgejo/decisions/forest-teardown) |
-| issue opened / edited / labels changed / comment not authored by the configured decomposer identity (issue open, carries both labels, blocks no issue) | hold off, naming the empty forest — the engine can see there is nothing to delete, so no agent is asked to discover it (§forgejo/decisions/forest-teardown) |
+| issue opened / edited / labels changed / comment not authored by the configured decomposer identity (issue open, carries both the `ideation` and the `teardown-forest` label, blocks at least one issue that is not an `outcome` tracker) | `teardown-forest` — the teardown row wins over the root's `decompose` row, so a forest under teardown is never re-commissioned while it is being deleted (§forgejo/decisions/forest-teardown) |
+| issue opened / edited / labels changed / comment not authored by the configured decomposer identity (issue open, carries both labels, blocks no issue other than a tracker) | hold off, naming what the root still blocks — the engine can see there is nothing left to delete, so no agent is asked to discover it, and a tracker standing by the order's own rule is that state (§forgejo/decisions/forest-teardown) |
 | issue opened / edited / labels changed / comment (issue open, carries the `teardown-forest` label without `ideation`) | hold off, naming that the label modifies the root row and retires no work item — a kind label carried alongside is named first, since what an issue *is* outweighs what a label *modifies* (§forgejo/decisions/forest-teardown) |
 | issue opened / edited / labels changed (issue open, carries the `ideation` label, and — for the labels-changed event — no longer carries `teardown-forest`) | `decompose` — the label makes the root, whatever the repository and the title; attaching the label is the *first* trigger. The event path keeps the revision-keyed watermark guard; the sweep is watermark-exempt (§forgejo/reconciliation/watermark-exemptions) |
 | issue comment by an author other than the configured decomposer identity (issue open, carries the `ideation` label) | `decompose` — the comment bumps the root's `updated_at`, so it reads as a new revision under the ordinary revision-keyed watermark guard: a human answering the decomposer's questions re-cures the forest event-driven, without waiting for the sweep; a root that also carries `teardown-forest` takes the teardown row instead, as an edit does (§forgejo/decisions/forest-teardown) (§forgejo/decisions/loop-prevention, s-git/maitred#147) |
@@ -278,12 +295,12 @@ re-firing (§forgejo/decisions/label-triggered-review).
 | PR merged | unblock cascade (for the connected issue) |
 | PR closed without merging | hold off |
 | PR commented (open) | as reconcile — the sweep's logic: the re-fetched PR state decides the next action — but **not** the sweep's watermark exemption: an approved `agentic-auto-merge` PR whose watermark already records `merge-or-wait` at head holds off here, and so do the states whose subject slots already record the lens `review` at head or whose watermark records `fix-feedback` at head (§forgejo/reconciliation/watermark-exemptions, §forgejo/state/watermark) |
-| reconcile — open issue carrying both the `ideation` and the `teardown-forest` label, blocking at least one issue | `teardown-forest`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
-| reconcile — open issue carrying both labels, blocking nothing | hold off, naming the empty forest: the re-firing ends where the forest does (§forgejo/decisions/forest-teardown) |
+| reconcile — open issue carrying both the `ideation` and the `teardown-forest` label, blocking at least one issue that is not an `outcome` tracker | `teardown-forest`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
+| reconcile — open issue carrying both labels, blocking no issue other than a tracker | hold off, naming what it still blocks: the re-firing ends where the order has nothing left to delete (§forgejo/decisions/forest-teardown) |
 | reconcile — open issue with the `ideation` label | `decompose`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue, no open blockers | `wrap-up`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open `outcome` issue with open blockers, its `ideation` blocker closed | `decompose`, revision notwithstanding — the forest is commissioned and unfinished, so curation continues (§forgejo/reconciliation/watermark-exemptions) |
-| reconcile — open `outcome` issue whose `ideation` blocker is **open** and carries the `teardown-forest` label | hold off, as any tracker with an open root does: the teardown order needs no row of its own, and the root's own edge is what keeps an emptied tracker from reading as finished (§forgejo/decisions/forest-teardown) |
+| reconcile — open `outcome` issue whose `ideation` blocker is **open** and carries the `teardown-forest` label | hold off, as any tracker with an open root does: the teardown order needs no row of its own, and the root's own edge is what keeps a spared tracker from reading as finished (§forgejo/decisions/forest-teardown) |
 | reconcile — open `outcome` issue with open blockers, its `ideation` blocker open | hold off, naming the root — the forest is not yet commissioned, and the root's own row is the pulse: a forest is curated once per sweep |
 | reconcile — open `outcome` issue with open blockers and no `ideation` blocker | hold off, naming the absence — a tracker not gated by a root is not a forest's tracker |
 | reconcile — open issue carrying the `sync` label | `sync` when every member is closed or approved-at-head, mergeable, and opted in; otherwise a silent hold-off naming the members that are not ready — and a hold-off naming both reserved labels when the issue also carries `ideation` or `outcome`, two kind claims one row must not settle by label order (§forgejo/decisions/sync-set) |
