@@ -611,11 +611,7 @@ func isRefLead(b byte) bool {
 // edge hop it always did (§forgejo/webhook/re-fetch,
 // §forgejo/decisions/sync-set, §forgejo/decisions/unblock-cascade).
 func (e *Engine) fetchPRSetState(owner, name string, number int, st *State) error {
-	var body string
-	if st.PR != nil {
-		body = st.PR.Body
-	}
-	connected, err := e.connectedIssues(owner, name, number, body)
+	connected, err := e.connectedIssues(owner, name, number, st.PR.Body)
 	if err != nil {
 		return err
 	}
