@@ -38,6 +38,10 @@ type AdapterConfig struct {
 	//                still-pending task's key)
 	//   .Title     — human-readable task title (optional)
 	//   .URL       — reference URL for the work (optional)
+	//   .Priority  — queue tier the task should be served at (optional;
+	//                forwarded verbatim, and the default template emits it
+	//                only when set, so an unset priority leaves the body
+	//                unchanged and the queue's own default tier applies)
 	//
 	// A built-in "json" function marshals values to JSON for safe embedding
 	// inside the template. If empty, a default template is used that omits
@@ -79,7 +83,8 @@ const defaultTaskTemplate = `{
 	"persona": {{ .Persona | json }},
 	"dedup_key": {{ .DedupKey | json }}{{ if .Title }},
 	"title": {{ .Title | json }}{{ end }}{{ if .URL }},
-	"url": {{ .URL | json }}{{ end }}
+	"url": {{ .URL | json }}{{ end }}{{ if .Priority }},
+	"priority": {{ .Priority | json }}{{ end }}
 }`
 
 // HTTPAdapter is a TaskQueueProvider that sends tasks to a remote
@@ -178,6 +183,7 @@ func (a *HTTPAdapter) AddTask(task *Task) error {
 		DedupKey string
 		Title    string
 		URL      string
+		Priority string
 	}{
 		ID:       task.ID,
 		Prompt:   task.Prompt,
@@ -187,6 +193,7 @@ func (a *HTTPAdapter) AddTask(task *Task) error {
 		DedupKey: task.DedupKey,
 		Title:    task.Title,
 		URL:      task.URL,
+		Priority: task.Priority,
 	}
 
 	if err := a.tmpl.Execute(&buf, data); err != nil {

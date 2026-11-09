@@ -160,7 +160,7 @@ mtls_cert: "/path/to/client.crt"
 mtls_key:  "/path/to/client.key"
 
 # Optional: custom task body template (Go text/template syntax)
-# Available fields: .ID, .Prompt, .Tags, .Timeout, .Persona, .DedupKey, .Title, .URL
+# Available fields: .ID, .Prompt, .Tags, .Timeout, .Persona, .DedupKey, .Title, .URL, .Priority
 # A built-in "json" function marshals values to JSON for safe embedding.
 # If omitted, the default template is used (see below).
 task_template: |
@@ -171,7 +171,8 @@ task_template: |
     "persona": {{ .Persona | json }},
     "dedup_key": {{ .DedupKey | json }}{{ if .Title }},
     "title": {{ .Title | json }}{{ end }}{{ if .URL }},
-    "url": {{ .URL | json }}{{ end }}
+    "url": {{ .URL | json }}{{ end }}{{ if .Priority }},
+    "priority": {{ .Priority | json }}{{ end }}
   }
 
 # Optional: log the full response body from the remote system
@@ -189,7 +190,8 @@ task_template: |
     "persona": {{ .Persona | json }},
     "dedup_key": {{ .DedupKey | json }}{{ if .Title }},
     "title": {{ .Title | json }}{{ end }}{{ if .URL }},
-    "url": {{ .URL | json }}{{ end }}
+    "url": {{ .URL | json }}{{ end }}{{ if .Priority }},
+    "priority": {{ .Priority | json }}{{ end }}
   }
 ```
 
@@ -213,6 +215,7 @@ templates via `.ID`.
 | `.DedupKey` | `string` | Dedup key (empty unless the dispatch sets one); a queue system with de-duplication (hotelier) squelches a submission whose key matches a still-pending task's key |
 | `.Title` | `string` | Human-readable task title (empty unless the dispatch sets one); the default template includes `title` only when set |
 | `.URL` | `string` | Reference URL for the work, e.g. the triggering issue/PR (empty unless the dispatch sets one); the default template includes `url` only when set |
+| `.Priority` | `string` | Queue tier to serve the task at (empty unless the dispatch sets one); forwarded verbatim, so the queue's own vocabulary applies — hotelier accepts `firefighter`, `teacher` or `orangutan` and defaults to the lowest when the field is absent. The default template includes `priority` only when set |
 
 The Forgejo engine sets a dedup key on every dispatch — the dispatch
 identity: the issue/PR, the action, and the revision — so a re-dispatch of

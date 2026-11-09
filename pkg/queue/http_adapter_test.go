@@ -1,7 +1,9 @@
 package queue_test
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -593,5 +595,77 @@ func TestHTTPAdapter_AddTask_NoDedupKey(t *testing.T) {
 	}
 	if received["dedup_key"] != "" {
 		t.Errorf("expected empty dedup_key, got %v", received["dedup_key"])
+	}
+}
+
+// TestHTTPAdapter_AddTask_NoPriority: a task carrying no priority produces
+// the body maitred produces today — byte for byte, and with no "priority"
+// key — so the queue's own default tier applies unchanged.
+func TestHTTPAdapter_AddTask_NoPriority(t *testing.T) {
+	var raw bytes.Buffer
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(&raw, r.Body)
+		w.WriteHeader(201)
+		w.Write([]byte(`{"id":"remote-1"}`))
+	}))
+	defer server.Close()
+
+	adapter, err := queue.NewHTTPAdapter(queue.AdapterConfig{
+		Endpoint: server.URL,
+	}, log.New(os.Stdout, "", log.LstdFlags))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	task := &queue.Task{
+		ID:      "task-1",
+		Prompt:  "plain task",
+		Tags:    []string{"business-default"},
+		Timeout: 1800,
+	}
+	if err := adapter.AddTask(task); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := "{\n\t\"prompt\": \"plain task\",\n\t\"tags\": [\"business-default\"],\n\t\"timeout\": 1800,\n\t\"persona\": \"\",\n\t\"dedup_key\": \"\"\n}"
+	if raw.String() != want {
+		t.Errorf("body mismatch\n got: %q\nwant: %q", raw.String(), want)
+	}
+}
+
+// TestHTTPAdapter_AddTask_Priority: a task carrying a priority forwards it
+// verbatim as "priority" on the task-creation request, so the queue serves
+// the task above its default tier. An unknown level is the queue's call to
+// reject (hotelier answers 400); maitred does not interpret the value.
+func TestHTTPAdapter_AddTask_Priority(t *testing.T) {
+	var raw bytes.Buffer
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(&raw, r.Body)
+		w.WriteHeader(201)
+		w.Write([]byte(`{"id":"remote-1"}`))
+	}))
+	defer server.Close()
+
+	adapter, err := queue.NewHTTPAdapter(queue.AdapterConfig{
+		Endpoint: server.URL,
+	}, log.New(os.Stdout, "", log.LstdFlags))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	task := &queue.Task{
+		ID:       "task-1",
+		Prompt:   "vip task",
+		Tags:     []string{"business-default"},
+		Timeout:  1800,
+		Priority: "teacher",
+	}
+	if err := adapter.AddTask(task); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := "{\n\t\"prompt\": \"vip task\",\n\t\"tags\": [\"business-default\"],\n\t\"timeout\": 1800,\n\t\"persona\": \"\",\n\t\"dedup_key\": \"\",\n\t\"priority\": \"teacher\"\n}"
+	if raw.String() != want {
+		t.Errorf("body mismatch\n got: %q\nwant: %q", raw.String(), want)
 	}
 }

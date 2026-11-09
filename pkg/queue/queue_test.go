@@ -223,3 +223,24 @@ func TestTask_TitleAndURL_JSON(t *testing.T) {
 		t.Errorf("expected title/url in JSON, got %s", b)
 	}
 }
+
+func TestTask_Priority_JSON(t *testing.T) {
+	// Omitted when empty: an unset priority must say nothing, so the queue
+	// applies its own default tier.
+	b, err := json.Marshal(&queue.Task{ID: "task-1", Prompt: "p"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(b), "priority") {
+		t.Errorf("priority should be omitted when empty, got %s", b)
+	}
+
+	// Present when set, verbatim.
+	b, err = json.Marshal(&queue.Task{ID: "task-1", Prompt: "p", Priority: "teacher"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"priority":"teacher"`) {
+		t.Errorf("expected priority in JSON, got %s", b)
+	}
+}

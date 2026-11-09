@@ -40,11 +40,15 @@ HTTP queue system.
   template; the prompt is passed through verbatim) or, without a queue
   config, an in-memory queue. Tasks carry a prompt, capability tags, a timeout,
   an optional persona, an optional dedup key, an optional human-readable
-  title, and an optional reference URL — a queue system with
-  de-duplication may squelch a submission whose key matches a still-pending
-  task's key (the Forgejo engine sets one per dispatch identity, and names
-  each task with a title and a reference URL, per
-  §forgejo/webhook/the-pipeline).
+  title, an optional reference URL, and an optional priority — a queue
+  system with de-duplication may squelch a submission whose key matches a
+  still-pending task's key (the Forgejo engine sets one per dispatch
+  identity, and names each task with a title and a reference URL, per
+  §forgejo/webhook/the-pipeline). A priority is the queue's own vocabulary,
+  forwarded verbatim and never interpreted by maitred; a task that declares
+  none omits the field from the wire body entirely, so the queue's default
+  tier applies and the body is the one maitred produced before the field
+  existed. No maitred dispatch site sets a priority yet.
 - **Persistent state.** Each trigger's last run time and extra state is
   persisted as a JSON file per trigger under the data directory and survives
   restarts. Per-trigger execution history is recorded.
