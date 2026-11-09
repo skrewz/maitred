@@ -352,15 +352,33 @@ For each decision event, the re-fetch assembles the state
   Go's regexp engine has no lookahead, the scan rewinds over the
   terminator a match consumes, as the forge's scanner does, so two
   references separated by nothing but a newline both resolve
-  (s-git/maitred#185). A reference
-  naming a pull request connects nothing, a pull request being a
-  delivery and never a connected issue, and a reference whose issue
-  answers **not found** — a deleted issue, a mistyped number, an
-  illustrative one in prose — is skipped the same way: the forge itself
-  silently ignores a reference whose target does not exist, and a
-  definitive "no such issue" is a read that succeeded in learning there
-  is nothing there, not a failed read to fail closed on. An issue
-  reachable both ways is
+  (s-git/maitred#185). A reference whose repository names a path
+  segment — `.` or `..`, which the grammar's character class admits —
+  resolves nowhere; no body-derived string reaches the API URL
+  unvalidated. A reference naming a pull request connects
+  nothing, a pull request being a delivery and never a connected issue,
+  and a reference whose issue answers **not found** — a deleted issue, a
+  mistyped number, an illustrative one in prose — is skipped the same
+  way: the forge itself silently ignores a reference whose target does
+  not exist, and a definitive "no such issue" is a read that succeeded
+  in learning there is nothing there, not a failed read to fail closed
+  on. The same answer arrives from a **repository the token cannot
+  read** — Forgejo guards private repositories with a 404 — so a
+  reference into such a repository reads as connecting nothing. That is
+  a defensible reading for a read-only client, but it is the case where
+  a real relation goes unseen, so every skipped reference leaves a
+  debug line naming the resolved repository and number — identifiers
+  only, never the body. A cross-repository reference additionally pays
+  the **remit** test every other cross-repository read pays
+  (§forgejo/webhook/repository-roles): the engine's token must hold a
+  role in the named repository, or the reference connects nothing and a
+  stranger's prose directs no privileged read; an unknown scope fails
+  the re-fetch rather than reading on. The distinct references a body
+  resolves are **capped** (eight): the authoring contract needs one or
+  two, and the cap bounds the per-reference fan-out against a body
+  written to cost the engine the delivery; the cap bounds both readers,
+  the approval path's and the predicate's, and a body exceeding it
+  resolves no more. An issue reachable both ways is
   read once, the blocking-edge rows first, so it is counted once.
   Every entry is resolved: the gate's decision is
   never left to the order the listing happens to return; a failed read

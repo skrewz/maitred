@@ -386,10 +386,17 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 // "not found" is a definitive answer, not a failed read: the forge
 // itself silently ignores a reference whose target does not exist, so a
 // dangling reference — a deleted issue, a mistyped number, an
-// illustrative one in prose — is skipped like a reference naming a pull
-// request, and only a genuine read failure holds the re-fetch off.
-// A pull request is never a connected issue: it is a delivery, so a
-// reference naming one is skipped.
+// illustrative one in prose, a repository the token cannot see — is
+// skipped like a reference naming a pull request, and only a genuine
+// read failure holds the re-fetch off. A reference into a repository
+// other than the pull request's pays the same admission test every
+// other cross-repository read pays (§forgejo/webhook/repository-roles):
+// outside the engine's remit it connects nothing, and an unknown scope
+// fails the re-fetch. The distinct references resolved are capped
+// (maxAutoCloseRefs), and every skip leaves a debug line naming the
+// resolved reference, so a dropped relation is visible rather than
+// silent. A pull request is never a connected issue: it is a delivery,
+// so a reference naming one is skipped.
 func (e *Engine) connectedIssues(owner, name string, number int, body string) ([]ConnectedIssue, error) {
 	prRepo := owner + "/" + name
 	blocks, err := e.api.IssueBlocks(owner, name, number)
@@ -414,15 +421,41 @@ func (e *Engine) connectedIssues(owner, name string, number int, body string) ([
 		if seen[ref.key()] {
 			continue // the blocking-edge row already carries this issue
 		}
+		if !strings.EqualFold(ref.repo, prRepo) {
+			// A cross-repository reference directs the engine's token
+			// into a repository the PR author does not control, so it
+			// pays the same admission test every other cross-repository
+			// read pays (§forgejo/webhook/repository-roles): a reference
+			// naming a repository outside the engine's remit connects
+			// nothing, and an unknown scope fails the re-fetch rather
+			// than reading on.
+			r, err := e.repoRoles(ref.repo)
+			if err != nil {
+				return nil, err
+			}
+			if !r.any() {
+				e.log.Debug("connected issues: skipping a closing reference into a repository outside the engine's remit",
+					"pr", prRepo+"#"+strconv.Itoa(number), "reference", ref.repo+"#"+strconv.Itoa(ref.number))
+				continue
+			}
+		}
 		ro, rn := splitRepo(ref.repo)
 		issue, err := e.api.GetIssue(ro, rn, ref.number)
 		if err != nil {
 			if isNotFound(err) {
-				continue // dangling reference: the forge ignores it too
+				// Dangling reference: the forge ignores it too. The same
+				// answer arrives from a repository the token cannot see,
+				// so the line names the resolved reference — identifiers
+				// only, never the body (§forgejo/webhook/re-fetch).
+				e.log.Debug("connected issues: skipping a dangling closing reference",
+					"pr", prRepo+"#"+strconv.Itoa(number), "reference", ref.repo+"#"+strconv.Itoa(ref.number))
+				continue
 			}
 			return nil, err
 		}
 		if issue.IsPull {
+			e.log.Debug("connected issues: skipping a closing reference naming a pull request",
+				"pr", prRepo+"#"+strconv.Itoa(number), "reference", ref.repo+"#"+strconv.Itoa(ref.number))
 			continue // a pull request delivers; it never sits as a connected issue
 		}
 		if issue.Repository == "" {
@@ -470,9 +503,18 @@ func isNotFound(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
 }
 
+// maxAutoCloseRefs caps the number of distinct references a body
+// resolves. The authoring contract needs one or two; the cap bounds
+// the per-reference fan-out the approval path pays (one issue read and
+// one blockers row per resolved reference) against a body written to
+// cost the engine the delivery (§forgejo/webhook/re-fetch). The cap
+// bounds both readers: the predicate's body match tests these same
+// refs, so one number decides the cost wherever the grammar is read.
+const maxAutoCloseRefs = 8
+
 // autoCloseRefs lists the issues a pull request body auto-closes, in
-// order of first appearance and without duplicates. The grammar is the
-// one prAutoClosesIssue applies and the forge itself honours: the
+// order of first appearance, without duplicates and no more than
+// maxAutoCloseRefs strong. The grammar is the one prAutoClosesIssue applies and the forge itself honours: the
 // default closing keywords, a bare #N resolved in the pull request's own
 // repository and an owner/repo#N in the repository it names
 // (https://forgejo.org/docs/latest/user/linked-references/,
@@ -482,6 +524,9 @@ func isNotFound(err error) bool {
 // over the whitespace its match ate
 // (https://codeberg.org/forgejo/forgejo/src/branch/main/modules/references/references.go),
 // so two references separated by nothing but a newline both resolve.
+// A reference whose repository names a path segment — "." or "..", the
+// grammar's class admits dots — names no repository and is dropped
+// before it can reach an API URL.
 func autoCloseRefs(body, prRepo string) []issueRef {
 	var refs []issueRef
 	seen := make(map[Key]bool)
@@ -514,6 +559,9 @@ func autoCloseRefs(body, prRepo string) []issueRef {
 		repo := prRepo
 		if m[2] >= 0 {
 			repo = body[match+m[2] : match+m[3]]
+			if !validRepoRef(repo) {
+				continue
+			}
 		}
 		ref := issueRef{repo: repo, number: number}
 		if seen[ref.key()] {
@@ -521,8 +569,23 @@ func autoCloseRefs(body, prRepo string) []issueRef {
 		}
 		seen[ref.key()] = true
 		refs = append(refs, ref)
+		if len(refs) == maxAutoCloseRefs {
+			break
+		}
 	}
 	return refs
+}
+
+// validRepoRef reports whether a reference's repository is a plain
+// owner/repo pair. The grammar's character class admits dots, and the
+// resolved string reaches the API URL, so "." and ".." segments are
+// refused (§forgejo/webhook/re-fetch).
+func validRepoRef(s string) bool {
+	owner, name := splitRepo(s)
+	if owner == "" || name == "" || strings.ContainsRune(name, '/') {
+		return false
+	}
+	return owner != "." && owner != ".." && name != "." && name != ".."
 }
 
 // isRefLead reports whether b can stand at the start of a closing

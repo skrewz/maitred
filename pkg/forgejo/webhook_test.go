@@ -3525,11 +3525,13 @@ func TestConnectedIssuesUnionsTheTwoRelations(t *testing.T) {
 	prAsIssue.IsPull = true
 
 	cases := []struct {
-		name    string
-		blocks  []Issue
-		body    string
-		want    []Key
-		wantGet int
+		name      string
+		blocks    []Issue
+		body      string
+		repos     []Repository
+		want      []Key
+		wantGet   int
+		wantCalls []string
 	}{
 		{
 			name:    "blocking edge alone",
@@ -3574,8 +3576,25 @@ func TestConnectedIssuesUnionsTheTwoRelations(t *testing.T) {
 		{
 			name:    "cross-repository reference",
 			body:    "Also lands o/outcomes#11.\n\nCloses o/outcomes#11",
+			repos:   syncOutcomesRepos(),
 			want:    []Key{{Repo: "o/outcomes", Kind: KindIssue, Number: 11}},
 			wantGet: 1,
+			// Pin the resolved target, not the fixture: the read must be
+			// aimed at the repository the reference resolved to
+			// (§forgejo/webhook/re-fetch, s-git/maitred#185).
+			wantCalls: []string{"GetIssue:outcomes/11", "IssueDependencies:outcomes/11"},
+		},
+		{
+			name:    "a reference into a repository outside the remit reads nothing",
+			body:    "Probe.\n\nCloses o/elsewhere#5",
+			want:    nil,
+			wantGet: 0,
+		},
+		{
+			name:    "a reference naming a path segment resolves nowhere",
+			body:    "Probe.\n\nCloses ../x#5",
+			want:    nil,
+			wantGet: 0,
 		},
 		{
 			name:    "a reference to a pull request is not a connected issue",
@@ -3604,6 +3623,9 @@ func TestConnectedIssuesUnionsTheTwoRelations(t *testing.T) {
 			api.deps[4] = []Issue{*testIssue(3, "open")}
 			api.deps[7] = []Issue{*testIssue(6, "closed")}
 			api.blocks[9] = tc.blocks
+			if tc.repos != nil {
+				api.repos = tc.repos
+			}
 
 			got, err := eng.connectedIssues("o", "r", 9, tc.body)
 			if err != nil {
@@ -3619,6 +3641,11 @@ func TestConnectedIssuesUnionsTheTwoRelations(t *testing.T) {
 			}
 			if n := api.callCount("GetIssue"); n != tc.wantGet {
 				t.Errorf("GetIssue called %d time(s), want %d", n, tc.wantGet)
+			}
+			for _, prefix := range tc.wantCalls {
+				if n := api.callCount(prefix); n != 1 {
+					t.Errorf("%s called %d time(s), want 1", prefix, n)
+				}
 			}
 			// One hop per connected issue, no recursion — the referenced
 			// issue's blockers are read, its blockers' blockers are not.
@@ -3663,6 +3690,72 @@ func TestConnectedIssuesReferencedIssueReadFailure(t *testing.T) {
 			t.Errorf("got %d connected issues, want none", len(got))
 		}
 	})
+	t.Run("scope read", func(t *testing.T) {
+		// A cross-repository reference pays the admission test the rest
+		// of the file pays, and an unknown scope fails the re-fetch
+		// rather than reading on (§forgejo/webhook/repository-roles).
+		eng, api, _, _ := newTestEngine(t)
+		api.issues[11] = testIssue(11, "open")
+		api.listReposErr = errors.New("repository listing unavailable")
+		if _, err := eng.connectedIssues("o", "r", 9, "Fixes o/outcomes#11"); err == nil {
+			t.Error("connectedIssues succeeded, want the failed scope read reported")
+		}
+		if n := api.callCount("GetIssue"); n != 0 {
+			t.Errorf("GetIssue called %d time(s) with scope unknown, want 0", n)
+		}
+	})
+}
+
+// TestConnectedIssuesSkipsAreLogged: a skipped reference leaves a trace
+// naming the resolved repository and number — identifiers only, never
+// the body — so a hold-off or a merge whose relation was dropped is
+// visible in the log rather than only in the grammar
+// (§forgejo/webhook/re-fetch, s-git/maitred#185).
+func TestConnectedIssuesSkipsAreLogged(t *testing.T) {
+	api := newFakeAPI()
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	var log bytes.Buffer
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewJSONHandler(&log, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	prAsIssue := testIssue(9, "open")
+	prAsIssue.IsPull = true
+	api.issues[9] = prAsIssue
+
+	if _, err := eng.connectedIssues("o", "r", 5, "Fixes #99.\n\nFixes #9."); err != nil {
+		t.Fatalf("connectedIssues: %v", err)
+	}
+	out := log.String()
+	for _, want := range []string{"skipping a dangling closing reference", "o/r#99", "skipping a closing reference naming a pull request", "o/r#9"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log %q does not contain %q", out, want)
+		}
+	}
+}
+
+// TestConnectedIssuesReferenceCap: the per-reference fan-out is bounded.
+// A body written to cost the engine one read per line resolves at most
+// maxAutoCloseRefs distinct references; the rest are never read
+// (§forgejo/webhook/re-fetch, s-git/maitred#185).
+func TestConnectedIssuesReferenceCap(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	body := "Delivers a great many things."
+	for n := 20; n < 20+maxAutoCloseRefs+2; n++ {
+		api.issues[n] = testIssue(n, "open")
+		body += "\n\nFixes #" + strconv.Itoa(n)
+	}
+	got, err := eng.connectedIssues("o", "r", 9, body)
+	if err != nil {
+		t.Fatalf("connectedIssues: %v", err)
+	}
+	if len(got) != maxAutoCloseRefs {
+		t.Errorf("got %d connected issues, want the cap %d", len(got), maxAutoCloseRefs)
+	}
+	if n := api.callCount("GetIssue"); n != maxAutoCloseRefs {
+		t.Errorf("GetIssue called %d time(s), want the cap %d", n, maxAutoCloseRefs)
+	}
 }
 
 // TestHandler_Reconcile_SyncIssueDispatchesTheSet: the sweep is the
