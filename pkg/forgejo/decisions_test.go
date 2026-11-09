@@ -3749,4 +3749,22 @@ func TestDecide_TeardownSparesTheTrackerInCount(t *testing.T) {
 			t.Errorf("sweep action = %q, want %q (%s)", sd.Action, ActionTeardownForest, sd.Reason)
 		}
 	})
+
+	// The `ideation` carve-out in isTracker is what makes a downstream
+	// issue carrying both reserved labels a member the order would
+	// delete rather than a tracker it spares — the graph the one-hop
+	// membership rule invites, a root blocking another root
+	// (§forgejo/decisions/forest-teardown, s-git/maitred#173).
+	t.Run("a downstream issue carrying both reserved labels is a member, not a tracker", func(t *testing.T) {
+		root := teardownRoot()
+		blocked := []Issue{{Number: 12, State: "open", Labels: []string{LabelOutcome, LabelIdeation}, Repository: "o/r"}}
+		d := Decide(issueEvent(EventIssueLabelsChanged), State{Issue: root, Blocked: blocked}, nil)
+		if d.Action != ActionTeardownForest {
+			t.Errorf("event path action = %q, want %q (%s)", d.Action, ActionTeardownForest, d.Reason)
+		}
+		sd := sweep(root, blocked, nil)
+		if sd.Action != ActionTeardownForest {
+			t.Errorf("sweep action = %q, want %q (%s)", sd.Action, ActionTeardownForest, sd.Reason)
+		}
+	})
 }

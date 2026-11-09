@@ -434,9 +434,11 @@ func TestIssueBlocks_CrossRepo(t *testing.T) {
 			"url":    "https://forge.example.com/acme/maitred/pulls/49",
 			"merged": true,
 		}
+		blocked := issueJSON(7, "acme/other-repo")
+		blocked["labels"] = []map[string]any{{"name": "outcome"}}
 		_ = json.NewEncoder(w).Encode([]map[string]any{
 			pr,
-			issueJSON(7, "acme/other-repo"),
+			blocked,
 		})
 	})
 
@@ -459,6 +461,14 @@ func TestIssueBlocks_CrossRepo(t *testing.T) {
 	}
 	if blocked[1].Repository != "acme/other-repo" {
 		t.Errorf("blocked[1].Repository = %q, want acme/other-repo (cross-repo)", blocked[1].Repository)
+	}
+	// The labels survive the wire mapping. The teardown's emptiness test
+	// is a label test on exactly these rows, so a projection that drops
+	// them would silently read a spared tracker as a deletable member and
+	// re-fire the order on every sweep (§forgejo/webhook/re-fetch,
+	// §forgejo/decisions/forest-teardown).
+	if !reflect.DeepEqual(blocked[1].Labels, []string{"outcome"}) {
+		t.Errorf("blocked[1].Labels = %v, want [outcome]: the labels must survive the mapping", blocked[1].Labels)
 	}
 }
 
