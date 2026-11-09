@@ -3528,6 +3528,38 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 	})
 }
 
+// TestDecide_FanOutReasonFlagsNeverSeenLensIdentity: a subject slot
+// at head with no review by the lens's login anywhere on the PR is
+// the shape a mistyped identity produces — the lens can never report,
+// so the sweep re-fires it forever. The reason says what the state
+// shows so an operator can tell that from a dispatch still
+// mid-flight (§forgejo/config/review-lenses).
+func TestDecide_FanOutReasonFlagsNeverSeenLensIdentity(t *testing.T) {
+	t.Run("the sweep reason names a lens identity never seen on the PR", func(t *testing.T) {
+		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: openPR("abc")}, lensWatermark("abc", "carol"))
+		if d.Action != ActionReview {
+			t.Fatalf("decision = %+v, want the exempt sweep re-fire", d)
+		}
+		if !strings.Contains(d.Reason, "no review by carol has been seen on this PR at all") {
+			t.Errorf("reason = %q, want it to name the identity the PR has never seen", d.Reason)
+		}
+	})
+
+	t.Run("a lens whose earlier reviews simply went stale keeps the plain reason", func(t *testing.T) {
+		d := Decide(prEvent(EventReconcile, ""), State{
+			ReviewLenses: testLenses,
+			PR:           openPR("abc"),
+			Reviews:      []Review{{Event: ReviewApproved, Author: "carol", CommitID: "old", SubmittedAt: testTime}},
+		}, lensWatermark("abc", "carol"))
+		if d.Action != ActionReview {
+			t.Fatalf("decision = %+v, want the exempt sweep re-fire", d)
+		}
+		if strings.Contains(d.Reason, "has been seen on this PR at all") {
+			t.Errorf("reason = %q, want no identity warning: the login has reviewed, its approval is merely stale", d.Reason)
+		}
+	})
+}
+
 // TestDecide_ReviewLenses pins the dispatch predicate end to end on
 // the pure decision function: the lenses to dispatch are the
 // configured lenses with no undismissed approving review at the

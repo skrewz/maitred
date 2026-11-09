@@ -787,6 +787,16 @@ func decideReviewFanOut(e Event, pr *PullRequest, s State, w *Watermark, labelRe
 			// state fact carries past the recorded revision, and the
 			// log says so rather than "already dispatched".
 			reason += fmt.Sprintf("; the state calls for the lens regardless of revision %s", pr.HeadSHA)
+			if !lensHasAnyReview(s.Reviews, lens) {
+				// The slot names this revision yet no review by the
+				// lens's login has ever been seen — the shape a
+				// mistyped identity produces (the lens can never
+				// report, so the sweep re-fires it forever), shared
+				// with a dispatch still mid-flight. Name what the
+				// state shows so an operator can tell them apart
+				// (§forgejo/config/review-lenses).
+				reason += fmt.Sprintf("; no review by %s has been seen on this PR at all — if this persists, check the lens's configured identity", lens.Identity)
+			}
 		}
 		dispatched = append(dispatched, LensDispatch{Lens: lens.Identity, Reason: reason})
 	}

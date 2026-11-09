@@ -213,7 +213,11 @@ revision do not hold each other off, and the guard speaks only for
 the lens it names. The sweep's fan-out row is exempt per lens while
 that lens has reported **nothing** at the head: a dispatch that went
 nowhere recovers, a lens that has already spoken at head does not
-re-fire (§forgejo/reconciliation/watermark-exemptions).
+re-fire (§forgejo/reconciliation/watermark-exemptions). While the slot
+names a dispatch at the current head yet the PR carries no review by
+that login anywhere, the reason says so — the state cannot tell a
+dispatch still mid-flight from a mistyped `identity` that can never
+report, but the operator can (§forgejo/config/review-lenses).
 
 The review-following gates read the chain, not "the latest review":
 
