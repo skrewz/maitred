@@ -64,7 +64,13 @@ func testIssue(number int, state string) *Issue {
 	}
 }
 
-// testPR returns a fixture pull request in repo o/r.
+// testPR returns a fixture pull request in repo o/r. The engine's
+// fixture PRs are agent-authored deliverables opted into automatic
+// merging, exactly as testIssue's fixture issues are: the
+// agentic-auto-merge label is the precondition every merge-or-wait
+// path reads, so a fixture that stands at an approved head merges
+// unless the test clears the label
+// (§forgejo/decisions/merge-gate, s-git/maitred#179).
 func testPR(number int, state string, mergeable bool) *PullRequest {
 	return &PullRequest{
 		Number:    number,
@@ -73,6 +79,7 @@ func testPR(number int, state string, mergeable bool) *PullRequest {
 		HeadSHA:   "sha-" + strconv.Itoa(number),
 		Mergeable: mergeable,
 		UpdatedAt: testUpdatedAt,
+		Labels:    []string{LabelAgenticAutoMerge},
 		HTMLURL:   "https://forge.example.com/o/r/pulls/" + strconv.Itoa(number),
 	}
 }
@@ -2848,6 +2855,36 @@ func TestHandler_IssueClosed_CascadePRNotApprovedStaysSilent(t *testing.T) {
 	}
 }
 
+// TestHandler_IssueClosed_CascadePRWithoutOptInHoldsOff: the
+// agentic-auto-merge label is a precondition of the cascade's PR leg
+// too — the PR's own re-fetch decides it, and an approved PR with no
+// merge opt-in holds off, the fork recorded in the decision log
+// naming the missing label and the connected issue. Nothing is
+// dispatched, no watermark is recorded, and the hold-off has no
+// backstop of its own: the next sweep is (§forgejo/decisions/unblock-cascade,
+// §forgejo/decisions/merge-gate, s-git/maitred#179).
+func TestHandler_IssueClosed_CascadePRWithoutOptInHoldsOff(t *testing.T) {
+	eng, api, q, store, log := cascadePRFixtures(t)
+	api.pulls[9].Labels = nil
+	h := NewHandler(eng, "s3cret", nil)
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none (an approved PR with no opt-in waits on a human)", len(tasks))
+	}
+	w, _ := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if w != nil {
+		t.Errorf("watermark = %+v, want none", w)
+	}
+	reason := reasonFor(t, log, "o/r/pr/9")
+	if !strings.Contains(reason, LabelAgenticAutoMerge) || !strings.Contains(reason, "o/r#10") {
+		t.Errorf("decision-log reason %q does not name the missing opt-in and the connected issue o/r#10", reason)
+	}
+}
+
 // TestHandler_IssueClosed_CascadePRClosedInMeantime: a cascaded PR
 // closed or merged between the closure and the re-fetch is silent
 // (§forgejo/decisions/unblock-cascade).
@@ -4534,6 +4571,12 @@ func TestHandler_PRReviewed_DirectPRMemberOfRetiredSetMerges(t *testing.T) {
 	eng, api, q, store, _ := directPRSetFixtures(t)
 	api.issues[11].State = "closed"
 	api.blocks[9] = []Issue{*api.issues[11]}
+	// The retirement leaves the delivery's set membership stale, not
+	// gating — but merging on its own is still opt-in, so the human's
+	// lever on the orphaned delivery is the agentic-auto-merge label
+	// (§forgejo/decisions/sync-set, §forgejo/decisions/merge-gate,
+	// s-git/maitred#179).
+	api.pulls[9].Labels = append(api.pulls[9].Labels, LabelAgenticAutoMerge)
 	h := NewHandler(eng, "s3cret", nil)
 
 	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))

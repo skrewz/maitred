@@ -169,6 +169,7 @@ func TestReconcile_PRStandingAtReview(t *testing.T) {
 	cases := []struct {
 		name      string
 		review    Review
+		labels    []string
 		watermark *Watermark
 		want      string // empty: no dispatch
 	}{
@@ -180,6 +181,7 @@ func TestReconcile_PRStandingAtReview(t *testing.T) {
 		{
 			name:   "approved against the head dispatches merge-or-wait",
 			review: Review{Event: ReviewApproved, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt},
+			labels: []string{LabelAgenticAutoMerge},
 			want:   "action=merge-or-wait",
 		},
 		{
@@ -198,7 +200,11 @@ func TestReconcile_PRStandingAtReview(t *testing.T) {
 			want:      "action=fix-feedback",
 		},
 		{
-			name:      "merge-or-wait already dispatched at the revision",
+			// The merge opt-in is a precondition of the dispatch on
+			// every path: an approved PR with no agentic-auto-merge
+			// label waits on a human whatever the watermark records
+			// (§forgejo/decisions/merge-gate, s-git/maitred#179).
+			name:      "approved at the head without the opt-in waits on a human",
 			review:    Review{Event: ReviewApproved, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt},
 			watermark: &Watermark{Action: string(ActionMergeOrWait), Revision: "sha-1"},
 			want:      "",
@@ -214,7 +220,7 @@ func TestReconcile_PRStandingAtReview(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			eng, api, q, store := newTestEngine(t)
 			api.repos = []Repository{testRepo("o/r")}
-			pr := PullRequest{Number: 1, State: "open", Mergeable: true, HeadSHA: "sha-1"}
+			pr := PullRequest{Number: 1, State: "open", Mergeable: true, HeadSHA: "sha-1", Labels: tc.labels}
 			api.pulls[1] = &pr
 			api.openPulls["r"] = []PullRequest{pr}
 			api.reviews[1] = []Review{tc.review}
