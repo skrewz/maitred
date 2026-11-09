@@ -1272,9 +1272,10 @@ func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
 // rooted the cascade (§forgejo/webhook/repository-roles), and the
 // re-fetched PR state decides: only a decision of merge-or-wait
 // dispatches — a PR not standing at an approved head, a PR whose gate
-// still sees an open blocker on re-fetch, and a PR whose connected
-// issue is a member of an open landing set all dispatch nothing, each
-// recorded in the decision log with the sweep as the backstop
+// still sees an open blocker on re-fetch, a PR carrying no
+// agentic-auto-merge opt-in, and a PR whose connected issue is a
+// member of an open landing set all dispatch nothing, each recorded
+// in the decision log with the sweep as the backstop
 // (§forgejo/decisions/merge-gate, §forgejo/decisions/sync-set). The PR
 // key's own watermark applies before dispatching; the set's own
 // decision is not emitted from here — the walk follows the closed

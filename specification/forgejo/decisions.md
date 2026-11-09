@@ -500,9 +500,13 @@ resolved through the forge's closing-keyword grammar, and the non-PR
 issues it blocks (its dependency rows, read cross-repo where the
 connected issue lives elsewhere) — the two relations that connect a
 delivery, read as one list (§forgejo/webhook/re-fetch); an issue's
-**blockers** are the issues that block it. A go-ahead label on the
-issue or the PR authorises merging on
-its own — it does not authorise merging **past a blocker**. The gate is
+**blockers** are the issues that block it. The go-ahead label sits on
+the **PR**: it authorises merging on its own — it does not authorise
+merging **past a blocker**. An issue-side copy authorises nothing
+here; the only issue-side read the decision function makes flags a
+landing-set member carrying both go-ahead labels as the authoring
+error the set's hold-off names (§forgejo/decisions/sync-set). The
+gate is
 the merge-path twin of the open-blocker rule that holds off `reassess`
 (§forgejo/decisions/transition-table), and every path that dispatches
 `merge-or-wait` consults it through one shared test: the review event,
@@ -607,8 +611,12 @@ alone**. A labelled member of no open set — the decomposer retired
 the set, or a membership edge went away — has no set whose decision
 to wait for, and a silent hold-off would strand its approved,
 mergeable PR with no backstop; such a stale label is no gate, and
-the merge gate decides on as if the member carried no set label. A
-member carrying `agentic-auto-merge` alongside `agentic-sync-merge`
+the merge gate decides on as if the member carried no set label. What
+the merge gate then requires is the PR's own `agentic-auto-merge`
+opt-in: a stale-labelled member's PR without it waits on a human,
+its reason naming the missing label (§forgejo/decisions/merge-gate,
+s-git/maitred#179). A member carrying `agentic-auto-merge`
+alongside `agentic-sync-merge`
 is the error state the hold-off exists to contain: it holds off
 whatever sets exist, the reason naming both labels.
 
