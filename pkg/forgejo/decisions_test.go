@@ -1387,7 +1387,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:      "merge-or-wait already dispatched at the revision holds off",
 			event:     prEvent(EventPRReviewed, "carol"),
-			state:     State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			state:     State{ReviewLenses: testLenses, PR: optedIntoMerge(openPR("abc")), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
 		},
 		{
@@ -1398,7 +1398,11 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionFixFeedback,
 		},
 		{
-			name:      "reconcile PR merge-or-wait already dispatched at the revision holds off",
+			// The sweep's approved row is watermark-exempt only for a
+			// PR that carries the opt-in; with no label the opt-in row
+			// answers first, whatever the watermark records
+			// (§forgejo/decisions/merge-gate, s-git/maitred#179).
+			name:      "reconcile PR approved at the head without the opt-in waits on a human",
 			event:     prEvent(EventReconcile, "maitred"),
 			state:     State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
@@ -1437,7 +1441,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:      "PR commented, merge-or-wait already dispatched at the revision, holds off",
 			event:     prEvent(EventPRCommented, "alice"),
-			state:     State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			state:     State{ReviewLenses: testLenses, PR: optedIntoMerge(openPR("abc")), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
 		},
 		{
