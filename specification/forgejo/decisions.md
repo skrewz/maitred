@@ -167,15 +167,82 @@ prompts:
 |---|---|
 | `implement` | the issue is open, unblocked (all its blockers closed), has no connected open PR, carries no reserved label and does not carry `forest-seeding`, and is not an `outcome` tracker (one that becomes unblocked is a `wrap-up` candidate) — the issue was opened, became unblocked, or was reconciled into that state (§forgejo/decisions/loop-prevention, §forgejo/decisions/commissioning) |
 | `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement), and it carries no reserved label |
-| `review` | a mergeable PR opened, or synced while it has no review, or an open mergeable PR carrying the `trigger-review` label while it has no review (§forgejo/decisions/label-triggered-review); watermark-exempt on the sweep while the PR has no reviews (§forgejo/reconciliation/watermark-exemptions) |
-| `re-review` | a mergeable PR synced while it has a review, or an open mergeable PR carrying the `trigger-review` label while it has a review (§forgejo/decisions/label-triggered-review); watermark-exempt on the sweep while the latest review stands at an older revision than the head (§forgejo/reconciliation/watermark-exemptions) |
-| `fix-feedback` | the PR's latest review requests changes, or a reconciled PR stands at a comment review — **and** the PR's author is the configured implementer identity; a PR authored by anyone else holds off, its feedback theirs to fix (§forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention, s-git/maitred#143); watermark-exempt on the sweep while the latest review at the current head requests changes or is a comment review (§forgejo/reconciliation/watermark-exemptions) |
-| `merge-or-wait` | the PR's latest review approves **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's; never for a PR whose connected issue is a member of an open sync set — landing is the set's decision (§forgejo/decisions/sync-set); a labelled member of no open set — its set retired — reads as stale authoring, not a gate, and the merge gate decides on (§forgejo/decisions/sync-set); watermark-exempt on the sweep when the PR carries `agentic-auto-merge` (§forgejo/reconciliation/watermark-exemptions) |
+| `review` | the **fan-out over the configured lenses**: a mergeable PR opened, or synced, dispatches each lens with no undismissed approval at the head (§forgejo/decisions/review-lenses); so does an open mergeable PR carrying the `trigger-review` label, at the current revision (§forgejo/decisions/label-triggered-review); watermark-exempt per lens on the sweep while that lens has reported nothing at the head (§forgejo/reconciliation/watermark-exemptions) |
+| `fix-feedback` | every configured review lens has reported at the PR's current head and the reports are not all approvals (§forgejo/decisions/review-lenses) — **and** the PR's author is the configured implementer identity; a PR authored by anyone else holds off, its feedback theirs to fix (§forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention, s-git/maitred#143); while any lens has not reported at head the action holds off naming the outstanding lenses, whose dispatches the fan-out row advances; watermark-exempt on the sweep while the chain reports feedback at the current head (§forgejo/reconciliation/watermark-exemptions) |
+| `merge-or-wait` | **every configured lens holds an undismissed approval at the PR's current head**, no reviewer's latest undismissed review at head is a non-approval (§forgejo/decisions/review-lenses), **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's; never for a PR whose connected issue is a member of an open sync set — landing is the set's decision (§forgejo/decisions/sync-set); a labelled member of no open set — its set retired — reads as stale authoring, not a gate, and the merge gate decides on (§forgejo/decisions/sync-set); watermark-exempt on the sweep when the PR carries `agentic-auto-merge` (§forgejo/reconciliation/watermark-exemptions) |
 | `rebase` | an open PR is not mergeable (conflicts) |
 | `decompose` | an open issue carrying the `ideation` label was opened, edited, had its labels changed, or received a comment authored by anyone other than the configured decomposer identity (§forgejo/decisions/loop-prevention, s-git/maitred#147); or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions); or the unblock cascade newly unblocks an open issue carrying the `outcome` label (§forgejo/decisions/unblock-cascade) |
 | `teardown-forest` | an open issue carrying the `ideation` label **also** carries the `teardown-forest` label, **and blocks at least one issue**: the human has ordered the forest that root commissioned to be deleted, and there is a forest to delete (§forgejo/decisions/forest-teardown); watermark-exempt on the sweep while the forest stands (§forgejo/reconciliation/watermark-exemptions) |
-| `sync` | an open issue carrying the `sync` label — a **landing set**: changes that must land together — has every blocking issue either closed or standing with its delivering PR approved at head and mergeable while carrying `agentic-sync-merge` (a blocking issue that is itself a pull request is held to that test through its own state); dispatched from the reconciliation sweep, from the unblock cascade's sync-set candidate, and from the approval path's emission re-checked on re-fetch; the watermark is a revision derived from the whole set (§forgejo/decisions/sync-set) |
+| `sync` | an open issue carrying the `sync` label — a **landing set**: changes that must land together — has every blocking issue either closed or standing with its delivering PR approved at head and mergeable while carrying `agentic-sync-merge`; "approved at head" is the lens gate — every configured lens holds an undismissed approval at that PR's head (§forgejo/decisions/review-lenses) (a blocking issue that is itself a pull request is held to that test through its own state); dispatched from the reconciliation sweep, from the unblock cascade's sync-set candidate, and from the approval path's emission re-checked on re-fetch; the watermark is a revision derived from the whole set (§forgejo/decisions/sync-set) |
+
+Reviews are the fan-out over the configured lenses, not a configured
+action entry: `review` names the fan-out's dispatch in the decision
+log, one emission per lens, and `re-review` is retired with the
+single-reviewer model (§forgejo/config/review-lenses).
+
+## Review lenses
+
+A pull request is reviewed by the **ordered lens list** the config
+declares (§forgejo/config/review-lenses). The whole model reduces to
+one predicate:
+
+> **The lenses to dispatch are the configured lenses with no
+> undismissed approving review at the PR's current head.**
+
+A lens's standing is read from the reviews the forge reports: the
+lens — compared by its configured `identity`, exact and case-sensitive,
+never inferred — has an **undismissed** review at head whose latest
+such review approves. Stale-approval dismissal is what makes a push
+invalidate the chain: after a push no lens holds an undismissed
+approval at the new head, so the fan-out re-fires **all** of them —
+parallel at first, only the invalidated ones after a push, the whole
+chain again whenever a fix round ends with rejections (the fix pushes
+new commits, and the push is the re-ask). The fan-out dispatches one
+task per outstanding lens, in config order; the task's dedup key
+carries the lens (§forgejo/webhook/the-pipeline), so three review
+tasks over one head are three tasks, and a lens mid-flight when the
+head moves gets at most a queued duplicate it walks away from on
+seeing its own approval at head — a task wasted, not correctness
+lost.
+
+Each outstanding lens passes under its own half of the watermark —
+the subject slot for its identity at this revision
+(§forgejo/state/watermark) — so two lenses dispatched at the same
+revision do not hold each other off, and the guard speaks only for
+the lens it names. The sweep's fan-out row is exempt per lens while
+that lens has reported **nothing** at the head: a dispatch that went
+nowhere recovers, a lens that has already spoken at head does not
+re-fire (§forgejo/reconciliation/watermark-exemptions). While the slot
+names a dispatch at the current head yet the PR carries no review by
+that login anywhere, the reason says so — the state cannot tell a
+dispatch still mid-flight from a mistyped `identity` that can never
+report, but the operator can (§forgejo/config/review-lenses).
+
+The review-following gates read the chain, not "the latest review":
+
+- **fix-feedback** fires only when every lens has reported at head
+  and the reports are not all approvals — a reviewer's latest
+  undismissed review at head asking for changes (or a comment report,
+  on the sweep's row) is feedback for the implementer. While any lens
+  has not reported at head the action holds off, the reason naming
+  the outstanding lenses, because a fix pushes commits and would
+  silence the lenses still reading the old head.
+- **merge-or-wait** fires when every lens holds an undismissed
+  approval at head and no reviewer's latest undismissed review at
+  head is a non-approval — alongside the sync-set and open-blocker
+  gates it consults today (§forgejo/decisions/merge-gate,
+  §forgejo/decisions/sync-set).
+- A lens's own push does not re-fire **that lens**; the other lenses'
+  dispatches go on (§forgejo/decisions/loop-prevention).
+- The landing-set member test is the same gate over the member's
+  delivering PR (§forgejo/decisions/sync-set).
+
+The `trigger-review` label overrides the *trigger*, not the chain: it
+re-asks the lenses for the current revision — including one that
+already approved, which is the point of the human's explicit request —
+while the subject-slot guard keeps the label's mere presence from
+re-firing (§forgejo/decisions/label-triggered-review).
 
 ## Transition table
 
@@ -196,22 +263,21 @@ prompts:
 | issue edited / labels changed / feedback comment (issue open, an open blocker) | hold off — the reason names the open blockers |
 | issue edited / labels changed / feedback comment (issue not open) | hold off |
 | issue closed | unblock cascade |
-| PR opened (open, mergeable) | `review` |
+| PR opened (open, mergeable) | `review` fan-out — every lens, none has an approval at head |
 | PR opened (open, not mergeable) | `rebase` |
 | PR synced (open, not mergeable) | `rebase` |
-| PR synced (open, mergeable, no review) | `review` |
-| PR synced (open, mergeable, has a review) | `re-review` |
-| PR carrying the `trigger-review` label (open, mergeable, no review) | `review` — explicit request (§forgejo/decisions/label-triggered-review) |
-| PR carrying the `trigger-review` label (open, mergeable, has a review) | `re-review` — explicit request (§forgejo/decisions/label-triggered-review) |
-| review submitted (latest review requests changes, PR authored by the implementer identity) | `fix-feedback` |
-| review submitted (latest review requests changes, PR authored by anyone else) | hold off — the reason names the PR's author and the configured implementer identity (§forgejo/config/implementer-identity, s-git/maitred#143) |
-| review submitted (latest review approves, no connected issue has an open blocker) | `merge-or-wait` |
-| review submitted (latest review approves, a connected issue has an open blocker) | hold off — the reason names the open blockers (§forgejo/decisions/merge-gate) |
-| review submitted (latest review approves, a connected issue carries `agentic-sync-merge`, or the PR itself stands in an open grouping issue's blockers) | hold off, naming the sync set — the member never merges on its own; the member's open sync sets are emitted for a `sync` dispatch against their grouping issues. A member of **no open set** — its set retired — decides on through the merge gate, its label stale rather than a gate; a member also carrying `agentic-auto-merge` holds off naming both labels, whatever sets exist (§forgejo/decisions/sync-set) |
-| review submitted (latest review is anything else) | hold off |
+| PR synced (open, mergeable) | `review` fan-out — the lenses with no undismissed approval at the new head (§forgejo/decisions/review-lenses) |
+| PR carrying the `trigger-review` label (open, mergeable) | `review` fan-out for the current revision — explicit request, overriding the per-lens sender guard and re-asking even an approving lens (§forgejo/decisions/label-triggered-review) |
+| review submitted (every lens reported at head, the reports not all approvals, PR authored by the implementer identity) | `fix-feedback` (§forgejo/decisions/review-lenses) |
+| review submitted (every lens reported at head, the reports not all approvals, PR authored by anyone else) | hold off — the reason names the PR's author and the configured implementer identity (§forgejo/config/implementer-identity, s-git/maitred#143) |
+| review submitted (every lens approved at head, no connected issue has an open blocker) | `merge-or-wait` |
+| review submitted (every lens approved at head, a connected issue has an open blocker) | hold off — the reason names the open blockers (§forgejo/decisions/merge-gate) |
+| review submitted (a connected issue carries `agentic-sync-merge`, or the PR itself stands in an open grouping issue's blockers) | hold off, naming the sync set — the member never merges on its own; the member's open sync sets are emitted for a `sync` dispatch against their grouping issues. A member of **no open set** — its set retired — decides on through the merge gate, its label stale rather than a gate; a member also carrying `agentic-auto-merge` holds off naming both labels, whatever sets exist (§forgejo/decisions/sync-set) |
+| review submitted (a lens has not reported at head) | `review` fan-out for the lenses still owed; fix-feedback holds off naming the outstanding lenses (§forgejo/decisions/review-lenses) |
+| review submitted (every lens reported at head, comment reports only) | hold off — the sweep is the row that turns comment reports into fix-feedback (§forgejo/decisions/transition-table) |
 | PR merged | unblock cascade (for the connected issue) |
 | PR closed without merging | hold off |
-| PR commented (open) | as reconcile — the sweep's logic: the re-fetched PR state decides the next action — but **not** the sweep's watermark exemption: an approved `agentic-auto-merge` PR whose watermark already records `merge-or-wait` at head holds off here, and so do the states whose watermark already records `review`, `re-review` or `fix-feedback` at head (§forgejo/reconciliation/watermark-exemptions) |
+| PR commented (open) | as reconcile — the sweep's logic: the re-fetched PR state decides the next action — but **not** the sweep's watermark exemption: an approved `agentic-auto-merge` PR whose watermark already records `merge-or-wait` at head holds off here, and so do the states whose subject slots already record the lens `review` at head or whose watermark records `fix-feedback` at head (§forgejo/reconciliation/watermark-exemptions, §forgejo/state/watermark) |
 | reconcile — open issue carrying both the `ideation` and the `teardown-forest` label, blocking at least one issue | `teardown-forest`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
 | reconcile — open issue carrying both labels, blocking nothing | hold off, naming the empty forest: the re-firing ends where the forest does (§forgejo/decisions/forest-teardown) |
 | reconcile — open issue with the `ideation` label | `decompose`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
@@ -221,7 +287,7 @@ prompts:
 | reconcile — open `outcome` issue with open blockers, its `ideation` blocker open | hold off, naming the root — the forest is not yet commissioned, and the root's own row is the pulse: a forest is curated once per sweep |
 | reconcile — open `outcome` issue with open blockers and no `ideation` blocker | hold off, naming the absence — a tracker not gated by a root is not a forest's tracker |
 | reconcile — open issue carrying the `sync` label | `sync` when every member is closed or approved-at-head, mergeable, and opted in; otherwise a silent hold-off naming the members that are not ready — and a hold-off naming both reserved labels when the issue also carries `ideation` or `outcome`, two kind claims one row must not settle by label order (§forgejo/decisions/sync-set) |
-| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, as PR synced — except when the last activity is a review: changes-requested or comment dispatches `fix-feedback` **revision notwithstanding**, the exempt rows of a PR standing at feedback for a fix that has not landed — behind the ownership gate, so a PR authored by anyone but the configured implementer identity holds off naming the author and the identity (§forgejo/config/implementer-identity, s-git/maitred#143) — approved dispatches `merge-or-wait` — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate), and dispatches `merge-or-wait` **revision notwithstanding** when the PR carries `agentic-auto-merge`, the exempt row of an approved PR at a frozen head; the synced-like rows for `review` and `re-review` likewise dispatch **revision notwithstanding** while no review stands at the head — the exempt rows of a PR waiting to be reviewed (§forgejo/reconciliation/watermark-exemptions) |
+| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, as PR synced — except when the chain has reported at head: **every lens approved at head** dispatches `merge-or-wait` — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate), and dispatches `merge-or-wait` **revision notwithstanding** when the PR carries `agentic-auto-merge`, the exempt row of an approved PR at a frozen head — while **every lens reported and the reports not all approvals** dispatches `fix-feedback` **revision notwithstanding**, the exempt row of a PR standing at feedback for a fix that has not landed — behind the ownership gate, so a PR authored by anyone but the configured implementer identity holds off naming the author and the identity (§forgejo/config/implementer-identity, s-git/maitred#143). While any lens has not reported at head, the synced-like fan-out row dispatches those lenses **revision notwithstanding** — the exempt rows of a PR waiting to be reviewed, exempt per lens while the lens has reported nothing at the head (§forgejo/reconciliation/watermark-exemptions, §forgejo/decisions/review-lenses) |
 
 The **merge gate is the only place work is stopped**, and it stops it
 by holding off, never by closing: whichever path can dispatch
@@ -257,7 +323,10 @@ until it does the merge gate sees no blockers — a PR whose opening
 recorded no dependency has no connected issues and merges as the graph
 states.
 
-The "latest review" is the PR's most recently submitted review. An
+There is no longer a single "latest review" that decides: the
+review-following rows read the **chain** — each lens's latest
+undismissed review at head, and each author's latest undismissed
+review at head (§forgejo/decisions/review-lenses). An
 issue that *became unblocked* is dispatched `implement` through the
 unblock cascade, under the same conditions as an opened issue — except
 that a newly unblocked issue carrying the `outcome` label is a
@@ -333,19 +402,22 @@ issue becomes unblocked, the cascade — not the activity — dispatches
 
 **Seeding, not authorship, gates a forest member.** A forest member's authorship is not a gate: an open, unblocked member with no connected open PR and no `forest-seeding` label is an `implement` candidate on every path — the opened row, the unblock cascade and the reconciliation sweep alike. The window in which `implement` would be vacuously correct is the creation race, and it is closed by the label, not by the author: the decomposer attaches `forest-seeding` atomically as it creates the member, wires the member's blocking edges, then removes the label (§forgejo/decisions/transition-table, §forgejo/decisions/commissioning). Authorship is the operator's declaration of *who made* the issue, and what an issue *is* — a work item awaiting its gate — is not a property of who opened it; the engine therefore reads the label and never the identity. The corollary is the sweep's role: because the sweep decides as issue opened, it is the backstop for a member whose unblocking delivery was lost, was never delivered, or was dispatched at a revision that cannot recur (§forgejo/reconciliation/the-sweep, §forgejo/decisions/unblock-cascade, s-git/maitred#135). The cascade is un-narrowed, not widened: the closure that removes a member's last issue-side blocker dispatches `implement` as before, whether that blocker is the ideation ticket or a work-order issue.
 
-A PR's **last activity is a review** when its latest review is a
-changes-requested, approved, or comment review submitted against the PR's
-current head (the review's commit ID equals the head SHA) — no commit has
-been pushed since the review. A reconciled PR standing at such a review
-decides as if that review had just been submitted — except that a comment
-review, which holds off on the event path, dispatches `fix-feedback`: the
-review is feedback for the implementer, and the sweep moves the PR along by
-triggering the implementer, not the reviewer. Changes-requested dispatches
-`fix-feedback`, approved dispatches `merge-or-wait` — unless the merge
-gate holds it off on an open blocker (§forgejo/decisions/merge-gate). A
-PR whose latest
-review is anything else (e.g. dismissed), or whose latest review predates
-the current head, is reconciled as PR synced.
+A reconciled PR whose **chain has reported at head** — every
+configured lens with an undismissed review submitted against the PR's
+current head (the review's commit ID equals the head SHA), so no commit
+has been pushed since the chain spoke — decides through the
+review-following rows: approvals across the board dispatch
+`merge-or-wait` unless the merge gate holds it off on an open blocker
+(§forgejo/decisions/merge-gate); reports that are not all approvals
+dispatch `fix-feedback`, a comment report counting on the sweep's row
+(the sweep moves the PR along by triggering the implementer, not the
+reviewer) where the pure review event waits for a changes-requested
+(§forgejo/decisions/review-lenses, §forgejo/decisions/transition-table).
+A PR whose chain has not reported at head — some lens silent at the
+current revision, or reports the head has moved past — is reconciled
+as PR synced: the fan-out row dispatches those lenses, and
+fix-feedback holds off naming the outstanding ones
+(§forgejo/decisions/review-lenses).
 
 Both `fix-feedback` dispatches that follow a review — the submitted-review
 row and the sweep's — sit behind the **ownership gate**: when the
@@ -360,24 +432,27 @@ exactly as before.
 ## Label-triggered review
 
 The `trigger-review` label is the **explicit request for an agentic review**.
-When an open, mergeable pull request carries it, the decision dispatches a
-review for that revision regardless of the review state the transition table
-would otherwise produce: `review` when the PR has no review, `re-review` when
-it already does. The label is an *override of the trigger*, not of the review's
-content — the reviewing agent decides the outcome (approve, request changes,
-comment) and the merge policy applies unchanged (§forgejo/decisions/actions).
+When an open, mergeable pull request carries it, the decision dispatches
+the lens fan-out for the current revision regardless of the review state
+the transition table would otherwise produce — including lenses that
+already hold an undismissed approval at head, whose re-ask is the point
+of the human's request (§forgejo/decisions/review-lenses). The label is
+an *override of the trigger*, not of the review's content — the
+reviewing agents decide the outcome (approve, request changes, comment)
+and the merge policy applies unchanged (§forgejo/decisions/actions).
 
 The label restores the pre-engine affordance where a human, by labelling, asked
 for a review that the state transitions alone would not have raised. The
-dispatch is keyed to the label's presence at the current revision so it does
-not re-fire the review while the label is merely present
-(§forgejo/decisions/loop-prevention); removing and re-applying the label at a
-new revision is how an explicit re-ask is made. The reviewing-author sender
-guard does not suppress a label-requested review — the label is an explicit
-request, not the author's own push.
+dispatch is keyed to the label's presence at the current revision — each
+lens through its subject slot — so it does not re-fire the review while
+the label is merely present (§forgejo/decisions/loop-prevention,
+§forgejo/state/watermark); removing and re-applying the label at a new
+revision is how an explicit re-ask is made. The per-lens sender guard
+does not suppress a label-requested review — the label is an explicit
+request, not a lens's own push.
 
 `trigger-review` is **additive**: it never suppresses the state-driven
-`review` / `re-review` transitions, and it is distinct from the reserved labels
+fan-out, and it is distinct from the reserved labels
 (`ideation`, `outcome`, `human-task`), which gate work items rather than
 request reviews (§forgejo/decisions/transition-table).
 
@@ -717,43 +792,52 @@ Five mechanisms, in this order:
    does not re-dispatch the same action: when the watermark already
    records the action at the current revision (the PR head sha, or the
    issue's `updated_at`), the decision holds off. The guard is
-   revision-keyed on every path. The watermark-exempt actions
-   `decompose`, `wrap-up`, `review`, `re-review`, `fix-feedback`, and
+   revision-keyed on every path, and for the review fan-out it is
+   **subject-keyed** as well: each lens is guarded by its own slot at
+   the revision, so three lenses dispatched at one head are three
+   dispatches, and a lens already mid-flight at the head is not
+   duplicated (§forgejo/state/watermark, §forgejo/decisions/review-lenses).
+   The watermark-exempt actions
+   `decompose`, `wrap-up`, `review`, `fix-feedback`, and
    `merge-or-wait` are exempt only **on the sweep**, whose rows for
    them decide without consulting the watermark:
    state is their watermark (§forgejo/reconciliation/watermark-exemptions),
    and the agent's silence-on-noop keeps the re-firing quiet. For
    `merge-or-wait` the exemption is narrower still: the sweep's row, and
    only for an approved, unblocked PR carrying `agentic-auto-merge`, so
-   an approving review never re-fires on its own. The `review`,
-   `re-review` and `fix-feedback` exemptions are the sweep's rows
-   alone: a PR waiting to be reviewed, or standing at feedback whose
-   fix has not landed, sits at a frozen head sha, and each of those
-   states is self-limiting — a review at head ends `review` and
-   `re-review`, a push ends `fix-feedback` — so the sweep re-fires a
+   an approving review never re-fires on its own. The `review`
+   exemption is per lens — the sweep's fan-out re-fires a lens only
+   while that lens has reported nothing at the head — and the
+   `fix-feedback` exemption is the sweep's row alone: a PR waiting to
+   be reviewed, or standing at feedback whose fix has not landed, sits
+   at a frozen head sha, and each of those states is self-limiting — a
+   lens reporting at head ends its `review` exemption, a chain fully
+   reported at head ends the `fix-feedback` exemption's re-ask to the
+   lenses, a push ends `fix-feedback` — so the sweep re-fires a
    dispatch that went nowhere until the state moves, while on the
    event path these actions stay revision-keyed and a push or a
    review never re-fires on its own.
 3. **Targeted per-transition sender guards**, only where an agent's
    *own* action would re-trigger the *same* action: a commit pushed by
-   the PR's reviewing author (the author of its latest review) must
-   not re-review that same commit; a comment on an open `ideation`
-   root authored by the configured decomposer identity must not
-   re-dispatch `decompose` — every other author's comment re-cures the
-   forest, which is what makes answering the decomposer's clarifying
-   questions work event-driven (s-git/maitred#147). The two guards
-   that read a *declared* identity — the root-comment author guard and
-   the fix-feedback ownership gate of mechanism 5 — compare the
-   payload's login to that config key by exact, case-sensitive
-   equality, no case folding, no substring
+   a review lens must not re-fire **that lens** — the fan-out carries
+   on with the other lenses (§forgejo/decisions/review-lenses); a
+   comment on an open `ideation` root authored by the configured
+   decomposer identity must not re-dispatch `decompose` — every other
+   author's comment re-cures the forest, which is what makes answering
+   the decomposer's clarifying questions work event-driven
+   (s-git/maitred#147). The guards that read a *declared* identity —
+   the root-comment author guard, the fix-feedback ownership gate of
+   mechanism 5, and the per-lens sender guard, which compares the
+   payload's login to each lens's configured `identity` — match by
+   exact, case-sensitive equality, no case folding, no substring
    (§forgejo/config/decomposer-identity,
-   §forgejo/config/implementer-identity); the re-review author guard
-   reads no config key at all, comparing the payload's login to the
-   author of the PR's latest review, both logins read from the forge.
-   The re-review guard yields to an explicit request: a PR carrying the
-   `trigger-review` label is reviewed whatever its author pushed
+   §forgejo/config/implementer-identity, §forgejo/config/review-lenses);
+   the guard fires only where the lens has actually reviewed, as the
+   retired reviewing-author guard did.
+   The guard yields to an explicit request: a PR carrying the
+   `trigger-review` label is reviewed whatever a lens pushed
    (§forgejo/decisions/label-triggered-review).
-   Cross-persona triggering (a reviewer's changes-requested leading to
+   Cross-persona triggering (a lens's changes-requested leading to
    the implementer's fix) is intended and unguarded.
 4. **The seeding hold-off**, where a delivery that is new to a key
    would otherwise dispatch work that is not yet commissioned: the

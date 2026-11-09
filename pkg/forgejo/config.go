@@ -17,11 +17,14 @@ import (
 
 // AllActions lists every action the decision function references
 // (§forgejo/config/validation): the config must cover each of them.
+// The retired `review` and `re-review` singletons are absent: reviews
+// are configured as the ordered lens list below, and a config that
+// still names either singleton fails the unknown-action check — the
+// loud half of the config-before-binary change
+// (§forgejo/config/review-lenses, §forgejo/config/validation).
 var AllActions = []Action{
 	ActionImplement,
 	ActionReassess,
-	ActionReview,
-	ActionReReview,
 	ActionFixFeedback,
 	ActionMergeOrWait,
 	ActionRebase,
@@ -38,6 +41,23 @@ const ConfigEnvVar = "MAITRED_FORGEJOENG_DIR"
 // DefaultConfigPath is the engine config location when ConfigEnvVar is
 // unset (§forgejo/config/loading).
 const DefaultConfigPath = "/etc/maitred/forgejoeng.yaml"
+
+// ReviewLens is one configured review lens: an identity whose approval
+// the gates count, with the canned prompt and persona that dispatch a
+// review from it (§forgejo/config/review-lenses).
+type ReviewLens struct {
+	// Identity is the Forgejo login the lens reviews as; the decision
+	// function compares it against review authors to decide which
+	// lenses still owe a verdict (§forgejo/decisions/review-lenses).
+	Identity string `yaml:"identity"`
+	// Prompt is the canned prompt template, the hotelier task
+	// invocation, shaped exactly like an action's (§forgejo/config/canned-prompts).
+	Prompt string `yaml:"prompt"`
+	// Persona is the persona the lens task runs as.
+	Persona string `yaml:"persona"`
+	// Timeout is how long the lens task may run.
+	Timeout time.Duration `yaml:"timeout"`
+}
 
 // PromptConfig is the canned prompt for one action
 // (§forgejo/config/canned-prompts).
@@ -80,6 +100,11 @@ type Config struct {
 	// Actions maps each action the decision function references to its
 	// canned prompt.
 	Actions map[string]PromptConfig `yaml:"actions"`
+	// Reviews is the ordered list of review lenses (§forgejo/config/review-lenses).
+	// It replaces the retired `review` and `re-review` singletons;
+	// extending or contracting the chain is a config edit. At least one
+	// lens is required (§forgejo/config/validation).
+	Reviews []ReviewLens `yaml:"reviews"`
 }
 
 // Placeholders are the values the engine fills into a prompt template at
@@ -162,6 +187,43 @@ func (c *Config) Validate() error {
 	for name := range c.Actions {
 		if !isKnownAction(name) {
 			return fmt.Errorf("unknown action %q: the decision function does not dispatch it: %w", name, ErrActionSetMismatch)
+		}
+	}
+	if err := c.validateReviewLenses(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateReviewLenses checks the lens list: at least one lens, each
+// lens complete (identity, prompt, persona, positive timeout), each
+// lens's prompt parseable with only known placeholders, and no
+// duplicate identity (§forgejo/config/review-lenses,
+// §forgejo/config/validation).
+func (c *Config) validateReviewLenses() error {
+	if len(c.Reviews) == 0 {
+		return fmt.Errorf("reviews: at least one review lens is required: %w", ErrActionSetMismatch)
+	}
+	seen := map[string]bool{}
+	for i, lens := range c.Reviews {
+		if lens.Identity == "" {
+			return fmt.Errorf("reviews[%d]: identity is required", i)
+		}
+		if seen[lens.Identity] {
+			return fmt.Errorf("reviews: duplicate lens identity %q", lens.Identity)
+		}
+		seen[lens.Identity] = true
+		if lens.Prompt == "" {
+			return fmt.Errorf("reviews %q: prompt is required", lens.Identity)
+		}
+		if lens.Persona == "" {
+			return fmt.Errorf("reviews %q: persona is required", lens.Identity)
+		}
+		if lens.Timeout <= 0 {
+			return fmt.Errorf("reviews %q: timeout must be positive", lens.Identity)
+		}
+		if _, err := (&PromptConfig{Prompt: lens.Prompt}).Render(Placeholders{}); err != nil {
+			return fmt.Errorf("reviews %q: %w", lens.Identity, err)
 		}
 	}
 	return nil
@@ -303,6 +365,20 @@ func loadConfigDir(dir string) (*Config, error) {
 				return nil, fmt.Errorf("config %q: action %q is already defined", name, action)
 			}
 			merged.Actions[action] = pc
+		}
+		// Lenses concatenate in sorted file order, so the chain's
+		// order stays a config fact; a lens identity defined twice is
+		// the same conflict the scalar keys refuse
+		// (§forgejo/config/review-lenses). The non-empty requirement
+		// belongs to Validate, not the merge: one file of a directory
+		// may lawfully hold no lenses.
+		for _, lens := range cfg.Reviews {
+			for _, have := range merged.Reviews {
+				if lens.Identity != "" && lens.Identity == have.Identity {
+					return nil, fmt.Errorf("config %q: review lens identity %q is already defined", name, lens.Identity)
+				}
+			}
+			merged.Reviews = append(merged.Reviews, lens)
 		}
 	}
 	return merged, nil

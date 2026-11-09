@@ -160,13 +160,21 @@ func (e *Engine) HandleEvent(ev Event) {
 		}
 		e.recordDecision(key, ev, st, d)
 		if d.Dispatched {
-			if err := e.dispatch(ev, st, d.Action); err != nil {
-				// No watermark: the reconciliation sweep retries.
-				e.log.Error("dispatch failed", "key", key.String(), "action", string(d.Action), "error", err)
-				return
-			}
-			if err := e.store.saveLocked(key, Watermark{Action: string(d.Action), Revision: revisionFor(ev, st)}); err != nil {
-				e.log.Error("save watermark", "key", key.String(), "error", err)
+			if len(d.Lenses) > 0 {
+				// The review fan-out: one dispatch per outstanding lens,
+				// each recorded in its own subject slot so a second
+				// lens at the same revision is not held off by the first
+				// (§forgejo/decisions/review-lenses, §forgejo/state/watermark).
+				e.dispatchLenses(key, w, ev, st, d.Lenses)
+			} else {
+				if err := e.dispatch(ev, st, d.Action); err != nil {
+					// No watermark: the reconciliation sweep retries.
+					e.log.Error("dispatch failed", "key", key.String(), "action", string(d.Action), "error", err)
+					return
+				}
+				if err := e.store.saveLocked(key, watermarkAt(w, string(d.Action), revisionFor(ev, st))); err != nil {
+					e.log.Error("save watermark", "key", key.String(), "error", err)
+				}
 			}
 		}
 		e.emitCascade(d, key, ev.Sender)
@@ -242,7 +250,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		if err != nil {
 			return ev, State{}, err
 		}
-		st := State{Issue: issue, DecomposerIdentity: e.cfg.DecomposerIdentity}
+		st := State{Issue: issue, DecomposerIdentity: e.cfg.DecomposerIdentity, ReviewLenses: e.cfg.Reviews}
 		switch ev.Type {
 		case EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged,
 			EventIssueCommented, EventReconcile:
@@ -301,8 +309,11 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		// The implementer identity rides on the state verbatim from the
 		// config: the fix-feedback ownership gate reads it alongside
 		// the PR's author (§forgejo/config/implementer-identity,
-		// §forgejo/decisions/inputs, s-git/maitred#143).
-		st := State{PR: pr, ImplementerIdentity: e.cfg.ImplementerIdentity}
+		// §forgejo/decisions/inputs, s-git/maitred#143). The lens list
+		// rides the same way: the review fan-out and the per-lens
+		// gates read the operator's declaration, never an inferred
+		// roster (§forgejo/config/review-lenses).
+		st := State{PR: pr, ImplementerIdentity: e.cfg.ImplementerIdentity, ReviewLenses: e.cfg.Reviews}
 		switch ev.Type {
 		case EventPRReviewed, EventPRCommented, EventReconcile:
 			// The one hop performed wherever a merge may be dispatched —
@@ -704,16 +715,15 @@ func taskURL(st State) string {
 }
 
 // taskTitle composes the dispatched task's human-readable name — the
-// action's verb, the subject's title where the state carries one, and
-// the `repo#number` reference — in the one helper both event kinds go
-// through, so a queue system's row reads the same whichever object
-// dispatched, e.g. "Review: Make everything awesome and pink (o/r#1337)"
-// (§forgejo/webhook/the-pipeline).
-func taskTitle(action Action, ev Event, st State) string {
-	verb := string(action)
-	if r := []rune(verb); len(r) > 0 {
-		verb = string(unicode.ToUpper(r[0])) + string(r[1:])
-	}
+// dispatch's verb, the subject's title where the state carries one,
+// and the `repo#number` reference — in the one helper every dispatch
+// path goes through, so a queue system's row reads the same whichever
+// object or lens dispatched, e.g. "Review: Make everything awesome
+// and pink (o/r#1337)" (§forgejo/webhook/the-pipeline). The verb
+// names the dispatch: the action's own verb for a singleton, the
+// action with its subject for a fan-out ("Review as lens-a"), so the
+// title budget lives in exactly one function.
+func taskTitle(verb string, ev Event, st State) string {
 	ref := fmt.Sprintf("%s#%d", ev.Repo, ev.Number)
 	if subject := taskSubject(st); subject != "" {
 		// The subject takes what is left of the line's budget once the
@@ -730,20 +740,50 @@ func taskTitle(action Action, ev Event, st State) string {
 	return trimRunes(fmt.Sprintf("%s (%s)", verb, ref), maxTaskTitleRunes)
 }
 
-// dispatch fills the action's canned prompt and enqueues the task, with
-// the dedup key of the dispatch identity — the key's repo, kind, and
-// number, the action, and the revision — so a queue system with
-// de-duplication (hotelier's dedup_key) squelches a re-dispatch of the
-// same (action, revision) while the first task is still pending
-// (§forgejo/webhook/the-pipeline). The key carries the repo verbatim
-// (slash retained — it is opaque to the queue system), so two distinct
-// repos never produce the same key. The task ID, by contrast, keeps its
-// "-"-replaced repo: there the ambiguity is only a traceability concern.
+// dispatchVerb is the title verb of one dispatch: the action's verb,
+// capitalised, with the fan-out's subject named alongside it where
+// there is one — "Implement" for a singleton, "Review as lens-a" for
+// a lens (§forgejo/webhook/the-pipeline).
+func dispatchVerb(action Action, subject string) string {
+	verb := string(action)
+	if r := []rune(verb); len(r) > 0 {
+		verb = string(unicode.ToUpper(r[0])) + string(r[1:])
+	}
+	if subject != "" {
+		verb += " as " + subject
+	}
+	return verb
+}
+
+// dispatch fills the action's canned prompt and enqueues the task
+// through dispatchPrompt with no subject — the singleton shape
+// (§forgejo/webhook/the-pipeline).
 func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	pc, err := e.cfg.PromptFor(action)
 	if err != nil {
 		return err
 	}
+	return e.dispatchPrompt(ev, st, *pc, "", action, revisionFor(ev, st))
+}
+
+// dispatchPrompt is the one dispatch pipeline: it fills the canned
+// prompt, refuses an invocation that names no object, and enqueues
+// the task with the dedup key of the dispatch identity — the key's
+// repo, kind, and number, the action, the subject where the dispatch
+// names one (a fan-out lens's identity), and the revision — so a
+// queue system with de-duplication (hotelier's dedup_key) squelches a
+// re-dispatch of the same (action, subject, revision) while the first
+// task is still pending (§forgejo/webhook/the-pipeline,
+// §forgejo/decisions/review-lenses). The subject is what keeps one
+// lens's task from squelching a sibling's at the same revision; the
+// singleton path carries none. The key carries the repo verbatim
+// (slash retained — it is opaque to the queue system), so two
+// distinct repos never produce the same key. The task ID, by
+// contrast, keeps its "-"-replaced repo: there the ambiguity is only
+// a traceability concern. The prompt contract, the URL-placeholder
+// refusal, and the task shape all live here, so the singleton and
+// the fan-out cannot drift apart (§forgejo/config/canned-prompts).
+func (e *Engine) dispatchPrompt(ev Event, st State, pc PromptConfig, subject string, action Action, rev string) error {
 	p := Placeholders{
 		Repo:   ev.Repo,
 		Kind:   string(ev.Kind),
@@ -762,23 +802,112 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 		return err
 	}
 	if referenced, filled := urlArguments(pc.Prompt, p); referenced > 0 && filled == 0 {
-		return fmt.Errorf("dispatch %s for %s: the canned prompt references a URL placeholder but the state carries no URL — refusing to enqueue an invocation that names no object", action, ev.KeyOf())
+		return fmt.Errorf("dispatch %s for %s: the canned prompt references a URL placeholder but the state carries no URL — refusing to enqueue an invocation that names no object", dispatchVerb(action, subject), ev.KeyOf())
 	}
-	rev := revisionFor(ev, st)
+	identity := string(action)
+	if subject != "" {
+		identity += "-" + subject
+	}
 	task := &queue.Task{
-		ID:       fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%d", strings.ReplaceAll(ev.Repo, "/", "-"), ev.Kind, ev.Number, action, time.Now().UnixNano()),
+		ID:       fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%d", strings.ReplaceAll(ev.Repo, "/", "-"), ev.Kind, ev.Number, identity, time.Now().UnixNano()),
 		Prompt:   prompt,
 		Persona:  pc.Persona,
 		Timeout:  int(pc.Timeout.Seconds()),
-		DedupKey: fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%s", ev.Repo, ev.Kind, ev.Number, action, rev),
-		Title:    taskTitle(action, ev, st),
+		DedupKey: fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%s", ev.Repo, ev.Kind, ev.Number, identity, rev),
+		Title:    taskTitle(dispatchVerb(action, subject), ev, st),
 		URL:      taskURL(st),
 	}
 	if err := e.queue.AddTask(task); err != nil {
-		return fmt.Errorf("enqueue %s for %s: %w", action, ev.KeyOf(), err)
+		return fmt.Errorf("enqueue %s for %s: %w", dispatchVerb(action, subject), ev.KeyOf(), err)
 	}
 	e.log.Info("dispatched", "key", ev.KeyOf().String(), "task", task.ID)
 	return nil
+}
+
+// dispatchLenses dispatches the review fan-out's emissions for the
+// event's own object: one task per lens, each carrying its own dedup
+// key, then one watermark write recording a subject slot per lens that
+// made it onto the queue — the main slot and the other lenses' slots
+// are preserved, so a fan-out neither erases a fix-feedback dispatch
+// nor a mid-flight sibling lens (§forgejo/decisions/review-lenses,
+// §forgejo/state/watermark). A lens whose enqueue failed records no
+// slot and the sweep retries it, exactly as a failed singleton dispatch
+// retries.
+func (e *Engine) dispatchLenses(key Key, w *Watermark, ev Event, st State, lenses []LensDispatch) {
+	rev := revisionFor(ev, st)
+	slots := w.subjectSlots()
+	if slots == nil {
+		slots = map[string]Slot{}
+	}
+	dispatched := false
+	for _, ld := range lenses {
+		lens, ok := findLens(e.cfg.Reviews, ld.Lens)
+		if !ok {
+			// The decision emitted a lens the config does not carry —
+			// impossible while Decide and the engine read the same
+			// list; loud in the log if the two ever diverge.
+			e.log.Error("review lens not configured", "key", key.String(), "lens", ld.Lens)
+			continue
+		}
+		if err := e.dispatchLens(ev, st, lens, rev); err != nil {
+			e.log.Error("dispatch failed", "key", key.String(), "action", string(ActionReview), "lens", ld.Lens, "error", err)
+			continue
+		}
+		slots[ld.Lens] = Slot{Action: string(ActionReview), Revision: rev}
+		dispatched = true
+	}
+	if !dispatched {
+		return
+	}
+	next := watermarkKeepSlots(w, slots)
+	if err := e.store.saveLocked(key, next); err != nil {
+		e.log.Error("save watermark", "key", key.String(), "error", err)
+	}
+}
+
+// findLens looks a configured lens up by identity.
+func findLens(lenses []ReviewLens, identity string) (ReviewLens, bool) {
+	for _, l := range lenses {
+		if l.Identity == identity {
+			return l, true
+		}
+	}
+	return ReviewLens{}, false
+}
+
+// watermarkAt returns a watermark whose main slot records action at
+// revision, keeping the subject slots a previous fan-out wrote
+// (§forgejo/state/watermark).
+func watermarkAt(prev *Watermark, action, revision string) Watermark {
+	return Watermark{Action: action, Revision: revision, Subjects: prev.subjectSlots()}
+}
+
+// watermarkKeepSlots returns a watermark keeping prev's main slot and
+// adding/overwriting the given subject slots — the fan-out's write.
+func watermarkKeepSlots(prev *Watermark, slots map[string]Slot) Watermark {
+	next := Watermark{Subjects: prev.subjectSlots()}
+	if prev != nil {
+		next.Action = prev.Action
+		next.Revision = prev.Revision
+	}
+	if next.Subjects == nil {
+		next.Subjects = map[string]Slot{}
+	}
+	for k, v := range slots {
+		next.Subjects[k] = v
+	}
+	return next
+}
+
+// dispatchLens dispatches one review lens through the same
+// dispatchPrompt as the singleton paths, with the lens identity as
+// the subject: three review tasks over one head are three tasks, not
+// one squelched trio, while a re-dispatch of the same (lens,
+// revision) still squelches while pending
+// (§forgejo/webhook/the-pipeline, §forgejo/decisions/review-lenses).
+func (e *Engine) dispatchLens(ev Event, st State, lens ReviewLens, rev string) error {
+	pc := PromptConfig{Prompt: lens.Prompt, Persona: lens.Persona, Timeout: lens.Timeout}
+	return e.dispatchPrompt(ev, st, pc, lens.Identity, ActionReview, rev)
 }
 
 // cascadeHoldOffReason qualifies a cascade hold-off with the roles of
@@ -924,7 +1053,7 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 	// empty SyncSets and a member of an open set would merge here, on
 	// the one path the labels table forbids it on
 	// (§forgejo/decisions/sync-set, §forgejo/decisions/unblock-cascade).
-	st := State{PR: pr, Reviews: reviews, ImplementerIdentity: e.cfg.ImplementerIdentity}
+	st := State{PR: pr, Reviews: reviews, ImplementerIdentity: e.cfg.ImplementerIdentity, ReviewLenses: e.cfg.Reviews}
 	if err := e.fetchPRSetState(owner, name, k.Number, &st); err != nil {
 		return err
 	}
@@ -950,7 +1079,7 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 	if err := e.dispatch(ev, State{PR: pr}, ActionMergeOrWait); err != nil {
 		return err
 	}
-	return e.store.Save(k, Watermark{Action: string(ActionMergeOrWait), Revision: pr.HeadSHA})
+	return e.store.Save(k, watermarkAt(w, string(ActionMergeOrWait), pr.HeadSHA))
 }
 
 // dispatchSyncSet dispatches the sync-set candidate the cascade walk
@@ -1005,7 +1134,7 @@ func (e *Engine) dispatchSyncSet(cd CascadeDispatch, sender string) error {
 		e.log.Warn("load watermark (continuing without)", "key", k.String(), "error", err)
 		w = nil
 	}
-	st := State{Issue: issue, Blockers: blockers, SyncMembers: members}
+	st := State{Issue: issue, Blockers: blockers, SyncMembers: members, ReviewLenses: e.cfg.Reviews}
 	d := Decide(ev, st, w)
 	if !d.Dispatched {
 		// Unready, or already dispatched at this set state: silent on
@@ -1029,7 +1158,7 @@ func (e *Engine) dispatchSyncSet(cd CascadeDispatch, sender string) error {
 	if err := e.dispatch(ev, st, ActionSync); err != nil {
 		return err
 	}
-	return e.store.Save(k, Watermark{Action: string(ActionSync), Revision: syncSetRevision(issue, members)})
+	return e.store.Save(k, watermarkAt(w, string(ActionSync), syncSetRevision(issue, members, e.cfg.Reviews)))
 }
 
 // revisionFor is the revision a dispatch's watermark records: the PR
@@ -1046,7 +1175,7 @@ func revisionFor(ev Event, st State) string {
 	// re-fetch that shares the field from silently re-typing a PR
 	// row's watermark (§forgejo/decisions/sync-set).
 	if ev.Kind == KindIssue && st.Issue != nil && hasLabel(st.Issue, LabelSync) && len(st.SyncMembers) > 0 {
-		return syncSetRevision(st.Issue, st.SyncMembers)
+		return syncSetRevision(st.Issue, st.SyncMembers, st.ReviewLenses)
 	}
 	if ev.Kind == KindPR && st.PR != nil {
 		return st.PR.HeadSHA

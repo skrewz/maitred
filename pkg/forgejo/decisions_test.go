@@ -177,6 +177,7 @@ func directPRMemberState(pr *PullRequest, syncNumber int) State {
 	set := syncIssueFixture(syncNumber)
 	set.Repository = "o/outcomes"
 	return State{
+		ReviewLenses:    testLenses,
 		PR:              pr,
 		Reviews:         []Review{review("APPROVED", "carol", testTime)},
 		ConnectedIssues: []ConnectedIssue{directPRMemberConnected(syncNumber, true)},
@@ -286,14 +287,30 @@ func review(event, author string, at time.Time) Review {
 	return Review{Event: event, Author: author, CommitID: "abc", SubmittedAt: at}
 }
 
+// testLenses is the lens roster the fixtures default to: the single
+// lens is carol, the reviewing author of the fixtures' reviews, so a
+// fixture keeps the standing the retired single-reviewer rule gave it
+// (§forgejo/decisions/review-lenses). Tests of the fan-out itself
+// override the roster per case.
+var testLenses = []ReviewLens{{Identity: "carol"}}
+
+// lensWatermark returns a watermark whose subject slots record the
+// fan-out dispatch of the named lenses at revision — the shape a
+// dispatched review chain leaves behind (§forgejo/state/watermark).
+func lensWatermark(revision string, lenses ...string) *Watermark {
+	w := &Watermark{Subjects: map[string]Slot{}}
+	for _, l := range lenses {
+		w.Subjects[l] = Slot{Action: string(ActionReview), Revision: revision}
+	}
+	return w
+}
+
 // TestActionNames pins the action names: they form the enum the engine
 // config maps to canned prompts (§forgejo/decisions/actions).
 func TestActionNames(t *testing.T) {
 	want := map[Action]string{
 		ActionImplement:      "implement",
 		ActionReassess:       "reassess",
-		ActionReview:         "review",
-		ActionReReview:       "re-review",
 		ActionFixFeedback:    "fix-feedback",
 		ActionMergeOrWait:    "merge-or-wait",
 		ActionRebase:         "rebase",
@@ -306,6 +323,12 @@ func TestActionNames(t *testing.T) {
 		if string(action) != name {
 			t.Errorf("action = %q, want %q", action, name)
 		}
+	}
+	// The fan-out keeps the retired singleton's name in the log while
+	// leaving the configured enum: review is dispatched per lens, never
+	// configured as an action entry (§forgejo/decisions/review-lenses).
+	if string(ActionReview) != "review" {
+		t.Errorf("ActionReview = %q, want \"review\"", ActionReview)
 	}
 	// The map and AllActions are the same enum seen two ways: an action
 	// added to one and not the other is a name waiting to be wrong
@@ -336,34 +359,34 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "issue opened dispatches implement",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: openIssue()},
+			state:      State{ReviewLenses: testLenses, Issue: openIssue()},
 			wantAction: ActionImplement,
 		},
 		{
 			name:  "issue opened with an open blocker holds off",
 			event: issueEvent(EventIssueOpened),
-			state: State{Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
+			state: State{ReviewLenses: testLenses, Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
 		},
 		{
 			name:       "issue opened with only closed blockers dispatches implement",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "closed", Repository: "o/r"}}},
+			state:      State{ReviewLenses: testLenses, Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "closed", Repository: "o/r"}}},
 			wantAction: ActionImplement,
 		},
 		{
 			name:  "issue opened with a connected PR holds off",
 			event: issueEvent(EventIssueOpened),
-			state: State{Issue: openIssue(), ConnectedPRs: []PullRequest{*openPR("abc")}},
+			state: State{ReviewLenses: testLenses, Issue: openIssue(), ConnectedPRs: []PullRequest{*openPR("abc")}},
 		},
 		{
 			name:  "issue opened but closed on re-fetch holds off",
 			event: issueEvent(EventIssueOpened),
-			state: State{Issue: closedIssue()},
+			state: State{ReviewLenses: testLenses, Issue: closedIssue()},
 		},
 		{
 			name:  "issue opened carrying human-task holds off",
 			event: issueEvent(EventIssueOpened),
-			state: State{Issue: labelledIssue(LabelHumanTask)},
+			state: State{ReviewLenses: testLenses, Issue: labelledIssue(LabelHumanTask)},
 		},
 		{
 			// The seeding hold-off: a forest member created by the
@@ -371,19 +394,19 @@ func TestDecide(t *testing.T) {
 			// are wired and the label is removed (#125).
 			name:  "issue opened carrying forest-seeding holds off",
 			event: issueEvent(EventIssueOpened),
-			state: State{Issue: labelledIssue(LabelForestSeeding)},
+			state: State{ReviewLenses: testLenses, Issue: labelledIssue(LabelForestSeeding)},
 		},
 		{
 			name:  "reconciled issue carrying forest-seeding holds off",
 			event: issueEvent(EventReconcile),
-			state: State{Issue: labelledIssue(LabelForestSeeding)},
+			state: State{ReviewLenses: testLenses, Issue: labelledIssue(LabelForestSeeding)},
 		},
 		{
 			// The ideation branch is evaluated before the connected-PR
 			// check: a root is decomposed whatever else hangs off it.
 			name:       "an open ideation root with a connected open PR dispatches decompose",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: ideationIssue(), ConnectedPRs: []PullRequest{*openPR("abc")}},
+			state:      State{ReviewLenses: testLenses, Issue: ideationIssue(), ConnectedPRs: []PullRequest{*openPR("abc")}},
 			wantAction: ActionDecompose,
 		},
 		{
@@ -392,13 +415,13 @@ func TestDecide(t *testing.T) {
 			// work item on the opened path and on the sweep alike.
 			name:       "issue opened authored by the decomposer dispatches implement",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: authoredIssue("decomposer")},
+			state:      State{ReviewLenses: testLenses, Issue: authoredIssue("decomposer")},
 			wantAction: ActionImplement,
 		},
 		{
 			name:       "issue opened authored by anyone else dispatches implement",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: authoredIssue("alice")},
+			state:      State{ReviewLenses: testLenses, Issue: authoredIssue("alice")},
 			wantAction: ActionImplement,
 		},
 		{
@@ -407,15 +430,16 @@ func TestDecide(t *testing.T) {
 			// the engine reads at all.
 			name:       "issue opened authored by a differently cased login dispatches implement",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: authoredIssue("Decomposer")},
+			state:      State{ReviewLenses: testLenses, Issue: authoredIssue("Decomposer")},
 			wantAction: ActionImplement,
 		},
 		{
 			name:  "issue opened authored by the decomposer with closed blockers dispatches implement",
 			event: issueEvent(EventIssueOpened),
 			state: State{
-				Issue:    authoredIssue("decomposer"),
-				Blockers: []Issue{{Number: 3, State: "closed", Repository: "o/r"}},
+				ReviewLenses: testLenses,
+				Issue:        authoredIssue("decomposer"),
+				Blockers:     []Issue{{Number: 3, State: "closed", Repository: "o/r"}},
 			},
 			wantAction: ActionImplement,
 		},
@@ -425,7 +449,7 @@ func TestDecide(t *testing.T) {
 			// other work item (s-git/maitred#135).
 			name:       "reconciled issue authored by the decomposer dispatches implement",
 			event:      issueEvent(EventReconcile),
-			state:      State{Issue: authoredIssue("decomposer")},
+			state:      State{ReviewLenses: testLenses, Issue: authoredIssue("decomposer")},
 			wantAction: ActionImplement,
 		},
 		{
@@ -435,107 +459,107 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "issue edited dispatches reassess",
 			event:      issueEvent(EventIssueEdited),
-			state:      State{Issue: openIssue()},
+			state:      State{ReviewLenses: testLenses, Issue: openIssue()},
 			wantAction: ActionReassess,
 		},
 		{
 			name:       "issue labels changed dispatches reassess",
 			event:      issueEvent(EventIssueLabelsChanged),
-			state:      State{Issue: openIssue()},
+			state:      State{ReviewLenses: testLenses, Issue: openIssue()},
 			wantAction: ActionReassess,
 		},
 		{
 			name:       "issue feedback comment dispatches reassess",
 			event:      issueEvent(EventIssueCommented),
-			state:      State{Issue: openIssue()},
+			state:      State{ReviewLenses: testLenses, Issue: openIssue()},
 			wantAction: ActionReassess,
 		},
 		{
 			name:  "issue edited with an open blocker holds off",
 			event: issueEvent(EventIssueEdited),
-			state: State{Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
+			state: State{ReviewLenses: testLenses, Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
 		},
 		{
 			name:  "issue labels changed with an open blocker holds off",
 			event: issueEvent(EventIssueLabelsChanged),
-			state: State{Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
+			state: State{ReviewLenses: testLenses, Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
 		},
 		{
 			name:  "issue commented with an open blocker holds off",
 			event: issueEvent(EventIssueCommented),
-			state: State{Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
+			state: State{ReviewLenses: testLenses, Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
 		},
 		{
 			name:       "issue edited with only closed blockers dispatches reassess",
 			event:      issueEvent(EventIssueEdited),
-			state:      State{Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "closed", Repository: "o/r"}}},
+			state:      State{ReviewLenses: testLenses, Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "closed", Repository: "o/r"}}},
 			wantAction: ActionReassess,
 		},
 		{
 			name:  "issue edited but closed on re-fetch holds off",
 			event: issueEvent(EventIssueEdited),
-			state: State{Issue: closedIssue()},
+			state: State{ReviewLenses: testLenses, Issue: closedIssue()},
 		},
 		{
 			name:       "issue edited carrying ideation dispatches decompose",
 			event:      issueEvent(EventIssueEdited),
-			state:      State{Issue: labelledIssue("ideation")},
+			state:      State{ReviewLenses: testLenses, Issue: labelledIssue("ideation")},
 			wantAction: ActionDecompose,
 		},
 		{
 			name:  "issue labels changed carrying outcome holds off",
 			event: issueEvent(EventIssueLabelsChanged),
-			state: State{Issue: labelledIssue("outcome")},
+			state: State{ReviewLenses: testLenses, Issue: labelledIssue("outcome")},
 		},
 		{
 			name:  "issue commented carrying human-task holds off",
 			event: issueEvent(EventIssueCommented),
-			state: State{Issue: labelledIssue(LabelHumanTask)},
+			state: State{ReviewLenses: testLenses, Issue: labelledIssue(LabelHumanTask)},
 		},
 		{
 			name:  "issue labels changed carrying forest-seeding holds off — reassess is denied during seeding",
 			event: issueEvent(EventIssueLabelsChanged),
-			state: State{Issue: labelledIssue(LabelForestSeeding)},
+			state: State{ReviewLenses: testLenses, Issue: labelledIssue(LabelForestSeeding)},
 		},
 		{
 			name:       "issue edited carrying an ordinary label dispatches reassess",
 			event:      issueEvent(EventIssueEdited),
-			state:      State{Issue: labelledIssue("bug")},
+			state:      State{ReviewLenses: testLenses, Issue: labelledIssue("bug")},
 			wantAction: ActionReassess,
 		},
 		{
 			name:        "issue closed runs the unblock cascade",
 			event:       issueEvent(EventIssueClosed),
-			state:       State{Issue: closedIssue(), CascadeRoot: cascadeFixture()},
+			state:       State{ReviewLenses: testLenses, Issue: closedIssue(), CascadeRoot: cascadeFixture()},
 			wantCascade: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 2}, Action: ActionImplement}},
 		},
 		{
 			name:        "issue closed newly unblocks an outcome tracker: the cascade emits wrap-up, never implement",
 			event:       issueEvent(EventIssueClosed),
-			state:       State{Issue: closedIssue(), CascadeRoot: trackerCascadeFixture(false)},
+			state:       State{ReviewLenses: testLenses, Issue: closedIssue(), CascadeRoot: trackerCascadeFixture(false)},
 			wantCascade: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 2}, Action: ActionWrapUp}},
 		},
 		{
 			name:  "issue closed but open on re-fetch holds off without cascade",
 			event: issueEvent(EventIssueClosed),
-			state: State{Issue: openIssue(), CascadeRoot: cascadeFixture()},
+			state: State{ReviewLenses: testLenses, Issue: openIssue(), CascadeRoot: cascadeFixture()},
 		},
 		{
 			name:      "issue closed leaves an outcome tracker blocked: the cascade records a hold-off naming the blockers",
 			event:     issueEvent(EventIssueClosed),
-			state:     State{Issue: closedIssue(), CascadeRoot: trackerCascadeFixture(true)},
+			state:     State{ReviewLenses: testLenses, Issue: closedIssue(), CascadeRoot: trackerCascadeFixture(true)},
 			wantHolds: []CascadeHoldOff{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 2}, Issue: &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}}, Reason: "issue 2 is an open outcome tracker still blocked by o/r#3; wrap-up held off"}},
 		},
 		{
 			name:       "PR opened dispatches review",
 			event:      prEvent(EventPROpened, "alice"),
-			state:      State{PR: openPR("abc")},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc")},
 			wantAction: ActionReview,
 		},
 		{
 			name:       "PR opened not mergeable dispatches rebase",
 			event:      prEvent(EventPROpened, "alice"),
-			state:      State{PR: notMergeablePR("abc")},
+			state:      State{ReviewLenses: testLenses, PR: notMergeablePR("abc")},
 			wantAction: ActionRebase,
 		},
 		{
@@ -547,7 +571,8 @@ func TestDecide(t *testing.T) {
 			name:  "PR opened whose connected issue is blocked by an open ideation issue dispatches review",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
-				PR: openPR("abc"),
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"),
 				ConnectedIssues: []ConnectedIssue{{
 					Issue:    *connectedIssue(),
 					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
@@ -559,7 +584,8 @@ func TestDecide(t *testing.T) {
 			name:  "PR opened whose second connected issue is blocked by an open ideation issue dispatches review",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
-				PR: openPR("abc"),
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"),
 				ConnectedIssues: []ConnectedIssue{
 					{
 						Issue:    *connectedIssue(),
@@ -577,7 +603,8 @@ func TestDecide(t *testing.T) {
 			name:  "PR opened whose two connected issues have no open ideation blocker dispatches review",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
-				PR: openPR("abc"),
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"),
 				ConnectedIssues: []ConnectedIssue{
 					{
 						Issue:    *connectedIssue(),
@@ -597,7 +624,8 @@ func TestDecide(t *testing.T) {
 			name:  "PR opened against a closed connected issue blocked by an open ideation issue dispatches review",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
-				PR: openPR("abc"),
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"),
 				ConnectedIssues: []ConnectedIssue{{
 					Issue: func() Issue {
 						issue := *connectedIssue()
@@ -615,7 +643,8 @@ func TestDecide(t *testing.T) {
 			name:  "PR opened whose connected issue is blocked by an open issue labelled Ideation dispatches review",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
-				PR: openPR("abc"),
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"),
 				ConnectedIssues: []ConnectedIssue{{
 					Issue:    *connectedIssue(),
 					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{"Ideation"}}},
@@ -627,7 +656,8 @@ func TestDecide(t *testing.T) {
 			name:  "PR opened whose connected issue is blocked only by a closed ideation issue dispatches review",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
-				PR: openPR("abc"),
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"),
 				ConnectedIssues: []ConnectedIssue{{
 					Issue:    *connectedIssue(),
 					Blockers: []Issue{{Number: 1, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}}},
@@ -639,7 +669,8 @@ func TestDecide(t *testing.T) {
 			name:  "PR opened whose connected issue has an open blocker without the ideation label dispatches review",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
-				PR: openPR("abc"),
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"),
 				ConnectedIssues: []ConnectedIssue{{
 					Issue:    *connectedIssue(),
 					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r"}},
@@ -651,14 +682,15 @@ func TestDecide(t *testing.T) {
 			name:  "PR opened with no connected issue dispatches review",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
-				PR: openPR("abc"),
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"),
 			},
 			wantAction: ActionReview,
 		},
 		{
 			name:  "PR opened but closed on re-fetch holds off",
 			event: prEvent(EventPROpened, "alice"),
-			state: State{PR: closedPR("abc")},
+			state: State{ReviewLenses: testLenses, PR: closedPR("abc")},
 		},
 		{
 			name:  "PR opened without re-fetched state holds off",
@@ -667,72 +699,72 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "PR synced without prior review dispatches review",
 			event:      prEvent(EventPRSynced, "alice"),
-			state:      State{PR: openPR("abc")},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc")},
 			wantAction: ActionReview,
 		},
 		{
-			name:       "PR synced after a review dispatches re-review",
+			name:       "PR synced after a review re-fires the lenses without an approval at the new head",
 			event:      prEvent(EventPRSynced, "alice"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
-			wantAction: ActionReReview,
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
+			wantAction: ActionReview,
 		},
 		{
 			name:       "PR synced not mergeable dispatches rebase",
 			event:      prEvent(EventPRSynced, "alice"),
-			state:      State{PR: notMergeablePR("abc")},
+			state:      State{ReviewLenses: testLenses, PR: notMergeablePR("abc")},
 			wantAction: ActionRebase,
 		},
 		{
 			name:  "PR synced pushed by the reviewing author holds off",
 			event: prEvent(EventPRSynced, "carol"),
-			state: State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			state: State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 		},
 		{
-			name:       "PR synced pushed by the reviewing author of an older review dispatches re-review",
+			name:       "PR synced pushed by the reviewing author of an older review dispatches every lens — the push predates any lens standing at head",
 			event:      prEvent(EventPRSynced, "bob"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "bob", testTime), review("COMMENT", "carol", testTime2)}},
-			wantAction: ActionReReview,
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "bob", testTime), review("COMMENT", "carol", testTime2)}},
+			wantAction: ActionReview,
 		},
 		{
 			name:  "PR synced pushed by the latest reviewing author holds off",
 			event: prEvent(EventPRSynced, "carol"),
-			state: State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "bob", testTime), review("COMMENT", "carol", testTime2)}},
+			state: State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "bob", testTime), review("COMMENT", "carol", testTime2)}},
 		},
 		{
-			name:       "PR synced pushed by the implementer after a review dispatches re-review",
+			name:       "PR synced pushed by the implementer after a review dispatches every lens",
 			event:      prEvent(EventPRSynced, "alice"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
-			wantAction: ActionReReview,
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
+			wantAction: ActionReview,
 		},
 		{
 			// The trigger-review label is the explicit request for an
 			// agentic review (§forgejo/decisions/label-triggered-review).
 			name:       "PR synced carrying trigger-review without a review dispatches review",
 			event:      prEvent(EventPRSynced, "alice"),
-			state:      State{PR: labelledPR("abc", LabelTriggerReview)},
+			state:      State{ReviewLenses: testLenses, PR: labelledPR("abc", LabelTriggerReview)},
 			wantAction: ActionReview,
 		},
 		{
-			name:       "PR synced carrying trigger-review with a review dispatches re-review",
+			name:       "PR synced carrying trigger-review with a review re-fires the lens",
 			event:      prEvent(EventPRSynced, "alice"),
-			state:      State{PR: labelledPR("abc", LabelTriggerReview), Reviews: []Review{review("APPROVED", "carol", testTime)}},
-			wantAction: ActionReReview,
+			state:      State{ReviewLenses: testLenses, PR: labelledPR("abc", LabelTriggerReview), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			wantAction: ActionReview,
 		},
 		{
 			// The label is an explicit request, not the author's own
 			// push: the reviewing-author sender guard does not
 			// suppress a label-requested review
 			// (§forgejo/decisions/label-triggered-review).
-			name:       "PR synced carrying trigger-review pushed by the reviewing author dispatches re-review",
+			name:       "PR synced carrying trigger-review pushed by the reviewing author dispatches the lens review",
 			event:      prEvent(EventPRSynced, "carol"),
-			state:      State{PR: labelledPR("abc", LabelTriggerReview), Reviews: []Review{review("APPROVED", "carol", testTime)}},
-			wantAction: ActionReReview,
+			state:      State{ReviewLenses: testLenses, PR: labelledPR("abc", LabelTriggerReview), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			wantAction: ActionReview,
 		},
 		{
-			name:       "PR synced carrying a differently cased trigger-review label dispatches re-review",
+			name:       "PR synced carrying a differently cased trigger-review label dispatches the fan-out at the current revision",
 			event:      prEvent(EventPRSynced, "carol"),
-			state:      State{PR: labelledPR("abc", "Trigger-Review"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
-			wantAction: ActionReReview,
+			state:      State{ReviewLenses: testLenses, PR: labelledPR("abc", "Trigger-Review"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			wantAction: ActionReview,
 		},
 		{
 			// Keyed to the label's presence at the current revision:
@@ -741,8 +773,8 @@ func TestDecide(t *testing.T) {
 			// §forgejo/decisions/loop-prevention).
 			name:      "PR synced carrying trigger-review already dispatched at the revision holds off",
 			event:     prEvent(EventPRSynced, "alice"),
-			state:     State{PR: labelledPR("abc", LabelTriggerReview), Reviews: []Review{review("APPROVED", "carol", testTime)}},
-			watermark: &Watermark{Action: string(ActionReReview), Revision: "abc"},
+			state:     State{ReviewLenses: testLenses, PR: labelledPR("abc", LabelTriggerReview), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			watermark: lensWatermark("abc", "carol"),
 		},
 		{
 			// The label requests a review of mergeable work; a
@@ -750,13 +782,13 @@ func TestDecide(t *testing.T) {
 			// (§forgejo/decisions/label-triggered-review).
 			name:       "PR synced carrying trigger-review but not mergeable dispatches rebase",
 			event:      prEvent(EventPRSynced, "alice"),
-			state:      State{PR: labelledPRNotMergeable("abc", LabelTriggerReview)},
+			state:      State{ReviewLenses: testLenses, PR: labelledPRNotMergeable("abc", LabelTriggerReview)},
 			wantAction: ActionRebase,
 		},
 		{
 			name:       "PR review changes-requested dispatches fix-feedback",
 			event:      prEvent(EventPRReviewed, "carol"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
 			wantAction: ActionFixFeedback,
 		},
 		{
@@ -768,6 +800,7 @@ func TestDecide(t *testing.T) {
 			name:  "PR review changes-requested on a PR not authored by the implementer identity holds off",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
+				ReviewLenses:        testLenses,
 				PR:                  openPRBy("skrewz-bot", "abc"),
 				Reviews:             []Review{review(ReviewChangesRequested, "carol", testTime)},
 				ImplementerIdentity: testImplementerIdentity,
@@ -777,6 +810,7 @@ func TestDecide(t *testing.T) {
 			name:  "PR review changes-requested on a PR authored by the implementer identity dispatches fix-feedback",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
+				ReviewLenses:        testLenses,
 				PR:                  openPRBy(testImplementerIdentity, "abc"),
 				Reviews:             []Review{review(ReviewChangesRequested, "carol", testTime)},
 				ImplementerIdentity: testImplementerIdentity,
@@ -788,7 +822,7 @@ func TestDecide(t *testing.T) {
 			// as before, whatever the author (§forgejo/config/implementer-identity).
 			name:       "PR review changes-requested with no implementer identity configured dispatches fix-feedback whatever the author",
 			event:      prEvent(EventPRReviewed, "carol"),
-			state:      State{PR: openPRBy("skrewz-bot", "abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
+			state:      State{ReviewLenses: testLenses, PR: openPRBy("skrewz-bot", "abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
 			wantAction: ActionFixFeedback,
 		},
 		{
@@ -802,6 +836,7 @@ func TestDecide(t *testing.T) {
 			name:  "PR review changes-requested with an empty author and a configured implementer identity holds off",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
+				ReviewLenses:        testLenses,
 				PR:                  openPRBy("", "abc"),
 				Reviews:             []Review{review(ReviewChangesRequested, "carol", testTime)},
 				ImplementerIdentity: testImplementerIdentity,
@@ -814,6 +849,7 @@ func TestDecide(t *testing.T) {
 			name:  "PR review approved on a PR not authored by the implementer identity dispatches merge-or-wait",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
+				ReviewLenses:        testLenses,
 				PR:                  openPRBy("skrewz-bot", "abc"),
 				Reviews:             []Review{review("APPROVED", "carol", testTime)},
 				ImplementerIdentity: testImplementerIdentity,
@@ -823,7 +859,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "PR review approved dispatches merge-or-wait",
 			event:      prEvent(EventPRReviewed, "carol"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 			wantAction: ActionMergeOrWait,
 		},
 		{
@@ -834,8 +870,9 @@ func TestDecide(t *testing.T) {
 			name:  "PR review approved whose connected issue is blocked by an open ideation issue holds off at the merge gate",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
-				PR:      openPR("abc"),
-				Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"),
+				Reviews:      []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{{
 					Issue:    *connectedIssue(),
 					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
@@ -846,8 +883,9 @@ func TestDecide(t *testing.T) {
 			name:  "PR review changes-requested whose connected issue is blocked by an open ideation issue dispatches fix-feedback",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
-				PR:      openPR("abc"),
-				Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)},
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"),
+				Reviews:      []Review{review(ReviewChangesRequested, "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{{
 					Issue:    *connectedIssue(),
 					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
@@ -859,8 +897,9 @@ func TestDecide(t *testing.T) {
 			name:  "PR review approved whose connected issue is blocked only by a closed ideation issue dispatches merge-or-wait",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
-				PR:      openPR("abc"),
-				Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"),
+				Reviews:      []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{{
 					Issue:    *connectedIssue(),
 					Blockers: []Issue{{Number: 1, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}}},
@@ -871,17 +910,17 @@ func TestDecide(t *testing.T) {
 		{
 			name:  "PR review comment holds off",
 			event: prEvent(EventPRReviewed, "carol"),
-			state: State{PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
+			state: State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
 		},
 		{
 			name:  "PR review without reviews on re-fetch holds off",
 			event: prEvent(EventPRReviewed, "carol"),
-			state: State{PR: openPR("abc")},
+			state: State{ReviewLenses: testLenses, PR: openPR("abc")},
 		},
 		{
 			name:       "PR review latest review wins",
 			event:      prEvent(EventPRReviewed, "carol"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime), review("APPROVED", "carol", testTime2)}},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime), review("APPROVED", "carol", testTime2)}},
 			wantAction: ActionMergeOrWait,
 		},
 		// The merge gate: merge-or-wait only when no connected
@@ -890,7 +929,8 @@ func TestDecide(t *testing.T) {
 			name:  "PR review approved with a connected issue blocked by an open issue holds off",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
-				PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "closed"), gateBlocker("o/r", 4, "open"))},
 			},
 		},
@@ -898,7 +938,8 @@ func TestDecide(t *testing.T) {
 			name:  "PR review approved with a connected issue's blockers all closed dispatches merge-or-wait",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
-				PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "closed"))},
 			},
 			wantAction: ActionMergeOrWait,
@@ -907,7 +948,8 @@ func TestDecide(t *testing.T) {
 			name:  "PR review approved where the only open blocker is the PR itself dispatches merge-or-wait",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
-				PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlockerPR("o/r", 9, "open"))},
 			},
 			wantAction: ActionMergeOrWait,
@@ -916,7 +958,8 @@ func TestDecide(t *testing.T) {
 			name:  "PR review approved with the second connected issue blocked holds off",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
-				PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{
 					connectedIssueOf(7, gateBlocker("o/r", 3, "closed")),
 					connectedIssueOf(8, gateBlocker("other/repo", 5, "open")),
@@ -927,24 +970,27 @@ func TestDecide(t *testing.T) {
 			name:  "PR review changes-requested with a connected issue blocked still dispatches fix-feedback",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
-				PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)},
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "open"))},
 			},
 			wantAction: ActionFixFeedback,
 		},
 		{
-			name:  "PR synced with a connected issue blocked dispatches re-review — the push path decides no merge",
+			name:  "PR synced with a connected issue blocked dispatches the fan-out — the push path decides no merge",
 			event: prEvent(EventPRSynced, "alice"),
 			state: State{
-				PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)},
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "open"))},
 			},
-			wantAction: ActionReReview,
+			wantAction: ActionReview,
 		},
 		{
 			name:  "PR opened with a connected issue blocked dispatches review — the open path decides no merge",
 			event: prEvent(EventPROpened, "alice"),
 			state: State{
+				ReviewLenses:    testLenses,
 				PR:              openPR("abc"),
 				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "open"))},
 			},
@@ -958,6 +1004,7 @@ func TestDecide(t *testing.T) {
 			name:  "PR review approved on a sync-set member PR holds off and emits its sync set",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
+				ReviewLenses:    testLenses,
 				PR:              openPR("abc"),
 				Reviews:         []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{syncMemberConnected(7, 11)},
@@ -968,6 +1015,7 @@ func TestDecide(t *testing.T) {
 			name:  "reconcile PR approved at head on a sync-set member holds off and emits its sync set",
 			event: prEvent(EventReconcile, "maitred"),
 			state: State{
+				ReviewLenses:    testLenses,
 				PR:              openPR("abc"),
 				Reviews:         []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{syncMemberConnected(7, 11)},
@@ -978,6 +1026,7 @@ func TestDecide(t *testing.T) {
 			name:  "PR review changes-requested on a sync-set member still dispatches fix-feedback",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
+				ReviewLenses:    testLenses,
 				PR:              openPR("abc"),
 				Reviews:         []Review{review(ReviewChangesRequested, "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{syncMemberConnected(7, 11)},
@@ -988,6 +1037,7 @@ func TestDecide(t *testing.T) {
 			name:  "PR review approved on a member of no open sync set dispatches merge-or-wait — a retired set is no gate",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
+				ReviewLenses:    testLenses,
 				PR:              openPR("abc"),
 				Reviews:         []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{syncMemberWithoutSets(7)},
@@ -998,6 +1048,7 @@ func TestDecide(t *testing.T) {
 			name:  "reconcile PR approved at head on a member of no open sync set dispatches merge-or-wait",
 			event: prEvent(EventReconcile, "maitred"),
 			state: State{
+				ReviewLenses:    testLenses,
 				PR:              openPR("abc"),
 				Reviews:         []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{syncMemberWithoutSets(7)},
@@ -1008,6 +1059,7 @@ func TestDecide(t *testing.T) {
 			name:  "PR review approved on a member carrying both merge opt-ins holds off with no open set — the error state is contained",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
+				ReviewLenses:    testLenses,
 				PR:              openPR("abc"),
 				Reviews:         []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{dualLabelledSyncMember(7)},
@@ -1016,7 +1068,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:  "reconcile issue carrying the sync label with no members holds off — an empty set has nothing to land",
 			event: issueEvent(EventReconcile),
-			state: State{Issue: syncIssueFixture(7)},
+			state: State{ReviewLenses: testLenses, Issue: syncIssueFixture(7)},
 		},
 		{
 			// The sweep is the set's only backstop, so the sync row
@@ -1026,23 +1078,25 @@ func TestDecide(t *testing.T) {
 			name:  "reconcile issue carrying sync alongside outcome holds off naming both kind labels",
 			event: issueEvent(EventReconcile),
 			state: State{
-				Issue:       syncIssueWithLabel(7, LabelOutcome),
-				SyncMembers: []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)},
-				Blockers:    []Issue{{Number: 4, State: "closed", Repository: "o/r"}, {Number: 5, State: "closed", Repository: "o/r"}},
+				ReviewLenses: testLenses,
+				Issue:        syncIssueWithLabel(7, LabelOutcome),
+				SyncMembers:  []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)},
+				Blockers:     []Issue{{Number: 4, State: "closed", Repository: "o/r"}, {Number: 5, State: "closed", Repository: "o/r"}},
 			},
 		},
 		{
 			name:  "reconcile issue carrying sync alongside ideation holds off naming both kind labels",
 			event: issueEvent(EventReconcile),
 			state: State{
-				Issue:    syncIssueWithLabel(7, LabelIdeation),
-				Blockers: []Issue{{Number: 4, State: "closed", Repository: "o/r"}},
+				ReviewLenses: testLenses,
+				Issue:        syncIssueWithLabel(7, LabelIdeation),
+				Blockers:     []Issue{{Number: 4, State: "closed", Repository: "o/r"}},
 			},
 		},
 		{
 			name:       "reconcile sync issue with every member closed or approved dispatches sync",
 			event:      issueEvent(EventReconcile),
-			state:      State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}},
+			state:      State{ReviewLenses: testLenses, Issue: syncIssueFixture(7), SyncMembers: []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}},
 			wantAction: ActionSync,
 		},
 		{
@@ -1052,29 +1106,29 @@ func TestDecide(t *testing.T) {
 			// (§forgejo/decisions/sync-set).
 			name:       "reconcile sync issue whose direct PR member is approved at head dispatches sync",
 			event:      issueEvent(EventReconcile),
-			state:      State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{prMemberFixture(9, true, true), closedSyncMemberFixture(5)}},
+			state:      State{ReviewLenses: testLenses, Issue: syncIssueFixture(7), SyncMembers: []SyncMember{prMemberFixture(9, true, true), closedSyncMemberFixture(5)}},
 			wantAction: ActionSync,
 		},
 		{
 			name:       "reconcile sync issue whose direct PR member has landed dispatches sync",
 			event:      issueEvent(EventReconcile),
-			state:      State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{closedPRMemberFixture(9), closedSyncMemberFixture(5)}},
+			state:      State{ReviewLenses: testLenses, Issue: syncIssueFixture(7), SyncMembers: []SyncMember{closedPRMemberFixture(9), closedSyncMemberFixture(5)}},
 			wantAction: ActionSync,
 		},
 		{
 			name:  "reconcile sync issue whose direct PR member is not mergeable holds off",
 			event: issueEvent(EventReconcile),
-			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{prMemberFixture(9, false, true), closedSyncMemberFixture(5)}},
+			state: State{ReviewLenses: testLenses, Issue: syncIssueFixture(7), SyncMembers: []SyncMember{prMemberFixture(9, false, true), closedSyncMemberFixture(5)}},
 		},
 		{
 			name:  "reconcile sync issue whose direct PR member carries no opt-in holds off",
 			event: issueEvent(EventReconcile),
-			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{prMemberFixture(9, true, false), closedSyncMemberFixture(5)}},
+			state: State{ReviewLenses: testLenses, Issue: syncIssueFixture(7), SyncMembers: []SyncMember{prMemberFixture(9, true, false), closedSyncMemberFixture(5)}},
 		},
 		{
 			name:  "reconcile sync issue with an unlabelled open member holds off — the member awaits a human",
 			event: issueEvent(EventReconcile),
-			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{
+			state: State{ReviewLenses: testLenses, Issue: syncIssueFixture(7), SyncMembers: []SyncMember{
 				syncMemberFixture(4, 40),
 				{Issue: Issue{Number: 5, State: "open", Repository: "o/r", UpdatedAt: testTime}},
 			}},
@@ -1082,7 +1136,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:  "reconcile sync issue with a member whose PR is not approved at head holds off",
 			event: issueEvent(EventReconcile),
-			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{
+			state: State{ReviewLenses: testLenses, Issue: syncIssueFixture(7), SyncMembers: []SyncMember{
 				syncMemberFixture(4, 40),
 				func() SyncMember {
 					m := syncMemberFixture(5, 50)
@@ -1094,7 +1148,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:  "reconcile sync issue with a member whose PR has merge conflicts holds off",
 			event: issueEvent(EventReconcile),
-			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{
+			state: State{ReviewLenses: testLenses, Issue: syncIssueFixture(7), SyncMembers: []SyncMember{
 				func() SyncMember {
 					m := syncMemberFixture(4, 40)
 					m.PR.Mergeable = false
@@ -1106,60 +1160,60 @@ func TestDecide(t *testing.T) {
 		{
 			name:  "reconcile sync issue already dispatched at the set revision holds off",
 			event: issueEvent(EventReconcile),
-			state: State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}},
+			state: State{ReviewLenses: testLenses, Issue: syncIssueFixture(7), SyncMembers: []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}},
 			watermark: &Watermark{Action: string(ActionSync), Revision: syncSetRevision(syncIssueFixture(7), []SyncMember{
 				closedSyncMemberFixture(5), syncMemberFixture(4, 40),
-			})},
+			}, testLenses)},
 		},
 		{
 			name:       "reconcile sync issue whose set state moved re-dispatches over the watermark",
 			event:      issueEvent(EventReconcile),
-			state:      State{Issue: syncIssueFixture(7), SyncMembers: []SyncMember{syncMemberFixture(4, 40), syncMemberFixture(5, 50)}},
-			watermark:  &Watermark{Action: string(ActionSync), Revision: syncSetRevision(syncIssueFixture(7), []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)})},
+			state:      State{ReviewLenses: testLenses, Issue: syncIssueFixture(7), SyncMembers: []SyncMember{syncMemberFixture(4, 40), syncMemberFixture(5, 50)}},
+			watermark:  &Watermark{Action: string(ActionSync), Revision: syncSetRevision(syncIssueFixture(7), []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}, testLenses)},
 			wantAction: ActionSync,
 		},
 		{
 			name:  "issue opened carrying the sync label holds off — never an implement candidate",
 			event: issueEvent(EventIssueOpened),
-			state: State{Issue: syncIssueFixture(7)},
+			state: State{ReviewLenses: testLenses, Issue: syncIssueFixture(7)},
 		},
 		{
 			name:        "PR merged runs the unblock cascade",
 			event:       prEvent(EventPRMerged, "alice"),
-			state:       State{PR: mergedPR("abc"), CascadeRoot: cascadeFixture()},
+			state:       State{ReviewLenses: testLenses, PR: mergedPR("abc"), CascadeRoot: cascadeFixture()},
 			wantCascade: []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 2}, Action: ActionImplement}},
 		},
 		{
 			name:  "PR merged but not merged on re-fetch holds off without cascade",
 			event: prEvent(EventPRMerged, "alice"),
-			state: State{PR: openPR("abc"), CascadeRoot: cascadeFixture()},
+			state: State{ReviewLenses: testLenses, PR: openPR("abc"), CascadeRoot: cascadeFixture()},
 		},
 		{
 			name:  "PR closed without merging holds off",
 			event: prEvent(EventPRClosed, "alice"),
-			state: State{PR: closedPR("abc")},
+			state: State{ReviewLenses: testLenses, PR: closedPR("abc")},
 		},
 		{
 			name:       "reconcile issue behaves like issue opened",
 			event:      issueEvent(EventReconcile),
-			state:      State{Issue: openIssue()},
+			state:      State{ReviewLenses: testLenses, Issue: openIssue()},
 			wantAction: ActionImplement,
 		},
 		{
 			name:  "reconcile blocked issue holds off",
 			event: issueEvent(EventReconcile),
-			state: State{Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
+			state: State{ReviewLenses: testLenses, Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
 		},
 		{
 			name:       "reconcile PR behaves like PR synced",
 			event:      prEvent(EventReconcile, "maitred"),
-			state:      State{PR: openPR("abc")},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc")},
 			wantAction: ActionReview,
 		},
 		{
 			name:       "reconcile PR standing at a comment review dispatches fix-feedback",
 			event:      prEvent(EventReconcile, "maitred"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
 			wantAction: ActionFixFeedback,
 		},
 		{
@@ -1169,6 +1223,7 @@ func TestDecide(t *testing.T) {
 			name:  "reconcile PR standing at a changes-requested review on a PR not authored by the implementer identity holds off",
 			event: prEvent(EventReconcile, "maitred"),
 			state: State{
+				ReviewLenses:        testLenses,
 				PR:                  openPRBy("skrewz-bot", "abc"),
 				Reviews:             []Review{review(ReviewChangesRequested, "carol", testTime)},
 				ImplementerIdentity: testImplementerIdentity,
@@ -1178,6 +1233,7 @@ func TestDecide(t *testing.T) {
 			name:  "reconcile PR standing at a comment review on a PR not authored by the implementer identity holds off",
 			event: prEvent(EventReconcile, "maitred"),
 			state: State{
+				ReviewLenses:        testLenses,
 				PR:                  openPRBy("skrewz-bot", "abc"),
 				Reviews:             []Review{review("COMMENT", "carol", testTime)},
 				ImplementerIdentity: testImplementerIdentity,
@@ -1187,6 +1243,7 @@ func TestDecide(t *testing.T) {
 			name:  "reconcile PR standing at a comment review authored by the implementer identity dispatches fix-feedback",
 			event: prEvent(EventReconcile, "maitred"),
 			state: State{
+				ReviewLenses:        testLenses,
 				PR:                  openPRBy(testImplementerIdentity, "abc"),
 				Reviews:             []Review{review("COMMENT", "carol", testTime)},
 				ImplementerIdentity: testImplementerIdentity,
@@ -1201,6 +1258,7 @@ func TestDecide(t *testing.T) {
 			name:  "reconcile PR standing at an approved review on a PR not authored by the implementer identity dispatches merge-or-wait",
 			event: prEvent(EventReconcile, "maitred"),
 			state: State{
+				ReviewLenses:        testLenses,
 				PR:                  openPRBy("skrewz-bot", "abc"),
 				Reviews:             []Review{review("APPROVED", "carol", testTime)},
 				ImplementerIdentity: testImplementerIdentity,
@@ -1210,26 +1268,27 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "PR synced on a PR not authored by the implementer identity dispatches review",
 			event:      prEvent(EventPRSynced, "skrewz-bot"),
-			state:      State{PR: openPRBy("skrewz-bot", "abc"), ImplementerIdentity: testImplementerIdentity},
+			state:      State{ReviewLenses: testLenses, PR: openPRBy("skrewz-bot", "abc"), ImplementerIdentity: testImplementerIdentity},
 			wantAction: ActionReview,
 		},
 		{
 			name:       "reconcile PR standing at a changes-requested review dispatches fix-feedback",
 			event:      prEvent(EventReconcile, "maitred"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
 			wantAction: ActionFixFeedback,
 		},
 		{
 			name:       "reconcile PR standing at an approved review dispatches merge-or-wait",
 			event:      prEvent(EventReconcile, "maitred"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 			wantAction: ActionMergeOrWait,
 		},
 		{
 			name:  "reconcile PR standing at an approved review with a connected issue blocked holds off",
 			event: prEvent(EventReconcile, "maitred"),
 			state: State{
-				PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "open"))},
 			},
 		},
@@ -1237,22 +1296,23 @@ func TestDecide(t *testing.T) {
 			name:  "reconcile PR standing at a changes-requested review with a connected issue blocked still dispatches fix-feedback",
 			event: prEvent(EventReconcile, "maitred"),
 			state: State{
-				PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)},
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "open"))},
 			},
 			wantAction: ActionFixFeedback,
 		},
 		{
-			name:       "reconcile PR standing at a dismissed review dispatches re-review",
+			name:       "reconcile PR standing at a dismissed review dispatches that lens again — a dismissed approval is no approval",
 			event:      prEvent(EventReconcile, "maitred"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review("DISMISSED", "carol", testTime)}},
-			wantAction: ActionReReview,
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("DISMISSED", "carol", testTime)}},
+			wantAction: ActionReview,
 		},
 		{
-			name:       "reconcile PR whose latest review predates the head dispatches re-review",
+			name:       "reconcile PR whose reviews predate the head dispatches the fan-out at the new head",
 			event:      prEvent(EventReconcile, "maitred"),
-			state:      State{PR: openPR("def"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
-			wantAction: ActionReReview,
+			state:      State{ReviewLenses: testLenses, PR: openPR("def"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
+			wantAction: ActionReview,
 		},
 		{
 			// The sweep's PR path decides as PR synced and as the
@@ -1262,7 +1322,8 @@ func TestDecide(t *testing.T) {
 			name:  "reconcile PR whose connected issue is blocked by an open ideation issue dispatches review",
 			event: prEvent(EventReconcile, "maitred"),
 			state: State{
-				PR: openPR("abc"),
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"),
 				ConnectedIssues: []ConnectedIssue{{
 					Issue:    *connectedIssue(),
 					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
@@ -1277,15 +1338,16 @@ func TestDecide(t *testing.T) {
 			// (§forgejo/decisions/label-triggered-review).
 			name:       "reconcile PR carrying trigger-review standing at an approved review dispatches merge-or-wait",
 			event:      prEvent(EventReconcile, "alice"),
-			state:      State{PR: labelledPR("abc", LabelTriggerReview), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			state:      State{ReviewLenses: testLenses, PR: labelledPR("abc", LabelTriggerReview), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 			wantAction: ActionMergeOrWait,
 		},
 		{
 			name:  "reconcile PR standing at an approved review whose connected issue is blocked by an open ideation issue holds off at the merge gate",
 			event: prEvent(EventReconcile, "maitred"),
 			state: State{
-				PR:      openPR("abc"),
-				Reviews: []Review{review("APPROVED", "carol", testTime)},
+				ReviewLenses: testLenses,
+				PR:           openPR("abc"),
+				Reviews:      []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{{
 					Issue:    *connectedIssue(),
 					Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
@@ -1295,125 +1357,125 @@ func TestDecide(t *testing.T) {
 		{
 			name:      "implement already dispatched at the revision holds off",
 			event:     issueEvent(EventIssueOpened),
-			state:     State{Issue: openIssue()},
+			state:     State{ReviewLenses: testLenses, Issue: openIssue()},
 			watermark: &Watermark{Action: "implement", Revision: testRev},
 		},
 		{
 			name:      "reassess already dispatched at the revision holds off",
 			event:     issueEvent(EventIssueEdited),
-			state:     State{Issue: openIssue()},
+			state:     State{ReviewLenses: testLenses, Issue: openIssue()},
 			watermark: &Watermark{Action: "reassess", Revision: testRev},
 		},
 		{
 			name:      "review already dispatched at the revision holds off",
 			event:     prEvent(EventPROpened, "alice"),
-			state:     State{PR: openPR("abc")},
-			watermark: &Watermark{Action: "review", Revision: "abc"},
+			state:     State{ReviewLenses: testLenses, PR: openPR("abc")},
+			watermark: lensWatermark("abc", "carol"),
 		},
 		{
-			name:      "re-review already dispatched at the revision holds off",
+			name:      "lens review already dispatched at the revision holds off",
 			event:     prEvent(EventPRSynced, "alice"),
-			state:     State{PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
-			watermark: &Watermark{Action: "re-review", Revision: "abc"},
+			state:     State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
+			watermark: lensWatermark("abc", "carol"),
 		},
 		{
 			name:      "fix-feedback already dispatched at the revision holds off",
 			event:     prEvent(EventPRReviewed, "carol"),
-			state:     State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
+			state:     State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
 			watermark: &Watermark{Action: "fix-feedback", Revision: "abc"},
 		},
 		{
 			name:      "merge-or-wait already dispatched at the revision holds off",
 			event:     prEvent(EventPRReviewed, "carol"),
-			state:     State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			state:     State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
 		},
 		{
 			name:       "reconcile PR fix-feedback already dispatched at the revision re-fires: the state at head is the watermark",
 			event:      prEvent(EventReconcile, "maitred"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
 			watermark:  &Watermark{Action: "fix-feedback", Revision: "abc"},
 			wantAction: ActionFixFeedback,
 		},
 		{
 			name:      "reconcile PR merge-or-wait already dispatched at the revision holds off",
 			event:     prEvent(EventReconcile, "maitred"),
-			state:     State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			state:     State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
 		},
 		{
 			name:       "reconcile PR standing at a comment review, fix-feedback already dispatched at the revision, re-fires",
 			event:      prEvent(EventReconcile, "maitred"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
 			watermark:  &Watermark{Action: "fix-feedback", Revision: "abc"},
 			wantAction: ActionFixFeedback,
 		},
 		{
 			name:       "PR commented decides as reconcile: approved at head dispatches merge-or-wait",
 			event:      prEvent(EventPRCommented, "alice"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 			wantAction: ActionMergeOrWait,
 		},
 		{
 			name:       "PR commented decides as reconcile: changes-requested at head dispatches fix-feedback",
 			event:      prEvent(EventPRCommented, "alice"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
 			wantAction: ActionFixFeedback,
 		},
 		{
 			name:       "PR commented decides as reconcile: comment review at head dispatches fix-feedback",
 			event:      prEvent(EventPRCommented, "alice"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
 			wantAction: ActionFixFeedback,
 		},
 		{
 			name:       "PR commented decides as reconcile: no review dispatches review",
 			event:      prEvent(EventPRCommented, "alice"),
-			state:      State{PR: openPR("abc")},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc")},
 			wantAction: ActionReview,
 		},
 		{
 			name:      "PR commented, merge-or-wait already dispatched at the revision, holds off",
 			event:     prEvent(EventPRCommented, "alice"),
-			state:     State{PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			state:     State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
 		},
 		{
 			name:  "PR commented but closed on re-fetch holds off",
 			event: prEvent(EventPRCommented, "alice"),
-			state: State{PR: closedPR("abc")},
+			state: State{ReviewLenses: testLenses, PR: closedPR("abc")},
 		},
 		{
 			name:  "commented event on an issue kind holds off",
 			event: issueEvent(EventPRCommented),
-			state: State{Issue: openIssue()},
+			state: State{ReviewLenses: testLenses, Issue: openIssue()},
 		},
 		{
 			name:      "rebase already dispatched at the revision holds off",
 			event:     prEvent(EventPRSynced, "alice"),
-			state:     State{PR: notMergeablePR("abc")},
+			state:     State{ReviewLenses: testLenses, PR: notMergeablePR("abc")},
 			watermark: &Watermark{Action: "rebase", Revision: "abc"},
 		},
 		{
 			name:       "a different revision dispatches",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: openIssue()},
+			state:      State{ReviewLenses: testLenses, Issue: openIssue()},
 			watermark:  &Watermark{Action: "implement", Revision: testRev2},
 			wantAction: ActionImplement,
 		},
 		{
 			name:       "a different action dispatches",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: openIssue()},
+			state:      State{ReviewLenses: testLenses, Issue: openIssue()},
 			watermark:  &Watermark{Action: "reassess", Revision: testRev},
 			wantAction: ActionImplement,
 		},
 		{
-			name:       "a review watermark does not block a re-review",
+			name:       "a review watermark does not block the fan-out at a new revision",
 			event:      prEvent(EventPRSynced, "alice"),
-			state:      State{PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
 			watermark:  &Watermark{Action: "review", Revision: "abc"},
-			wantAction: ActionReReview,
+			wantAction: ActionReview,
 		},
 		{
 			name:  "an unknown event type holds off",
@@ -1425,20 +1487,20 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "reconcile open fully unblocked outcome tracker dispatches wrap-up",
 			event:      issueEvent(EventReconcile),
-			state:      State{Issue: trackerIssue()},
+			state:      State{ReviewLenses: testLenses, Issue: trackerIssue()},
 			wantAction: ActionWrapUp,
 		},
 		{
 			name:       "reconcile re-fires wrap-up for a tracker already dispatched at an unchanged revision",
 			event:      issueEvent(EventReconcile),
-			state:      State{Issue: trackerIssue()},
+			state:      State{ReviewLenses: testLenses, Issue: trackerIssue()},
 			watermark:  &Watermark{Action: "wrap-up", Revision: testRev},
 			wantAction: ActionWrapUp,
 		},
 		{
 			name:  "reconcile outcome tracker with an open blocker and no ideation blocker holds off",
 			event: issueEvent(EventReconcile),
-			state: State{Issue: trackerIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
+			state: State{ReviewLenses: testLenses, Issue: trackerIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
 		},
 		// A commissioned forest stays under curation: closing the ideation issue
 		// removes the root from the sweep's enumeration, so the tracker's own
@@ -1447,7 +1509,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:  "reconcile commissioned unfinished tracker dispatches decompose",
 			event: issueEvent(EventReconcile),
-			state: State{Issue: trackerIssue(), Blockers: []Issue{
+			state: State{ReviewLenses: testLenses, Issue: trackerIssue(), Blockers: []Issue{
 				{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
 				{Number: 8, State: "open", Repository: "o/r"},
 			}},
@@ -1456,7 +1518,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:  "reconcile re-fires decompose for a commissioned tracker already dispatched at an unchanged revision",
 			event: issueEvent(EventReconcile),
-			state: State{Issue: trackerIssue(), Blockers: []Issue{
+			state: State{ReviewLenses: testLenses, Issue: trackerIssue(), Blockers: []Issue{
 				{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
 				{Number: 8, State: "open", Repository: "o/r"},
 			}},
@@ -1466,7 +1528,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:  "reconcile not-yet-commissioned tracker holds off naming its open root",
 			event: issueEvent(EventReconcile),
-			state: State{Issue: trackerIssue(), Blockers: []Issue{
+			state: State{ReviewLenses: testLenses, Issue: trackerIssue(), Blockers: []Issue{
 				{Number: 3, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}},
 				{Number: 8, State: "open", Repository: "o/r"},
 			}},
@@ -1474,7 +1536,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:  "reconcile fully unblocked tracker whose commissioning edge is closed dispatches wrap-up",
 			event: issueEvent(EventReconcile),
-			state: State{Issue: trackerIssue(), Blockers: []Issue{
+			state: State{ReviewLenses: testLenses, Issue: trackerIssue(), Blockers: []Issue{
 				{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
 				{Number: 8, State: "closed", Repository: "o/r"},
 			}},
@@ -1483,36 +1545,36 @@ func TestDecide(t *testing.T) {
 		{
 			name:  "reconcile outcome tracker closed on re-fetch holds off",
 			event: issueEvent(EventReconcile),
-			state: State{Issue: func() *Issue { i := trackerIssue(); i.State = "closed"; return i }()},
+			state: State{ReviewLenses: testLenses, Issue: func() *Issue { i := trackerIssue(); i.State = "closed"; return i }()},
 		},
 		{
 			name:       "reconcile open ideation issue dispatches decompose",
 			event:      issueEvent(EventReconcile),
-			state:      State{Issue: ideationIssue()},
+			state:      State{ReviewLenses: testLenses, Issue: ideationIssue()},
 			wantAction: ActionDecompose,
 		},
 		{
 			name:       "reconcile re-fires decompose for an ideation issue already dispatched at an unchanged revision",
 			event:      issueEvent(EventReconcile),
-			state:      State{Issue: ideationIssue()},
+			state:      State{ReviewLenses: testLenses, Issue: ideationIssue()},
 			watermark:  &Watermark{Action: "decompose", Revision: testRev},
 			wantAction: ActionDecompose,
 		},
 		{
 			name:  "reconcile ideation issue closed on re-fetch holds off",
 			event: issueEvent(EventReconcile),
-			state: State{Issue: func() *Issue { i := ideationIssue(); i.State = "closed"; return i }()},
+			state: State{ReviewLenses: testLenses, Issue: func() *Issue { i := ideationIssue(); i.State = "closed"; return i }()},
 		},
 		{
 			name:       "an ideation label takes precedence over an outcome label",
 			event:      issueEvent(EventReconcile),
-			state:      State{Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{LabelOutcome, LabelIdeation}}},
+			state:      State{ReviewLenses: testLenses, Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{LabelOutcome, LabelIdeation}}},
 			wantAction: ActionDecompose,
 		},
 		{
 			name:      "reconcile unlabelled issue implement already dispatched at the revision holds off",
 			event:     issueEvent(EventReconcile),
-			state:     State{Issue: openIssue()},
+			state:     State{ReviewLenses: testLenses, Issue: openIssue()},
 			watermark: &Watermark{Action: "implement", Revision: testRev},
 		},
 		// The event path dispatches `decompose` for an open ideation
@@ -1523,13 +1585,13 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "issue opened carrying the ideation label dispatches decompose",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: ideationIssue()},
+			state:      State{ReviewLenses: testLenses, Issue: ideationIssue()},
 			wantAction: ActionDecompose,
 		},
 		{
 			name:       "labels changed on an issue carrying the ideation label dispatches decompose",
 			event:      issueEvent(EventIssueLabelsChanged),
-			state:      State{Issue: ideationIssue()},
+			state:      State{ReviewLenses: testLenses, Issue: ideationIssue()},
 			wantAction: ActionDecompose,
 		},
 		{
@@ -1543,12 +1605,12 @@ func TestDecide(t *testing.T) {
 				Number: 7,
 				Sender: "decomposer",
 			},
-			state: State{Issue: ideationIssue(), DecomposerIdentity: "decomposer"},
+			state: State{ReviewLenses: testLenses, Issue: ideationIssue(), DecomposerIdentity: "decomposer"},
 		},
 		{
 			name:  "decompose already dispatched at the revision holds off on the event path",
 			event: issueEvent(EventIssueOpened),
-			state: State{Issue: ideationIssue()},
+			state: State{ReviewLenses: testLenses, Issue: ideationIssue()},
 			watermark: &Watermark{
 				Action:   string(ActionDecompose),
 				Revision: testRev,
@@ -1557,7 +1619,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:  "decompose already dispatched at an older revision re-fires on an edit at a new revision",
 			event: issueEvent(EventIssueEdited),
-			state: State{Issue: func() *Issue {
+			state: State{ReviewLenses: testLenses, Issue: func() *Issue {
 				i := ideationIssue()
 				i.UpdatedAt = testTime2
 				return i
@@ -1571,25 +1633,25 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "a root is decomposed whatever blocks it",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: ideationIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
+			state:      State{ReviewLenses: testLenses, Issue: ideationIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
 			wantAction: ActionDecompose,
 		},
 		{
 			name:       "an ideation label takes precedence over human-task on the event path",
 			event:      issueEvent(EventIssueLabelsChanged),
-			state:      State{Issue: labelledIssue(LabelHumanTask, LabelIdeation)},
+			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelHumanTask, LabelIdeation)},
 			wantAction: ActionDecompose,
 		},
 		{
 			name:       "an ideation label takes precedence over outcome on the event path",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: labelledIssue(LabelOutcome, LabelIdeation)},
+			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelOutcome, LabelIdeation)},
 			wantAction: ActionDecompose,
 		},
 		{
 			name:  "an ideation root authored by the decomposer dispatches decompose",
 			event: issueEvent(EventIssueOpened),
-			state: State{Issue: func() *Issue {
+			state: State{ReviewLenses: testLenses, Issue: func() *Issue {
 				i := ideationIssue()
 				i.Author = "decomposer"
 				return i
@@ -1599,13 +1661,13 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "issue opened carrying a differently cased ideation label dispatches decompose",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{"Ideation"}}},
+			state:      State{ReviewLenses: testLenses, Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{"Ideation"}}},
 			wantAction: ActionDecompose,
 		},
 		{
 			name:  "ideation issue closed on re-fetch holds off",
 			event: issueEvent(EventIssueOpened),
-			state: State{Issue: func() *Issue {
+			state: State{ReviewLenses: testLenses, Issue: func() *Issue {
 				i := ideationIssue()
 				i.State = "closed"
 				return i
@@ -1614,7 +1676,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:  "edited ideation issue closed on re-fetch holds off",
 			event: issueEvent(EventIssueEdited),
-			state: State{Issue: func() *Issue {
+			state: State{ReviewLenses: testLenses, Issue: func() *Issue {
 				i := ideationIssue()
 				i.State = "closed"
 				return i
@@ -1623,12 +1685,12 @@ func TestDecide(t *testing.T) {
 		{
 			name:  "feedback comment on an issue carrying the outcome label holds off",
 			event: issueEvent(EventIssueCommented),
-			state: State{Issue: trackerIssue()},
+			state: State{ReviewLenses: testLenses, Issue: trackerIssue()},
 		},
 		{
 			name:  "issue opened carrying the outcome label holds off",
 			event: issueEvent(EventIssueOpened),
-			state: State{Issue: trackerIssue()},
+			state: State{ReviewLenses: testLenses, Issue: trackerIssue()},
 		},
 		{
 			// Reserved label names match case-insensitively: label
@@ -1637,19 +1699,19 @@ func TestDecide(t *testing.T) {
 			// (§forgejo/reconciliation/watermark-exemptions).
 			name:       "reconcile open issue carrying a differently cased ideation label dispatches decompose",
 			event:      issueEvent(EventReconcile),
-			state:      State{Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{"Ideation"}}},
+			state:      State{ReviewLenses: testLenses, Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{"Ideation"}}},
 			wantAction: ActionDecompose,
 		},
 		{
 			name:       "reconcile open tracker carrying an upper-cased outcome label dispatches wrap-up",
 			event:      issueEvent(EventReconcile),
-			state:      State{Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{"OUTCOME"}}},
+			state:      State{ReviewLenses: testLenses, Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{"OUTCOME"}}},
 			wantAction: ActionWrapUp,
 		},
 		{
 			name:  "issue opened carrying a differently cased reserved label holds off",
 			event: issueEvent(EventIssueOpened),
-			state: State{Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{"Outcome"}}},
+			state: State{ReviewLenses: testLenses, Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{"Outcome"}}},
 		},
 	}
 
@@ -1693,17 +1755,17 @@ func TestDecide_FixFeedbackOwnershipHoldOffNamesAuthor(t *testing.T) {
 		{
 			name:  "review submitted, changes requested",
 			event: prEvent(EventPRReviewed, "carol"),
-			state: State{PR: openPRBy("skrewz-bot", "abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}, ImplementerIdentity: testImplementerIdentity},
+			state: State{ReviewLenses: testLenses, PR: openPRBy("skrewz-bot", "abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}, ImplementerIdentity: testImplementerIdentity},
 		},
 		{
 			name:  "reconcile standing at a changes-requested review",
 			event: prEvent(EventReconcile, "maitred"),
-			state: State{PR: openPRBy("skrewz-bot", "abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}, ImplementerIdentity: testImplementerIdentity},
+			state: State{ReviewLenses: testLenses, PR: openPRBy("skrewz-bot", "abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}, ImplementerIdentity: testImplementerIdentity},
 		},
 		{
 			name:  "reconcile standing at a comment review",
 			event: prEvent(EventReconcile, "maitred"),
-			state: State{PR: openPRBy("skrewz-bot", "abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}, ImplementerIdentity: testImplementerIdentity},
+			state: State{ReviewLenses: testLenses, PR: openPRBy("skrewz-bot", "abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}, ImplementerIdentity: testImplementerIdentity},
 		},
 	}
 	for _, tc := range cases {
@@ -1727,7 +1789,8 @@ func TestDecide_FixFeedbackOwnershipHoldOffNamesAuthor(t *testing.T) {
 // closed ones (§forgejo/decisions/transition-table).
 func TestDecide_ActivityBlockerHoldOffNamesBlockers(t *testing.T) {
 	state := State{
-		Issue: openIssue(),
+		ReviewLenses: testLenses,
+		Issue:        openIssue(),
 		Blockers: []Issue{
 			{Number: 3, State: "open", Repository: "o/r"},
 			{Number: 12, State: "open", Repository: "other/repo"},
@@ -1757,8 +1820,9 @@ func TestDecide_ActivityBlockerHoldOffNamesBlockers(t *testing.T) {
 // the closed ones or the PR itself (§forgejo/decisions/merge-gate).
 func TestDecide_MergeGateHoldOffNamesBlockers(t *testing.T) {
 	state := State{
-		PR:      openPR("abc"),
-		Reviews: []Review{review("APPROVED", "carol", testTime)},
+		ReviewLenses: testLenses,
+		PR:           openPR("abc"),
+		Reviews:      []Review{review("APPROVED", "carol", testTime)},
 		ConnectedIssues: []ConnectedIssue{connectedIssueOf(7,
 			gateBlocker("o/r", 3, "open"),
 			gateBlocker("other/repo", 12, "open"),
@@ -1800,7 +1864,7 @@ func TestDecide_MergeGateHoldOffNamesBlockers(t *testing.T) {
 // §forgejo/observability/the-decision-log).
 func TestDecide_HoldOffReasons(t *testing.T) {
 	t.Run("a revision-keyed hold-off names the revision", func(t *testing.T) {
-		d := Decide(issueEvent(EventReconcile), State{Issue: openIssue()}, &Watermark{Action: "implement", Revision: testRev})
+		d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: openIssue()}, &Watermark{Action: "implement", Revision: testRev})
 		if !d.HoldOff() {
 			t.Fatalf("expected hold-off, got dispatch of %q", d.Action)
 		}
@@ -1809,7 +1873,7 @@ func TestDecide_HoldOffReasons(t *testing.T) {
 		}
 	})
 	t.Run("a watermark-exempt hold-off names the state, not the revision", func(t *testing.T) {
-		d := Decide(issueEvent(EventReconcile), State{Issue: trackerIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}}, &Watermark{Action: "wrap-up", Revision: testRev})
+		d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: trackerIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}}, &Watermark{Action: "wrap-up", Revision: testRev})
 		if !d.HoldOff() {
 			t.Fatalf("expected hold-off, got dispatch of %q", d.Action)
 		}
@@ -1821,7 +1885,7 @@ func TestDecide_HoldOffReasons(t *testing.T) {
 		}
 	})
 	t.Run("an event-path hold-off for a reserved label names the label", func(t *testing.T) {
-		d := Decide(issueEvent(EventIssueOpened), State{Issue: trackerIssue()}, nil)
+		d := Decide(issueEvent(EventIssueOpened), State{ReviewLenses: testLenses, Issue: trackerIssue()}, nil)
 		if !d.HoldOff() {
 			t.Fatalf("expected hold-off, got dispatch of %q", d.Action)
 		}
@@ -2463,13 +2527,13 @@ func TestDecide_ReservedLabelHoldOffsNameTheLabel(t *testing.T) {
 		{
 			name:       "opened: implement denied by the label",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: labelledIssue(LabelHumanTask)},
+			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelHumanTask)},
 			wantReason: "never an implement candidate",
 		},
 		{
 			name:       "activity: reassess denied by the label",
 			event:      issueEvent(EventIssueCommented),
-			state:      State{Issue: labelledIssue(LabelOutcome)},
+			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelOutcome)},
 			wantReason: "never a reassess candidate",
 		},
 	}
@@ -2503,19 +2567,19 @@ func TestDecide_ForestSeedingHoldOff(t *testing.T) {
 		{
 			name:       "opened: implement denied while seeding",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: labelledIssue(LabelForestSeeding)},
+			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelForestSeeding)},
 			wantReason: "issue 7 carries forest-seeding; forest is seeding, not yet gated",
 		},
 		{
 			name:       "activity: reassess denied while seeding",
 			event:      issueEvent(EventIssueLabelsChanged),
-			state:      State{Issue: labelledIssue(LabelForestSeeding)},
+			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelForestSeeding)},
 			wantReason: "issue 7 carries forest-seeding; forest is seeding, not yet gated",
 		},
 		{
 			name:       "sweep: the reconcile fall-through holds off too",
 			event:      issueEvent(EventReconcile),
-			state:      State{Issue: labelledIssue(LabelForestSeeding)},
+			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelForestSeeding)},
 			wantReason: "issue 7 carries forest-seeding; forest is seeding, not yet gated",
 		},
 		{
@@ -2523,7 +2587,7 @@ func TestDecide_ForestSeedingHoldOff(t *testing.T) {
 			// reserved name does.
 			name:       "a label created as Forest-Seeding holds off too",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: labelledIssue("Forest-Seeding")},
+			state:      State{ReviewLenses: testLenses, Issue: labelledIssue("Forest-Seeding")},
 			wantReason: "issue 7 carries forest-seeding; forest is seeding, not yet gated",
 		},
 		{
@@ -2531,13 +2595,13 @@ func TestDecide_ForestSeedingHoldOff(t *testing.T) {
 			// the kind or claim label is named first.
 			name:       "outcome carried alongside forest-seeding is named first",
 			event:      issueEvent(EventIssueCommented),
-			state:      State{Issue: labelledIssue(LabelForestSeeding, LabelOutcome)},
+			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelForestSeeding, LabelOutcome)},
 			wantReason: "issue 7 carries the outcome label; never a reassess candidate",
 		},
 		{
 			name:       "human-task carried alongside forest-seeding is named first",
 			event:      issueEvent(EventIssueOpened),
-			state:      State{Issue: labelledIssue(LabelForestSeeding, LabelHumanTask)},
+			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelForestSeeding, LabelHumanTask)},
 			wantReason: "issue 7 carries the human-task label; never an implement candidate",
 		},
 	}
@@ -2569,7 +2633,7 @@ func TestDecide_DecomposerAuthoredMemberIsAnOrdinaryWorkItem(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d := Decide(tt.event, State{Issue: authoredIssue("decomposer")}, nil)
+			d := Decide(tt.event, State{ReviewLenses: testLenses, Issue: authoredIssue("decomposer")}, nil)
 			if !d.Dispatched || d.Action != ActionImplement {
 				t.Errorf("decision = %+v, want a dispatch of %v", d, ActionImplement)
 			}
@@ -2591,7 +2655,7 @@ func TestDecide_CascadeUnblocksDecomposerAuthoredMember(t *testing.T) {
 			},
 		},
 	}
-	d := Decide(issueEvent(EventIssueClosed), State{Issue: closedIssue(), CascadeRoot: root}, nil)
+	d := Decide(issueEvent(EventIssueClosed), State{ReviewLenses: testLenses, Issue: closedIssue(), CascadeRoot: root}, nil)
 	want := []CascadeDispatch{{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 7}, Action: ActionImplement}}
 	if !reflect.DeepEqual(d.Cascade, want) {
 		t.Errorf("cascade = %v, want %v (the cascade is not narrowed by authorship)", d.Cascade, want)
@@ -2604,7 +2668,7 @@ func TestDecide_CascadeUnblocksDecomposerAuthoredMember(t *testing.T) {
 // (§forgejo/decisions/transition-table, s-git/maitred#147).
 func TestDecide_IdeationRowsReasons(t *testing.T) {
 	for _, typ := range []EventType{EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged, EventIssueCommented} {
-		d := Decide(issueEvent(typ), State{Issue: ideationIssue()}, nil)
+		d := Decide(issueEvent(typ), State{ReviewLenses: testLenses, Issue: ideationIssue()}, nil)
 		if d.HoldOff() || d.Action != ActionDecompose {
 			t.Fatalf("%s: decision = %+v, want a dispatch of %q", typ, d, ActionDecompose)
 		}
@@ -2625,7 +2689,7 @@ func TestDecide_IdeationRowsReasons(t *testing.T) {
 // §forgejo/config/decomposer-identity, s-git/maitred#147).
 func TestDecide_IdeationCommentAuthorGuard(t *testing.T) {
 	root := ideationIssue()
-	st := State{Issue: root, DecomposerIdentity: "decomposer"}
+	st := State{ReviewLenses: testLenses, Issue: root, DecomposerIdentity: "decomposer"}
 	byDecomposer := func(issue *Issue) Event {
 		return Event{Type: EventIssueCommented, Repo: "o/r", Kind: KindIssue, Number: issue.Number, Sender: "decomposer"}
 	}
@@ -2665,14 +2729,14 @@ func TestDecide_IdeationCommentAuthorGuard(t *testing.T) {
 	})
 
 	t.Run("an unset identity leaves the guard inert", func(t *testing.T) {
-		d := Decide(byDecomposer(root), State{Issue: root}, nil)
+		d := Decide(byDecomposer(root), State{ReviewLenses: testLenses, Issue: root}, nil)
 		if d.HoldOff() || d.Action != ActionDecompose {
 			t.Fatalf("decision = %+v, want a dispatch of %q with no identity configured", d, ActionDecompose)
 		}
 	})
 
 	t.Run("a comment by the decomposer on a root under teardown also holds off", func(t *testing.T) {
-		d := Decide(byDecomposer(teardownRoot()), State{Issue: teardownRoot(), DecomposerIdentity: "decomposer"}, nil)
+		d := Decide(byDecomposer(teardownRoot()), State{ReviewLenses: testLenses, Issue: teardownRoot(), DecomposerIdentity: "decomposer"}, nil)
 		if !d.HoldOff() {
 			t.Fatalf("dispatched %q, want the authorship hold-off even under a teardown order", d.Action)
 		}
@@ -2695,7 +2759,6 @@ func TestAdmissibleInRoles(t *testing.T) {
 		{ActionImplement, workItem, true},
 		{ActionReassess, workItem, true},
 		{ActionReview, workItem, true},
-		{ActionReReview, workItem, true},
 		{ActionRebase, workItem, true},
 		{ActionFixFeedback, workItem, true},
 		{ActionMergeOrWait, workItem, true},
@@ -2769,7 +2832,7 @@ func teardownRoot() *Issue {
 func TestDecide_ForestTeardownRows(t *testing.T) {
 	for _, typ := range []EventType{EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged} {
 		e := issueEvent(typ)
-		d := Decide(e, State{Issue: teardownRoot(), Blocked: standingForest()}, nil)
+		d := Decide(e, State{ReviewLenses: testLenses, Issue: teardownRoot(), Blocked: standingForest()}, nil)
 		if d.Action != ActionTeardownForest {
 			t.Errorf("%s on a root carrying the label: action = %q, want %q (%s)",
 				typ, d.Action, ActionTeardownForest, d.Reason)
@@ -2783,7 +2846,7 @@ func TestDecide_ForestTeardownRows(t *testing.T) {
 	// decompose row exactly as it does for an edit
 	// (§forgejo/decisions/forest-teardown, s-git/maitred#147).
 	t.Run("a human comment on a root under teardown takes the teardown row, as an edit does", func(t *testing.T) {
-		d := Decide(issueEvent(EventIssueCommented), State{Issue: teardownRoot(), Blocked: standingForest(), DecomposerIdentity: "decomposer"}, nil)
+		d := Decide(issueEvent(EventIssueCommented), State{ReviewLenses: testLenses, Issue: teardownRoot(), Blocked: standingForest(), DecomposerIdentity: "decomposer"}, nil)
 		if d.Action != ActionTeardownForest {
 			t.Errorf("action = %q, want %q (%s)", d.Action, ActionTeardownForest, d.Reason)
 		}
@@ -2820,7 +2883,7 @@ func TestDecide_ForestTeardownRows(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d := Decide(tc.event, State{Issue: tc.issue}, nil)
+			d := Decide(tc.event, State{ReviewLenses: testLenses, Issue: tc.issue}, nil)
 			if d.Action != "" {
 				t.Errorf("action = %q, want the hold-off (%s)", d.Action, d.Reason)
 			}
@@ -2843,41 +2906,41 @@ func TestSyncSetRevision(t *testing.T) {
 	setIssue := syncIssueFixture(7)
 	members := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	reversed := []SyncMember{closedSyncMemberFixture(5), syncMemberFixture(4, 40)}
-	if syncSetRevision(setIssue, members) != syncSetRevision(setIssue, reversed) {
+	if syncSetRevision(setIssue, members, testLenses) != syncSetRevision(setIssue, reversed, testLenses) {
 		t.Error("set revision must not depend on member order")
 	}
 
 	pushed := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	pushed[0].PR.HeadSHA = "sha-new"
-	if syncSetRevision(setIssue, members) == syncSetRevision(setIssue, pushed) {
+	if syncSetRevision(setIssue, members, testLenses) == syncSetRevision(setIssue, pushed, testLenses) {
 		t.Error("a member PR head moving must change the set revision")
 	}
 
 	edited := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	edited[1].Issue.UpdatedAt = testTime2
-	if syncSetRevision(setIssue, members) != syncSetRevision(setIssue, edited) {
+	if syncSetRevision(setIssue, members, testLenses) != syncSetRevision(setIssue, edited, testLenses) {
 		t.Error("an edit that cannot move readiness must not change the set revision: the digest records what the predicate reads, not the members' activity")
 	}
 
 	unlabelled := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	unlabelled[0].Issue.Labels = nil
-	if syncSetRevision(setIssue, members) == syncSetRevision(setIssue, unlabelled) {
+	if syncSetRevision(setIssue, members, testLenses) == syncSetRevision(setIssue, unlabelled, testLenses) {
 		t.Error("a member losing the member label must change the set revision")
 	}
 
 	staleApproval := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	staleApproval[0].Reviews = []Review{{Event: ReviewApproved, Author: "carol", CommitID: "sha-before-the-push", SubmittedAt: testTime}}
-	if syncSetRevision(setIssue, members) == syncSetRevision(setIssue, staleApproval) {
+	if syncSetRevision(setIssue, members, testLenses) == syncSetRevision(setIssue, staleApproval, testLenses) {
 		t.Error("a member PR no longer approved at head must change the set revision")
 	}
 
 	conflicted := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	conflicted[0].PR.Mergeable = false
-	if syncSetRevision(setIssue, members) == syncSetRevision(setIssue, conflicted) {
+	if syncSetRevision(setIssue, members, testLenses) == syncSetRevision(setIssue, conflicted, testLenses) {
 		t.Error("a member PR that stopped being mergeable must change the set revision")
 	}
 
-	if syncSetRevision(setIssue, nil) == syncSetRevision(setIssue, members) {
+	if syncSetRevision(setIssue, nil, testLenses) == syncSetRevision(setIssue, members, testLenses) {
 		t.Error("an empty set must not share a revision with a populated one")
 	}
 
@@ -2888,7 +2951,7 @@ func TestSyncSetRevision(t *testing.T) {
 	// (§forgejo/decisions/sync-set, §forgejo/reconciliation/watermark-exemptions).
 	restated := syncIssueFixture(7)
 	restated.Body = "Land 4, then 5."
-	if syncSetRevision(setIssue, members) == syncSetRevision(restated, members) {
+	if syncSetRevision(setIssue, members, testLenses) == syncSetRevision(restated, members, testLenses) {
 		t.Error("restating the grouping issue's body must change the set revision: a ready set that never landed must not be a fixed point")
 	}
 	// The grouping issue's activity is not: its updated_at moves on a
@@ -2897,7 +2960,7 @@ func TestSyncSetRevision(t *testing.T) {
 	// restatement, not the touch (§forgejo/decisions/sync-set).
 	touched := syncIssueFixture(7)
 	touched.UpdatedAt = testTime2
-	if syncSetRevision(setIssue, members) != syncSetRevision(touched, members) {
+	if syncSetRevision(setIssue, members, testLenses) != syncSetRevision(touched, members, testLenses) {
 		t.Error("a touch of the grouping issue that restates nothing must not change the set revision: the landing prompt would re-run on activity")
 	}
 }
@@ -2916,6 +2979,7 @@ func TestDecide_SyncSetApprovalHoldOffNamesTheSet(t *testing.T) {
 			name:  "review event",
 			event: prEvent(EventPRReviewed, "carol"),
 			state: State{
+				ReviewLenses:    testLenses,
 				PR:              openPR("abc"),
 				Reviews:         []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{syncMemberConnected(7, 11)},
@@ -2925,6 +2989,7 @@ func TestDecide_SyncSetApprovalHoldOffNamesTheSet(t *testing.T) {
 			name:  "sweep PR path standing at an approved head",
 			event: prEvent(EventReconcile, "maitred"),
 			state: State{
+				ReviewLenses:    testLenses,
 				PR:              openPR("abc"),
 				Reviews:         []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{syncMemberConnected(7, 11)},
@@ -3072,7 +3137,7 @@ func TestDecide_TeardownProtectsTheTrackerThroughTheRootsOwnEdge(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tr := tracker()
 			d := Decide(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: tr.Number},
-				State{Issue: tr, Blockers: tc.blockers}, nil)
+				State{ReviewLenses: testLenses, Issue: tr, Blockers: tc.blockers}, nil)
 			if d.Action != tc.wantAction {
 				t.Errorf("action = %q, want %q (%s)", d.Action, tc.wantAction, d.Reason)
 			}
@@ -3085,7 +3150,7 @@ func TestDecide_TeardownProtectsTheTrackerThroughTheRootsOwnEdge(t *testing.T) {
 // calls for it (§forgejo/decisions/forest-teardown).
 func TestDecide_TeardownNamesTheLabelAndTheRoot(t *testing.T) {
 	root := teardownRoot()
-	d := Decide(issueEvent(EventIssueLabelsChanged), State{Issue: root, Blocked: standingForest()}, nil)
+	d := Decide(issueEvent(EventIssueLabelsChanged), State{ReviewLenses: testLenses, Issue: root, Blocked: standingForest()}, nil)
 	if !strings.Contains(d.Reason, LabelTeardownForest) || !strings.Contains(d.Reason, LabelIdeation) {
 		t.Errorf("reason = %q, want both reserved label names", d.Reason)
 	}
@@ -3101,7 +3166,7 @@ func TestDecide_TeardownNamesTheLabelAndTheRoot(t *testing.T) {
 func TestDecide_TeardownRefiresOnTheSweepWhateverTheWatermark(t *testing.T) {
 	root := teardownRoot()
 	w := &Watermark{Action: string(ActionTeardownForest), Revision: issueRevision(root)}
-	d := Decide(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: root.Number}, State{Issue: root, Blocked: standingForest()}, w)
+	d := Decide(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: root.Number}, State{ReviewLenses: testLenses, Issue: root, Blocked: standingForest()}, w)
 	if d.Action != ActionTeardownForest {
 		t.Errorf("action = %q, want %q (%s)", d.Action, ActionTeardownForest, d.Reason)
 	}
@@ -3129,7 +3194,7 @@ func TestDecide_TeardownLabelRemovalIsTheRootRowResuming(t *testing.T) {
 		{"the sweep row resumes whatever the watermark holds", Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: root.Number}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d := Decide(tc.event, State{Issue: root, Blocked: standingForest()}, w)
+			d := Decide(tc.event, State{ReviewLenses: testLenses, Issue: root, Blocked: standingForest()}, w)
 			if d.Action != ActionDecompose {
 				t.Errorf("action = %q, want %q (%s)", d.Action, ActionDecompose, d.Reason)
 			}
@@ -3166,7 +3231,7 @@ func TestDecide_TeardownDispatchesOnlyWhileTheForestStands(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := teardownRoot()
-			d := Decide(issueEvent(EventIssueLabelsChanged), State{Issue: root, Blocked: tc.blocked}, nil)
+			d := Decide(issueEvent(EventIssueLabelsChanged), State{ReviewLenses: testLenses, Issue: root, Blocked: tc.blocked}, nil)
 			if d.Action != tc.wantAction {
 				t.Errorf("action = %q, want %q (%s)", d.Action, tc.wantAction, d.Reason)
 			}
@@ -3186,7 +3251,7 @@ func TestDecide_EmptyForestStopsTheTeardownRefiring(t *testing.T) {
 	root := teardownRoot()
 	for i := 0; i < 2; i++ {
 		d := Decide(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: root.Number},
-			State{Issue: root, Blocked: nil}, nil)
+			State{ReviewLenses: testLenses, Issue: root, Blocked: nil}, nil)
 		if d.Action != "" {
 			t.Fatalf("sweep %d dispatched %q (%s), want nothing: an empty forest is not a state that calls for the action",
 				i+1, d.Action, d.Reason)
@@ -3202,6 +3267,7 @@ func TestDecide_EmptyForestStopsTheTeardownRefiring(t *testing.T) {
 func TestDecide_SyncSetMemberEdgeCaseReasons(t *testing.T) {
 	t.Run("dual-labelled member names both labels", func(t *testing.T) {
 		d := Decide(prEvent(EventPRReviewed, "carol"), State{
+			ReviewLenses:    testLenses,
 			PR:              openPR("abc"),
 			Reviews:         []Review{review("APPROVED", "carol", testTime)},
 			ConnectedIssues: []ConnectedIssue{dualLabelledSyncMember(7)},
@@ -3217,6 +3283,7 @@ func TestDecide_SyncSetMemberEdgeCaseReasons(t *testing.T) {
 	})
 	t.Run("member of no open set is not held off", func(t *testing.T) {
 		d := Decide(prEvent(EventPRReviewed, "carol"), State{
+			ReviewLenses:    testLenses,
 			PR:              openPR("abc"),
 			Reviews:         []Review{review("APPROVED", "carol", testTime)},
 			ConnectedIssues: []ConnectedIssue{syncMemberWithoutSets(7)},
@@ -3238,8 +3305,9 @@ func TestDecide_SyncSetMemberEdgeCaseReasons(t *testing.T) {
 func TestDecide_SweepAutoMergeRowIsWatermarkExempt(t *testing.T) {
 	approvedAtHead := func(labels ...string) State {
 		return State{
-			PR:      labelledPR("abc", labels...),
-			Reviews: []Review{review("APPROVED", "carol", testTime)},
+			ReviewLenses: testLenses,
+			PR:           labelledPR("abc", labels...),
+			Reviews:      []Review{review("APPROVED", "carol", testTime)},
 		}
 	}
 	watermark := &Watermark{Action: string(ActionMergeOrWait), Revision: "abc"}
@@ -3286,8 +3354,9 @@ func TestDecide_SweepAutoMergeRowIsWatermarkExempt(t *testing.T) {
 		pr := labelledPR("abc", LabelAgenticAutoMerge)
 		pr.State, pr.Merged = "closed", true
 		d := Decide(prEvent(EventReconcile, ""), State{
-			PR:      pr,
-			Reviews: []Review{review("APPROVED", "carol", testTime)},
+			ReviewLenses: testLenses,
+			PR:           pr,
+			Reviews:      []Review{review("APPROVED", "carol", testTime)},
 		}, watermark)
 		if !d.HoldOff() {
 			t.Fatalf("decision = %+v, want a hold-off: the re-fire ends where the PR does", d)
@@ -3311,10 +3380,10 @@ func TestDecide_SweepAutoMergeRowIsWatermarkExempt(t *testing.T) {
 }
 
 // TestDecide_SweepReviewRowsAreWatermarkExempt: the sweep's rows for
-// review, re-review and fix-feedback are watermark-exempt — the state
+// the lens fan-out and fix-feedback are watermark-exempt — the state
 // is their watermark, so a dispatch that went nowhere recovers on the
 // next sweep while the head stands still. Each exempt state is
-// self-limiting: a review at head ends review and re-review, a push
+// self-limiting: a lens reporting at head ends that lens' exemption, a push
 // ends fix-feedback, and the sweep enumerates open pull requests only.
 // The exemption is the sweep's rows alone: the same states reached
 // from an event (pr_synced, pr_reviewed, pr_commented) keep the
@@ -3327,7 +3396,7 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 	}
 
 	t.Run("sweep re-fires review for a PR with no reviews at the recorded revision", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{PR: openPR("abc")}, &Watermark{Action: string(ActionReview), Revision: "abc"})
+		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: openPR("abc")}, lensWatermark("abc", "carol"))
 		if d.Action != ActionReview {
 			t.Fatalf("decision = %+v, want review: the review the sweep asked for has still not happened", d)
 		}
@@ -3339,10 +3408,10 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 		}
 	})
 
-	t.Run("sweep re-fires re-review when the latest review stands at an older revision", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{PR: openPR("abc"), Reviews: []Review{oldReview(ReviewApproved)}}, &Watermark{Action: string(ActionReReview), Revision: "abc"})
-		if d.Action != ActionReReview {
-			t.Fatalf("decision = %+v, want re-review: the head carries work no reviewer has looked at", d)
+	t.Run("sweep re-fires the lens review when the latest review stands at an older revision", func(t *testing.T) {
+		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{oldReview(ReviewApproved)}}, lensWatermark("abc", "carol"))
+		if d.Action != ActionReview {
+			t.Fatalf("decision = %+v, want review: the head carries work no reviewer has looked at", d)
 		}
 		if strings.Contains(d.Reason, "already dispatched") {
 			t.Errorf("reason = %q, want the state that calls for the action, not the watermark", d.Reason)
@@ -3353,7 +3422,7 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 	})
 
 	t.Run("sweep re-fires fix-feedback at a changes-requested review standing at head", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}}, &Watermark{Action: string(ActionFixFeedback), Revision: "abc"})
+		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}}, &Watermark{Action: string(ActionFixFeedback), Revision: "abc"})
 		if d.Action != ActionFixFeedback {
 			t.Fatalf("decision = %+v, want fix-feedback: feedback was asked for and the head has not moved since", d)
 		}
@@ -3366,7 +3435,7 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 	})
 
 	t.Run("sweep re-fires fix-feedback at a comment review standing at head", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{PR: openPR("abc"), Reviews: []Review{review(ReviewComment, "carol", testTime)}}, &Watermark{Action: string(ActionFixFeedback), Revision: "abc"})
+		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewComment, "carol", testTime)}}, &Watermark{Action: string(ActionFixFeedback), Revision: "abc"})
 		if d.Action != ActionFixFeedback {
 			t.Fatalf("decision = %+v, want fix-feedback: the sweep moves the PR along by triggering the implementer", d)
 		}
@@ -3376,7 +3445,7 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 	})
 
 	t.Run("the trigger-review label is not needed to ask again on the sweep", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{PR: labelledPR("abc", LabelTriggerReview)}, &Watermark{Action: string(ActionReview), Revision: "abc"})
+		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: labelledPR("abc", LabelTriggerReview)}, lensWatermark("abc", "carol"))
 		if d.Action != ActionReview {
 			t.Fatalf("decision = %+v, want review: a labelled hold-off at the recorded revision would leave the PR stranded like an unlabelled one", d)
 		}
@@ -3388,11 +3457,11 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 	// Green controls: the exemption is exactly the three sweep rows.
 
 	t.Run("an approving review at head still belongs to merge-or-wait and none of the three fires", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{PR: openPR("abc"), Reviews: []Review{review(ReviewApproved, "carol", testTime)}}, &Watermark{Action: string(ActionMergeOrWait), Revision: "abc"})
+		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewApproved, "carol", testTime)}}, &Watermark{Action: string(ActionMergeOrWait), Revision: "abc"})
 		if d.Dispatched {
 			t.Fatalf("decision = %+v, want the merge-or-wait hold-off: an approved PR without the opt-in waits on a human", d)
 		}
-		if d.Action == ActionReview || d.Action == ActionReReview || d.Action == ActionFixFeedback {
+		if d.Action == ActionReview || d.Action == ActionFixFeedback {
 			t.Errorf("decision = %+v, want no review-side action: a review at head ends the review rows", d)
 		}
 		if !strings.Contains(d.Reason, "already dispatched at revision abc") {
@@ -3401,7 +3470,7 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 	})
 
 	t.Run("a PR that is not mergeable still decides rebase, revision-keyed", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{PR: notMergeablePR("abc")}, &Watermark{Action: string(ActionRebase), Revision: "abc"})
+		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: notMergeablePR("abc")}, &Watermark{Action: string(ActionRebase), Revision: "abc"})
 		if !d.HoldOff() {
 			t.Fatalf("decision = %+v, want a hold-off: rebase is real work and stays revision-keyed", d)
 		}
@@ -3412,19 +3481,20 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 
 	t.Run("a PR whose connected issue is blocked by an open ideation issue still dispatches the exempt review row", func(t *testing.T) {
 		d := Decide(prEvent(EventReconcile, ""), State{
-			PR: openPR("abc"),
+			ReviewLenses: testLenses,
+			PR:           openPR("abc"),
 			ConnectedIssues: []ConnectedIssue{{
 				Issue:    *connectedIssue(),
 				Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
 			}},
-		}, &Watermark{Action: string(ActionReview), Revision: "abc"})
+		}, lensWatermark("abc", "carol"))
 		if d.Action != ActionReview {
 			t.Fatalf("decision = %+v, want review: nothing about a connected issue's blockers decides ahead of the exempt rows (s-git/maitred#151)", d)
 		}
 	})
 
 	t.Run("a closed PR holds off: the re-fire ends where the PR does", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{PR: closedPR("abc")}, &Watermark{Action: string(ActionReview), Revision: "abc"})
+		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: closedPR("abc")}, lensWatermark("abc", "carol"))
 		if !d.HoldOff() {
 			t.Fatalf("decision = %+v, want a hold-off: the sweep enumerates open pull requests only", d)
 		}
@@ -3440,11 +3510,11 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 			state     State
 			watermark *Watermark
 		}{
-			{"pr_synced with no review at a recorded revision", prEvent(EventPRSynced, "alice"), State{PR: openPR("abc")}, &Watermark{Action: string(ActionReview), Revision: "abc"}},
-			{"pr_synced with a review at an older revision", prEvent(EventPRSynced, "alice"), State{PR: openPR("abc"), Reviews: []Review{oldReview(ReviewApproved)}}, &Watermark{Action: string(ActionReReview), Revision: "abc"}},
-			{"pr_synced carrying trigger-review with no review", prEvent(EventPRSynced, "alice"), State{PR: labelledPR("abc", LabelTriggerReview)}, &Watermark{Action: string(ActionReview), Revision: "abc"}},
-			{"pr_reviewed requesting changes at head", prEvent(EventPRReviewed, "carol"), State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}}, &Watermark{Action: string(ActionFixFeedback), Revision: "abc"}},
-			{"pr_commented standing at a changes-requested review at head", prEvent(EventPRCommented, "alice"), State{PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}}, &Watermark{Action: string(ActionFixFeedback), Revision: "abc"}},
+			{"pr_synced with no review at a recorded revision", prEvent(EventPRSynced, "alice"), State{ReviewLenses: testLenses, PR: openPR("abc")}, lensWatermark("abc", "carol")},
+			{"pr_synced with a review at an older revision", prEvent(EventPRSynced, "alice"), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{oldReview(ReviewApproved)}}, lensWatermark("abc", "carol")},
+			{"pr_synced carrying trigger-review with no review", prEvent(EventPRSynced, "alice"), State{ReviewLenses: testLenses, PR: labelledPR("abc", LabelTriggerReview)}, lensWatermark("abc", "carol")},
+			{"pr_reviewed requesting changes at head", prEvent(EventPRReviewed, "carol"), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}}, &Watermark{Action: string(ActionFixFeedback), Revision: "abc"}},
+			{"pr_commented standing at a changes-requested review at head", prEvent(EventPRCommented, "alice"), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}}, &Watermark{Action: string(ActionFixFeedback), Revision: "abc"}},
 		}
 		for _, tt := range cases {
 			d := Decide(tt.event, tt.state, tt.watermark)
@@ -3454,6 +3524,172 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 			if !strings.Contains(d.Reason, "already dispatched at revision abc") {
 				t.Errorf("%s: reason = %q, want the revision-keyed hold-off", tt.name, d.Reason)
 			}
+		}
+	})
+}
+
+// TestDecide_FanOutReasonFlagsNeverSeenLensIdentity: a subject slot
+// at head with no review by the lens's login anywhere on the PR is
+// the shape a mistyped identity produces — the lens can never report,
+// so the sweep re-fires it forever. The reason says what the state
+// shows so an operator can tell that from a dispatch still
+// mid-flight (§forgejo/config/review-lenses).
+func TestDecide_FanOutReasonFlagsNeverSeenLensIdentity(t *testing.T) {
+	t.Run("the sweep reason names a lens identity never seen on the PR", func(t *testing.T) {
+		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: openPR("abc")}, lensWatermark("abc", "carol"))
+		if d.Action != ActionReview {
+			t.Fatalf("decision = %+v, want the exempt sweep re-fire", d)
+		}
+		if !strings.Contains(d.Reason, "no review by carol has been seen on this PR at all") {
+			t.Errorf("reason = %q, want it to name the identity the PR has never seen", d.Reason)
+		}
+	})
+
+	t.Run("a lens whose earlier reviews simply went stale keeps the plain reason", func(t *testing.T) {
+		d := Decide(prEvent(EventReconcile, ""), State{
+			ReviewLenses: testLenses,
+			PR:           openPR("abc"),
+			Reviews:      []Review{{Event: ReviewApproved, Author: "carol", CommitID: "old", SubmittedAt: testTime}},
+		}, lensWatermark("abc", "carol"))
+		if d.Action != ActionReview {
+			t.Fatalf("decision = %+v, want the exempt sweep re-fire", d)
+		}
+		if strings.Contains(d.Reason, "has been seen on this PR at all") {
+			t.Errorf("reason = %q, want no identity warning: the login has reviewed, its approval is merely stale", d.Reason)
+		}
+	})
+}
+
+// TestDecide_ReviewLenses pins the dispatch predicate end to end on
+// the pure decision function: the lenses to dispatch are the
+// configured lenses with no undismissed approving review at the
+// current head — all outstanding at first, partial as verdicts land,
+// the whole chain again after a push invalidated the approvals, and
+// nothing once every lens approves at head (§forgejo/decisions/review-lenses).
+func TestDecide_ReviewLenses(t *testing.T) {
+	lenses := []ReviewLens{{Identity: "lens-min"}, {Identity: "lens-maint"}, {Identity: "lens-sec"}}
+	pr := openPR("head-1")
+	at := func(lens, event, sha string, minute int) Review {
+		return Review{
+			Event:       event,
+			Author:      lens,
+			CommitID:    sha,
+			SubmittedAt: testTime.Add(time.Duration(minute) * time.Minute),
+		}
+	}
+	stateWith := func(reviews ...Review) State {
+		return State{ReviewLenses: lenses, PR: pr, Reviews: reviews}
+	}
+
+	t.Run("all outstanding: every lens dispatches in order", func(t *testing.T) {
+		d := Decide(prEvent(EventPROpened, "alice"), stateWith(), nil)
+		if d.Action != ActionReview || len(d.Lenses) != 3 {
+			t.Fatalf("decision = %+v, want a fan-out over all three lenses", d)
+		}
+		if d.Lenses[0].Lens != "lens-min" || d.Lenses[2].Lens != "lens-sec" {
+			t.Errorf("fan-out = %+v, want config order", d.Lenses)
+		}
+	})
+
+	t.Run("partial: mid-flight lenses hold off, named as outstanding", func(t *testing.T) {
+		// All three were dispatched at the head; lens-min approved.
+		// The other two are mid-flight — their subject slots keep
+		// the fan-out from duplicating them, and the hold-off names
+		// them (§forgejo/decisions/review-lenses).
+		st := stateWith(at("lens-min", ReviewApproved, "head-1", 1))
+		d := Decide(prEvent(EventPRReviewed, "lens-min"), st, lensWatermark("head-1", "lens-min", "lens-maint", "lens-sec"))
+		if d.Dispatched {
+			t.Fatalf("decision = %+v, want a hold-off: the outstanding lenses are mid-flight", d)
+		}
+		if !strings.Contains(d.Reason, "lens-maint") || !strings.Contains(d.Reason, "lens-sec") {
+			t.Errorf("reason = %q, want the outstanding lenses named", d.Reason)
+		}
+		// Without the slots — a dispatch that went nowhere — the
+		// sweep re-fires exactly those two.
+		d = Decide(prEvent(EventReconcile, ""), st, nil)
+		if d.Action != ActionReview || len(d.Lenses) != 2 || d.Lenses[0].Lens != "lens-maint" || d.Lenses[1].Lens != "lens-sec" {
+			t.Fatalf("sweep decision = %+v, want lens-maint and lens-sec re-dispatched", d)
+		}
+	})
+
+	t.Run("stale after push: the whole chain re-fires", func(t *testing.T) {
+		// Approvals stand at the pre-push head; the push dismissed
+		// them, so no lens holds an undismissed approval at head.
+		st := State{ReviewLenses: lenses, PR: openPR("head-2"), Reviews: []Review{
+			at("lens-min", ReviewApproved, "head-1", 1),
+			at("lens-maint", ReviewApproved, "head-1", 2),
+			at("lens-sec", ReviewApproved, "head-1", 3),
+		}}
+		d := Decide(prEvent(EventPRSynced, "implementer-bot"), st, lensWatermark("head-1", "lens-min", "lens-maint", "lens-sec"))
+		if d.Action != ActionReview || len(d.Lenses) != 3 {
+			t.Fatalf("decision = %+v, want all three lenses re-dispatched at the new head", d)
+		}
+	})
+
+	t.Run("a dismissed approval is no approval", func(t *testing.T) {
+		st := stateWith(
+			Review{Event: ReviewApproved, Author: "lens-min", CommitID: "head-1", SubmittedAt: testTime, Dismissed: true},
+			at("lens-maint", ReviewApproved, "head-1", 2),
+			at("lens-sec", ReviewApproved, "head-1", 3),
+		)
+		d := Decide(prEvent(EventReconcile, ""), st, nil)
+		if d.Action != ActionReview || len(d.Lenses) != 1 || d.Lenses[0].Lens != "lens-min" {
+			t.Fatalf("decision = %+v, want only the dismissed lens re-dispatched", d)
+		}
+	})
+
+	t.Run("all approved: merge-or-wait decides, the fan-out holds off", func(t *testing.T) {
+		st := stateWith(
+			at("lens-min", ReviewApproved, "head-1", 1),
+			at("lens-maint", ReviewApproved, "head-1", 2),
+			at("lens-sec", ReviewApproved, "head-1", 3),
+		)
+		d := Decide(prEvent(EventPRReviewed, "lens-sec"), st, nil)
+		if d.Action != ActionMergeOrWait {
+			t.Fatalf("decision = %+v, want merge-or-wait once every lens approves at head", d)
+		}
+	})
+
+	t.Run("fix-feedback waits for every lens and names the outstanding", func(t *testing.T) {
+		// lens-min rejected, lens-maint approved, lens-sec silent:
+		// the round is unfinished, so no fix dispatches yet and the
+		// hold-off names who still owes a report.
+		st := stateWith(
+			at("lens-min", ReviewChangesRequested, "head-1", 1),
+			at("lens-maint", ReviewApproved, "head-1", 2),
+		)
+		d := Decide(prEvent(EventPRReviewed, "lens-maint"), st, lensWatermark("head-1", "lens-maint"))
+		if d.Action != ActionReview || len(d.Lenses) != 2 || d.Lenses[0].Lens != "lens-min" || d.Lenses[1].Lens != "lens-sec" {
+			t.Fatalf("decision = %+v, want the unreported lenses dispatched, not fix-feedback", d)
+		}
+		if strings.Contains(d.Reason, "fix") {
+			t.Errorf("reason = %q, must not dispatch fix-feedback while the round is open", d.Reason)
+		}
+		// Once every lens has reported and the reports are not all
+		// approvals, the fix fires.
+		st.Reviews = append(st.Reviews, at("lens-sec", ReviewChangesRequested, "head-1", 3))
+		d = Decide(prEvent(EventPRReviewed, "lens-sec"), st, lensWatermark("head-1", "lens-min", "lens-maint", "lens-sec"))
+		if d.Action != ActionFixFeedback {
+			t.Fatalf("decision = %+v, want fix-feedback once the round closed with rejections", d)
+		}
+		if !strings.Contains(d.Reason, "lens-min") || !strings.Contains(d.Reason, "lens-sec") {
+			t.Errorf("reason = %q, want the lenses without an approval named", d.Reason)
+		}
+	})
+
+	t.Run("a lens's own push does not re-fire that lens", func(t *testing.T) {
+		st := stateWith(at("lens-min", ReviewApproved, "head-0", 1))
+		d := Decide(prEvent(EventPRSynced, "lens-min"), st, nil)
+		if d.Action != ActionReview {
+			t.Fatalf("decision = %+v, want the fan-out", d)
+		}
+		for _, ld := range d.Lenses {
+			if ld.Lens == "lens-min" {
+				t.Errorf("the pushing lens was re-fired: %+v", d.Lenses)
+			}
+		}
+		if len(d.Lenses) != 2 {
+			t.Errorf("fan-out = %+v, want the other two lenses", d.Lenses)
 		}
 	})
 }

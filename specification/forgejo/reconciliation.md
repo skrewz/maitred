@@ -98,10 +98,9 @@ while the prior task is still pending).
 | `decompose` | the issue is open and carries the `ideation` label, or it is open, carries the `outcome` label, has an open blocker, and the `ideation` issue it is blocked by is closed |
 | `wrap-up` | the issue is open, carries the `outcome` label, and has no open blockers |
 | `teardown-forest` | the issue is open, carries the `ideation` label, carries the `teardown-forest` label **and blocks at least one issue** — the forest still standing is the state that calls for the deletion, so a teardown that died half way through re-fires until the graph is empty, and stops the sweep the moment it is (§forgejo/decisions/forest-teardown) |
-| `merge-or-wait` | the PR is open, its latest review approves at head, no connected issue has an open blocker (the merge gate, §forgejo/decisions/merge-gate), and it carries the `agentic-auto-merge` label — the label is the whole point: an approved PR with no opt-in waits on a human, and only the sweep's row for a labelled, approved, unblocked PR is exempt |
-| `review` | the PR is open, mergeable and has **no reviews** — the review the sweep would ask for has still not happened, and the `trigger-review` label is not needed to ask again (§forgejo/decisions/label-triggered-review) |
-| `re-review` | the PR is open, mergeable, has at least one review, and its **latest review is not at the current head sha** — the head carries work no reviewer has looked at |
-| `fix-feedback` | the PR is open, mergeable, and its latest review **at the current head** requests changes, or is a comment review — feedback was asked for and the head has not moved since |
+| `merge-or-wait` | the PR is open, **every configured review lens holds an undismissed approval at head**, no reviewer's latest undismissed review at head is a non-approval (§forgejo/decisions/review-lenses), no connected issue has an open blocker (the merge gate, §forgejo/decisions/merge-gate), and it carries the `agentic-auto-merge` label — the label is the whole point: an approved PR with no opt-in waits on a human, and only the sweep's row for a labelled, approved, unblocked PR is exempt |
+| `review`, per lens | the PR is open, mergeable, and **this lens has reported nothing at the current head sha** — the report the sweep would ask for has still not happened, whether because no dispatch reached the lens or the head moved past its last one; a lens that has reported at head is exempt no more, its dispatch having landed (§forgejo/decisions/review-lenses) |
+| `fix-feedback` | the PR is open, mergeable, **every lens has reported at the current head**, and some reviewer's latest undismissed review at head is not an approval — a comment report counts on this row, as feedback the sweep hands to the implementer — and the head has not moved since (§forgejo/decisions/review-lenses) |
 
 `ideation` and `outcome` are reserved label names, not configuration.
 They match **case-insensitively**: a label name is a user-authored
@@ -151,10 +150,11 @@ by any event is caught within one reconcile interval.
 All other actions — `implement`, `reassess`, `rebase`, `merge-or-wait`
 on any path other than a sweep row exempted above — keep
 revision-keyed watermarks: re-dispatching those would re-run real
-work. The `review`, `re-review` and `fix-feedback` exemptions are the
+work. The `review` (per lens) and `fix-feedback` exemptions are the
 sweep's rows alone; on the event path those actions stay
-revision-keyed, so a push or a review never re-fires on its own
-(§forgejo/decisions/loop-prevention).
+revision-keyed — the lenses through their subject slots
+(§forgejo/state/watermark) — so a push or a review never re-fires on
+its own (§forgejo/decisions/loop-prevention).
 
 The `merge-or-wait` row is exempt for the reason `teardown-forest`
 is, and not for the dependency-edge reason that opens this section: a
@@ -182,8 +182,10 @@ revision-keyed watermark makes it a fixed point the sweep can never
 fire on, and a review dispatch that went nowhere never recovers. The
 state is therefore its watermark: the sweep re-fires until the state
 changes, and every state in the table above is self-limiting — a
-review at head ends `review` and `re-review` (the review-following
-rows then own the PR, §forgejo/decisions/transition-table), a push
+lens reporting at head ends that lens's `review` exemption and a
+chain fully reported at head hands the PR to the review-following
+rows (§forgejo/decisions/review-lenses,
+§forgejo/decisions/transition-table), a push
 ends `fix-feedback`, and the sweep enumerates **open** pull requests
 only, so a merged or closed PR stops firing at once
 (§forgejo/reconciliation/the-sweep). Recovery latency is one

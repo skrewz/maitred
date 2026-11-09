@@ -11,15 +11,14 @@ exclusively canned prompts.
 
 ## Canned prompts
 
-The config maps each action — `implement`, `reassess`, `review`, `re-review`,
+The config maps each action — `implement`, `reassess`,
 `fix-feedback`, `merge-or-wait`, `rebase`, `decompose`, `wrap-up`,
 `teardown-forest`, `sync` — to:
 
 - a **prompt template** — the canned prompt: the hotelier task invocation
-  (e.g. the `/issue-implementer`, `/pr-reviewer`, `/pr-feedback-fixer`
+  (e.g. the `/issue-implementer`, `/pr-merger`, `/pr-feedback-fixer`
   invocations) plus their pre-flight checks,
-- a **persona** — the persona the task runs as (e.g.
-  `s-autonomics-implementer`, `s-autonomics-reviewer`),
+- a **persona** — the persona the task runs as,
 - a **timeout** — how long the task may run.
 
 Pi expands a prompt template only when the dispatched message **starts
@@ -51,8 +50,6 @@ config it deploys (§forgejo/config/loading).
 |---|---|
 | `implement` | `/issue-implementer` |
 | `reassess` | `/issue-reassess` |
-| `review` | `/pr-reviewer` |
-| `re-review` | `/pr-reviewer`, with `"re-review"` as a further argument |
 | `fix-feedback` | `/pr-feedback-fixer` |
 | `merge-or-wait` | `/pr-merger` |
 | `rebase` | `/pr-rebase` |
@@ -60,6 +57,10 @@ config it deploys (§forgejo/config/loading).
 | `wrap-up` | `/issue-wrapper` |
 | `teardown-forest` | `/forest-teardown` |
 | `sync` | `/set-lander` |
+
+Reviews are configured separately, as the ordered lens list
+(§forgejo/config/review-lenses); the retired `review` and `re-review`
+entries have no row here, and `/pr-reviewer` is retired with them.
 
 A prompt that asks for a URL the state cannot fill is a dispatch with no
 object: the invocation would read `/issue-implementer ` and Pi reports
@@ -80,9 +81,55 @@ told the number and is told to cite it.
 
 The config also names the **org** the engine tracks (the organisation
 whose role-holding repositories it watches
-(§forgejo/webhook/repository-roles)), and sets the
+(§forgejo/webhook/repository-roles)), sets the
 **reconciliation interval** (`reconcile_interval`): how often the
-reconciliation sweep runs (§forgejo/reconciliation/scheduling).
+reconciliation sweep runs (§forgejo/reconciliation/scheduling), and
+carries the ordered **review lens list** (§forgejo/config/review-lenses).
+
+## Review lenses
+
+Reviews are not one action with one prompt: the config declares an
+ordered list of **review lenses**, each with its own identity, canned
+prompt, persona, and timeout:
+
+```yaml
+reviews:
+  - identity: reviewer-minimalism
+    prompt: '/pr-minimalism-reviewer {{.PRURL}}'
+    persona: reviewer-minimalism
+    timeout: 30m
+  - identity: reviewer-maintainability
+    prompt: '/pr-maintainability-reviewer {{.PRURL}}'
+    persona: reviewer-maintainability
+    timeout: 30m
+  - identity: reviewer-security
+    prompt: '/pr-security-reviewer {{.PRURL}}'
+    persona: reviewer-security
+    timeout: 30m
+```
+
+Extending or contracting the chain is an edit here, not a code change.
+The list is **ordered**, and the order is the chain's: the first lens
+biases the implementation before the later ones see it, and because
+approvals do not survive a push, complexity added to satisfy a later
+lens comes back through the earlier ones (§forgejo/decisions/review-lenses).
+
+`identity` is a **declaration in the operator's voice**, the same
+standing as `implementer_identity` and `decomposer_identity`: the
+decision function compares it against review authors by exact,
+case-sensitive equality to decide which lenses owe a verdict, and the
+engine never infers the roster from the reviews it reads. Like the
+other identity keys it grants no privilege — a lens's rights live on
+the forge, and its task runs under the persona the entry names.
+
+Per lens: `identity`, `prompt`, and `persona` are required, `timeout`
+must be positive, and the prompt is held to the same canned-prompt
+contract as an action's. A lens identity appears at most once; in a
+directory merge the lists concatenate in sorted file order and a
+repeated identity is a conflict, exactly as with the scalar keys.
+At least one lens is required (§forgejo/config/validation): with no
+lenses nothing reviews, and a chain of zero would silently pass every
+gate that reads the chain.
 
 ## Decomposer identity
 
@@ -186,6 +233,17 @@ Loading **fails at load time** — mirroring the trigger `Validate()` — when:
   `reconcile_interval`, about `decomposer_identity`, or about
   `implementer_identity`,
 - a directory's files define the same action twice.
+
+The lens list is validated with the actions: it must hold at least one
+lens, every lens must carry an identity, prompt, and persona with a
+positive timeout, identities must be unique, and a lens prompt is
+parsed like an action's (§forgejo/config/review-lenses). A config that
+still names the retired `review` or `re-review` action entry fails the
+unknown-action check, and a config with no `reviews:` list fails the
+empty-list check: either way the failure is the config-or-binary
+mismatch (§forgejo/config/validation) — the loud half of the
+config-before-binary rule, telling the deployment to write the lens
+list before the binary that retired the singletons is deployed.
 
 Optional keys are the exception: `decomposer_identity` and
 `implementer_identity` unset are valid and never a load error

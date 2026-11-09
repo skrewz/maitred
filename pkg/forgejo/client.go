@@ -127,6 +127,13 @@ type Review struct {
 	Author string
 	// CommitID is the commit the review was submitted against.
 	CommitID string
+	// Dismissed reports whether the review has been dismissed — by
+	// stale-approval dismissal on a push or by a maintainer by hand.
+	// The review lenses' gates count **undismissed** approvals, so the
+	// flag is the read that separates a standing approval at head from
+	// one the forge has already voided (§forgejo/client/operations,
+	// §forgejo/decisions/review-lenses).
+	Dismissed bool
 	// SubmittedAt is when the review was submitted.
 	SubmittedAt time.Time
 }
@@ -348,6 +355,7 @@ func (c *Client) ListPullRequestReviews(owner, repo string, number int) ([]Revie
 			Event:       w.State,
 			Author:      w.User.Login,
 			CommitID:    w.CommitID,
+			Dismissed:   w.Dismissed,
 			SubmittedAt: w.SubmittedAt,
 		}
 	}
@@ -493,6 +501,7 @@ type wireReview struct {
 	State       string    `json:"state"`
 	User        wireUser  `json:"user"`
 	CommitID    string    `json:"commit_id"`
+	Dismissed   bool      `json:"dismissed"`
 	SubmittedAt time.Time `json:"submitted_at"`
 }
 

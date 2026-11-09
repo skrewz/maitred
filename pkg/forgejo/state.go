@@ -44,8 +44,23 @@ func (k Key) fileName() string {
 	return strings.ReplaceAll(k.Repo, "/", "__") + "." + string(k.Kind) + "." + strconv.Itoa(k.Number) + ".json"
 }
 
+// Slot is one (action, revision) dispatch record: the shape a
+// watermark holds per subject of a fan-out dispatch
+// (§forgejo/state/watermark).
+type Slot struct {
+	// Action is the named action dispatched for this subject.
+	Action string `json:"action"`
+	// Revision is the activity revision the action was dispatched at.
+	Revision string `json:"revision"`
+}
+
 // Watermark is the "what have I dispatched" record for a single issue or
-// pull request (§forgejo/state/watermark).
+// pull request (§forgejo/state/watermark). The main (Action, Revision)
+// slot records the object's own singleton dispatches; Subjects carries
+// one slot per subject of a fan-out dispatch — the review lenses — so
+// two lenses dispatched at the same revision do not hold each other
+// off as "already dispatched". Storage stays one file per object
+// (§forgejo/state/storage).
 type Watermark struct {
 	// Action is the named action last dispatched for this key (the
 	// decision function's action names).
@@ -54,6 +69,34 @@ type Watermark struct {
 	// the PR head sha for pull requests, the issue's updated_at for
 	// issues.
 	Revision string `json:"revision"`
+	// Subjects maps each fan-out subject's identity (a review lens's
+	// configured login) to the slot dispatched for it. Empty for
+	// objects that have only ever seen singleton dispatches, and for
+	// watermarks written before the lens list (§forgejo/state/watermark).
+	Subjects map[string]Slot `json:"subjects,omitempty"`
+}
+
+// subjectSlot returns the slot recorded for subject, if any.
+func (w *Watermark) subjectSlot(subject string) (Slot, bool) {
+	if w == nil || w.Subjects == nil {
+		return Slot{}, false
+	}
+	s, ok := w.Subjects[subject]
+	return s, ok
+}
+
+// subjectSlots returns a copy of the subject-slot map, nil-safe for a
+// missing watermark; the copy keeps a merge-save from aliasing the
+// record it was merged into (§forgejo/state/watermark).
+func (w *Watermark) subjectSlots() map[string]Slot {
+	if w == nil || w.Subjects == nil {
+		return nil
+	}
+	m := make(map[string]Slot, len(w.Subjects))
+	for k, v := range w.Subjects {
+		m[k] = v
+	}
+	return m
 }
 
 // Store persists watermarks as one JSON file per key under a directory

@@ -32,9 +32,15 @@ the view shows:
 
 - the **current state** — the object's state as last re-fetched (open
   or closed; merged, for pull requests),
-- the **watermark** — the last dispatched action and the revision it
-  was dispatched at (§forgejo/state/watermark), or none when nothing
-  has been dispatched,
+- the **watermark** — the object's last *singleton* dispatch: the
+  action and the revision it was dispatched at
+  (§forgejo/state/watermark), or none when nothing has been
+  dispatched through the main slot. Fan-out dispatches do not touch
+  the main slot; the view lists the watermark's **subject slots**
+  alongside it — one row per dispatched action and revision, naming
+  the subjects (the review lenses) dispatched at it — so a fan-out is
+  visible even where no singleton dispatch preceded it, and a
+  stale-looking main slot is explainable at a glance, and
 - the **last decision** — the most recent dispatch or hold-off, with
   its reason and the event that produced it.
 

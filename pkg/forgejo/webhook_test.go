@@ -35,6 +35,16 @@ func testConfig() *Config {
 			Timeout: 2 * time.Hour,
 		}
 	}
+	cfg.Reviews = []ReviewLens{{
+		// One lens, bob — the reviewing author of the fixtures'
+		// reviews — so engine-level fixtures keep the standing the
+		// retired single-reviewer rows gave them
+		// (§forgejo/config/review-lenses).
+		Identity: "bob",
+		Prompt:   "action={{.Action}} repo={{.Repo}} kind={{.Kind}} number={{.Number}} issue={{.IssueURL}} pr={{.PRURL}} sender={{.Sender}}",
+		Persona:  "persona-review",
+		Timeout:  1 * time.Hour,
+	}}
 	return cfg
 }
 
@@ -674,11 +684,15 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			name:      "PR synced, reviews exist",
 			eventType: "pull_request_sync", action: "synchronized",
 			payload: prPayload("o/r", 9, "synchronized"),
+			// The sync re-fires only the lenses whose approval the push
+			// invalidated; here the head moved and bob's approval
+			// stands at the old revision
+			// (§forgejo/decisions/review-lenses).
 			setup: func(api *fakeAPI) {
 				api.pulls[9] = testPR(9, "open", true)
-				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved}}
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-old"}}
 			},
-			want: ActionReReview,
+			want: ActionReview,
 		},
 		{
 			name:      "PR synced by the reviewing author, hold off",
@@ -690,7 +704,7 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			}(),
 			setup: func(api *fakeAPI) {
 				api.pulls[9] = testPR(9, "open", true)
-				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved}}
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 			},
 			want: "",
 		},
@@ -700,7 +714,7 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			payload: prPayload("o/r", 9, "approved"),
 			setup: func(api *fakeAPI) {
 				api.pulls[9] = testPR(9, "open", true)
-				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved}}
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 			},
 			want: ActionMergeOrWait,
 		},
@@ -713,7 +727,7 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			payload: prPayload("o/r", 9, "approved"),
 			setup: func(api *fakeAPI) {
 				api.pulls[9] = testPR(9, "open", true)
-				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved}}
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 				api.blocks[9] = []Issue{*testIssue(4, "open")}
 				ideation := testIssue(1, "open")
 				ideation.Labels = []string{LabelIdeation}
@@ -727,7 +741,7 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			payload: prPayload("o/r", 9, "approved"),
 			setup: func(api *fakeAPI) {
 				api.pulls[9] = testPR(9, "open", true)
-				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved}}
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 				api.blocks[9] = []Issue{*testIssue(4, "open")}
 				ideation := testIssue(1, "closed")
 				ideation.Labels = []string{LabelIdeation}
@@ -741,7 +755,7 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			payload: prPayload("o/r", 9, "rejected"),
 			setup: func(api *fakeAPI) {
 				api.pulls[9] = testPR(9, "open", true)
-				api.reviews[9] = []Review{{Author: "bob", Event: ReviewChangesRequested}}
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewChangesRequested, CommitID: "sha-9"}}
 			},
 			want: ActionFixFeedback,
 		},
@@ -760,7 +774,7 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			configure: setImplementerIdentity,
 			setup: func(api *fakeAPI) {
 				api.pulls[9] = authoredPR(9, "open", true, "dave")
-				api.reviews[9] = []Review{{Author: "bob", Event: ReviewChangesRequested}}
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewChangesRequested, CommitID: "sha-9"}}
 			},
 			want: "",
 		},
@@ -771,7 +785,7 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			configure: setImplementerIdentity,
 			setup: func(api *fakeAPI) {
 				api.pulls[9] = authoredPR(9, "open", true, testImplementerIdentity)
-				api.reviews[9] = []Review{{Author: "bob", Event: ReviewChangesRequested}}
+				api.reviews[9] = []Review{{Author: "bob", Event: ReviewChangesRequested, CommitID: "sha-9"}}
 			},
 			want: ActionFixFeedback,
 		},
@@ -781,7 +795,7 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			payload: prPayload("o/r", 9, "created"),
 			setup: func(api *fakeAPI) {
 				api.pulls[9] = testPR(9, "open", true)
-				api.reviews[9] = []Review{{Author: "bob", Event: "COMMENT"}}
+				api.reviews[9] = []Review{{Author: "bob", Event: "COMMENT", CommitID: "sha-9"}}
 			},
 			want: "",
 		},
@@ -867,7 +881,7 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 				api.pulls[9] = testPR(9, "open", true)
 				api.reviews[9] = []Review{{Author: "bob", Event: ReviewComment, CommitID: "stale-sha", SubmittedAt: testUpdatedAt}}
 			},
-			want: ActionReReview,
+			want: ActionReview,
 		},
 	}
 
@@ -975,8 +989,8 @@ func TestHandler_PROpened_BlockedConnectedIssueDispatchesReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if w == nil || w.Action != string(ActionReview) {
-		t.Errorf("watermark = %+v, want review at the head revision", w)
+	if w == nil || w.Subjects["bob"] != (Slot{Action: string(ActionReview), Revision: "sha-9"}) {
+		t.Errorf("watermark = %+v, want a subject slot for the lens review at the head revision", w)
 	}
 }
 
@@ -1064,7 +1078,7 @@ func TestHandler_PRReviewed_FetchesConnectedIssueOneHop(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
 	h := NewHandler(eng, "s3cret", nil)
 	api.pulls[9] = testPR(9, "open", true)
-	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved}}
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 	api.blocks[9] = []Issue{*testIssue(4, "open")}
 	ideation := testIssue(1, "open")
 	ideation.Labels = []string{LabelIdeation}
@@ -1093,7 +1107,7 @@ func TestHandler_PRReviewed_ConnectedIssueFetchFailureHoldsOff(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
 	h := NewHandler(eng, "s3cret", nil)
 	api.pulls[9] = testPR(9, "open", true)
-	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved}}
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 	api.issueBlocksErr = errors.New("blocks unavailable")
 
 	serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
@@ -1121,7 +1135,7 @@ func TestHandler_PRReviewed_ConnectedIssueBlocksFetchFailureHoldsOff(t *testing.
 	eng, api, q, store := newTestEngine(t)
 	h := NewHandler(eng, "s3cret", nil)
 	api.pulls[9] = testPR(9, "open", true)
-	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved}}
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 	api.blocks[9] = []Issue{*testIssue(4, "open")}
 	api.issueDepsErr = errors.New("dependencies unavailable")
 
@@ -1396,16 +1410,49 @@ func TestDispatch_DedupKeyPR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("refetch: %v", err)
 	}
-	if err := eng.dispatch(ev, st, ActionReview); err != nil {
+	if err := eng.dispatchLens(ev, st, eng.cfg.Reviews[0], revisionFor(ev, st)); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 	tasks := q.all()
 	if len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1", len(tasks))
 	}
-	want := "forgejoeng-o/r-pr-9-review-sha-9"
+	// The key carries the lens alongside the action and the revision:
+	// the fan-out's tasks are three tasks over one head, not one
+	// squelched trio (§forgejo/decisions/review-lenses).
+	want := "forgejoeng-o/r-pr-9-review-bob-sha-9"
 	if tasks[0].DedupKey != want {
 		t.Errorf("dedup key = %q, want %q", tasks[0].DedupKey, want)
+	}
+}
+
+// TestDispatch_LensDedupKeysDistinct: the fan-out over a three-lens
+// chain produces three distinct dedup keys — the queue squelches a
+// re-dispatch of one lens, never of the chain
+// (§forgejo/webhook/the-pipeline, §forgejo/decisions/review-lenses).
+func TestDispatch_LensDedupKeysDistinct(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	eng.cfg.Reviews = []ReviewLens{
+		{Identity: "lens-a", Prompt: "/pr-review-a {{.PRURL}}", Persona: "p", Timeout: time.Hour},
+		{Identity: "lens-b", Prompt: "/pr-review-b {{.PRURL}}", Persona: "p", Timeout: time.Hour},
+		{Identity: "lens-c", Prompt: "/pr-review-c {{.PRURL}}", Persona: "p", Timeout: time.Hour},
+	}
+	api.pulls[9] = testPR(9, "open", true)
+	ev := Event{Type: EventPROpened, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "alice"}
+	_, st, err := eng.refetch(ev)
+	if err != nil {
+		t.Fatalf("refetch: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, lens := range eng.cfg.Reviews {
+		if err := eng.dispatchLens(ev, st, lens, revisionFor(ev, st)); err != nil {
+			t.Fatalf("dispatchLens(%s): %v", lens.Identity, err)
+		}
+		key := q.all()[len(q.all())-1].DedupKey
+		if seen[key] {
+			t.Fatalf("lens %s repeats dedup key %q", lens.Identity, key)
+		}
+		seen[key] = true
 	}
 }
 
@@ -1450,6 +1497,7 @@ func TestDispatch_TitleAndRefURL(t *testing.T) {
 		ev     Event
 		st     State
 		action Action
+		lens   bool
 		want   string
 		url    string
 	}{
@@ -1462,11 +1510,12 @@ func TestDispatch_TitleAndRefURL(t *testing.T) {
 			url:    "https://forge.example.com/o/r/issues/7",
 		},
 		{
-			name:   "pull request dispatch",
+			name:   "lens review dispatch",
 			ev:     Event{Type: EventPRSynced, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "alice"},
 			st:     State{PR: testPR(9, "open", true)},
 			action: ActionReview,
-			want:   "Review: pr 9 (o/r#9)",
+			lens:   true,
+			want:   "Review as bob: pr 9 (o/r#9)",
 			url:    "https://forge.example.com/o/r/pulls/9",
 		},
 		{
@@ -1517,7 +1566,11 @@ func TestDispatch_TitleAndRefURL(t *testing.T) {
 			if tc.prompt != nil {
 				eng.cfg.Actions[string(tc.action)] = *tc.prompt
 			}
-			if err := eng.dispatch(tc.ev, tc.st, tc.action); err != nil {
+			if tc.lens {
+				if err := eng.dispatchLens(tc.ev, tc.st, eng.cfg.Reviews[0], revisionFor(tc.ev, tc.st)); err != nil {
+					t.Fatalf("dispatchLens: %v", err)
+				}
+			} else if err := eng.dispatch(tc.ev, tc.st, tc.action); err != nil {
 				t.Fatalf("dispatch: %v", err)
 			}
 			tasks := q.all()
@@ -2672,10 +2725,14 @@ func TestHandler_PRReviewed_ConnectedIssueInAnotherRepo(t *testing.T) {
 // (§forgejo/decisions/merge-gate, s-git/maitred#151).
 func TestHandler_PRSynced_DoesNotFetchConnectedIssues(t *testing.T) {
 	eng, api, q, _, _ := mergeGateFixtures(t)
+	// The push moved the head past the approval: the fan-out re-fires
+	// the lens whose approval the push invalidated
+	// (§forgejo/decisions/review-lenses).
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-before-the-push"}}
 	serve(t, NewHandler(eng, "s3cret", nil),
 		signedRequest(t, "s3cret", "pull_request_sync", "synchronized", prPayload("o/r", 9, "synchronized")))
 	if tasks := q.all(); len(tasks) != 1 {
-		t.Fatalf("got %d tasks, want 1 (re-review)", len(tasks))
+		t.Fatalf("got %d tasks, want 1 (lens review re-fire)", len(tasks))
 	}
 	if n := api.callCount("IssueBlocks"); n != 0 {
 		t.Errorf("IssueBlocks calls = %d, want 0 (no gate read on the push path)", n)
@@ -4044,5 +4101,72 @@ func TestHandler_RootPerformsNoForestHop(t *testing.T) {
 	}
 	if n := api.callCount("IssueBlocks:out/7"); n != 0 {
 		t.Errorf("IssueBlocks on the root called %d time(s), want none for a root under no teardown order", n)
+	}
+}
+
+// TestHandler_ReviewFanOut_EndToEnd: a PR opened dispatches one task
+// per configured lens — distinct dedup keys, the lens persona and
+// timeout — and records one subject slot per lens while leaving the
+// main slot alone; the following fix-feedback dispatch writes the
+// main slot and keeps the slots (§forgejo/decisions/review-lenses,
+// §forgejo/state/watermark, §forgejo/webhook/the-pipeline).
+func TestHandler_ReviewFanOut_EndToEnd(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	eng.cfg.Reviews = []ReviewLens{
+		{Identity: "lens-a", Prompt: "/pr-review-a {{.PRURL}}", Persona: "persona-a", Timeout: 30 * time.Minute},
+		{Identity: "lens-b", Prompt: "/pr-review-b {{.PRURL}}", Persona: "persona-b", Timeout: 30 * time.Minute},
+	}
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+
+	serve(t, h, signedRequest(t, "s3cret", "pull_request", "opened", prPayload("o/r", 9, "opened")))
+
+	tasks := q.all()
+	if len(tasks) != 2 {
+		t.Fatalf("got %d tasks, want one per lens: %+v", len(tasks), tasks)
+	}
+	for i, lens := range eng.cfg.Reviews {
+		task := tasks[i]
+		if task.Persona != "persona-"+string(lens.Identity[len(lens.Identity)-1:]) {
+			t.Errorf("task %d persona = %q, want the lens persona", i, task.Persona)
+		}
+		if task.Timeout != 1800 {
+			t.Errorf("task %d timeout = %d, want the lens timeout in seconds", i, task.Timeout)
+		}
+		if !strings.Contains(task.DedupKey, "review-"+lens.Identity+"-") {
+			t.Errorf("task %d dedup key = %q, want the lens identity carried", i, task.DedupKey)
+		}
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, lens := range eng.cfg.Reviews {
+		if w.Subjects[lens.Identity] != (Slot{Action: string(ActionReview), Revision: "sha-9"}) {
+			t.Errorf("subject slot %q = %+v, want review at the head", lens.Identity, w.Subjects[lens.Identity])
+		}
+	}
+	if w.Action != "" {
+		t.Errorf("main slot = %+v, want it untouched by a fan-out", *w)
+	}
+
+	// The chain closes with a rejection: fix-feedback lands in the
+	// main slot, and the lens slots survive it.
+	api.reviews[9] = []Review{
+		{Author: "lens-a", Event: ReviewChangesRequested, CommitID: "sha-9"},
+		{Author: "lens-b", Event: ReviewChangesRequested, CommitID: "sha-9"},
+	}
+	serve(t, h, signedRequest(t, "s3cret", "pull_request_review_rejected", "rejected", prPayload("o/r", 9, "rejected")))
+	w, err = store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w.Action != string(ActionFixFeedback) || w.Revision != "sha-9" {
+		t.Errorf("main slot = %+v, want fix-feedback at the head", *w)
+	}
+	for _, lens := range eng.cfg.Reviews {
+		if _, ok := w.Subjects[lens.Identity]; !ok {
+			t.Errorf("subject slot %q lost when fix-feedback was written", lens.Identity)
+		}
 	}
 }
