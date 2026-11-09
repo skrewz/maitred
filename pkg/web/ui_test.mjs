@@ -46,6 +46,24 @@ const mockIssue = {
   repository: { full_name: 'o/r' },
 };
 
+// The pull request the fan-out test opens: mergeable and open, so the
+// PR-opened row is the review fan-out — one dispatch per configured
+// lens, each recorded in its own subject slot of the watermark
+// (§forgejo/decisions/review-lenses, §forgejo/state/watermark).
+const mockPull = {
+  number: 9,
+  title: 'Test pull request',
+  state: 'open',
+  merged: false,
+  mergeable: true,
+  head: { sha: 'sha-abc' },
+  user: { login: 'implementer' },
+  labels: [],
+  body: '',
+  updated_at: '2026-09-16T13:25:18Z',
+  html_url: 'https://forge.example.com/o/r/pulls/9',
+};
+
 function startMockForgejo(port) {
   const server = createServer((req, res) => {
     const send = (code, obj) => {
@@ -64,6 +82,10 @@ function startMockForgejo(port) {
       case '/api/v1/repos/o/r/issues':
         return send(200, [mockIssue]);
       case '/api/v1/repos/o/r/pulls':
+        return send(200, []);
+      case '/api/v1/repos/o/r/pulls/9':
+        return send(200, mockPull);
+      case '/api/v1/repos/o/r/pulls/9/reviews':
         return send(200, []);
       case '/api/v1/repos/o/r/issues/7':
         return send(200, mockIssue);
@@ -503,6 +525,49 @@ async function testForgejoTracking(page, results) {
     `Last decision carries a reason (got: "${entry.decision?.reason}")`
   ));
 
+  // The review fan-out: opening a pull request dispatches one task
+  // per configured lens and records one subject slot per lens while
+  // the main watermark slot stays untouched
+  // (§forgejo/decisions/review-lenses, §forgejo/state/watermark).
+  // The tracked row must make those slots visible
+  // (§forgejo/observability/the-dashboard-view).
+  const prBody = JSON.stringify({
+    action: 'opened',
+    repository: { full_name: 'o/r' },
+    pull_request: { number: 9 },
+    sender: { login: 'alice' },
+  });
+  const prDelivery = await fetch(`${apiUrl}/v1/forgejo/all_events`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Forgejo-Event-Type': 'pull_request',
+      'X-Forgejo-Signature': forgejoSignature(prBody),
+    },
+    body: prBody,
+  });
+  results.push(assert(prDelivery.status === 204, `PR webhook delivery acknowledged (got: ${prDelivery.status})`));
+
+  let prEntry = {};
+  for (let i = 0; i < 40; i++) {
+    const r = await fetch(`${baseUrl}/api/forgejo`).catch(() => ({ ok: false }));
+    const viewNow = r.ok ? await r.json() : {};
+    const found = (viewNow.items ?? []).find(item => item.kind === 'pr' && item.number === 9);
+    if (found) { prEntry = found; break; }
+    await new Promise(res => setTimeout(res, 500));
+  }
+  const subjectIds = Object.keys(prEntry.watermark?.subjects ?? {}).sort();
+  results.push(assert(
+    subjectIds.length === 3,
+    `Fan-out records one subject slot per configured lens (got: ${subjectIds.join(', ')})`
+  ));
+  results.push(assert(
+    subjectIds.every(id =>
+      prEntry.watermark?.subjects?.[id]?.action === 'review' &&
+      prEntry.watermark?.subjects?.[id]?.revision === 'sha-abc'),
+    'Each subject slot records review at the head sha'
+  ));
+
   // The dashboard section renders the tracked issue
   // (§forgejo/observability/the-dashboard-view).
   await page.goto(baseUrl);
@@ -511,6 +576,11 @@ async function testForgejoTracking(page, results) {
   results.push(assert(sectionText.includes('o/r'), 'Forgejo section shows the repository'));
   results.push(assert(sectionText.includes('issue #7'), 'Forgejo section shows issue #7'));
   results.push(assert(sectionText.includes('implement'), 'Forgejo section shows the implement watermark'));
+  results.push(assert(sectionText.includes('pr #9'), 'Forgejo section shows the tracked pull request'));
+  results.push(assert(
+    sectionText.includes('review: reviewer-maintainability, reviewer-minimalism, reviewer-security @ sha-abc'),
+    'Watermark cell lists the fan-out subject slots (§forgejo/state/watermark)'
+  ));
 
   const stateBadges = await page.locator('#forgejo-section .badge').allTextContents();
   results.push(assert(stateBadges.some(b => b.toLowerCase() === 'open'), `Forgejo section shows an open state badge (got: ${stateBadges.join(', ')})`));

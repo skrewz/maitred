@@ -384,12 +384,34 @@
             const trackedTitle = tracked.length > 0
                 ? '<div class="forgejo-title">Forgejo engine — tracked</div>'
                 : '';
+            // The Watermark cell shows the object's main (singleton)
+            // slot plus one row per fan-out group in the subject
+            // slots: the dispatched action with the lenses it names,
+            // at the revision — so a review fan-out is visible even
+            // where no singleton dispatch preceded it
+            // (§forgejo/state/watermark, §forgejo/observability/the-dashboard-view).
+            function watermarkText(watermark) {
+                if (!watermark) return '\u2014';
+                const rows = [];
+                if (watermark.action) {
+                    rows.push(`${escapeHtml(watermark.action)} @ ${escapeHtml(watermark.revision)}`);
+                }
+                const subjects = Object.entries(watermark.subjects || {}).sort((a, b) => a[0].localeCompare(b[0]));
+                const groups = new Map();
+                for (const [identity, slot] of subjects) {
+                    const key = `${slot.action}\u0000${slot.revision}`;
+                    if (!groups.has(key)) groups.set(key, { action: slot.action, revision: slot.revision, identities: [] });
+                    groups.get(key).identities.push(identity);
+                }
+                for (const group of groups.values()) {
+                    rows.push(`${escapeHtml(group.action)}: ${group.identities.map(escapeHtml).join(', ')} @ ${escapeHtml(group.revision)}`);
+                }
+                return rows.length > 0 ? rows.join('<br>') : '\u2014';
+            }
             section.innerHTML = statusNote + trackedTitle + tracked.map(t => {
                 const stateLabel = t.merged ? 'merged' : (t.state || 'unknown');
                 const badgeClass = t.merged ? 'badge-merged' : (t.state === 'open' ? 'badge-open' : 'badge-closed');
-                const watermark = t.watermark
-                    ? `${escapeHtml(t.watermark.action)} @ ${escapeHtml(t.watermark.revision)}`
-                    : '\u2014';
+                const watermark = watermarkText(t.watermark);
                 const decision = t.decision.dispatched
                     ? `${escapeHtml(t.decision.action)} <span style="color:#64748b;">(${escapeHtml(t.decision.event)})</span>`
                     : `hold-off <span style="color:#64748b;">(${escapeHtml(t.decision.event)})</span>`;
