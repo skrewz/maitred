@@ -3470,12 +3470,14 @@ func TestMergeOptedIn(t *testing.T) {
 // issue it delivers fires the sweep's watermark-exempt row exactly as
 // one carrying the label itself does — the shape that left a fully
 // approved pull request in limbo until an operator labelled it by
-// hand. Where neither seat carries the label the decision is
-// byte-identical to the one the PR-only read made, and the delivered
-// issues never widen the merge gate itself
+// hand. Where neither seat carries the label the merge opt-in
+// precondition holds off, naming the missing label and the connected
+// issues exactly as a PR-only read holds off (s-git/maitred#179), and
+// the delivered issues never widen the merge gate itself
 // (§forgejo/decisions/merge-gate, §forgejo/reconciliation/watermark-exemptions).
 func TestDecide_MergeOptInReadFromEitherSeat(t *testing.T) {
 	watermark := &Watermark{Action: string(ActionMergeOrWait), Revision: "abc"}
+	const missingHoldOff = "an approved PR with no merge opt-in waits on a human"
 	const keyedHoldOff = "merge-or-wait already dispatched at revision abc"
 
 	// sweepState is an approved chain at head abc whose merge opt-in
@@ -3494,10 +3496,11 @@ func TestDecide_MergeOptInReadFromEitherSeat(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name     string
-		state    State
-		wantFire bool
-		wantSeat string
+		name        string
+		state       State
+		wantFire    bool
+		wantSeat    string
+		wantHoldOff string
 	}{
 		{
 			name:     "the opt-in on the PR alone fires the row as it did",
@@ -3518,12 +3521,14 @@ func TestDecide_MergeOptInReadFromEitherSeat(t *testing.T) {
 			wantSeat: "its issue other/repo#12 carries agentic-auto-merge",
 		},
 		{
-			name:  "neither seat opts in",
-			state: sweepState(nil, connectedIssueLabelled("o/r", 4, LabelSync)),
+			name:        "neither seat opts in",
+			state:       sweepState(nil, connectedIssueLabelled("o/r", 4, LabelSync)),
+			wantHoldOff: missingHoldOff + " (connected issues: o/r#4)",
 		},
 		{
-			name:  "nothing is delivered",
-			state: sweepState(nil),
+			name:        "nothing is delivered",
+			state:       sweepState(nil),
+			wantHoldOff: missingHoldOff + " (connected issues: none)",
 		},
 		{
 			name:     "the label on either seat is matched case-insensitively",
@@ -3535,8 +3540,8 @@ func TestDecide_MergeOptInReadFromEitherSeat(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := Decide(prEvent(EventReconcile, ""), tc.state, watermark)
 			if !tc.wantFire {
-				if d.Reason != keyedHoldOff {
-					t.Errorf("decision = %+v, want the revision-keyed hold-off %q unchanged", d, keyedHoldOff)
+				if !strings.Contains(d.Reason, tc.wantHoldOff) {
+					t.Errorf("decision = %+v, want the precondition hold-off naming the missing opt-in %q", d, tc.wantHoldOff)
 				}
 				return
 			}
