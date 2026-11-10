@@ -3396,7 +3396,8 @@ func connectedIssueLabelled(repo string, number int, labels ...string) Connected
 // TestMergeOptedIn pins the one predicate that answers "did this work
 // opt into merging?": the pull request carries the label, or any issue
 // it delivers does — matched case-insensitively on either seat — and
-// the seat it was found in is named so the decision log can tell a PR
+// the issue the opt-in was found on is named with it, empty when the
+// label sits on the pull request, so the decision log can tell a PR
 // opted into merging from a forest that opted in through its work item
 // (§forgejo/decisions/merge-gate).
 func TestMergeOptedIn(t *testing.T) {
@@ -3404,27 +3405,26 @@ func TestMergeOptedIn(t *testing.T) {
 		name      string
 		pr        *PullRequest
 		connected []ConnectedIssue
-		wantSeat  string
+		wantRef   string
 		want      bool
 	}{
 		{
-			name:     "the PR carries the label",
-			pr:       labelledPR("abc", LabelAgenticAutoMerge),
-			wantSeat: "the pull request",
-			want:     true,
+			name: "the PR carries the label",
+			pr:   labelledPR("abc", LabelAgenticAutoMerge),
+			want: true,
 		},
 		{
 			name:      "a delivered issue carries the label",
 			pr:        openPR("abc"),
 			connected: []ConnectedIssue{connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge)},
-			wantSeat:  "o/r#4",
+			wantRef:   "o/r#4",
 			want:      true,
 		},
 		{
 			name:      "a delivered issue in another repository carries the label",
 			pr:        openPR("abc"),
 			connected: []ConnectedIssue{connectedIssueLabelled("other/repo", 12, LabelAgenticAutoMerge)},
-			wantSeat:  "other/repo#12",
+			wantRef:   "other/repo#12",
 			want:      true,
 		},
 		{
@@ -3437,30 +3437,29 @@ func TestMergeOptedIn(t *testing.T) {
 			pr:   openPR("abc"),
 		},
 		{
-			name:     "the PR's label is matched case-insensitively",
-			pr:       labelledPR("abc", "Agentic-Auto-Merge"),
-			wantSeat: "the pull request",
-			want:     true,
+			name: "the PR's label is matched case-insensitively",
+			pr:   labelledPR("abc", "Agentic-Auto-Merge"),
+			want: true,
 		},
 		{
 			name:      "the issue's label is matched case-insensitively",
 			pr:        openPR("abc"),
 			connected: []ConnectedIssue{connectedIssueLabelled("o/r", 4, "AGENTIC-AUTO-MERGE")},
-			wantSeat:  "o/r#4",
+			wantRef:   "o/r#4",
 			want:      true,
 		},
 		{
 			name:      "the first delivered issue naming it wins",
 			pr:        openPR("abc"),
 			connected: []ConnectedIssue{connectedIssueLabelled("o/r", 4), connectedIssueLabelled("o/r", 5, LabelAgenticAutoMerge)},
-			wantSeat:  "o/r#5",
+			wantRef:   "o/r#5",
 			want:      true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			seat, ok := mergeOptedIn(tc.pr, tc.connected)
-			if ok != tc.want || seat != tc.wantSeat {
-				t.Errorf("mergeOptedIn = (%q, %t), want (%q, %t)", seat, ok, tc.wantSeat, tc.want)
+			ref, ok := mergeOptedIn(tc.pr, tc.connected)
+			if ok != tc.want || ref != tc.wantRef {
+				t.Errorf("mergeOptedIn = (%q, %t), want (%q, %t)", ref, ok, tc.wantRef, tc.want)
 			}
 		})
 	}
