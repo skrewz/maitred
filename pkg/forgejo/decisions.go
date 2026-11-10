@@ -985,22 +985,17 @@ func lensIdentities(lenses []ReviewLens) []string {
 // author is not the configured implementer identity holds off
 // (§forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention,
 // s-git/maitred#143).
-// The fix-feedback row is watermark-exempt on the sweep, and the
-// approved row is exempt wherever the work it delivers opts into
-// merging — the agentic-auto-merge label on the PR or on the issue its
-// body closes (§forgejo/decisions/merge-gate): a PR standing at a
-// fully approved chain at a frozen head sha is then re-fired whatever
-// its
-// watermark records (§forgejo/reconciliation/watermark-exemptions).
+// The fix-feedback row is watermark-exempt on the sweep; the approved
+// merge row is exempt wherever it is reached once the work it delivers
+// opts into merging — the agentic-auto-merge label on the PR or on the
+// issue its body closes (§forgejo/decisions/merge-gate) — its re-fire
+// bounded by the engine rather than by the watermark
+// (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/decisions/loop-prevention).
 // A fix-feedback dispatch that died recovers on the next sweep the
 // same way an approved auto-merge PR's merge does: the state — an
 // open, mergeable PR whose chain reports feedback at head — is
-// self-limiting, ending the moment the author pushes. The fix-feedback
-// exemption tests the event, not the state — only the sweep is exempt
-// there — while the merge row's does not: an approving chain at a
-// frozen head answers the state test on an event as truly as on the
-// sweep, so the PR-commented event sharing this function re-fires
-// merge-or-wait like the sweep does.
+// self-limiting, ending the moment the author pushes.
 func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
 	if pr != nil && prOpen(pr) && pr.Mergeable {
@@ -1067,7 +1062,11 @@ func decideChainReported(e Event, s State, w *Watermark, sweepComments bool) (De
 		// rows alone — the per-lens review and fix-feedback rows keep
 		// the sweep scoping below, because "this lens has not reported
 		// at head" is a state test an event can answer falsely
-		// mid-chain, whereas "every lens approves at head" cannot
+		// mid-chain, whereas "every lens approves at head" cannot. What bounds the re-fire is the engine, not this
+		// row: the gates ahead of it hold a gated PR at a hold-off, and the
+		// re-fire bound lets one unchanged head dispatch once per reconcile
+		// interval whichever event arrived, so a comment, or a close the
+		// cascade walked, cannot set the pace of a privileged dispatch
 		// (§forgejo/reconciliation/watermark-exemptions,
 		// §forgejo/decisions/loop-prevention). The dispatch reason
 		// names the seat the opt-in was found in
@@ -1154,8 +1153,7 @@ func prReviewGate(reviews []Review, lenses []ReviewLens, head string) reviewGate
 // shared with the PR-commented event, which decides the same state
 // under the ordinary revision-keyed guard, so an exemption keyed on
 // them is keyed on the event, not on the function that reads the
-// state. The merge-or-wait exemption is not: an approving chain at a
-// frozen head answers its state test on any path
+// state; the merge-or-wait exemption is not keyed on it at all
 // (§forgejo/reconciliation/watermark-exemptions).
 func onSweep(e Event) bool {
 	return e.Type == EventReconcile
@@ -2036,6 +2034,15 @@ func holdOffActionInadmissible(a Action, repo string) Decision {
 		return holdOff(fmt.Sprintf("action %s is inadmissible for repo %s: requires the %s role", a, repo, topic))
 	}
 	return holdOff(fmt.Sprintf("action %s is admitted by no maitred role", a))
+}
+
+// holdOffMergeReFireBound is the re-fire bound's hold-off: the exempt
+// merge row reached a state that calls for merge-or-wait, but the
+// engine already dispatched it at this revision inside one reconcile
+// interval, so the bound — not the watermark — is what holds the re-fire
+// off, and the reason says so (§forgejo/decisions/loop-prevention).
+func holdOffMergeReFireBound(revision string, interval time.Duration) Decision {
+	return holdOff(fmt.Sprintf("merge-or-wait re-fired at revision %s within the last %s: the re-fire is bounded to one per reconcile interval", revision, interval))
 }
 
 // holdOffNeverImplement and holdOffNeverReassess are the reserved-label
