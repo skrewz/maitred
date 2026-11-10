@@ -1304,7 +1304,10 @@ func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
 // member of an open landing set all dispatch nothing, each recorded
 // in the decision log with the sweep as the backstop
 // (§forgejo/decisions/merge-gate, §forgejo/decisions/sync-set). The PR
-// key's own watermark applies before dispatching; the set's own
+// key's own watermark applies before dispatching — except on the
+// exempt merge row of a PR carrying the agentic-auto-merge opt-in,
+// which re-fires at the recorded head the way the sweep's row does
+// (§forgejo/reconciliation/watermark-exemptions); the set's own
 // decision is not emitted from here — the walk follows the closed
 // node's edges only — and stays the sweep's row to make.
 func (e *Engine) dispatchCascadePR(k Key, sender string) error {
