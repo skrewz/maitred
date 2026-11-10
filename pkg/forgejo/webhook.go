@@ -319,14 +319,15 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 			// The one hop performed wherever a merge may be dispatched —
 			// the PR reviewed event, PR commented (which decides as the
 			// sweep's PR path), and the sweep's synthetic current-state
-			// event: every non-PR issue the PR blocks — relationships
-			// recorded on the blocker graph rather than inferred from the
-			// PR body — and each issue's blockers, read from that issue's
-			// own repository, no recursion. Every non-PR entry is
-			// resolved: the merge gate is not left to API ordering. A
-			// failure to resolve any connected issue is a re-fetch
-			// failure — a hold-off naming the failure, never the path's
-			// default (§forgejo/webhook/re-fetch,
+			// event: every issue connected to the PR — those its body
+			// auto-closes and those its blocking edges name, the two
+			// relations that can carry a delivery — each with its
+			// blockers, read from that issue's own repository, no
+			// recursion. Every entry is resolved: the merge gate is not
+			// left to API ordering. A failure to resolve any connected
+			// issue is a re-fetch failure — a hold-off naming the
+			// failure, never the path's default
+			// (§forgejo/webhook/re-fetch,
 			// §forgejo/decisions/merge-gate).
 			if err := e.fetchPRSetState(owner, name, ev.Number, &st); err != nil {
 				return ev, State{}, err
@@ -362,18 +363,59 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 	return ev, State{}, fmt.Errorf("unknown kind %q", ev.Kind)
 }
 
-// connectedIssues fetches the one hop the merge gate reads: every
-// non-PR issue the PR blocks — its connected issues — each carrying the
-// issues that block it. The hop is read in the connected issue's own
-// repository (cross-repo aware), one hop per connected issue, no
-// recursion; a failed read fails the whole re-fetch
-// (§forgejo/webhook/re-fetch, §forgejo/decisions/merge-gate).
-func (e *Engine) connectedIssues(owner, name string, number int) ([]ConnectedIssue, error) {
+// connectedIssues fetches the one hop the merge gate and the landing-set
+// read share: the issues connected to a pull request, each carrying the
+// issues that block it. Two relations connect them, and both are read.
+// The issues the pull request's body **auto-closes**, resolved through
+// the forge's own closing-keyword grammar, are the delivery relation the
+// authoring contract writes: a member delivers through the pull request
+// whose body closes it, and no blocking edge between the two is recorded
+// any more (§forgejo/decisions/sync-set, s-git/maitred#171). The issues
+// the pull request **blocks** are still read, because that edge carries
+// the shape a grouping issue's own PR member stands in. A read of one
+// relation alone leaves a path blind to the delivery the other sees: the
+// approval path that could not see a member's set merged its delivery
+// through merge-or-wait and left the set to the next sweep
+// (s-git/maitred#180). An issue reachable through either relation is
+// read the same way — its blockers, in its own repository (cross-repo
+// aware), one hop per connected issue, no recursion — and the rows are
+// deduplicated by repository and number, the blocking-edge rows first,
+// so an issue reachable both ways is read and counted once. A failed
+// read fails the whole re-fetch (§forgejo/webhook/re-fetch,
+// §forgejo/decisions/merge-gate) — but a reference whose issue answers
+// "not found" is a definitive answer, not a failed read: the forge
+// itself silently ignores a reference whose target does not exist, so a
+// dangling reference — a deleted issue, a mistyped number, an
+// illustrative one in prose, a repository the token cannot see — is
+// skipped like a reference naming a pull request, and only a genuine
+// read failure holds the re-fetch off. A reference into a repository
+// other than the pull request's pays the same admission test every
+// other cross-repository read pays (§forgejo/webhook/repository-roles):
+// outside the engine's remit it connects nothing, and an unknown scope
+// fails the re-fetch. A reference whose repository names a path segment
+// is refused before any URL is built, and the reads this loop makes
+// are capped (maxAutoCloseRefs), charged beside the paid read they
+// bound: a reference that costs no read — deduped against an edge
+// row, refused as a path segment, turned away by the remit test —
+// spends none of the budget and cannot truncate the read. A body
+// that asks for more reads than the cap pays cannot have its
+// relations read completely, and a partial answer presented as a
+// complete one is the fail-open #180 exists to close: the re-fetch
+// fails — a hold-off naming the failure, never a merge. The grammar
+// itself stays uncapped, a faithful mirror for the predicate's pure
+// in-memory read. Every drop — a skip, a refusal, the cap's
+// overflow — leaves a debug line naming the resolved reference, so a
+// dropped relation is visible rather than silent. A pull request is
+// never a connected issue: it is a delivery, so a reference naming
+// one is skipped.
+func (e *Engine) connectedIssues(owner, name string, number int, body string) ([]ConnectedIssue, error) {
+	prRepo := owner + "/" + name
 	blocks, err := e.api.IssueBlocks(owner, name, number)
 	if err != nil {
 		return nil, err
 	}
 	var connected []ConnectedIssue
+	seen := make(map[Key]bool)
 	for i := range blocks {
 		if blocks[i].IsPull {
 			continue // only issues connect a PR to the graph this way
@@ -383,25 +425,245 @@ func (e *Engine) connectedIssues(owner, name string, number int) ([]ConnectedIss
 		if err != nil {
 			return nil, err
 		}
+		seen[connectedKey(blocks[i].Repository, blocks[i].Number)] = true
 		connected = append(connected, ConnectedIssue{Issue: blocks[i], Blockers: blockers})
+	}
+	resolved := 0
+	for _, ref := range autoCloseRefs(body, prRepo) {
+		if !validRepoRef(ref.repo) {
+			// A reference whose repository names a path segment — "." or
+			// "..", which the grammar's character class admits — names
+			// no repository; it is refused here, before any URL is built
+			// (§forgejo/webhook/re-fetch).
+			e.logSkippedRef(prRepo, number, ref, "whose repository names a path segment")
+			continue
+		}
+		if seen[ref.key()] {
+			continue // the blocking-edge row already carries this issue
+		}
+		if !strings.EqualFold(ref.repo, prRepo) {
+			// A cross-repository reference directs the engine's token
+			// into a repository the PR author does not control, so it
+			// pays the same admission test every other cross-repository
+			// read pays (§forgejo/webhook/repository-roles): a reference
+			// naming a repository outside the engine's remit connects
+			// nothing, and an unknown scope fails the re-fetch rather
+			// than reading on.
+			r, err := e.repoRoles(ref.repo)
+			if err != nil {
+				return nil, err
+			}
+			if !r.any() {
+				e.logSkippedRef(prRepo, number, ref, "into a repository outside the engine's remit")
+				continue
+			}
+		}
+		if resolved == maxAutoCloseRefs {
+			// A reference every refusal and test has admitted — so one
+			// that wants a read the budget can no longer pay — means the
+			// relations of this body cannot be read completely. The
+			// rows collected so far may be missing the delivery, and a
+			// partial answer presented as a complete one is the
+			// fail-open #180 exists to close: the set hold-off would
+			// read it as not-a-member and merge-or-wait would land the
+			// delivery out of turn, the survivor set chosen by the body
+			// being read. The re-fetch fails — a hold-off naming the
+			// failure, never a merge (§forgejo/webhook/re-fetch).
+			e.logSkippedRef(prRepo, number, ref, "beyond the reference cap; the read is incomplete and the re-fetch fails")
+			return nil, fmt.Errorf("connected issues of %s#%d: the body names more than %d closing references that cost a read, so the connected-issues read is incomplete", prRepo, number, maxAutoCloseRefs)
+		}
+		resolved++
+		ro, rn := splitRepo(ref.repo)
+		issue, err := e.api.GetIssue(ro, rn, ref.number)
+		if err != nil {
+			if isNotFound(err) {
+				// Dangling reference: the forge ignores it too. The same
+				// answer arrives from a repository the token cannot see,
+				// so the line names the resolved reference — identifiers
+				// only, never the body (§forgejo/webhook/re-fetch).
+				e.logSkippedRef(prRepo, number, ref, "whose issue answers not found")
+				continue
+			}
+			return nil, err
+		}
+		if issue.IsPull {
+			e.logSkippedRef(prRepo, number, ref, "naming a pull request")
+			continue // a pull request delivers; it never sits as a connected issue
+		}
+		if issue.Repository == "" {
+			// The single-issue endpoint names no repository; the reference does.
+			issue.Repository = ref.repo
+		}
+		blockers, err := e.api.IssueDependencies(ro, rn, ref.number)
+		if err != nil {
+			return nil, err
+		}
+		connected = append(connected, ConnectedIssue{Issue: *issue, Blockers: blockers})
 	}
 	return connected, nil
 }
 
+// issueRef is an issue a pull request body names: the repository the
+// reference resolved to — the pull request's own for a bare #N — and the
+// number it carried.
+type issueRef struct {
+	repo   string
+	number int
+}
+
+// key is the reference's identity, compared case-insensitively on the
+// repository — the reference grammar matches a repository name that way
+// — and exactly on the number.
+func (r issueRef) key() Key {
+	return connectedKey(r.repo, r.number)
+}
+
+// logSkippedRef records one dropped closing reference — identifiers
+// only, never the body — in one place, so the wording a reader greps
+// for when a relation went missing cannot drift between its sites
+// (§forgejo/webhook/re-fetch).
+func (e *Engine) logSkippedRef(prRepo string, prNumber int, ref issueRef, why string) {
+	e.log.Debug("connected issues: skipping a closing reference "+why,
+		"pr", prRepo+"#"+strconv.Itoa(prNumber),
+		"reference", ref.repo+"#"+strconv.Itoa(ref.number))
+}
+
+// connectedKey is the dedup key of a connected issue, matching a
+// reference's identity so the same issue reached through either relation
+// is read once (§forgejo/webhook/re-fetch).
+func connectedKey(repo string, number int) Key {
+	return Key{Repo: strings.ToLower(repo), Kind: KindIssue, Number: number}
+}
+
+// isNotFound reports whether err is the forge's definitive "no such
+// object" answer — an HTTP 404 — as opposed to a failed read. The forge
+// ignores a linked reference whose target does not exist, so a read
+// told an issue is not found has succeeded in learning there is nothing
+// there (§forgejo/webhook/re-fetch).
+func isNotFound(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
+}
+
+// maxAutoCloseRefs caps the number of references connectedIssues
+// resolves. The authoring contract needs one or two; the cap bounds
+// the per-reference fan-out the approval path pays (one issue read and
+// one blockers row per resolved reference) against a body written to
+// cost the engine the delivery (§forgejo/webhook/re-fetch). It is
+// charged where that fan-out happens — beside the issue read — so a
+// reference the loop drops before reaching the API spends none of the
+// budget, and eight means eight reads rather than eight references
+// the body happened to name first. A reference that survives every
+// refusal and test but meets the cap marks the read as incomplete,
+// and the re-fetch fails on it rather than answering with the rows
+// it happened to collect: which references survive must never be
+// decided by the body being read. The cap belongs to that resolving
+// loop, not to the grammar: the predicate's read of the same body is
+// pure in-memory matching that costs nothing per reference, and #180
+// asks nothing of it.
+const maxAutoCloseRefs = 8
+
+// autoCloseRefs lists the issues a pull request body auto-closes, in
+// order of first appearance and without duplicates — the grammar read,
+// with no decision about what the engine can afford to resolve: every
+// distinct reference the body names is returned, and what to do with
+// the ninth is its caller's, taken where the cost is paid. The grammar
+// is the one prAutoClosesIssue applies and the forge itself honours:
+// the default closing keywords, a bare #N resolved in the pull
+// request's own repository and an owner/repo#N in the repository it
+// names (https://forgejo.org/docs/latest/user/linked-references/,
+// §forgejo/decisions/sync-set). Go's RE2 has no lookahead, so the
+// pattern consumes the character that terminates a match; the scan
+// rewinds to that character's start the way the forge's scanner rewinds
+// over the whitespace its match ate
+// (https://codeberg.org/forgejo/forgejo/src/branch/main/modules/references/references.go),
+// so two references separated by nothing but a newline both resolve.
+// A reference's repository carries its canonical identity, lowercased:
+// the grammar matches repository names case-insensitively, the dedup
+// key (issueRef.key) lowercases, and the scope lookup matches
+// case-insensitively, so one casing decides the identity everywhere.
+// A qualified reference whose repository names a path segment — "." or
+// "..", the grammar's class admits dots — is carried like any other;
+// connectedIssues refuses it before any URL is built.
+func autoCloseRefs(body, prRepo string) []issueRef {
+	var refs []issueRef
+	seen := make(map[Key]bool)
+	for pos := 0; pos < len(body); {
+		m := closeKeywordRef.FindStringSubmatchIndex(body[pos:])
+		if m == nil {
+			break
+		}
+		match := pos
+		if m[0] == 0 && pos > 0 && !isRefLead(body[pos]) {
+			// The pattern's ^ alternative matches at the start of every
+			// rewound slice, but the forge reads a reference's lead
+			// against the whole message: no whitespace or bracket
+			// before the keyword means no reference here. Step one byte
+			// and let the next scan find the real lead, if any.
+			pos++
+			continue
+		}
+		// m[6] bounds the start of the terminator the match consumed —
+		// one character, or the empty end of the body. The terminator
+		// group always participates (its $ alternative matches empty at
+		// the end) and always starts at least one byte past the match
+		// start (the keyword and #N sit between), so either way the
+		// cursor advances.
+		pos = match + m[6]
+		number, err := strconv.Atoi(body[match+m[4] : match+m[5]])
+		if err != nil {
+			continue
+		}
+		repo := prRepo
+		if m[2] >= 0 {
+			repo = body[match+m[2] : match+m[3]]
+		}
+		ref := issueRef{repo: strings.ToLower(repo), number: number}
+		if seen[ref.key()] {
+			continue
+		}
+		seen[ref.key()] = true
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
+// validRepoRef reports whether a reference's repository is a plain
+// owner/repo pair. The grammar's character class admits dots, and the
+// resolved string reaches the API URL, so "." and ".." segments are
+// refused (§forgejo/webhook/re-fetch).
+func validRepoRef(s string) bool {
+	owner, name := splitRepo(s)
+	if owner == "" || name == "" || strings.ContainsRune(name, '/') {
+		return false
+	}
+	return owner != "." && owner != ".." && name != "." && name != ".."
+}
+
+// isRefLead reports whether b can stand at the start of a closing
+// reference: whitespace or an opening bracket, the forge's leading
+// context (https://forgejo.org/docs/latest/user/linked-references/).
+func isRefLead(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\f' || b == '(' || b == '['
+}
+
 // fetchPRSetState assembles the state the approval path's sync-set
-// hold-off and the merge gate read for a pull request: every non-PR
-// issue the PR blocks, each with its blockers, and the landing-set
-// membership — the open sync issues it belongs to, read through a
-// connected member's membership edges or, where the PR stands in a
-// grouping issue's own blockers, through that edge. Both paths that can
-// dispatch merge-or-wait for a PR build this state here, the event's
-// re-fetch and the unblock cascade's PR leg, so the hold-off cannot see
-// membership on one and be blind to it on the other: a member of an
-// open set never merges on its own, whichever direction the approval
-// arrived from (§forgejo/webhook/re-fetch, §forgejo/decisions/sync-set,
-// §forgejo/decisions/unblock-cascade).
+// hold-off and the merge gate read for a pull request: its connected
+// issues — those its body auto-closes and those its blocking edges name
+// — each with its blockers, and the landing-set membership, the open
+// sync issues it belongs to, read through a connected member's
+// membership edges or, where the PR stands in a grouping issue's own
+// blockers, through that edge. Both paths that can dispatch
+// merge-or-wait for a PR build this state here, the event's re-fetch and
+// the unblock cascade's PR leg, so the hold-off cannot see membership on
+// one and be blind to it on the other: a member of an open set never
+// merges on its own, whichever direction the approval arrived from. The
+// body the references are read from is the pull request's own, already
+// fetched, so a delivery that names no issue costs no read beyond the
+// edge hop it always did (§forgejo/webhook/re-fetch,
+// §forgejo/decisions/sync-set, §forgejo/decisions/unblock-cascade).
 func (e *Engine) fetchPRSetState(owner, name string, number int, st *State) error {
-	connected, err := e.connectedIssues(owner, name, number)
+	connected, err := e.connectedIssues(owner, name, number, st.PR.Body)
 	if err != nil {
 		return err
 	}
@@ -556,12 +818,15 @@ func (e *Engine) syncMembers(blockers []Issue) ([]SyncMember, error) {
 // repositories, terminated by a non-word character or the end
 // (https://forgejo.org/docs/latest/user/linked-references/ and
 // https://codeberg.org/forgejo/forgejo/src/branch/main/models/references/references.go).
-// The engine mirrors the forge's **default** keyword set: an instance
-// that reconfigures the keywords reads differently than the predicate
-// does — a known limitation of a read-only client
-// (§forgejo/decisions/sync-set).
+// The terminator is captured so autoCloseRefs can rewind to it: Go's
+// RE2 has no lookahead, and without the rewind a reference terminated
+// by nothing but a newline would eat the next reference's leading
+// whitespace and the pair would resolve to one. The engine mirrors the
+// forge's **default** keyword set: an instance that reconfigures the
+// keywords reads differently than the predicate does — a known
+// limitation of a read-only client (§forgejo/decisions/sync-set).
 var closeKeywordRef = regexp.MustCompile(
-	`(?i)(?:\s|^|\(|\[)(?:closed|closes|close|fixed|fixes|fix|resolved|resolves|resolve):? (?:([0-9a-zA-Z-_.]+/[0-9a-zA-Z-_.]+))?#([0-9]+)(?:[^0-9A-Za-z]|$)`)
+	`(?i)(?:\s|^|\(|\[)(?:closed|closes|close|fixed|fixes|fix|resolved|resolves|resolve):? (?:([0-9a-zA-Z-_.]+/[0-9a-zA-Z-_.]+))?#([0-9]+)([^0-9A-Za-z]|$)`)
 
 // prAutoClosesIssue reports whether the pull request body auto-closes
 // the given issue — the relation the forge honours by closing the
@@ -569,18 +834,12 @@ var closeKeywordRef = regexp.MustCompile(
 // predicate reads a member's delivering PR through
 // (§forgejo/decisions/sync-set, s-git/maitred#171). A bare #N
 // resolves in the pull request's own repository; a qualified
-// owner/repo#N in the repository it names.
+// owner/repo#N in the repository it names. The resolution itself lives
+// in autoCloseRefs, so the predicate's read and the approval path's
+// read cannot drift apart on how the grammar resolves a reference.
 func prAutoClosesIssue(body, prRepo, issueRepo string, issueNumber int) bool {
-	for _, m := range closeKeywordRef.FindAllStringSubmatch(body, -1) {
-		number, err := strconv.Atoi(m[2])
-		if err != nil || number != issueNumber {
-			continue
-		}
-		repo := m[1]
-		if repo == "" {
-			repo = prRepo
-		}
-		if strings.EqualFold(repo, issueRepo) {
+	for _, ref := range autoCloseRefs(body, prRepo) {
+		if ref.number == issueNumber && strings.EqualFold(ref.repo, issueRepo) {
 			return true
 		}
 	}

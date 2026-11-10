@@ -228,7 +228,11 @@ snapshot. The reconciliation sweep refreshes it from the
 listing it already enumerates (§forgejo/reconciliation/the-sweep), and an
 event path that finds the cache empty or older than one
 `reconcile_interval` refreshes it with a single repository listing before
-deciding (§forgejo/client/operations). Entries are therefore never older
+deciding (§forgejo/client/operations). The snapshot is looked up by
+name **case-insensitively** — the way the forge addresses a repository
+and the way the closing-reference grammar matches one — so a
+reference's spelling and a listing's full name agree on the roles.
+Entries are therefore never older
 than one interval: a repository whose topic has just been removed is not
 acted on for longer than that. A repository absent from the snapshot holds
 no role — the test **fails closed**. Deliveries that find the cache
@@ -321,15 +325,89 @@ For each decision event, the re-fetch assembles the state
 - **PR events** — the PR itself, and its reviews, for the review
   transitions and for PR comments (which decide as reconcile). For PR
   reviewed, PR commented, and the sweep's synthetic
-  current-state event for a PR, the connected issues — the non-PR issues
-  the PR blocks, read from the issue-blocks surface, each carrying its
-  own repository, which may differ from the PR's — and each issue's
+  current-state event for a PR, the connected issues — the issues the
+  PR's **body auto-closes** and the non-PR issues it **blocks**, read
+  through the forge's closing-keyword grammar and the issue-blocks
+  surface respectively, each carrying its own repository, which may
+  differ from the PR's — and each issue's
   blockers as well: one hop per connected issue, no recursion, the input
   to the merge gate (§forgejo/decisions/merge-gate,
   §forgejo/decisions/inputs), consulted wherever a merge may be
   dispatched — the PR
   reviewed event and the sweep's PR path (which PR commented also
-  decides as). Every non-PR entry is resolved: the gate's decision is
+  decides as).
+
+  Two relations connect an issue to a delivery, and **both are read**.
+  The body's auto-close references are the relation the authoring
+  contract writes: a landing-set member delivers through the pull
+  request whose body closes it, and no blocking edge between the member
+  and its delivery is recorded (§forgejo/decisions/sync-set,
+  s-git/maitred#171). The blocking edges still carry the **direct**
+  shape below, where a pull request stands in a grouping issue's own
+  blockers. Reading one relation alone leaves a path blind to what the
+  other sees, and the predicate and the gate must decide on the same
+  membership: an approval path that could see only the edges found a
+  member's delivery connected to nothing, merged it through
+  `merge-or-wait`, and left the set to the next sweep
+  (s-git/maitred#180). A bare `#N` resolves in the PR's own repository,
+  an `owner/repo#N` in the repository it names, exactly as the forge
+  resolves it
+  (https://forgejo.org/docs/latest/user/linked-references/); because
+  Go's regexp engine has no lookahead, the scan rewinds over the
+  terminator a match consumes, as the forge's scanner does, so two
+  references separated by nothing but a newline both resolve
+  (s-git/maitred#185). A reference whose repository names a path
+  segment — `.` or `..`, which the grammar's character class admits —
+  is carried by the grammar like any other and **refused at
+  resolution**, before any URL is built and with a debug line naming
+  it: no body-derived string reaches the API URL unvalidated
+  (s-git/maitred#185 review 1304). A reference naming a pull request connects
+  nothing, a pull request being a delivery and never a connected issue,
+  and a reference whose issue answers **not found** — a deleted issue, a
+  mistyped number, an illustrative one in prose — is skipped the same
+  way: the forge itself silently ignores a reference whose target does
+  not exist, and a definitive "no such issue" is a read that succeeded
+  in learning there is nothing there, not a failed read to fail closed
+  on. The same answer arrives from a **repository the token cannot
+  read** — Forgejo guards private repositories with a 404 — so a
+  reference into such a repository reads as connecting nothing. That is
+  a defensible reading for a read-only client, but it is the case where
+  a real relation goes unseen, so every drop — a skip, a refusal, a
+  truncation — leaves a debug line naming the resolved repository and
+  number — identifiers only, never the body. A cross-repository
+  reference additionally pays
+  the **remit** test every other cross-repository read pays
+  (§forgejo/webhook/repository-roles): the engine's token must hold a
+  role in the named repository, or the reference connects nothing and a
+  stranger's prose directs no privileged read; an unknown scope fails
+  the re-fetch rather than reading on. The repository name a reference
+  resolved to carries one canonical identity — lowercased — matching
+  the grammar's case-insensitive name test, the dedup key and the
+  scope cache's case-insensitive lookup, so a mixed-case spelling of a
+  repository inside the remit is neither read twice nor logged as
+  outside it (s-git/maitred#185 review 1304). The reads the approval
+  path makes are **capped** (eight), capped in the
+  resolving loop where the per-reference cost is paid and not in the
+  grammar: the authoring contract needs one or two, and the cap bounds
+  the fan-out against a body written to cost the engine the delivery;
+  the predicate's read of the same body is pure in-memory matching
+  that costs nothing per reference and stays uncapped, a faithful
+  mirror of the forge. The budget is charged beside the call it bounds,
+  so a reference that costs no read — deduped against a blocking-edge
+  row, refused as a path segment, turned away by the remit test —
+  spends none of it, and a body of repeats followed by genuinely-new
+  references resolves what it names rather than reading as
+  disconnected (s-git/maitred#185 review 1338). The cap's **overflow
+  fails the re-fetch**: a body that asks for more paid reads than the
+  cap pays cannot have its relations read completely, and a partial
+  answer presented as a complete one would let the survivor set be
+  chosen by the body being read — the deliberate fail-open form #180
+  exists to close. The first reference the loop can no longer pay for
+  leaves a debug line and the re-fetch errors with a hold-off naming
+  the failure: the failure mode is a hold-off, never a merge
+  (s-git/maitred#185 review 1365). An issue reachable both ways is
+  read once, the blocking-edge rows first, so it is counted once.
+  Every entry is resolved: the gate's decision is
   never left to the order the listing happens to return; a failed read
   fails the re-fetch — a hold-off naming the failure, never "no
   blockers". The hop is performed wherever a merge may be dispatched,
@@ -338,7 +416,11 @@ For each decision event, the re-fetch assembles the state
   gate's rows. An opened pull request therefore costs one graph walk
   fewer than it did, and the sweep's PR path performs exactly the one
   hop the merge gate needs — no walk that served only the retired
-  action (§forgejo/decisions/commissioning, s-git/maitred#151). A pull
+  action (§forgejo/decisions/commissioning, s-git/maitred#151). The body
+  the references are read from is the PR's own, already fetched, so a
+  delivery naming no issue costs no read beyond the hop it always did,
+  and the reads an added reference costs are one issue and one blockers
+  row — never a listing. A pull
   request opened against a connected issue blocked by an open
   `ideation` issue is decided on its own state — `review` or `rebase` —
   and no graph walk runs for it at all (§forgejo/decisions/transition-table).

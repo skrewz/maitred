@@ -325,20 +325,25 @@ forbid. The paths that dispatch no merge read no graph at all — the
 cheap — and the next review submission, PR comment or sweep applies the
 gate (§forgejo/webhook/re-fetch).
 
-A PR's **connected issues** are the non-PR issues the PR blocks
-(§forgejo/webhook/re-fetch) — **recorded** blocker relationships, never
-inferred ones. Forgejo creates no PR→issue dependency from a `Fixes #NN`
+A PR's **connected issues** are the issues its body auto-closes and the
+non-PR issues it blocks
+(§forgejo/webhook/re-fetch). The blocking edges among them are
+**recorded** relationships. Forgejo creates no PR→issue dependency from a
+`Fixes #NN`
 keyword in a PR body, and the engine's client is read-only
-(§forgejo/client/operations), so the dependency must be recorded when
+(§forgejo/client/operations), so an edge must be recorded when
 the PR is opened: the workflow the `implement` prompt dispatches — the
 `/issue-implementer` invocation (§forgejo/config/canned-prompts) —
 records `issue-block <PR> → <issue>` for each issue the PR closes,
 cross-repo targets included, and the engine only reads it. That
 instruction lives in the canned prompts, deployed outside this
 repository (§forgejo/config/loading); **it does not exist yet**, and
-until it does the merge gate sees no blockers — a PR whose opening
-recorded no dependency has no connected issues and merges as the graph
-states.
+until it does the recorded half of the read contributes nothing. It no
+longer decides whether the gate has anything to look at: the auto-close
+reference the body carries is read through the forge's own grammar
+wherever a merge may be dispatched, so a PR whose opening recorded no
+dependency still connects the issues it closes, and their blockers are
+the gate's rows (§forgejo/webhook/re-fetch, s-git/maitred#180).
 
 There is no longer a single "latest review" that decides: the
 review-following rows read the **chain** — each lens's latest
@@ -476,10 +481,14 @@ request reviews (§forgejo/decisions/transition-table).
 ## Merge gate
 
 `merge-or-wait` is dispatched **only when no connected issue of the PR
-has an open blocker**. A PR's **connected issues** are the non-PR issues
-the PR blocks (its dependency rows, read cross-repo where the connected
-issue lives elsewhere); an issue's **blockers** are the issues that
-block it. A go-ahead label on the issue or the PR authorises merging on
+has an open blocker**. A PR's **connected issues** are the issues its
+body auto-closes, resolved through the forge's closing-keyword grammar,
+and the non-PR issues
+it blocks (its dependency rows, read cross-repo where the connected
+issue lives elsewhere) — the two relations that connect a delivery, read
+as one list (§forgejo/webhook/re-fetch); an issue's **blockers** are the
+issues that block it. A go-ahead label on the issue or the PR authorises
+merging on
 its own — it does not authorise merging **past a blocker**. The gate is
 the merge-path twin of the open-blocker rule that holds off `reassess`
 (§forgejo/decisions/transition-table), and every path that dispatches
@@ -488,9 +497,9 @@ the sweep's PR path, and the held PR the unblock cascade unblocks.
 
 The PR's **own entry** in a connected issue's blocker list is not a
 blocker: the PR *is* the connected issue's delivery vehicle (the
-issue-blocks record that connects them makes the PR one of the issue's
-blockers), so the test excludes the PR itself and counts every other
-open blocker.
+issue-blocks record or the body's auto-close reference that connects
+them makes the PR that issue's delivery), so the test excludes the PR
+itself and counts every other open blocker.
 
 A blocked merge **holds off**. The engine closes no pull request on any
 path: work that should not land is held from landing, and work that
@@ -507,7 +516,11 @@ recorded, the gate sees no blockers and merges as before. The
 recording half lives outside the decision function (the workflow the
 `implement` prompt dispatches records `issue-block PR → issue`,
 cross-repo targets included); until that record exists the gate
-cannot fire — it never blocks more than the graph states.
+cannot fire — it never blocks more than the graph states. Where the
+connection is the body's auto-close reference no record is needed for
+the gate to see the issue at all: the reference is the record, and the
+issue's own blockers still decide
+(§forgejo/webhook/re-fetch, s-git/maitred#180).
 
 ## Sync set
 
@@ -593,7 +606,14 @@ repository whose body carries a closing reference to the member —
 read as the forge itself reads it
 (https://forgejo.org/docs/latest/user/linked-references/). This is
 the relation the forge honours by closing the member when the
-delivery merges, and it sits wholly on the pull-request side. No
+delivery merges, and it sits wholly on the pull-request side. The
+approval path reads the same relation: its connected-issue read
+includes the issues the pull request's body auto-closes, so a member
+that records no blocking edge stays visible to the hold-off, the set is
+emitted on the approval that completes it instead of at the next sweep,
+and `merge-or-wait` never lands a set's delivery out of turn — one
+relation for a delivery, read one way by the predicate, the hold-off and
+the merge gate alike (§forgejo/webhook/re-fetch, s-git/maitred#180). No
 blocking edge between a member and its delivery is required,
 recorded, or consulted: `blocks` keeps its one meaning — *you cannot
 proceed while this is open* — and the edge that would make a pull
@@ -900,7 +920,9 @@ conditions; the PR's reviews, for the review transitions; the PR's labels,
 for the label-triggered review override
 (§forgejo/decisions/label-triggered-review); for PR reviewed, PR
 commented, the sweep's PR path and the unblock cascade's PR leg, the
-issues the PR blocks and each issue's blockers, for the merge gate
+**connected issues** — the union of the issues the PR's body
+auto-closes and the issues it blocks, each with its blockers
+(§forgejo/webhook/re-fetch) — for the merge gate
 (§forgejo/decisions/merge-gate) and the landing-set read
 (§forgejo/decisions/sync-set); and, for close events, the blocker-graph
 root — the closed issue — with

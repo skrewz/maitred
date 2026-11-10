@@ -182,13 +182,14 @@ type State struct {
 	Blockers []Issue
 	// ConnectedPRs are the open pull requests connected to State.Issue.
 	ConnectedPRs []PullRequest
-	// ConnectedIssues are the non-PR issues a pull request blocks, each
-	// with its own blockers: the input to the merge gate
+	// ConnectedIssues are the issues connected to a pull request — those
+	// its body auto-closes and those its blocking edges name — each with
+	// its own blockers: the input to the merge gate
 	// (§forgejo/decisions/merge-gate) and to the landing-set read
 	// (§forgejo/decisions/sync-set). Read for PR reviewed, PR commented,
 	// the sweep's synthetic PR event, and the unblock cascade's PR leg —
-	// every path that can dispatch a merge; empty when the PR's opening
-	// recorded no dependency.
+	// every path that can dispatch a merge; empty when neither relation
+	// connects an issue.
 	ConnectedIssues []ConnectedIssue
 	// SyncMembers are the blocking issues of the sync issue in
 	// State.Issue, each with the state of its delivering PR: the sync
