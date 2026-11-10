@@ -4,18 +4,9 @@
 package queue
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 )
-
-// ErrPriorityRejected is the sentinel an adapter returns when the queue
-// refused the tier a task carried — a refusal of the field's value, not of
-// the task. A caller asks with errors.Is and can retry once with the field
-// left off, so an ask for a tier never holds the work back
-// (§forgejo/webhook/vip-priority). Every other enqueue failure stays an
-// ordinary one and is not a tier question.
-var ErrPriorityRejected = errors.New("queue rejected the task's priority")
 
 // TaskQueueProvider is the interface that any queue system must implement
 // to receive tasks from the trigger engine. This decouples the engine from
@@ -54,14 +45,17 @@ type Task struct {
 	// "teacher" or "orangutan" and answers 400 for any other non-empty
 	// value (see the hotelier API, POST /api/tasks and
 	// POST /api/tasks/{id}/priority in
-	// https://github.com/skrewz/hotelier/blob/main/README.md; the
-	// submit handler validates the field with the same vocabulary).
-	// Empty means nothing was decided: the field is left off the wire
-	// body and the queue's own default tier applies, so the payload an
-	// unset priority produces is the payload maitred produced before
-	// the field existed. forgejoeng sets it where the `vip` label asks
-	// for the teacher tier (§forgejo/webhook/vip-priority); every other
-	// dispatch site leaves it unset.
+	// https://github.com/skrewz/hotelier/blob/main/README.md; the server
+	// validates the field against that vocabulary in handleCreateTask,
+	// verified at
+	// https://github.com/skrewz/hotelier/blob/17b4f6d1a135eb4bbad8a35e56f47ce376184d49/internal/server/server.go#L2023
+	// as of this writing). Empty means nothing was decided: the field is
+	// left off the wire body and the queue's own default tier applies,
+	// so the payload an unset priority produces is the payload maitred
+	// produced before the field existed. forgejoeng sets it where the
+	// `vip` label asks for the teacher tier
+	// (§forgejo/webhook/vip-priority); every other dispatch site leaves
+	// it unset.
 	Priority string `json:"priority,omitempty"`
 }
 

@@ -325,15 +325,16 @@ the level every other degraded continuation in the engine logs at.
 Holding the work back over an annotation would leave the queue poorer and
 the issue unattended, which is the opposite of what the label asks for.
 
-A tier the queue **refuses** is degraded the same way, and only then: an
-enqueue the queue rejects because of the priority it carries
-(§overview/scope — the queue owns the vocabulary) is retried once with the
-field left off, with one warn line saying the tier was refused, so the
-label can never leave an issue's dispatches failing forever. Any other
-enqueue failure — a queue that is down, a persona that does not exist —
-is not a tier question: it is returned as it stands, the watermark records
-nothing and the sweep retries it, exactly as it does for an unlabelled
-dispatch.
+The tier is an **ask**, made in the queue's own words: the one value the
+engine ever puts in the field is a word the queue documents
+(§overview/scope — the queue owns that vocabulary), so a refused tier is not
+a state the label can create and the engine writes no fallback for one. If
+the queue's vocabulary ever changes, the engine's word changes with it —
+that is a queue-side change with its own consequences, not a condition a
+dispatch path papers over. An enqueue that fails, for the field or for
+anything else — a queue that is down, a persona that does not exist — is
+the ordinary failure every path already handles: the watermark records
+nothing and the sweep retries.
 
 ## Event mapping
 

@@ -26,8 +26,8 @@ const PriorityTeacher = "teacher"
 // dispatch: nothing is cached in engine state, so attaching `vip` lifts the
 // next scheduling and removing it lowers that scheduling, with no
 // retroactive change to anything already queued. What the walk pays per
-// path, and what a failed read or a refused tier costs, is the section's to
-// say (§forgejo/webhook/vip-priority).
+// path, and what a failed read costs, is the section's to say
+// (§forgejo/webhook/vip-priority).
 func (e *Engine) taskPriority(st State) string {
 	if e.vipObject(st) {
 		return PriorityTeacher

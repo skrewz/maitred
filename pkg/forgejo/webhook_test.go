@@ -349,26 +349,11 @@ type fakeQueue struct {
 	mu    sync.Mutex
 	tasks []*queue.Task
 	err   error
-
-	// priorityErr, when set, refuses only tasks that ask for a tier —
-	// so a test can stand in for a queue that rejects the priority
-	// field while accepting the default (§forgejo/webhook/vip-priority).
-	// It must wrap queue.ErrPriorityRejected: that is how the engine
-	// tells a refused tier from any other enqueue failure.
-	priorityErr error
-
-	// attempts counts every AddTask call, retries included, so a test
-	// can tell a degraded dispatch from a doubled one.
-	attempts int
 }
 
 func (q *fakeQueue) AddTask(task *queue.Task) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.attempts++
-	if task.Priority != "" && q.priorityErr != nil {
-		return q.priorityErr
-	}
 	if q.err != nil {
 		return q.err
 	}
