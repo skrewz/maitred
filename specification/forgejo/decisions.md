@@ -292,7 +292,7 @@ re-firing (§forgejo/decisions/label-triggered-review).
 | review submitted (every lens approved at head, the PR carries `agentic-auto-merge`, no connected issue has an open blocker) | `merge-or-wait` |
 | review submitted (every lens approved at head, the PR carries no `agentic-auto-merge` label, no connected issue has an open blocker) | hold off — the reason names the missing opt-in and the connected issues: an approved PR with no merge opt-in waits on a human (§forgejo/decisions/merge-gate, s-git/maitred#179) |
 | review submitted (every lens approved at head, a connected issue has an open blocker) | hold off — the reason names the open blockers (§forgejo/decisions/merge-gate) |
-| review submitted (a connected issue carries `agentic-sync-merge`, or the PR itself stands in an open grouping issue's blockers) | hold off, naming the sync set — the member never merges on its own; the member's open sync sets are emitted for a `sync` dispatch against their grouping issues. A member of **no open set** — its set retired — decides on through the merge gate, its label stale rather than a gate; a member whose work also carries `agentic-auto-merge` — on the PR or on the issue it delivers — holds off naming both opt-ins and the seat the merging one sits in, whatever sets exist (§forgejo/decisions/sync-set, §forgejo/decisions/merge-gate) |
+| review submitted (a connected issue carries `agentic-sync-merge`, or the PR itself stands in an open grouping issue's blockers) | hold off, naming the sync set — the member never merges on its own; the member's open sync sets are emitted for a `sync` dispatch against their grouping issues. A member of **no open set** — its set retired — decides on through the merge gate, its label stale rather than a gate; a member whose work also carries `agentic-auto-merge` — on the PR or on the issue it delivers — holds off whatever sets exist, the reason naming the set it belongs to, the merging opt-in and the seat that opt-in sits in (§forgejo/decisions/sync-set, §forgejo/decisions/merge-gate) |
 | review submitted (a lens has not reported at head) | `review` fan-out for the lenses still owed; fix-feedback holds off naming the outstanding lenses (§forgejo/decisions/review-lenses) |
 | review submitted (every lens reported at head, comment reports only) | hold off — the sweep is the row that turns comment reports into fix-feedback (§forgejo/decisions/transition-table) |
 | PR merged | unblock cascade (for the connected issue) |
@@ -633,8 +633,9 @@ stale-labelled member's PR with neither waits on a human, its reason
 naming the missing label (§forgejo/decisions/merge-gate,
 s-git/maitred#179). A member whose work carries `agentic-auto-merge`
 alongside `agentic-sync-merge` is the error state the hold-off exists
-to contain: it holds off whatever sets exist, the reason naming both
-opt-ins and the seat the merging one sits in.
+to contain: it holds off whatever sets exist, the reason naming the set
+the member belongs to, the merging opt-in and the seat that opt-in
+sits in.
 
 A member delivers its change through the open pull request that
 **auto-closes** it: an open pull request of the member's own
@@ -734,8 +735,8 @@ the member or on the pull request delivering it — when it joins a set
 has the label removed by the decomposer — a member
 with both labels is the error state the approval hold-off exists to
 contain: it is never merged by `merge-or-wait`; landing is the set's
-decision, and the hold-off names the condition by both opt-ins and the
-seat the merging one sits in.
+decision, and the hold-off names the set, both opt-ins and the seat the
+merging one sits in.
 Retiring a set therefore includes removing `agentic-sync-merge` from
 its former members: the label is only ever a gate while an open set
 stands behind it.

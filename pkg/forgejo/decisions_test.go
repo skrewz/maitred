@@ -3578,36 +3578,87 @@ func TestDecide_MergeOptInReadFromEitherSeat(t *testing.T) {
 
 // TestDecide_SyncSetDualOptInReadFromEitherSeat: the hold-off that
 // contains a member opted into both landing routes asks the merging
-// question through the same predicate the merge row asks it, so the two
-// reads cannot disagree about the same pull request: a direct member
-// whose merging opt-in sits on the issue it delivers holds off naming
-// the authoring error and the seat the opt-in was found in
+// question through the same predicate the merge row asks it, whatever
+// shape the membership arrived in, so the two reads cannot disagree
+// about the same pull request: it holds off naming the set it belongs
+// to, the merging opt-in and the seat that opt-in sits in, whether the
+// membership came from the PR's own edge into a grouping issue or from
+// a connected issue carrying the member label
 // (§forgejo/decisions/sync-set, §forgejo/decisions/merge-gate).
 func TestDecide_SyncSetDualOptInReadFromEitherSeat(t *testing.T) {
-	t.Run("the direct member's opt-in on a delivered issue names the error", func(t *testing.T) {
-		state := directPRMemberState(openPR("abc"), 11)
-		state.ConnectedIssues = append(state.ConnectedIssues, connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge))
-		d := Decide(prEvent(EventPRReviewed, "carol"), state, nil)
-		if d.Action != "" || !d.HoldOff() {
-			t.Fatalf("decision = %+v, want a hold-off dispatching nothing", d)
-		}
-		for _, want := range []string{"sync set", "authoring error", "o/r#4", LabelAgenticAutoMerge} {
-			if !strings.Contains(d.Reason, want) {
-				t.Errorf("hold-off reason = %q, want it to name %q", d.Reason, want)
+	for _, tc := range []struct {
+		name  string
+		state State
+		want  []string
+	}{
+		{
+			name: "the direct member's opt-in on a delivered issue names the error",
+			state: func() State {
+				state := directPRMemberState(openPR("abc"), 11)
+				state.ConnectedIssues = append(state.ConnectedIssues, connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge))
+				return state
+			}(),
+			want: []string{"sync set", "authoring error", "o/r#4", LabelAgenticAutoMerge},
+		},
+		{
+			// The membership the approval side reads off a connected
+			// issue's labels: the PR is no grouping issue's blocker, so
+			// nothing but this read names the opt-in it carries.
+			name: "an indirect member's opt-in on the pull request names the error",
+			state: State{
+				ReviewLenses:    testLenses,
+				PR:              labelledPR("abc", LabelAgenticAutoMerge),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberConnected(4, 11)},
+			},
+			want: []string{"sync set", "authoring error", "the pull request carries", LabelAgenticAutoMerge},
+		},
+		{
+			name: "an indirect member's opt-in on a delivered issue names the seat",
+			state: State{
+				ReviewLenses:    testLenses,
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberConnected(4, 11), connectedIssueLabelled("o/r", 5, LabelAgenticAutoMerge)},
+			},
+			want: []string{"sync set", "authoring error", "o/r#5", LabelAgenticAutoMerge},
+		},
+		{
+			name: "a direct member with no merging opt-in is held off by membership alone",
+			state: func() State {
+				state := directPRMemberState(openPR("abc"), 11)
+				state.ConnectedIssues = append(state.ConnectedIssues, connectedIssueLabelled("o/r", 4))
+				return state
+			}(),
+		},
+		{
+			name: "an indirect member with no merging opt-in is held off by membership alone",
+			state: State{
+				ReviewLenses:    testLenses,
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberConnected(4, 11)},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := Decide(prEvent(EventPRReviewed, "carol"), tc.state, nil)
+			if d.Action != "" || !d.HoldOff() {
+				t.Fatalf("decision = %+v, want a hold-off dispatching nothing", d)
 			}
-		}
-	})
-	t.Run("a direct member with no merging opt-in is held off by membership alone", func(t *testing.T) {
-		state := directPRMemberState(openPR("abc"), 11)
-		state.ConnectedIssues = append(state.ConnectedIssues, connectedIssueLabelled("o/r", 4))
-		d := Decide(prEvent(EventPRReviewed, "carol"), state, nil)
-		if !d.HoldOff() {
-			t.Fatalf("decision = %+v, want the set hold-off", d)
-		}
-		if strings.Contains(d.Reason, "authoring error") {
-			t.Errorf("hold-off reason = %q, want no double opt-in named: the work is opted into the set alone", d.Reason)
-		}
-	})
+			if len(tc.want) == 0 {
+				if strings.Contains(d.Reason, "authoring error") {
+					t.Errorf("hold-off reason = %q, want no double opt-in named: the work is opted into the set alone", d.Reason)
+				}
+				return
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(d.Reason, want) {
+					t.Errorf("hold-off reason = %q, want it to name %q", d.Reason, want)
+				}
+			}
+		})
+	}
 }
 
 // TestDecide_SweepReviewRowsAreWatermarkExempt: the sweep's rows for

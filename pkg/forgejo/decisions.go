@@ -1540,9 +1540,9 @@ func openBlockers(blockers []Issue) []Issue {
 // (§forgejo/decisions/sync-set). Two readings of the label decide
 // alone: a member whose work also carries agentic-auto-merge — on the
 // PR or on the issue it delivers — is the authoring error the hold-off
-// exists to contain and holds off whatever sets exist, naming both
-// opt-ins and the seat the merging one sits in; a member of no open
-// set — its set
+// exists to contain and holds off whatever sets exist, naming the set
+// it belongs to, the merging opt-in and the seat that opt-in sits in; a
+// member of no open set — its set
 // retired by the decomposer, which deletes rather than closes — has
 // no set whose decision to wait for, and holding off would strand an
 // approved deliverable with no backstop, so its stale label is no
@@ -1606,20 +1606,28 @@ func syncMemberSetHoldOff(pr *PullRequest, s State) (Decision, bool) {
 	}
 	if len(dualLabelled) > 0 {
 		reason = fmt.Sprintf("PR %d stands at an approved review, but its connected issue %s carries both %s and %s%s", pr.Number, strings.Join(dualLabelled, ", "), LabelAgenticSyncMerge, LabelAgenticAutoMerge, dualOptInError)
-	} else if direct {
-		// The merging opt-in is read through the same predicate the
-		// merge row uses, so the set hold-off and the merge row cannot
-		// disagree about the same pull request: it sits on the PR
-		// itself, which carries both opt-ins on this path, or on the
-		// issue the member delivers
+	} else if ref, optedIn := mergeOptedIn(pr, s.ConnectedIssues); optedIn {
+		// The merging opt-in is asked through the same predicate the
+		// merge row asks it with, whatever shape the membership arrived
+		// in, so the set read and the merge read cannot disagree about
+		// one pull request — the reason then names the set the member
+		// belongs to and the seat the merging opt-in sits in
 		// (§forgejo/decisions/sync-set, §forgejo/decisions/merge-gate).
-		if ref, optedIn := mergeOptedIn(pr, s.ConnectedIssues); optedIn {
-			where := fmt.Sprintf("its issue %s carries %s", ref, LabelAgenticAutoMerge)
-			if ref == "" {
-				where = fmt.Sprintf("carries both %s and %s", LabelAgenticSyncMerge, LabelAgenticAutoMerge)
-			}
-			reason = fmt.Sprintf("PR %d stands at an approved review, but it is a direct member of the sync set grouped by %s and %s%s", pr.Number, strings.Join(directSets, ", "), where, dualOptInError)
+		membership := fmt.Sprintf("its connected issue %s is a member of a sync set", strings.Join(members, ", "))
+		if direct {
+			membership = fmt.Sprintf("it is a direct member of the sync set grouped by %s", strings.Join(directSets, ", "))
 		}
+		where := fmt.Sprintf("the pull request carries %s", LabelAgenticAutoMerge)
+		switch {
+		case direct && ref == "":
+			// The direct member is the one shape whose pull request
+			// carries both opt-ins itself: its edge into the grouping
+			// issue's blockers is the set's opt-in.
+			where = fmt.Sprintf("carries both %s and %s", LabelAgenticSyncMerge, LabelAgenticAutoMerge)
+		case ref != "":
+			where = fmt.Sprintf("its issue %s carries %s", ref, LabelAgenticAutoMerge)
+		}
+		reason = fmt.Sprintf("PR %d stands at an approved review, but %s and %s%s", pr.Number, membership, where, dualOptInError)
 	}
 	d := holdOff(reason)
 	d.Cascade = emissions
