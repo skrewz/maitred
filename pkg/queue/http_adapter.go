@@ -9,12 +9,27 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"text/template"
 	"time"
 )
+
+// maxReadResponseBytes bounds how much of the queue's response body the
+// adapter reads at all. The body is read where it is needed — the response
+// log, and the reason a failed enqueue carries — never buffered on a
+// successful dispatch nobody is inspecting; the cap bounds a misconfigured
+// endpoint that answers a POST with a large page.
+const maxReadResponseBytes = 64 << 10
+
+// maxErrorBodyBytes bounds how much of that body reaches an error value,
+// and through it a log line written by a caller that never opted into
+// response logging. The queue's own explanations are single sentences; a
+// longer body is a page rather than a reason.
+const maxErrorBodyBytes = 256
 
 // AdapterConfig holds the configuration for the HTTP queue adapter.
 type AdapterConfig struct {
@@ -47,8 +62,10 @@ type AdapterConfig struct {
 	// inside the template. If empty, a default template is used that omits
 	// the ID (the remote system is expected to generate its own).
 	TaskTemplate string `yaml:"task_template"`
-	// LogResponse controls whether the adapter logs the full response body
-	// from the remote queue system. Useful for debugging.
+	// LogResponse controls whether the adapter logs the queue's response
+	// body, up to maxReadResponseBytes, through the response logger.
+	// Useful for debugging; a failed enqueue carries a shorter excerpt of
+	// the body in its error whatever this is set to.
 	LogResponse bool `yaml:"log_response"`
 }
 
@@ -218,19 +235,57 @@ func (a *HTTPAdapter) AddTask(task *Task) error {
 	}
 	defer resp.Body.Close()
 
-	if a.cfg.LogResponse {
-		var bodyBuf bytes.Buffer
-		_, _ = bodyBuf.ReadFrom(resp.Body)
-		a.respLog.Printf("endpoint=%s status=%d body=%s",
-			a.cfg.Endpoint, resp.StatusCode, bodyBuf.String())
+	// The body is read only where something is made of it: the response
+	// log when it is on, and the reason a failed request carries.
+	var (
+		body    []byte
+		readErr error
+	)
+	if a.cfg.LogResponse || failedStatus(resp.StatusCode) {
+		body, readErr = io.ReadAll(io.LimitReader(resp.Body, maxReadResponseBytes))
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("queue adapter: unexpected status %d from %s", resp.StatusCode, a.cfg.Endpoint)
+	if a.cfg.LogResponse {
+		a.respLog.Printf("endpoint=%s status=%d body=%s",
+			a.cfg.Endpoint, resp.StatusCode, string(body))
+	}
+
+	if failedStatus(resp.StatusCode) {
+		return fmt.Errorf("queue adapter: unexpected status %d from %s: %s",
+			resp.StatusCode, a.cfg.Endpoint, failureReason(body, readErr))
 	}
 
 	a.log.Printf("[queue:adapter] task %s dispatched to %s (status: %d)",
 		task.ID, a.cfg.Endpoint, resp.StatusCode)
 
 	return nil
+}
+
+// failedStatus reports whether a response status means the queue did not
+// accept the task.
+func failedStatus(status int) bool {
+	return status < 200 || status >= 300
+}
+
+// failureReason is why the queue said no, as far as the adapter can say it.
+// The queue writes its own explanation into the body — a refused persona, a
+// malformed task — so a failed enqueue without it leaves the operator a
+// status code and an endpoint. The excerpt is short, and whitespace — the
+// newlines of an HTML error page included — is folded to spaces so the log
+// line the caller writes stays one line; the full body is the response
+// log's, under log_response.
+func failureReason(body []byte, readErr error) string {
+	switch {
+	case readErr != nil:
+		// A body that could not be read is itself worth naming, rather
+		// than quietly reporting an empty one.
+		return fmt.Sprintf("response body unreadable: %v", readErr)
+	case strings.TrimSpace(string(body)) == "":
+		return "no response body"
+	default:
+		if len(body) > maxErrorBodyBytes {
+			body = body[:maxErrorBodyBytes]
+		}
+		return strings.Join(strings.Fields(string(body)), " ")
+	}
 }

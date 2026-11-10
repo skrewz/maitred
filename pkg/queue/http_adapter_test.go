@@ -111,6 +111,66 @@ func TestHTTPAdapter_AddTask_FailsOnBadStatus(t *testing.T) {
 	}
 }
 
+// TestHTTPAdapter_AddTask_FailureCarriesQueueReason: the queue explains a
+// refused task in the response body, and a caller that did not opt into
+// response logging only has the error to read — so the explanation must
+// reach it, bounded and on one line whatever the queue answered with.
+func TestHTTPAdapter_AddTask_FailureCarriesQueueReason(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{
+			name:   "the queue names what it refused",
+			status: 400,
+			body:   "persona \"ghost\" not found\n",
+			want:   "persona \"ghost\" not found",
+		},
+		{
+			name:   "an unhealthy queue's page stays short and on one line",
+			status: 500,
+			body:   "<html>\n" + strings.Repeat("body ", 2000) + "\n</html>\n",
+			want:   "<html> body",
+		},
+		{
+			name:   "a queue that says nothing says nothing",
+			status: 502,
+			body:   "",
+			want:   "no response body",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := mockServer(tc.status, tc.body)
+			defer server.Close()
+
+			adapter, err := queue.NewHTTPAdapter(queue.AdapterConfig{
+				Endpoint: server.URL,
+			}, log.New(os.Stdout, "", log.LstdFlags))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			err = adapter.AddTask(&queue.Task{ID: "task-1", Prompt: "p"})
+			if err == nil {
+				t.Fatal("expected error for failed status, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not carry %q", err.Error(), tc.want)
+			}
+			if strings.Contains(err.Error(), "\n") {
+				t.Errorf("error spans lines, which a log line must not: %q", err.Error())
+			}
+			if len(err.Error()) > 512 {
+				t.Errorf("error is %d bytes, want a bounded excerpt", len(err.Error()))
+			}
+		})
+	}
+}
+
 func TestHTTPAdapter_AddTask_PassesPromptThroughUnmodified(t *testing.T) {
 	var receivedBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
