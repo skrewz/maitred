@@ -733,8 +733,11 @@ func TestReconcile_ReviewRowsRefireAtUnchangedRevision(t *testing.T) {
 // agentic-auto-merge with no connected open blocker — the state is the
 // watermark, so a PR that stalled at a frozen head sha recovers on the
 // next sweep instead of sitting forever at "already dispatched at
-// revision". Without the label the row keeps the revision-keyed guard
-// (§forgejo/reconciliation/watermark-exemptions).
+// revision". Without the label the merge opt-in is the precondition that
+// answers first: an approved PR with no agentic-auto-merge label waits on
+// a human whatever the watermark records, so the revision-keyed guard
+// never decides it (§forgejo/decisions/merge-gate, s-git/maitred#179;
+// §forgejo/reconciliation/watermark-exemptions).
 func TestReconcile_ApprovedAutoMergePRRefires(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -742,7 +745,7 @@ func TestReconcile_ApprovedAutoMergePRRefires(t *testing.T) {
 		want   string
 	}{
 		{"auto-merge PR re-fires merge-or-wait", []string{LabelAgenticAutoMerge}, "action=merge-or-wait"},
-		{"unlabelled PR holds off at the recorded revision", nil, ""},
+		{"unlabelled PR approved at the head waits on a human", nil, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -1398,16 +1398,6 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionFixFeedback,
 		},
 		{
-			// The sweep's approved row is watermark-exempt only for a
-			// PR that carries the opt-in; with no label the opt-in row
-			// answers first, whatever the watermark records
-			// (§forgejo/decisions/merge-gate, s-git/maitred#179).
-			name:      "reconcile PR approved at the head without the opt-in waits on a human",
-			event:     prEvent(EventReconcile, "maitred"),
-			state:     State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
-			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
-		},
-		{
 			name:       "reconcile PR standing at a comment review, fix-feedback already dispatched at the revision, re-fires",
 			event:      prEvent(EventReconcile, "maitred"),
 			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
