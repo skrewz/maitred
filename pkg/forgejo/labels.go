@@ -4,9 +4,10 @@ package forgejo
 //
 // This file is the single home of the engine's reserved label vocabulary:
 // one definition per reserved name, referenced wherever the name is
-// tested. Reserved names are matched by exact, case-sensitive comparison,
-// so a name defined twice is a divergence waiting to happen — add to this
-// block instead of declaring the name again.
+// tested. Reserved names are matched case-insensitively — the rule
+// carriesLabel applies to every one of them, first exercised by
+// LabelTriggerReview — so a name defined twice is a divergence waiting to
+// happen: add to this block instead of declaring the name again.
 const (
 	// LabelIdeation marks an issue whose forest is not yet commissioned: an
 	// ideation issue closes when the human commissions its forest, so an

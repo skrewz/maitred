@@ -306,6 +306,17 @@ organisation's humans: **a task must never attach `vip` to the object it
 was scheduled to work on**, and the tier this section promises rests on
 that convention as much as on the walk.
 
+What the walk judges is the label's **name**, matched case-insensitively
+like every reserved name (§forgejo/decisions/actions): labels reach the
+engine as names, not as scoped records, so the org-scope above is a
+property of the deployment's label permissions and nothing the resolver
+verifies — a repository-scoped label of the same name is
+indistinguishable at the moment of the check. That is the same trust the
+name-matched `agentic-auto-merge` already asks of a repository's label
+rights (§forgejo/decisions/merge-gate), and the tier is the smaller of
+what those rights buy; a carrier pinned by label ID instead of by name
+would close the gap mechanically, and this section does not ask for it.
+
 The walk pays **no read the dispatch did not already make** when no
 carrier wears the label: an object wearing the label costs no hop, and a
 forest nobody has labelled vip costs none either, because the label is
