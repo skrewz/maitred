@@ -1261,7 +1261,22 @@ func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
 		return nil
 	}
 	ev := Event{Type: EventIssueOpened, Repo: k.Repo, Kind: KindIssue, Number: k.Number, Sender: sender}
-	if err := e.dispatch(ev, State{Issue: issue}, cd.Action); err != nil {
+	// The vip walk reads the issue's blocker rows for a labelled tracker
+	// (§forgejo/webhook/vip-priority), and this is the one path that
+	// dispatches an issue without holding them — the cascade carries
+	// keys, not state — so the leg pays the one read the decision made
+	// elsewhere. A lost read costs the tier and not the dispatch: the
+	// task goes out at the queue's default with a warn line naming it
+	// (§forgejo/webhook/vip-priority).
+	st := State{Issue: issue}
+	blockers, err := e.api.IssueDependencies(owner, name, k.Number)
+	if err != nil {
+		e.log.Warn("vip walk: issue-dependencies read failed; scheduling at the queue's default tier",
+			"key", k.String(), "error", err)
+	} else {
+		st.Blockers = blockers
+	}
+	if err := e.dispatch(ev, st, cd.Action); err != nil {
 		return err
 	}
 	return e.store.Save(k, Watermark{Action: string(cd.Action), Revision: rev})
@@ -1340,7 +1355,15 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 		e.recordDecision(k, ev, st, d)
 		return nil
 	}
-	if err := e.dispatch(ev, State{PR: pr}, ActionMergeOrWait); err != nil {
+	// The dispatch carries the assembled state, not the bare pull
+	// request: the delivered issue's labels are read from the
+	// connected-issue rows this path already fetched, so the merge the
+	// gate now releases is judged on the same carriers the event path
+	// judges, with no read the decision did not already pay
+	// (§forgejo/webhook/vip-priority). taskURL, taskTitle and
+	// revisionFor read st.PR, which is the same pointer the stripped
+	// state carried.
+	if err := e.dispatch(ev, st, ActionMergeOrWait); err != nil {
 		return err
 	}
 	return e.store.Save(k, watermarkAt(w, string(ActionMergeOrWait), pr.HeadSHA))

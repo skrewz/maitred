@@ -5061,25 +5061,142 @@ func TestHandler_IssueLabelsChanged_VIPRemovedTakesEffectNextScheduling(t *testi
 
 // TestHandler_IssueClosed_CascadeVIPMemberDispatchesAtTeacher: the
 // unblock cascade dispatches through the same pipeline, so a vip member
-// woken by a close is scheduled at teacher too
+// woken by a close is scheduled at teacher too — by its own label, and
+// by the label on the tracker gating its forest, which the leg reads
+// because the cascade carries keys rather than blocker rows
 // (§forgejo/webhook/vip-priority, §forgejo/decisions/unblock-cascade).
 func TestHandler_IssueClosed_CascadeVIPMemberDispatchesAtTeacher(t *testing.T) {
-	eng, api, q, _ := newTestEngine(t)
-	h := NewHandler(eng, "s3cret", nil)
-	api.issues[7] = testIssue(7, "closed")
-	api.issues[10] = vipIssue(10, "open")
-	api.blocks[7] = []Issue{*testIssue(10, "open")}
-	api.deps[10] = []Issue{*testIssue(7, "closed")}
+	cases := []struct {
+		name  string
+		setup func(*fakeAPI)
+		want  string
+	}{
+		{
+			name:  "the member carries no label",
+			setup: func(*fakeAPI) {},
+			want:  "",
+		},
+		{
+			name: "the member carries vip",
+			setup: func(api *fakeAPI) {
+				api.issues[10].Labels = append(api.issues[10].Labels, LabelVIP)
+			},
+			want: PriorityTeacher,
+		},
+		{
+			// The woken member wears nothing; the tracker gating its
+			// forest wears the label, read from the blocker rows the leg
+			// fetches for it (§forgejo/webhook/vip-priority).
+			name: "the tracker gating the member carries vip",
+			setup: func(api *fakeAPI) {
+				api.deps[10] = []Issue{vipTrackerIssue(5, "closed", true), vipRootIssue(2, "closed"), *testIssue(7, "closed")}
+				api.deps[5] = []Issue{vipRootIssue(2, "closed")}
+			},
+			want: PriorityTeacher,
+		},
+	}
 
-	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204", rec.Code)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, q, _ := newTestEngine(t)
+			h := NewHandler(eng, "s3cret", nil)
+			api.issues[7] = testIssue(7, "closed")
+			api.issues[10] = testIssue(10, "open")
+			api.blocks[7] = []Issue{*testIssue(10, "open")}
+			api.deps[10] = []Issue{*testIssue(7, "closed")}
+			tc.setup(api)
+
+			rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 204", rec.Code)
+			}
+			tasks := q.all()
+			if len(tasks) != 1 {
+				t.Fatalf("got %d tasks, want 1 (implement for issue 10)", len(tasks))
+			}
+			if tasks[0].Priority != tc.want {
+				t.Errorf("priority = %q, want %q", tasks[0].Priority, tc.want)
+			}
+		})
+	}
+}
+
+// TestDispatchCascade_VIPReadFailureDispatchesAtDefault: the blocker read
+// the cascade's issue leg makes for the walk is an addition to the
+// dispatch, not a precondition — a lost read sends the task out at the
+// queue's default tier rather than holding the woken member back
+// (§forgejo/webhook/vip-priority).
+func TestDispatchCascade_VIPReadFailureDispatchesAtDefault(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	api.issues[10] = testIssue(10, "open")
+	api.depsErr = errors.New("dependencies unavailable")
+
+	cd := CascadeDispatch{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 10}, Action: ActionImplement}
+	if err := eng.dispatchCascade(cd, "alice"); err != nil {
+		t.Fatalf("dispatchCascade: %v", err)
 	}
 	tasks := q.all()
 	if len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1 (implement for issue 10)", len(tasks))
 	}
-	if tasks[0].Priority != PriorityTeacher {
-		t.Errorf("priority = %q, want %q", tasks[0].Priority, PriorityTeacher)
+	if tasks[0].Priority != "" {
+		t.Errorf("priority = %q, want unset — the lost read costs the tier, not the dispatch", tasks[0].Priority)
+	}
+}
+
+// TestHandler_IssueClosed_CascadeVIPDeliveredIssueDispatchesAtTeacher:
+// the cascade's PR leg lands the delivery, so it judges the vip label on
+// the state its re-fetch assembled — the delivered issue's label lifts
+// the merge-or-wait dispatch exactly as it lifts the approval path's
+// (§forgejo/webhook/vip-priority, §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadeVIPDeliveredIssueDispatchesAtTeacher(t *testing.T) {
+	cases := []struct {
+		name  string
+		label func(*fakeAPI)
+		want  string
+	}{
+		{
+			name:  "no carrier wears the label",
+			label: func(*fakeAPI) {},
+			want:  "",
+		},
+		{
+			name: "the delivered issue carries vip",
+			label: func(api *fakeAPI) {
+				api.issues[10].Labels = append(api.issues[10].Labels, LabelVIP)
+				api.blocks[9][0].Labels = api.issues[10].Labels // the delivery's row
+			},
+			want: PriorityTeacher,
+		},
+		{
+			name: "the pull request carries vip",
+			label: func(api *fakeAPI) {
+				api.pulls[9].Labels = append(api.pulls[9].Labels, LabelVIP)
+			},
+			want: PriorityTeacher,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, q, _, _ := cascadePRFixtures(t)
+			tc.label(api)
+			h := NewHandler(eng, "s3cret", nil)
+
+			rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 204", rec.Code)
+			}
+			tasks := q.all()
+			if len(tasks) != 1 {
+				t.Fatalf("got %d tasks, want 1 (merge-or-wait for PR 9)", len(tasks))
+			}
+			if !strings.Contains(tasks[0].Prompt, "action=merge-or-wait") {
+				t.Errorf("prompt = %q, want merge-or-wait", tasks[0].Prompt)
+			}
+			if tasks[0].Priority != tc.want {
+				t.Errorf("priority = %q, want %q", tasks[0].Priority, tc.want)
+			}
+		})
 	}
 }

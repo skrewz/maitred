@@ -286,19 +286,22 @@ A dispatch is scheduled at `teacher` when one of these holds:
 | the tracker of the forest an issue belongs to | the issue's blocker rows: an `outcome` issue wearing the label, gated in turn by the `ideation` root that makes it the forest's tracker (§forgejo/decisions/forest-teardown) |
 
 A tracker wearing the label lifts its **own** dispatches too — its
-decompose and wrap-up rows — since the root gating it is the root its
-forest shares. An `outcome` issue that wears the label without a root
-gating it names no forest and lifts nothing: membership is read, not
-inferred from a label.
+decompose and wrap-up rows — through the tracker's own label, no walk
+needed: the root gating it is the root its forest shares. An `outcome`
+issue that wears the label without a root gating it names no forest and
+lifts nothing: membership is read, not inferred from a label.
 
-The walk pays **no read the dispatch did not already make**: an object
-wearing the label costs no hop, and a forest nobody has labelled vip
-costs none either, because the label is what opens the graph. The one
-exception is a path that dispatches an issue without reading its blocker
-rows — the unblock cascade's issue leg
-(§forgejo/decisions/unblock-cascade) — which therefore sees only the
-issue's own label; the sweep's row, which does read them, is the backstop
-that lifts the next scheduling (§forgejo/reconciliation/the-sweep).
+The walk pays **no read the dispatch did not already make** when no
+carrier wears the label: an object wearing the label costs no hop, and a
+forest nobody has labelled vip costs none either, because the label is
+what opens the graph. Where a labelled tracker stands in the rows the
+walk pays one hop — the tracker's gate — per dispatch, and the review
+fan-out pays it once per lens (§forgejo/decisions/review-lenses). The
+unblock cascade's issue leg (§forgejo/decisions/unblock-cascade) is the
+one path that dispatches an issue without holding its blocker rows, so
+it reads them once per dispatch; the cascade's PR leg dispatches the
+state the re-fetch assembled, so the delivered issue is judged there on
+the same rows every other delivery path judges it on.
 
 A graph read that **fails** costs the tier and not the dispatch: an
 object whose forest cannot be read is scheduled at the queue's default

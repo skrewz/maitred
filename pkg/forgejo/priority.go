@@ -89,13 +89,14 @@ func (e *Engine) vipObject(st State) bool {
 //     label. The member and the tracker need not share the root directly:
 //     the tracker blocking the member is the membership that matters.
 //
-// The second shape covers a tracker's own dispatch too, since a tracker is
-// blocked by the root that gates it and by nothing else of its own forest.
-// The rows are those the dispatch's own re-fetch made: the event and sweep
-// paths read an issue's blockers as part of the re-fetch
-// (§forgejo/webhook/re-fetch), and the unblock cascade's issue dispatch —
-// the one path that reads none — therefore sees only the issue's own label,
-// with the sweep's row the backstop that lifts the next scheduling.
+// A tracker's own dispatch needs no second shape — its own label answers
+// at the first check, no walk taken; the shape above is what makes it the
+// tracker of the forest rather than a labelled outcome issue.
+// The rows are those the dispatch assembled: the event and sweep paths
+// read an issue's blockers as part of the re-fetch
+// (§forgejo/webhook/re-fetch), and the unblock cascade's issue leg — the
+// one path that holds none — reads them once per dispatch, so the tracker
+// carrier is judged there too (§forgejo/decisions/unblock-cascade).
 func (e *Engine) vipIssue(issue *Issue, blockers []Issue) bool {
 	if carriesLabel(issue.Labels, LabelVIP) {
 		return true
