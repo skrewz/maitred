@@ -85,7 +85,9 @@ type Engine struct {
 
 	// The merge re-fire bound: the last merge-or-wait dispatch per key,
 	// so an unchanged head re-fires at most once per reconcile interval
-	// whichever path brought the event (§forgejo/decisions/loop-prevention).
+	// whichever path brought the event (§forgejo/decisions/loop-
+	// prevention). The stamp is in memory, so a restart admits one re-fire
+	// per key before the bound reasserts itself.
 	reFireMu     sync.Mutex
 	mergeReFires map[Key]mergeReFire
 }
@@ -165,7 +167,7 @@ func (e *Engine) HandleEvent(ev Event) {
 		if d.Dispatched && !admissibleInRoles(d.Action, r) {
 			d = holdOffActionInadmissible(d.Action, ev.Repo)
 		}
-		d = e.boundMergeReFire(key, ev, st, w, d)
+		d = e.boundMergeReFire(key, ev, st, d)
 		e.recordDecision(key, ev, st, d)
 		if d.Dispatched {
 			if len(d.Lenses) > 0 {
@@ -1056,45 +1058,41 @@ type mergeReFire struct {
 }
 
 // boundMergeReFire applies the re-fire bound to Decide's answer: a
-// merge-or-wait the watermark says was already dispatched at this
-// revision, arriving before one reconcile interval has passed since
-// that dispatch, becomes a hold-off naming the bound
-// (§forgejo/decisions/loop-prevention).
-//
-// The exempt merge row is watermark-exempt on every path, so on the
-// paths an event — a comment, a close somewhere in the graph — rather
-// than the sweep delivers, the queue's (action, revision) dedup key
-// would be the only bound, and it squelches a submission only while the
-// match is still pending: N deliveries would enqueue N agent runs at a
-// head that never moves. The bound gives those paths the sweep's own
-// cadence, so an unchanged head dispatches at most once per interval
-// whatever arrives. A first dispatch at a revision is never touched,
-// because the watermark does not record it yet.
-func (e *Engine) boundMergeReFire(key Key, ev Event, st State, w *Watermark, d Decision) Decision {
+// merge-or-wait the engine dispatched at this revision inside one
+// reconcile interval becomes a hold-off naming the bound, whichever path
+// brought the event (§forgejo/decisions/loop-prevention). The bound is
+// the engine's own stamp rather than the watermark, so a store that
+// cannot be read narrows the re-fire instead of switching the bound off;
+// a revision with no stamp is a first dispatch, which is never touched.
+func (e *Engine) boundMergeReFire(key Key, ev Event, st State, d Decision) Decision {
 	if !d.Dispatched || d.Action != ActionMergeOrWait {
 		return d
 	}
 	rev := revisionFor(ev, st)
-	if !alreadyDispatched(w, ActionMergeOrWait, rev) {
-		return d
-	}
 	if e.mergeReFiredRecently(key, rev) {
 		return holdOffMergeReFireBound(rev, e.cfg.ReconcileInterval)
 	}
 	return d
 }
 
-// mergeReFiredRecently reports whether a merge-or-wait dispatch at
-// revision is still inside the bound. An interval of zero or less — no
-// reconciliation scheduled — bounds nothing.
+// mergeReFiredRecently reports whether the stamp for key still bounds a
+// re-fire at revision, dropping one that no longer does — its interval
+// spent, or a head the PR has moved past — so the bound is a rate and
+// never a hold-off on a revision the engine has not dispatched at, and
+// the map tracks the PRs standing at a merge-eligible head rather than
+// every PR that ever was (§forgejo/decisions/loop-prevention).
 func (e *Engine) mergeReFiredRecently(key Key, revision string) bool {
-	if e.cfg.ReconcileInterval <= 0 {
-		return false
-	}
 	e.reFireMu.Lock()
 	defer e.reFireMu.Unlock()
 	last, ok := e.mergeReFires[key]
-	return ok && last.revision == revision && time.Since(last.at) < e.cfg.ReconcileInterval
+	if !ok {
+		return false
+	}
+	if last.revision != revision || time.Since(last.at) >= e.cfg.ReconcileInterval {
+		delete(e.mergeReFires, key)
+		return false
+	}
+	return true
 }
 
 // stampMergeReFire records a merge-or-wait dispatch for the bound. A
@@ -1389,20 +1387,16 @@ func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
 // in the decision log with the sweep as the backstop
 // (§forgejo/decisions/merge-gate, §forgejo/decisions/sync-set). The PR
 // key's own watermark applies before dispatching, the exempt merge row
-// of an opted-in PR excepted. Two things bound that leg, because a
-// close is an input this engine does not pace: the walk reaches a PR
-// only once its issue-side blockers are all closed, and the re-fire
-// bound lets one unchanged head dispatch once per reconcile interval,
-// so a close, reopen, close on an issue at the end of a chain costs one
-// merge run rather than one per close. The leg can be woken by a close
-// in a repository holding no maitred role — handleCascadeOnlyClose
-// reads through the graph on purpose — but it is admitted and judged by
-// the roles of the PR's own repository and re-fetches the PR, so such a
-// close can repeat a dispatch the bound already covers, never a merge
-// the gate would refuse (§forgejo/reconciliation/watermark-exemptions,
-// §forgejo/decisions/loop-prevention); the set's own decision is not
-// emitted from here — the walk follows the closed node's edges only —
-// and stays the sweep's row to make.
+// of an opted-in PR excepted, and that row is paced here by the re-fire
+// bound (§forgejo/decisions/loop-prevention). The leg can be woken by a
+// close in a repository holding no maitred role —
+// handleCascadeOnlyClose reads through the graph on purpose — but it is
+// admitted and judged by the roles of the PR's own repository and
+// re-fetches the PR, so such a close can repeat a dispatch the bound
+// already covers, never a merge the gate would refuse
+// (§forgejo/reconciliation/watermark-exemptions); the set's own
+// decision is not emitted from here — the walk follows the closed
+// node's edges only — and stays the sweep's row to make.
 func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 	ev := Event{Type: EventPRReviewed, Repo: k.Repo, Kind: KindPR, Number: k.Number, Sender: sender}
 	r, err := e.repoRoles(k.Repo)
@@ -1447,7 +1441,7 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 	}
 	// Insurance against the re-fetched state, through the same pure
 	// decision and the same gate the event path takes.
-	d := e.boundMergeReFire(k, ev, st, w, Decide(ev, st, w))
+	d := e.boundMergeReFire(k, ev, st, Decide(ev, st, w))
 	if d.Action != ActionMergeOrWait {
 		// A fork of merge-or-wait — a landing-set member, or a re-fire the
 		// bound has caught — is recorded like the sibling cascade
