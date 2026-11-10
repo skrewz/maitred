@@ -595,7 +595,7 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 		return holdOffTeardownWithoutRoot(issue.Number)
 	}
 	if open := openBlockers(s.Blockers); len(open) > 0 {
-		return holdOff(fmt.Sprintf("issue %d is blocked by %s; not reassessing", issue.Number, blockerNames(open)))
+		return holdOff(fmt.Sprintf("issue %d is blocked by %s; not reassessing", issue.Number, issueRefs(open)))
 	}
 	rev := issueRevision(issue)
 	if alreadyDispatched(w, ActionReassess, rev) {
@@ -968,7 +968,11 @@ func lensIdentities(lenses []ReviewLens) []string {
 // undismissed approval at head and no reviewer's latest undismissed
 // review at head is a non-approval, the decision dispatches
 // merge-or-wait — held off, naming the open blockers, when a
-// connected issue has one (§forgejo/decisions/merge-gate); when every
+// connected issue has one (§forgejo/decisions/merge-gate), and held
+// off, naming the missing opt-in and the connected issues, when the
+// PR carries no agentic-auto-merge label: an approved PR with no
+// merge opt-in waits on a human
+// (§forgejo/decisions/merge-gate, s-git/maitred#179); when every
 // lens has reported at head and the reports are not all approvals, it
 // dispatches fix-feedback — a comment report moves the PR along on
 // the sweep, triggering the implementer, not the reviewer
@@ -1009,7 +1013,12 @@ func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 // head with the reports not all approvals — on the sweep a comment
 // report counts (the sweep triggers the implementer, not the
 // reviewer), while the pure review-event path waits for a
-// changes-requested (§forgejo/decisions/transition-table). ok is
+// changes-requested (§forgejo/decisions/transition-table). The
+// merge-or-wait dispatch additionally requires the
+// agentic-auto-merge opt-in on the PR: the sync-set hold-off and the
+// merge gate sit ahead of it, and a PR they let through without the
+// label holds off naming the missing opt-in and the connected issues
+// (§forgejo/decisions/merge-gate, s-git/maitred#179). ok is
 // false when the branch does not apply — some lens has still not
 // reported at head — and the caller falls through to the fan-out
 // row, which names the outstanding lenses in its reason.
@@ -1024,23 +1033,27 @@ func decideChainReported(e Event, s State, w *Watermark, sweepComments bool) (De
 			return d, true
 		}
 		if open := mergeGateOpenBlockers(e, s); len(open) > 0 {
-			return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens, but a connected issue is blocked by %s; not merging", pr.Number, blockerNames(open))), true
+			return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens, but a connected issue is blocked by %s; not merging", pr.Number, issueRefs(open))), true
 		}
-		// The sweep's exempt row. An agentic-auto-merge PR sits at a
+		// The merge opt-in is a precondition on every path that
+		// reaches here, the cascade's PR leg included: it decides
+		// through this branch on the PR's own re-fetch.
+		if !carriesLabel(pr.Labels, LabelAgenticAutoMerge) {
+			return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens but carries no %s label; an approved PR with no merge opt-in waits on a human (connected issues: %s)", pr.Number, LabelAgenticAutoMerge, connectedIssueNames(s))), true
+		}
+		// The sweep's exempt row. A labelled PR sits at a
 		// frozen head sha once the chain approves, so a revision-keyed
 		// watermark makes it a fixed point the sweep can never fire on
 		// and a labelled PR that failed to merge never recovers. The
 		// state is therefore its watermark: the row re-fires until the
 		// PR closes, and stops the moment it does, because the sweep
-		// enumerates open pull requests only. The opt-in label is the
-		// whole of it — an approved PR without it waits on a human,
-		// revision-keyed as ever — and the exemption belongs to this
-		// row alone: the same state reached from an event (the review
-		// event, a PR comment) keeps the guard below, so a fully
+		// enumerates open pull requests only. The exemption belongs to
+		// this row alone: the same state reached from an event (the
+		// review event, a PR comment) keeps the guard below, so a fully
 		// approved chain never re-fires merge on its own
 		// (§forgejo/reconciliation/watermark-exemptions,
 		// §forgejo/decisions/loop-prevention).
-		if onSweep(e) && carriesLabel(pr.Labels, LabelAgenticAutoMerge) {
+		if onSweep(e) {
 			return dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d stands at approving reviews from every lens and carries %s; the state calls for merge-or-wait regardless of revision %s", pr.Number, LabelAgenticAutoMerge, pr.HeadSHA)), true
 		}
 		if alreadyDispatched(w, ActionMergeOrWait, pr.HeadSHA) {
@@ -1171,8 +1184,10 @@ func dispatchOnState(w *Watermark, exempt bool, action Action, revision, reason 
 // and handles the feedback themselves —
 // §forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention,
 // s-git/maitred#143), and approvals across the board dispatch
-// merge-or-wait only when the merge gate lets it through, no
-// connected issue having an open blocker (§forgejo/decisions/merge-gate).
+// merge-or-wait only when the PR carries the agentic-auto-merge
+// opt-in and the merge gate lets it through, no connected issue
+// having an open blocker (§forgejo/decisions/merge-gate,
+// s-git/maitred#179).
 // A comment-only chain holds off here — the sweep is the row that
 // turns comment reports into fix-feedback — and while any lens has
 // not reported at head the decision falls through to the fan-out row
@@ -1390,10 +1405,10 @@ func trackerStillBlocked(issue *Issue, blockers []IssueNode) (CascadeHoldOff, bo
 			open = append(open, blockers[i].Issue)
 		}
 	}
-	reason := fmt.Sprintf("issue %d is an open %s tracker still blocked by %s", issue.Number, LabelOutcome, blockerNames(open))
+	reason := fmt.Sprintf("issue %d is an open %s tracker still blocked by %s", issue.Number, LabelOutcome, issueRefs(open))
 	if gate := ideationGate(every); gate != nil && gate.State != "open" {
 		reason = fmt.Sprintf("issue %d is an open %s tracker commissioned by %s %d and still blocked by %s; the sweep curates the forest",
-			issue.Number, LabelOutcome, LabelIdeation, gate.Number, blockerNames(open))
+			issue.Number, LabelOutcome, LabelIdeation, gate.Number, issueRefs(open))
 	} else {
 		reason += "; wrap-up held off"
 	}
@@ -1719,13 +1734,28 @@ func mergeGateOpenBlockers(ev Event, s State) []Issue {
 	return open
 }
 
-// blockerNames renders blockers as a comma-separated list of
+// connectedIssueNames renders a PR's connected issues as references
+// for a hold-off reason; a PR connected to no issue says so, so the
+// reason never ends in an empty list (§forgejo/decisions/merge-gate,
+// s-git/maitred#179).
+func connectedIssueNames(s State) string {
+	if len(s.ConnectedIssues) == 0 {
+		return "none"
+	}
+	issues := make([]Issue, len(s.ConnectedIssues))
+	for i := range s.ConnectedIssues {
+		issues[i] = s.ConnectedIssues[i].Issue
+	}
+	return issueRefs(issues)
+}
+
+// issueRefs renders issues as a comma-separated list of
 // "repo#number" references, so a hold-off reason can name them —
-// cross-repo blockers included (§forgejo/decisions/transition-table).
-func blockerNames(blockers []Issue) string {
-	names := make([]string, len(blockers))
-	for i := range blockers {
-		names[i] = fmt.Sprintf("%s#%d", blockers[i].Repository, blockers[i].Number)
+// cross-repo references included (§forgejo/decisions/transition-table).
+func issueRefs(issues []Issue) string {
+	names := make([]string, len(issues))
+	for i := range issues {
+		names[i] = fmt.Sprintf("%s#%d", issues[i].Repository, issues[i].Number)
 	}
 	return strings.Join(names, ", ")
 }
