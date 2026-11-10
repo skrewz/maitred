@@ -4,9 +4,18 @@
 package queue
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 )
+
+// ErrPriorityRejected is the sentinel an adapter returns when the queue
+// refused the tier a task carried — a refusal of the field's value, not of
+// the task. A caller asks with errors.Is and can retry once with the field
+// left off, so an ask for a tier never holds the work back
+// (§forgejo/webhook/vip-priority). Every other enqueue failure stays an
+// ordinary one and is not a tier question.
+var ErrPriorityRejected = errors.New("queue rejected the task's priority")
 
 // TaskQueueProvider is the interface that any queue system must implement
 // to receive tasks from the trigger engine. This decouples the engine from

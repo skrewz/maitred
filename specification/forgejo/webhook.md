@@ -325,6 +325,16 @@ the level every other degraded continuation in the engine logs at.
 Holding the work back over an annotation would leave the queue poorer and
 the issue unattended, which is the opposite of what the label asks for.
 
+A tier the queue **refuses** is degraded the same way, and only then: an
+enqueue the queue rejects because of the priority it carries
+(§overview/scope — the queue owns the vocabulary) is retried once with the
+field left off, with one warn line saying the tier was refused, so the
+label can never leave an issue's dispatches failing forever. Any other
+enqueue failure — a queue that is down, a persona that does not exist —
+is not a tier question: it is returned as it stands, the watermark records
+nothing and the sweep retries it, exactly as it does for an unlabelled
+dispatch.
+
 ## Event mapping
 
 | `X-Forgejo-Event-Type` | `action` | Decision event |

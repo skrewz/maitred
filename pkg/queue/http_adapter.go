@@ -9,12 +9,20 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"text/template"
 	"time"
 )
+
+// maxReadResponseBytes bounds how much of the queue's response body the
+// adapter reads. The body is read for every response now, because a failed
+// one carries the queue's own explanation of what it refused; queue replies
+// are small, so the cap only guards against a misconfigured endpoint.
+const maxReadResponseBytes = 64 << 10
 
 // AdapterConfig holds the configuration for the HTTP queue adapter.
 type AdapterConfig struct {
@@ -218,14 +226,18 @@ func (a *HTTPAdapter) AddTask(task *Task) error {
 	}
 	defer resp.Body.Close()
 
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxReadResponseBytes))
+
 	if a.cfg.LogResponse {
-		var bodyBuf bytes.Buffer
-		_, _ = bodyBuf.ReadFrom(resp.Body)
 		a.respLog.Printf("endpoint=%s status=%d body=%s",
-			a.cfg.Endpoint, resp.StatusCode, bodyBuf.String())
+			a.cfg.Endpoint, resp.StatusCode, string(body))
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if refusedPriority(resp.StatusCode, body) {
+			return fmt.Errorf("queue adapter: POST %s: %w: %s",
+				a.cfg.Endpoint, ErrPriorityRejected, strings.TrimSpace(string(body)))
+		}
 		return fmt.Errorf("queue adapter: unexpected status %d from %s", resp.StatusCode, a.cfg.Endpoint)
 	}
 
@@ -233,4 +245,16 @@ func (a *HTTPAdapter) AddTask(task *Task) error {
 		task.ID, a.cfg.Endpoint, resp.StatusCode)
 
 	return nil
+}
+
+// refusedPriority reports whether a failed response is the queue refusing
+// the priority it was handed, as opposed to refusing the task or failing for
+// some other reason. The queue reports a priority outside its vocabulary as
+// a 400 whose plain-text message names the field (see handleTaskSubmit in
+// https://github.com/skrewz/hotelier/blob/main/internal/server/server.go),
+// so this is the queue's wording rather than a contractual marker; anything
+// else stays an ordinary enqueue failure.
+func refusedPriority(status int, body []byte) bool {
+	return status == http.StatusBadRequest &&
+		bytes.Contains(bytes.ToLower(body), []byte("invalid priority"))
 }

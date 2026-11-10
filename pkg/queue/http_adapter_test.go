@@ -3,6 +3,7 @@ package queue_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -108,6 +109,60 @@ func TestHTTPAdapter_AddTask_FailsOnBadStatus(t *testing.T) {
 	task := &queue.Task{ID: "task-1", Prompt: "do something"}
 	if err := adapter.AddTask(task); err == nil {
 		t.Error("expected error for 500 status, got nil")
+	}
+}
+
+// TestHTTPAdapter_AddTask_PriorityRefusal: a queue that refuses the tier it
+// was handed says so in a 400 that names the field; that refusal is the one
+// enqueue failure a caller may degrade on, so the adapter must make it
+// identifiable and nothing else (§forgejo/webhook/vip-priority).
+func TestHTTPAdapter_AddTask_PriorityRefusal(t *testing.T) {
+	cases := []struct {
+		name        string
+		status      int
+		body        string
+		wantRefusal bool
+	}{
+		{
+			name:        "the queue refuses the tier",
+			status:      400,
+			body:        "invalid priority \"teacher\" (must be firefighter, teacher, or orangutan)\n",
+			wantRefusal: true,
+		},
+		{
+			name:        "the queue refuses something else",
+			status:      400,
+			body:        "persona \"ghost\" not found\n",
+			wantRefusal: false,
+		},
+		{
+			name:        "the queue is unhealthy",
+			status:      500,
+			body:        `{"error":"internal"}`,
+			wantRefusal: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := mockServer(tc.status, tc.body)
+			defer server.Close()
+
+			adapter, err := queue.NewHTTPAdapter(queue.AdapterConfig{
+				Endpoint: server.URL,
+			}, log.New(os.Stdout, "", log.LstdFlags))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			err = adapter.AddTask(&queue.Task{ID: "task-1", Prompt: "p", Priority: "teacher"})
+			if err == nil {
+				t.Fatal("expected error for failed status, got nil")
+			}
+			if got := errors.Is(err, queue.ErrPriorityRejected); got != tc.wantRefusal {
+				t.Errorf("errors.Is(err, ErrPriorityRejected) = %v, want %v (err: %v)", got, tc.wantRefusal, err)
+			}
+		})
 	}
 }
 

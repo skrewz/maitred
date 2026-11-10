@@ -2,8 +2,11 @@ package forgejo
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
+
+	"maitred/pkg/queue"
 )
 
 // The vip label decides the tier a task is scheduled at: an object
@@ -355,7 +358,7 @@ func TestDispatch_VIPReadFresh(t *testing.T) {
 // (§forgejo/webhook/vip-priority).
 func TestDispatch_VIPTierRefusedRetriesAtDefault(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
-	q.priorityErr = errors.New("queue refused the tier")
+	q.priorityErr = fmt.Errorf(`queue adapter: POST: %w: invalid priority "teacher"`, queue.ErrPriorityRejected)
 	issue := vipIssue(7, "open")
 	api.issues[7] = issue
 
@@ -380,5 +383,29 @@ func TestDispatch_VIPTierRefusedRetriesAtDefault(t *testing.T) {
 	tasks = q.all()
 	if len(tasks) != 2 || tasks[1].Priority != "" {
 		t.Errorf("tasks = %d with last priority %q, want 2 with unset", len(tasks), tasks[len(tasks)-1].Priority)
+	}
+}
+
+// TestDispatch_VIPTierOtherFailureNoRetry: the fallback belongs to a refused
+// tier and to nothing else. A vip dispatch whose enqueue fails for a reason
+// that is not the queue refusing the priority is reported once, as any other
+// dispatch failure is: retrying at the default would double the load on an
+// unhealthy queue and blame the tier for a failure it had nothing to do with
+// (§forgejo/webhook/vip-priority).
+func TestDispatch_VIPTierOtherFailureNoRetry(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	q.err = errors.New("queue adapter: POST: dial tcp: connection refused")
+	issue := vipIssue(7, "open")
+	api.issues[7] = issue
+
+	err := eng.dispatch(Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"}, State{Issue: issue}, ActionImplement)
+	if err == nil {
+		t.Fatal("expected the enqueue failure to be reported, got nil")
+	}
+	if q.attempts != 1 {
+		t.Errorf("queue saw %d submissions, want 1 — an unrelated failure must not be retried at the default", q.attempts)
+	}
+	if len(q.all()) != 0 {
+		t.Errorf("got %d enqueued tasks, want none", len(q.all()))
 	}
 }
