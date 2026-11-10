@@ -1365,8 +1365,8 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 	// gate now releases is judged on the same carriers the event path
 	// judges, with no read the decision did not already pay
 	// (§forgejo/webhook/vip-priority). taskURL, taskTitle and
-	// revisionFor read st.PR, which is the same pointer the stripped
-	// state carried.
+	// revisionFor read st.PR, which the assembled state carries
+	// unchanged, so nothing but the tier can differ.
 	if err := e.dispatch(ev, st, ActionMergeOrWait); err != nil {
 		return err
 	}

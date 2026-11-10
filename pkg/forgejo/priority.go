@@ -68,9 +68,8 @@ func (e *Engine) vipObject(st State) bool {
 // A forest's tracker is the `outcome` issue blocked by the `ideation` root
 // that gates the forest (§forgejo/decisions/forest-teardown,
 // §forgejo/reconciliation/watermark-exemptions), so the tracker is read from
-// an issue's blocker rows — the side of the graph a dispatch nearly always
-// holds already, and the only hop the walk makes. Two shapes carry the label
-// into an issue's scheduling:
+// an issue's blocker rows. Two shapes carry the label into an issue's
+// scheduling:
 //
 //   - the issue wears it, and the dispatch is the issue's own;
 //   - the issue is blocked by a vip tracker — an `outcome` issue wearing the
@@ -82,11 +81,11 @@ func (e *Engine) vipObject(st State) bool {
 // A tracker's own dispatch needs no second shape — its own label answers
 // at the first check, no walk taken; the shape above is what makes it the
 // tracker of the forest rather than a labelled outcome issue.
-// The rows are those the dispatch assembled: the event and sweep paths
-// read an issue's blockers as part of the re-fetch
-// (§forgejo/webhook/re-fetch), and the unblock cascade's issue leg — the
-// one path that holds none — reads them once per dispatch, so the tracker
-// carrier is judged there too (§forgejo/decisions/unblock-cascade).
+//
+// The blockers are the dispatch's own rows, judged here rather than
+// inferred from anything else about the issue; which rows each path holds,
+// what the walk pays per path, and what a failed read costs are the
+// section's to say (§forgejo/webhook/vip-priority).
 func (e *Engine) vipIssue(issue *Issue, blockers []Issue) bool {
 	if carriesLabel(issue.Labels, LabelVIP) {
 		return true
