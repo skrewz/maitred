@@ -2621,6 +2621,20 @@ func reasonFor(t *testing.T, log *bytes.Buffer, key string) string {
 	return ""
 }
 
+// lastReasonFor returns the newest decision recorded for key — what a
+// test reads when it feeds one object twice and the first decision is
+// the dispatch the second one is bounded by.
+func lastReasonFor(t *testing.T, log *bytes.Buffer, key string) string {
+	t.Helper()
+	found := ""
+	for _, e := range parseLogLines(t, log.Bytes()) {
+		if e["msg"] == "decision" && e["key"] == key {
+			found, _ = e["reason"].(string)
+		}
+	}
+	return found
+}
+
 // TestHandler_PRReviewed_ConnectedIssueBlockerHoldsOffMerge: an
 // approved, mergeable PR whose connected issue has an open blocker
 // dispatches no merge-or-wait on the review-event path; the hold-off
@@ -2963,7 +2977,8 @@ func TestHandler_IssueClosed_CascadePRFetchFailure(t *testing.T) {
 // opted into merging (§forgejo/decisions/unblock-cascade,
 // §forgejo/decisions/loop-prevention).
 func TestHandler_IssueClosed_CascadePRWatermarkHolds(t *testing.T) {
-	eng, _, q, store, _ := cascadePRFixtures(t)
+	eng, api, q, store, _ := cascadePRFixtures(t)
+	api.pulls[9].Labels = nil
 	if err := store.Save(Key{Repo: "o/r", Kind: KindPR, Number: 9},
 		Watermark{Action: string(ActionMergeOrWait), Revision: "sha-9"}); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -3031,6 +3046,94 @@ func TestHandler_IssueClosed_CascadePROptedInWithBlockedConnectedIssue(t *testin
 	}
 	if reason := reasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "o/r#11") {
 		t.Errorf("hold-off reason %q does not name the open blocker", reason)
+	}
+}
+
+// TestHandler_PRCommented_MergeReFireBoundedPerInterval: the exempt
+// merge row re-fires on a PR comment whatever the watermark records,
+// but the re-fire bound keeps one unchanged head to one dispatch per
+// reconcile interval — a comment supplies the event, not the clock —
+// and the bounded second delivery records a hold-off naming the bound
+// rather than a second task (§forgejo/decisions/loop-prevention,
+// §forgejo/observability/the-decision-log).
+func TestHandler_PRCommented_MergeReFireBoundedPerInterval(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, q, _ := newTestEngine(t)
+	eng.log = slog.New(slog.NewJSONHandler(&log, nil))
+	pr := testPR(9, "open", true)
+	pr.Labels = []string{LabelAgenticAutoMerge}
+	api.pulls[9] = pr
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
+
+	for i := 0; i < 2; i++ {
+		eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
+	}
+
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (the second re-fire is bounded); all = %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=merge-or-wait repo=o/r kind=pr number=9") {
+		t.Errorf("prompt = %q, want merge-or-wait for o/r PR 9", tasks[0].Prompt)
+	}
+	if reason := lastReasonFor(t, &log, "o/r/pr/9"); !strings.Contains(reason, "reconcile interval") {
+		t.Errorf("decision reason %q does not name the re-fire bound", reason)
+	}
+}
+
+// TestHandler_PRCommented_MergeReFireAllowedAfterInterval: the bound is
+// one reconcile interval, not a permanent hold-off — with the interval
+// spent, the same comment at the same head re-fires again, which is how
+// a merge run that died recovers without waiting on the sweep
+// (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/watermark-exemptions).
+func TestHandler_PRCommented_MergeReFireAllowedAfterInterval(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	pr := testPR(9, "open", true)
+	pr.Labels = []string{LabelAgenticAutoMerge}
+	api.pulls[9] = pr
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
+	key := Key{Repo: "o/r", Kind: KindPR, Number: 9}
+
+	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks after the first comment, want 1", len(tasks))
+	}
+	// The interval the bound waits out is spent.
+	eng.stampMergeReFireAt(key, "sha-9", time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+
+	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
+
+	if tasks := q.all(); len(tasks) != 2 {
+		t.Fatalf("got %d tasks, want 2 (the bound has expired); all = %+v", len(tasks), tasks)
+	}
+}
+
+// TestHandler_IssueClosed_CascadePRReFireBoundedPerInterval: the
+// cascade's PR leg is bounded like every other path — a close, reopen,
+// close on an issue the walk reaches dispatches the merge once, not
+// once per close, whatever repository the close landed in
+// (§forgejo/decisions/unblock-cascade,
+// §forgejo/decisions/loop-prevention).
+func TestHandler_IssueClosed_CascadePRReFireBoundedPerInterval(t *testing.T) {
+	eng, api, q, store, log := cascadePRFixtures(t)
+	pr := api.pulls[9]
+	pr.Labels = []string{LabelAgenticAutoMerge}
+	if err := store.Save(Key{Repo: "o/r", Kind: KindPR, Number: 9},
+		Watermark{Action: string(ActionMergeOrWait), Revision: "sha-9"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
+	}
+
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (the second re-fire is bounded); all = %+v", len(tasks), tasks)
+	}
+	if reason := lastReasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "reconcile interval") {
+		t.Errorf("decision reason %q does not name the re-fire bound", reason)
 	}
 }
 

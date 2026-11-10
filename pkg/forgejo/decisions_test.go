@@ -1396,13 +1396,6 @@ func TestDecide(t *testing.T) {
 			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
 		},
 		{
-			name:       "review event re-fires merge-or-wait for a labelled PR at the recorded revision",
-			event:      prEvent(EventPRReviewed, "carol"),
-			state:      State{ReviewLenses: testLenses, PR: labelledPR("abc", LabelAgenticAutoMerge), Reviews: []Review{review("APPROVED", "carol", testTime)}},
-			watermark:  &Watermark{Action: "merge-or-wait", Revision: "abc"},
-			wantAction: ActionMergeOrWait,
-		},
-		{
 			name:       "reconcile PR fix-feedback already dispatched at the revision re-fires: the state at head is the watermark",
 			event:      prEvent(EventReconcile, "maitred"),
 			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
@@ -1451,13 +1444,6 @@ func TestDecide(t *testing.T) {
 			event:     prEvent(EventPRCommented, "alice"),
 			state:     State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
-		},
-		{
-			name:       "PR commented re-fires merge-or-wait for a labelled PR at the recorded revision",
-			event:      prEvent(EventPRCommented, "alice"),
-			state:      State{ReviewLenses: testLenses, PR: labelledPR("abc", LabelAgenticAutoMerge), Reviews: []Review{review("APPROVED", "carol", testTime)}},
-			watermark:  &Watermark{Action: "merge-or-wait", Revision: "abc"},
-			wantAction: ActionMergeOrWait,
 		},
 		{
 			name:  "PR commented but closed on re-fetch holds off",
