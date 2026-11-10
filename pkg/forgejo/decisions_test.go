@@ -3592,9 +3592,10 @@ func TestDecide_MergeOptInReadFromEitherSeat(t *testing.T) {
 // (§forgejo/decisions/sync-set, §forgejo/decisions/merge-gate).
 func TestDecide_SyncSetDualOptInReadFromEitherSeat(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		state State
-		want  []string
+		name        string
+		state       State
+		want        []string
+		wantNoError bool
 	}{
 		{
 			name: "the direct member's opt-in on a delivered issue names the error",
@@ -3604,6 +3605,20 @@ func TestDecide_SyncSetDualOptInReadFromEitherSeat(t *testing.T) {
 				return state
 			}(),
 			want: []string{"sync set", "authoring error", "o/r#4", LabelAgenticAutoMerge},
+		},
+		{
+			// Direct membership comes from the PR's edge into the
+			// grouping issue's blockers, not from a label on the pull
+			// request: the sentence names the set label only where the
+			// pull request actually carries it.
+			name:  "a direct member's opt-in on the pull request names the merging label alone",
+			state: directPRMemberState(labelledPR("abc", LabelAgenticAutoMerge), 11),
+			want:  []string{"direct member of the open sync set", "carries agentic-auto-merge", "authoring error"},
+		},
+		{
+			name:  "a direct member whose pull request carries both labels says so",
+			state: directPRMemberState(labelledPR("abc", LabelAgenticSyncMerge, LabelAgenticAutoMerge), 11),
+			want:  []string{"carries both agentic-sync-merge and agentic-auto-merge", "authoring error"},
 		},
 		{
 			// The membership the approval side reads off a connected
@@ -3635,6 +3650,7 @@ func TestDecide_SyncSetDualOptInReadFromEitherSeat(t *testing.T) {
 				state.ConnectedIssues = append(state.ConnectedIssues, connectedIssueLabelled("o/r", 4))
 				return state
 			}(),
+			wantNoError: true,
 		},
 		{
 			name: "an indirect member with no merging opt-in is held off by membership alone",
@@ -3644,6 +3660,7 @@ func TestDecide_SyncSetDualOptInReadFromEitherSeat(t *testing.T) {
 				Reviews:         []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{syncMemberConnected(4, 11)},
 			},
+			wantNoError: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3651,7 +3668,10 @@ func TestDecide_SyncSetDualOptInReadFromEitherSeat(t *testing.T) {
 			if d.Action != "" || !d.HoldOff() {
 				t.Fatalf("decision = %+v, want a hold-off dispatching nothing", d)
 			}
-			if len(tc.want) == 0 {
+			if len(tc.want) == 0 && !tc.wantNoError {
+				t.Fatal("case names neither an expected reason nor the no-opt-in control: set want or wantNoError")
+			}
+			if tc.wantNoError {
 				if strings.Contains(d.Reason, "authoring error") {
 					t.Errorf("hold-off reason = %q, want no double opt-in named: the work is opted into the set alone", d.Reason)
 				}
