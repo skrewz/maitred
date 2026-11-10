@@ -37,12 +37,13 @@ HTTP queue system.
   and title templates as `.Payload`.
 - **Queue dispatch.** Tasks are dispatched through the `TaskQueueProvider`
   interface: an HTTP queue adapter (optional mTLS, optional custom task
-  template; the prompt is passed through verbatim) or, without a queue
-  config, an in-memory queue. Tasks carry a prompt, capability tags, a timeout,
-  an optional persona, an optional dedup key, an optional human-readable
-  title, an optional reference URL, and an optional priority — a queue
-  system with de-duplication may squelch a submission whose key matches a
-  still-pending task's key (the Forgejo engine sets one per dispatch
+  template, optional response logging; the prompt is passed through
+  verbatim) or, without a queue config, an in-memory queue. Tasks carry a
+  prompt, capability tags, a timeout, an optional persona, an optional
+  dedup key, an optional human-readable title, an optional reference URL,
+  and an optional priority — a queue system with de-duplication may
+  squelch a submission whose key matches a still-pending task's key (the
+  Forgejo engine sets one per dispatch
   identity, and names each task with a title and a reference URL, per
   §forgejo/webhook/the-pipeline). A priority is the queue's own vocabulary,
   forwarded verbatim and never interpreted by maitred; a task that declares
