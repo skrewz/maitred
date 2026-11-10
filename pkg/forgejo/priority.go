@@ -27,16 +27,21 @@ const PriorityTeacher = "teacher"
 // next scheduling and removing it lowers that scheduling, with no
 // retroactive change to anything already queued.
 //
-// The walk is a ladder, not a survey: it stops at the first carrier, and it
-// pays only the reads the dispatch's own re-fetch did not make. An object
-// wearing the label costs no read at all, and a forest nobody has labelled
-// vip costs no hop either — the label is what opens the gate, so the common
-// dispatch is exactly as cheap as it was before the field existed. A failed
-// hop costs the tier and not the dispatch — an object whose forest cannot be
-// read is scheduled at the default like any unlabelled object, with one
-// debug line naming the failure — because the label is an annotation on a
-// dispatch that stands on its own, and holding the work back over it would
-// make the queue poorer, not safer
+// The walk is a ladder, not a survey: it stops at the first carrier.
+// When no carrier wears the label it pays no read the dispatch's own
+// re-fetch did not make — an object wearing the label costs no read at
+// all, and a forest nobody has labelled vip costs no hop either: the
+// label is what opens the graph, so the common dispatch is exactly as
+// cheap as it was before the field existed. A labelled tracker in the
+// rows costs one hop — the tracker's gate — per dispatch, and the
+// review fan-out pays it once per lens; the cascade's issue leg reads
+// the issue's blocker rows once, being the one path that holds none
+// (§forgejo/decisions/unblock-cascade). A failed read costs the tier
+// and not the dispatch — an object whose forest cannot be read is
+// scheduled at the default like any unlabelled object, with one warn
+// line naming the failure — because the label is an annotation on a
+// dispatch that stands on its own, and holding the work back over it
+// would make the queue poorer, not safer
 // (§forgejo/webhook/the-pipeline, §forgejo/webhook/vip-priority).
 func (e *Engine) taskPriority(st State) string {
 	if e.vipObject(st) {
@@ -127,22 +132,17 @@ func (e *Engine) vipGatedByRoot(candidate Issue) bool {
 	owner, name := splitRepo(repo)
 	gates, err := e.api.IssueDependencies(owner, name, candidate.Number)
 	if err != nil {
-		e.logVipReadFailure("issue-dependencies", repo+"#"+strconv.Itoa(candidate.Number), err)
+		// The degraded continuations elsewhere in this package are loud
+		// for the same reason: a fallback nobody can see is a fallback
+		// nobody can explain (§forgejo/webhook/vip-priority).
+		e.log.Warn("vip walk: issue-dependencies read failed; scheduling at the queue's default tier",
+			"object", repo+"#"+strconv.Itoa(candidate.Number), "error", err)
 		return false
 	}
-	for _, gate := range gates {
-		if !gate.IsPull && hasLabel(&gate, LabelIdeation) {
-			return true
-		}
-	}
-	return false
-}
-
-// logVipReadFailure records one lost hop of the vip walk — identifiers only
-// — so a dispatch that fell back to the queue's default tier because a
-// forest could not be read is explainable after the fact
-// (§forgejo/webhook/vip-priority).
-func (e *Engine) logVipReadFailure(op, object string, err error) {
-	e.log.Debug("vip walk: "+op+" read failed; scheduling at the queue's default tier",
-		"object", object, "error", err.Error())
+	// The same gate the commissioning rule reads — what makes the
+	// candidate a tracker is the ideation root blocking it, whatever
+	// that root's own state: the walk asks whether this is the forest's
+	// tracker, not whether the forest still stands
+	// (§forgejo/decisions/commissioning).
+	return ideationGate(gates) != nil
 }

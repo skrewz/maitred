@@ -305,7 +305,8 @@ the same rows every other delivery path judges it on.
 
 A graph read that **fails** costs the tier and not the dispatch: an
 object whose forest cannot be read is scheduled at the queue's default
-like any unlabelled object, with one debug line naming the lost read.
+like any unlabelled object, with one warn line naming the lost read —
+the level every other degraded continuation in the engine logs at.
 Holding the work back over an annotation would leave the queue poorer and
 the issue unattended, which is the opposite of what the label asks for.
 
