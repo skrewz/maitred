@@ -45,15 +45,19 @@ const (
 	// decision (§forgejo/decisions/sync-set).
 	LabelAgenticSyncMerge = "agentic-sync-merge"
 	// LabelAgenticAutoMerge is the work item's opt-in to merging on
-	// its own once approved and unblocked. The merge-or-wait prompt's
+	// its own once approved and unblocked. It sits on the work item and
+	// is read from there or from the pull request delivering it — one
+	// seat is enough, and one predicate (mergeOptedIn) asks, so no row
+	// holds a narrower copy of the test. The merge-or-wait prompt's
 	// merge policy owns it; the decision function reads it to name the
-	// error state of a landing-set member carrying both opt-ins, which
-	// the approval hold-off contains, and — more consequentially — as
-	// the precondition of every merge-or-wait dispatch: the label must
-	// sit on the PR itself, and an approved, unblocked PR without it
-	// waits on a human on every path, the sweep's watermark-exempt row
-	// included (§forgejo/decisions/merge-gate,
-	// §forgejo/decisions/sync-set,
+	// error state of a landing-set member whose work carries both
+	// opt-ins, which the approval hold-off contains, and — more
+	// consequentially — as the precondition of every merge-or-wait
+	// dispatch: an approved, unblocked PR whose work carries it on
+	// neither seat waits on a human on every path, the sweep's
+	// watermark-exempt row included, while a PR whose work carries it
+	// is re-fired whatever its watermark records
+	// (§forgejo/decisions/merge-gate, §forgejo/decisions/sync-set,
 	// §forgejo/reconciliation/watermark-exemptions,
 	// s-git/maitred#179).
 	LabelAgenticAutoMerge = "agentic-auto-merge"

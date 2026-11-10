@@ -729,23 +729,26 @@ func TestReconcile_ReviewRowsRefireAtUnchangedRevision(t *testing.T) {
 }
 
 // TestReconcile_ApprovedAutoMergePRRefires: the sweep's merge-or-wait
-// row is watermark-exempt for an open, approved-at-head PR carrying
-// agentic-auto-merge with no connected open blocker — the state is the
+// row is watermark-exempt for an open, approved-at-head PR whose work is
+// opted into merging with no connected open blocker — the state is the
 // watermark, so a PR that stalled at a frozen head sha recovers on the
 // next sweep instead of sitting forever at "already dispatched at
-// revision". Without the label the merge opt-in is the precondition that
-// answers first: an approved PR with no agentic-auto-merge label waits on
-// a human whatever the watermark records, so the revision-keyed guard
-// never decides it (§forgejo/decisions/merge-gate, s-git/maitred#179;
-// §forgejo/reconciliation/watermark-exemptions).
+// revision". The opt-in is read from the pull request or from the issue
+// it delivers; without it the merge opt-in is the precondition that
+// answers first: an approved PR with no agentic-auto-merge label on
+// either seat waits on a human whatever the watermark records, so the
+// revision-keyed guard never decides it (§forgejo/decisions/merge-gate,
+// s-git/maitred#179; §forgejo/reconciliation/watermark-exemptions).
 func TestReconcile_ApprovedAutoMergePRRefires(t *testing.T) {
 	cases := []struct {
-		name   string
-		labels []string
-		want   string
+		name           string
+		labels         []string
+		connectedLabel []string
+		want           string
 	}{
-		{"auto-merge PR re-fires merge-or-wait", []string{LabelAgenticAutoMerge}, "action=merge-or-wait"},
-		{"unlabelled PR approved at the head waits on a human", nil, ""},
+		{"auto-merge PR re-fires merge-or-wait", []string{LabelAgenticAutoMerge}, nil, "action=merge-or-wait"},
+		{"PR whose delivered issue is opted in re-fires merge-or-wait", nil, []string{LabelAgenticAutoMerge}, "action=merge-or-wait"},
+		{"unlabelled PR approved at the head waits on a human", nil, nil, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -755,6 +758,13 @@ func TestReconcile_ApprovedAutoMergePRRefires(t *testing.T) {
 			api.pulls[1] = &pr
 			api.openPulls["r"] = []PullRequest{pr}
 			api.reviews[1] = []Review{{Event: ReviewApproved, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt}}
+			if tc.connectedLabel != nil {
+				// The work item the PR delivers, opted into merging while
+				// the PR itself carries no label — the shape that left a
+				// fully approved PR in limbo until an operator labelled it
+				// by hand (§forgejo/decisions/merge-gate).
+				api.blocks[1] = []Issue{{Number: 4, Repository: "o/r", State: "open", Title: "delivered issue", Labels: tc.connectedLabel}}
+			}
 			if err := store.Save(Key{Repo: "o/r", Kind: KindPR, Number: 1}, Watermark{Action: string(ActionMergeOrWait), Revision: "sha-1"}); err != nil {
 				t.Fatalf("save watermark: %v", err)
 			}

@@ -985,9 +985,11 @@ func lensIdentities(lenses []ReviewLens) []string {
 // (§forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention,
 // s-git/maitred#143).
 // The fix-feedback row is watermark-exempt on the sweep, and the
-// approved row is exempt only when the PR opts into merging on its
-// own with the agentic-auto-merge label: a PR standing at a fully
-// reported chain at a frozen head sha is then re-fired whatever its
+// approved row is exempt only when the work it delivers opts into
+// merging on its own — the agentic-auto-merge label on the PR or on
+// the issue it delivers (§forgejo/decisions/merge-gate): a PR standing
+// at a fully reported chain at a frozen head sha is then re-fired
+// whatever its
 // watermark records (§forgejo/reconciliation/watermark-exemptions).
 // A fix-feedback dispatch that died recovers on the next sweep the
 // same way an approved auto-merge PR's merge does: the state — an
@@ -1037,14 +1039,18 @@ func decideChainReported(e Event, s State, w *Watermark, sweepComments bool) (De
 		}
 		// The merge opt-in is a precondition on every path that
 		// reaches here, the cascade's PR leg included: it decides
-		// through this branch on the PR's own re-fetch.
-		if !carriesLabel(pr.Labels, LabelAgenticAutoMerge) {
+		// through this branch on the PR's own re-fetch. The opt-in is
+		// asked through mergeOptedIn, so a forest that opted in
+		// through its work item is held off exactly as one with no
+		// opt-in on either seat is (§forgejo/decisions/merge-gate).
+		seat, optedIn := mergeOptedIn(pr, s.ConnectedIssues)
+		if !optedIn {
 			return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens but carries no %s label; an approved PR with no merge opt-in waits on a human (connected issues: %s)", pr.Number, LabelAgenticAutoMerge, connectedIssueNames(s))), true
 		}
-		// The sweep's exempt row. A labelled PR sits at a
+		// The sweep's exempt row. An opted-into-merging PR sits at a
 		// frozen head sha once the chain approves, so a revision-keyed
 		// watermark makes it a fixed point the sweep can never fire on
-		// and a labelled PR that failed to merge never recovers. The
+		// and a PR whose merge never landed never recovers. The
 		// state is therefore its watermark: the row re-fires until the
 		// PR closes, and stops the moment it does, because the sweep
 		// enumerates open pull requests only. The exemption belongs to
@@ -1052,9 +1058,13 @@ func decideChainReported(e Event, s State, w *Watermark, sweepComments bool) (De
 		// review event, a PR comment) keeps the guard below, so a fully
 		// approved chain never re-fires merge on its own
 		// (§forgejo/reconciliation/watermark-exemptions,
-		// §forgejo/decisions/loop-prevention).
+		// §forgejo/decisions/loop-prevention). The dispatch reason
+		// names the seat the opt-in was found in, so the decision log
+		// tells a pull request opted into merging from a forest that
+		// opted in through its work item
+		// (§forgejo/decisions/merge-gate, §forgejo/observability/the-decision-log).
 		if onSweep(e) {
-			return dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d stands at approving reviews from every lens and carries %s; the state calls for merge-or-wait regardless of revision %s", pr.Number, LabelAgenticAutoMerge, pr.HeadSHA)), true
+			return dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d stands at approving reviews from every lens and %s; the state calls for merge-or-wait regardless of revision %s", pr.Number, mergeOptInSeat(seat), pr.HeadSHA)), true
 		}
 		if alreadyDispatched(w, ActionMergeOrWait, pr.HeadSHA) {
 			return holdOff(fmt.Sprintf("merge-or-wait already dispatched at revision %s", pr.HeadSHA)), true
@@ -1523,9 +1533,11 @@ func openBlockers(blockers []Issue) []Issue {
 // grouping issues, so the last approval that completes a set
 // triggers it without waiting for the sweep
 // (§forgejo/decisions/sync-set). Two readings of the label decide
-// alone: a member also carrying agentic-auto-merge is the authoring
-// error the hold-off exists to contain and holds off whatever sets
-// exist, naming both labels; a member of no open set — its set
+// alone: a member whose work also carries agentic-auto-merge — on the
+// PR or on the issue it delivers — is the authoring error the hold-off
+// exists to contain and holds off whatever sets exist, naming both
+// opt-ins and the seat the merging one sits in; a member of no open
+// set — its set
 // retired by the decomposer, which deletes rather than closes — has
 // no set whose decision to wait for, and holding off would strand an
 // approved deliverable with no backstop, so its stale label is no
@@ -1589,11 +1601,16 @@ func syncMemberSetHoldOff(pr *PullRequest, s State) (Decision, bool) {
 	}
 	if len(dualLabelled) > 0 {
 		reason = fmt.Sprintf("PR %d stands at an approved review, but its connected issue %s carries both %s and %s; a member is opted into the set, never into merging on its own — the double label is an authoring error the decomposer must retire", pr.Number, strings.Join(dualLabelled, ", "), LabelAgenticSyncMerge, LabelAgenticAutoMerge)
-	} else if direct && carriesLabel(pr.Labels, LabelAgenticAutoMerge) {
-		// A direct member's opt-ins sit on the PR itself: the connected
-		// issue carries the kind label alone, so this is the only place
-		// the double label can be named (§forgejo/decisions/sync-set).
-		reason = fmt.Sprintf("PR %d stands at an approved review, but it is a direct member of the sync set grouped by %s and carries both %s and %s; a member is opted into the set, never into merging on its own — the double label is an authoring error the decomposer must retire", pr.Number, strings.Join(directSets, ", "), LabelAgenticSyncMerge, LabelAgenticAutoMerge)
+	} else if direct {
+		// The merging opt-in is read through the same predicate the
+		// merge row uses, so the set hold-off and the merge row cannot
+		// disagree about the same pull request: it sits on the PR
+		// itself — the only place the double label can be named on this
+		// path — or on the issue the member delivers
+		// (§forgejo/decisions/sync-set, §forgejo/decisions/merge-gate).
+		if seat, optedIn := mergeOptedIn(pr, s.ConnectedIssues); optedIn {
+			reason = dualOptInReason(pr, directSets, seat)
+		}
 	}
 	d := holdOff(reason)
 	d.Cascade = emissions
@@ -1706,6 +1723,61 @@ func syncSetRevision(issue *Issue, members []SyncMember, lenses []ReviewLens) st
 	sort.Strings(lines)
 	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
 	return hex.EncodeToString(sum[:])
+}
+
+// optInSeatPullRequest names the pull request as the seat the merging
+// opt-in was found in, distinguishing it from an issue reference — the
+// seat the other returns.
+const optInSeatPullRequest = "the pull request"
+
+// mergeOptedIn answers the one question every merge row asks: did this
+// work opt into merging on its own? It did when the pull request
+// carries agentic-auto-merge, or any issue it delivers does — matched
+// case-insensitively on either seat, as every label read in this
+// package is. "Delivers" is whatever the assembly already holds in
+// State.ConnectedIssues (the body's auto-close references and the
+// blocking edges, read cross-repo where the issue lives elsewhere), so
+// the predicate invents no relation of its own and widens with the
+// assembly (§forgejo/decisions/merge-gate, §forgejo/webhook/re-fetch).
+// The PR is asked first, so a PR carrying the label reports its own
+// seat; ok is false when neither seat carries it, and the caller
+// decides exactly as it decides today.
+func mergeOptedIn(pr *PullRequest, connected []ConnectedIssue) (seat string, ok bool) {
+	if pr != nil && carriesLabel(pr.Labels, LabelAgenticAutoMerge) {
+		return optInSeatPullRequest, true
+	}
+	for i := range connected {
+		if hasLabel(&connected[i].Issue, LabelAgenticAutoMerge) {
+			return fmt.Sprintf("%s#%d", connected[i].Issue.Repository, connected[i].Issue.Number), true
+		}
+	}
+	return "", false
+}
+
+// mergeOptInSeat renders the seat mergeOptedIn found as a clause a
+// dispatch reason drops the opt-in label into: the PR carries it, or
+// the issue it delivers does — the decision log then distinguishes a
+// pull request opted into merging from a forest that opted in through
+// its work item (§forgejo/observability/the-decision-log).
+func mergeOptInSeat(seat string) string {
+	if seat == optInSeatPullRequest {
+		return fmt.Sprintf("carries %s", LabelAgenticAutoMerge)
+	}
+	return fmt.Sprintf("its issue %s carries %s", seat, LabelAgenticAutoMerge)
+}
+
+// dualOptInReason is the sync-set hold-off's naming of the authoring
+// error: the work is opted into the landing set and into merging on its
+// own at once. The set side is the PR's own direct membership; the
+// merging side is the seat mergeOptedIn found — a PR carrying both
+// opt-ins itself, or a member whose merging opt-in sits on the issue it
+// delivers (§forgejo/decisions/sync-set).
+func dualOptInReason(pr *PullRequest, directSets []string, seat string) string {
+	sets := strings.Join(directSets, ", ")
+	if seat == optInSeatPullRequest {
+		return fmt.Sprintf("PR %d stands at an approved review, but it is a direct member of the sync set grouped by %s and carries both %s and %s; a member is opted into the set, never into merging on its own — the double label is an authoring error the decomposer must retire", pr.Number, sets, LabelAgenticSyncMerge, LabelAgenticAutoMerge)
+	}
+	return fmt.Sprintf("PR %d stands at an approved review, but it is a direct member of the sync set grouped by %s and its issue %s carries %s; a member is opted into the set, never into merging on its own — the double opt-in is an authoring error the decomposer must retire", pr.Number, sets, seat, LabelAgenticAutoMerge)
 }
 
 // mergeGateOpenBlockers is the merge gate's shared test, consulted by

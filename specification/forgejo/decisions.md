@@ -186,7 +186,7 @@ prompts:
 | `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement), and it carries no reserved label |
 | `review` | the **fan-out over the configured lenses**: a mergeable PR opened, or synced, dispatches each lens with no undismissed approval at the head (§forgejo/decisions/review-lenses); so does an open mergeable PR carrying the `trigger-review` label, at the current revision (§forgejo/decisions/label-triggered-review); watermark-exempt per lens on the sweep while that lens has reported nothing at the head (§forgejo/reconciliation/watermark-exemptions) |
 | `fix-feedback` | every configured review lens has reported at the PR's current head and the reports are not all approvals (§forgejo/decisions/review-lenses) — **and** the PR's author is the configured implementer identity; a PR authored by anyone else holds off, its feedback theirs to fix (§forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention, s-git/maitred#143); while any lens has not reported at head the action holds off naming the outstanding lenses, whose dispatches the fan-out row advances; watermark-exempt on the sweep while the chain reports feedback at the current head (§forgejo/reconciliation/watermark-exemptions) |
-| `merge-or-wait` | **every configured lens holds an undismissed approval at the PR's current head**, no reviewer's latest undismissed review at head is a non-approval (§forgejo/decisions/review-lenses), **the PR carries the `agentic-auto-merge` opt-in** — the label is a precondition of the dispatch on every path, so an approved PR with no merge opt-in holds off, its reason naming the missing label and the connected issues (§forgejo/decisions/merge-gate, s-git/maitred#179) — **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's; never for a PR whose connected issue is a member of an open sync set — landing is the set's decision (§forgejo/decisions/sync-set); a labelled member of no open set — its set retired — reads as stale authoring, not a gate, and the merge gate decides on (§forgejo/decisions/sync-set); watermark-exempt on the sweep when the PR carries `agentic-auto-merge` (§forgejo/reconciliation/watermark-exemptions) |
+| `merge-or-wait` | **every configured lens holds an undismissed approval at the PR's current head**, no reviewer's latest undismissed review at head is a non-approval (§forgejo/decisions/review-lenses), **the work it delivers carries the `agentic-auto-merge` opt-in — on the PR or on an issue it delivers** — the label is a precondition of the dispatch on every path, so an approved PR with no merge opt-in on either seat holds off, its reason naming the missing label and the connected issues (§forgejo/decisions/merge-gate, s-git/maitred#179) — **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's; never for a PR whose connected issue is a member of an open sync set — landing is the set's decision (§forgejo/decisions/sync-set); a labelled member of no open set — its set retired — reads as stale authoring, not a gate, and the merge gate decides on (§forgejo/decisions/sync-set); watermark-exempt on the sweep when the PR or the issue it delivers carries `agentic-auto-merge` (§forgejo/decisions/merge-gate, §forgejo/reconciliation/watermark-exemptions) |
 | `rebase` | an open PR is not mergeable (conflicts) |
 | `decompose` | an open issue carrying the `ideation` label was opened, edited, had its labels changed, or received a comment authored by anyone other than the configured decomposer identity (§forgejo/decisions/loop-prevention, s-git/maitred#147); or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions); or the unblock cascade newly unblocks an open issue carrying the `outcome` label (§forgejo/decisions/unblock-cascade) |
@@ -292,7 +292,7 @@ re-firing (§forgejo/decisions/label-triggered-review).
 | review submitted (every lens approved at head, the PR carries `agentic-auto-merge`, no connected issue has an open blocker) | `merge-or-wait` |
 | review submitted (every lens approved at head, the PR carries no `agentic-auto-merge` label, no connected issue has an open blocker) | hold off — the reason names the missing opt-in and the connected issues: an approved PR with no merge opt-in waits on a human (§forgejo/decisions/merge-gate, s-git/maitred#179) |
 | review submitted (every lens approved at head, a connected issue has an open blocker) | hold off — the reason names the open blockers (§forgejo/decisions/merge-gate) |
-| review submitted (a connected issue carries `agentic-sync-merge`, or the PR itself stands in an open grouping issue's blockers) | hold off, naming the sync set — the member never merges on its own; the member's open sync sets are emitted for a `sync` dispatch against their grouping issues. A member of **no open set** — its set retired — decides on through the merge gate, its label stale rather than a gate; a member also carrying `agentic-auto-merge` holds off naming both labels, whatever sets exist (§forgejo/decisions/sync-set) |
+| review submitted (a connected issue carries `agentic-sync-merge`, or the PR itself stands in an open grouping issue's blockers) | hold off, naming the sync set — the member never merges on its own; the member's open sync sets are emitted for a `sync` dispatch against their grouping issues. A member of **no open set** — its set retired — decides on through the merge gate, its label stale rather than a gate; a member whose work also carries `agentic-auto-merge` — on the PR or on the issue it delivers — holds off naming both opt-ins and the seat the merging one sits in, whatever sets exist (§forgejo/decisions/sync-set, §forgejo/decisions/merge-gate) |
 | review submitted (a lens has not reported at head) | `review` fan-out for the lenses still owed; fix-feedback holds off naming the outstanding lenses (§forgejo/decisions/review-lenses) |
 | review submitted (every lens reported at head, comment reports only) | hold off — the sweep is the row that turns comment reports into fix-feedback (§forgejo/decisions/transition-table) |
 | PR merged | unblock cascade (for the connected issue) |
@@ -307,7 +307,7 @@ re-firing (§forgejo/decisions/label-triggered-review).
 | reconcile — open `outcome` issue with open blockers, its `ideation` blocker open | hold off, naming the root — the forest is not yet commissioned, and the root's own row is the pulse: a forest is curated once per sweep |
 | reconcile — open `outcome` issue with open blockers and no `ideation` blocker | hold off, naming the absence — a tracker not gated by a root is not a forest's tracker |
 | reconcile — open issue carrying the `sync` label | `sync` when every member is closed or approved-at-head, mergeable, and opted in; otherwise a silent hold-off naming the members that are not ready — and a hold-off naming both reserved labels when the issue also carries `ideation` or `outcome`, two kind claims one row must not settle by label order (§forgejo/decisions/sync-set) |
-| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, as PR synced — except when the chain has reported at head: **every lens approved at head** dispatches `merge-or-wait` only for a PR carrying `agentic-auto-merge` — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate), held off, naming the missing opt-in and the connected issues, when the PR carries no `agentic-auto-merge` (s-git/maitred#179) — and dispatches it **revision notwithstanding** for the labelled PR, the exempt row of an approved PR at a frozen head — while **every lens reported and the reports not all approvals** dispatches `fix-feedback` **revision notwithstanding**, the exempt row of a PR standing at feedback for a fix that has not landed — behind the ownership gate, so a PR authored by anyone but the configured implementer identity holds off naming the author and the identity (§forgejo/config/implementer-identity, s-git/maitred#143). While any lens has not reported at head, the synced-like fan-out row dispatches those lenses **revision notwithstanding** — the exempt rows of a PR waiting to be reviewed, exempt per lens while the lens has reported nothing at the head (§forgejo/reconciliation/watermark-exemptions, §forgejo/decisions/review-lenses) |
+| reconcile — the sweep's synthetic current-state event | as issue opened (issue); for a PR, as PR synced — except when the chain has reported at head: **every lens approved at head** dispatches `merge-or-wait` only for a PR whose work is opted into merging — held off, naming the open blockers, when a connected issue has one (§forgejo/decisions/merge-gate), held off, naming the missing opt-in and the connected issues, when neither the PR nor an issue it delivers carries `agentic-auto-merge` (s-git/maitred#179) — and dispatches it **revision notwithstanding** for the opted-in PR, the exempt row of an approved PR at a frozen head — while **every lens reported and the reports not all approvals** dispatches `fix-feedback` **revision notwithstanding**, the exempt row of a PR standing at feedback for a fix that has not landed — behind the ownership gate, so a PR authored by anyone but the configured implementer identity holds off naming the author and the identity (§forgejo/config/implementer-identity, s-git/maitred#143). While any lens has not reported at head, the synced-like fan-out row dispatches those lenses **revision notwithstanding** — the exempt rows of a PR waiting to be reviewed, exempt per lens while the lens has reported nothing at the head (§forgejo/reconciliation/watermark-exemptions, §forgejo/decisions/review-lenses) |
 
 The **merge gate is the only place work is stopped**, and it stops it
 by holding off, never by closing: whichever path can dispatch
@@ -487,8 +487,8 @@ request reviews (§forgejo/decisions/transition-table).
 
 ## Merge gate
 
-`merge-or-wait` is dispatched **only when the PR carries the
-`agentic-auto-merge` label and no connected issue of the PR
+`merge-or-wait` is dispatched **only when the work the PR delivers
+carries the `agentic-auto-merge` label and no connected issue of the PR
 has an open blocker**. The label is the opt-in and the precondition
 of the dispatch on every path that can reach it — the review event, a
 PR comment, the sweep's approved row, and the unblock cascade's PR
@@ -501,12 +501,26 @@ issues it blocks (its dependency rows, read cross-repo where the
 connected issue lives elsewhere) — the two relations that connect a
 delivery, read as one list (§forgejo/webhook/re-fetch); an issue's
 **blockers** are the issues that block it. The go-ahead label sits on
-the **PR**: it authorises merging on its own — it does not authorise
-merging **past a blocker**. An issue-side copy authorises nothing
-here; the only issue-side read the decision function makes flags a
-landing-set member carrying both go-ahead labels as the authoring
-error the set's hold-off names (§forgejo/decisions/sync-set). The
-gate is
+the **work item** and is read from there or from the **PR** delivering
+it: either seat authorises merging on its own — it does not authorise
+merging **past a blocker**. The two seats of that go-ahead are one
+question, asked by one test: the work is opted into merging when the
+pull request carries `agentic-auto-merge` **or** any issue it delivers
+does, matched case-insensitively on either seat. "Delivers" is what
+the assembly already holds as the PR's connected issues — the
+auto-close references and the blocking edges
+(§forgejo/webhook/re-fetch) — so the read never invents a relation of
+its own, and widens with that assembly; where nothing is delivered it
+reduces to the pull request alone. Every row that asks the question
+asks it through that one test — the precondition every path consults,
+the sweep's watermark-exempt `merge-or-wait` row, and the landing-set
+hold-off's both-opt-ins test alike — so no row keeps a private copy of
+it and two paths cannot disagree about the same pull request. The
+dispatch's reason names the seat the opt-in was found in, the pull
+request or the delivered issue by its `repo#number` reference, so the
+decision log distinguishes a pull request opted into merging from a
+forest that opted in through its work item
+(§forgejo/observability/the-decision-log). The gate is
 the merge-path twin of the open-blocker rule that holds off `reassess`
 (§forgejo/decisions/transition-table), and every path that dispatches
 `merge-or-wait` consults both halves of the gate through one shared
@@ -560,7 +574,7 @@ the topics are; none appears in engine config:
 |---|---|---|
 | `sync` | the grouping issue | this issue is a sync issue, a kind like `ideation` and `outcome`: never a work item |
 | `agentic-sync-merge` | a member | its PR may land automatically as part of the set, and is never merged by `merge-or-wait` on its own |
-| `agentic-auto-merge` | a work item | the merge opt-in, and the precondition of every `merge-or-wait` dispatch: an approved, unblocked PR without it waits on a human; once opted in, the merge policy is the prompt's, not the decision function's (s-git/maitred#179) |
+| `agentic-auto-merge` | a work item, or the pull request delivering it | the merge opt-in, and the precondition of every `merge-or-wait` dispatch: either seat is the whole opt-in, and one test reads both; an approved, unblocked PR with neither waits on a human (s-git/maitred#179); once opted in, the merge policy is the prompt's, not the decision function's |
 
 The predicate is **one function** (`considerSyncIssue`), called from
 whichever direction the set state moved: from the reconciliation
@@ -613,13 +627,14 @@ the set, or a membership edge went away — has no set whose decision
 to wait for, and a silent hold-off would strand its approved,
 mergeable PR with no backstop; such a stale label is no gate, and
 the merge gate decides on as if the member carried no set label. What
-the merge gate then requires is the PR's own `agentic-auto-merge`
-opt-in: a stale-labelled member's PR without it waits on a human,
-its reason naming the missing label (§forgejo/decisions/merge-gate,
-s-git/maitred#179). A member carrying `agentic-auto-merge`
-alongside `agentic-sync-merge`
-is the error state the hold-off exists to contain: it holds off
-whatever sets exist, the reason naming both labels.
+the merge gate then requires is the merging opt-in — on the PR or on
+the issue it delivers (§forgejo/decisions/merge-gate): a
+stale-labelled member's PR with neither waits on a human, its reason
+naming the missing label (§forgejo/decisions/merge-gate,
+s-git/maitred#179). A member whose work carries `agentic-auto-merge`
+alongside `agentic-sync-merge` is the error state the hold-off exists
+to contain: it holds off whatever sets exist, the reason naming both
+opt-ins and the seat the merging one sits in.
 
 A member delivers its change through the open pull request that
 **auto-closes** it: an open pull request of the member's own
@@ -714,11 +729,13 @@ that are not deployable alone, retires one whose members have become
 independently deployable (delete, never close), and keeps the member
 list, the `blocks` edges, and the stated merge order honest. The
 engine never creates, edits, or deletes a sync issue; it only
-evaluates and dispatches. A member carrying `agentic-auto-merge` when
-it joins a set has the label removed by the decomposer — a member
+evaluates and dispatches. A member carrying `agentic-auto-merge` — on
+the member or on the pull request delivering it — when it joins a set
+has the label removed by the decomposer — a member
 with both labels is the error state the approval hold-off exists to
 contain: it is never merged by `merge-or-wait`; landing is the set's
-decision, and the hold-off names the condition by both label names.
+decision, and the hold-off names the condition by both opt-ins and the
+seat the merging one sits in.
 Retiring a set therefore includes removing `agentic-sync-merge` from
 its former members: the label is only ever a gate while an open set
 stands behind it.
@@ -864,7 +881,9 @@ Five mechanisms, in this order:
    state is their watermark (§forgejo/reconciliation/watermark-exemptions),
    and the agent's silence-on-noop keeps the re-firing quiet. For
    `merge-or-wait` the exemption is narrower still: the sweep's row, and
-   only for an approved, unblocked PR carrying `agentic-auto-merge`, so
+   only for an approved, unblocked PR whose work is opted into merging —
+   the PR or the issue it delivers carries `agentic-auto-merge`
+   (§forgejo/decisions/merge-gate) — so
    an approving review never re-fires on its own. The `review`
    exemption is per lens — the sweep's fan-out re-fires a lens only
    while that lens has reported nothing at the head — and the
