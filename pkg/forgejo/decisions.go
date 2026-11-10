@@ -1758,7 +1758,7 @@ func syncSetRevision(issue *Issue, members []SyncMember, lenses []ReviewLens) st
 // label, and the caller decides exactly as it decides today
 // (§forgejo/decisions/merge-gate).
 func mergeOptedIn(pr *PullRequest, connected []ConnectedIssue) (issueRef string, ok bool) {
-	if pr != nil && carriesLabel(pr.Labels, LabelAgenticAutoMerge) {
+	if carriesLabel(pr.Labels, LabelAgenticAutoMerge) {
 		return "", true
 	}
 	for i := range connected {

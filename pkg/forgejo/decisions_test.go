@@ -3393,12 +3393,14 @@ func connectedIssueLabelled(repo string, number int, labels ...string) Connected
 	return c
 }
 
-// TestMergeOptedIn pins the one predicate that answers "did this work
-// opt into merging?": the pull request carries the label, or any issue
-// it delivers does — matched case-insensitively on either seat — and
-// the issue the opt-in was found on is named with it, empty when the
-// label sits on the pull request, so the decision log can tell a PR
-// opted into merging from a forest that opted in through its work item
+// TestMergeOptedIn pins the two shapes of the one predicate that
+// answers "did this work opt into merging?" the decision-level tables
+// cannot see: case-folding on the issue seat, and which delivered
+// issue is named when several are in play. Every other shape — the
+// PR seat alone, a delivered issue alone, another repository, neither
+// seat, nothing delivered — is pinned at the level #196's "How to
+// verify" asks for, through Decide, in
+// TestDecide_MergeOptInReadFromEitherSeat
 // (§forgejo/decisions/merge-gate).
 func TestMergeOptedIn(t *testing.T) {
 	for _, tc := range []struct {
@@ -3408,39 +3410,6 @@ func TestMergeOptedIn(t *testing.T) {
 		wantRef   string
 		want      bool
 	}{
-		{
-			name: "the PR carries the label",
-			pr:   labelledPR("abc", LabelAgenticAutoMerge),
-			want: true,
-		},
-		{
-			name:      "a delivered issue carries the label",
-			pr:        openPR("abc"),
-			connected: []ConnectedIssue{connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge)},
-			wantRef:   "o/r#4",
-			want:      true,
-		},
-		{
-			name:      "a delivered issue in another repository carries the label",
-			pr:        openPR("abc"),
-			connected: []ConnectedIssue{connectedIssueLabelled("other/repo", 12, LabelAgenticAutoMerge)},
-			wantRef:   "other/repo#12",
-			want:      true,
-		},
-		{
-			name:      "neither seat carries the label",
-			pr:        openPR("abc"),
-			connected: []ConnectedIssue{connectedIssueLabelled("o/r", 4, LabelSync)},
-		},
-		{
-			name: "nothing is delivered",
-			pr:   openPR("abc"),
-		},
-		{
-			name: "the PR's label is matched case-insensitively",
-			pr:   labelledPR("abc", "Agentic-Auto-Merge"),
-			want: true,
-		},
 		{
 			name:      "the issue's label is matched case-insensitively",
 			pr:        openPR("abc"),
@@ -3602,10 +3571,10 @@ func TestDecide_SyncSetDualOptInReadFromEitherSeat(t *testing.T) {
 		wantNoError bool
 	}{
 		{
-			// The merging opt-in sits on a work item the pull
-			// request co-delivers, not on the member: nothing here
-			// opted the member into merging, so membership holds the
-			// merge off without an authoring error to retire.
+			// The merging opt-in sits on a work item the pull request
+			// co-delivers, not on the member: nothing here opted the
+			// member into merging, so membership holds the merge off
+			// without an authoring error to retire.
 			name: "a direct member co-delivering an opted-in issue names no authoring error",
 			state: func() State {
 				state := directPRMemberState(openPR("abc"), 11)
