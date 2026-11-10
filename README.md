@@ -371,6 +371,16 @@ make clean          # Remove build artifacts
 
 See [AGENTS.md](AGENTS.md) for project conventions.
 
+How a change lands: a pull request lands only when all three review lenses
+hold an undismissed approval at the same head, as specified in
+[§forgejo/decisions/review-lenses](specification/forgejo/decisions.md#review-lenses).
+That is necessary but not sufficient: the merge gate also refuses a connected
+issue with an open blocker, and an approved pull request without the
+`agentic-auto-merge` opt-in waits on a human
+([§forgejo/decisions/merge-gate](specification/forgejo/decisions.md#merge-gate)).
+As a second line of defence behind the engine's gate, the forge requires three
+approving reviews on `main` through branch protection.
+
 ## License
 
 MIT
