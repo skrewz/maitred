@@ -928,10 +928,7 @@ Five mechanisms, in this order:
    lenses, a push ends `fix-feedback` — so the sweep re-fires a
    dispatch that went nowhere until the state moves, while on the
    event path these actions stay revision-keyed and a push or a
-   review never re-fires on its own. Their state test — "this lens has
-   not reported at head" — is also one an event can answer falsely mid
-   a chain, which is precisely why they, and not `merge-or-wait`, keep
-   the sweep scoping.
+   review never re-fires on its own.
 3. **Targeted per-transition sender guards**, only where an agent's
    *own* action would re-trigger the *same* action: a commit pushed by
    a review lens must not re-fire **that lens** — the fan-out carries

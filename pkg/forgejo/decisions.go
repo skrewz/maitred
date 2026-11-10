@@ -1058,18 +1058,10 @@ func decideChainReported(e Event, s State, w *Watermark, sweepComments bool) (De
 		// the review event, a PR comment, the unblock cascade's PR leg
 		// and the sweep alike — and the row re-fires until the PR closes,
 		// stopping the moment it does because the sweep enumerates open
-		// pull requests only. The exemption belongs to this action's
-		// rows alone — the per-lens review and fix-feedback rows keep
-		// the sweep scoping below, because "this lens has not reported
-		// at head" is a state test an event can answer falsely
-		// mid-chain, whereas "every lens approves at head" cannot. What bounds the re-fire is the engine, not this
-		// row: the gates ahead of it hold a gated PR at a hold-off, and the
-		// re-fire bound lets one unchanged head dispatch once per reconcile
-		// interval whichever event arrived, so a comment, or a close the
-		// cascade walked, cannot set the pace of a privileged dispatch
-		// (§forgejo/reconciliation/watermark-exemptions,
-		// §forgejo/decisions/loop-prevention). The dispatch reason
-		// names the seat the opt-in was found in
+		// pull requests only. The re-fire is the engine's to bound, not
+		// this row's (§forgejo/reconciliation/watermark-exemptions,
+		// §forgejo/decisions/loop-prevention). The dispatch reason names
+		// the seat the opt-in was found in
 		// (§forgejo/decisions/merge-gate,
 		// §forgejo/observability/the-decision-log).
 		where := prOptInClause

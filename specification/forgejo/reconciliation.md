@@ -196,13 +196,7 @@ dispatch at most once per `reconcile_interval` whichever event arrived
 key, which bounds a task's overlap and never the re-fire's spacing
 (§forgejo/webhook/the-pipeline, §forgejo/decisions/loop-prevention).
 The agent's silence-on-noop keeps a re-fire that found nothing to do
-quiet (§forgejo/decisions/loop-prevention). Unlike the
-`review` and `fix-feedback` rows — whose state test, "this lens has
-not reported at head", an event can answer falsely while a chain is
-still arriving, so their exemption reads the **event** and belongs to
-the sweep alone — this row's state test, "every lens approves at
-head", is as true on an event as on the sweep, so the exemption is a
-property of the row and not of the path that reaches it.
+quiet (§forgejo/decisions/loop-prevention).
 
 A PR waiting to be reviewed sits at a **frozen head sha** — by
 definition nobody is pushing to it while it waits — so a
@@ -239,15 +233,21 @@ this revision" from "state calls for no action"
 
 What the exemption buys is bounded latency: an edge change is
 invisible until the next sweep, so a state-call for an exempt action
-is acted on in **at most one reconcile interval**.
+is acted on in **at most one reconcile interval** — one
+`merge-or-wait` re-fire excepted, which the re-fire bound can push to
+the following tick, the sweep's own tick paying the bound too
+(§forgejo/decisions/loop-prevention).
 
 What it costs is steady-state noise, and the bound on that is stated
 plainly: an exempt action re-fires on **every sweep while the state
 holds** — an open `ideation` root, or an `outcome` tracker still
 waiting to be closed, enqueues a task on each sweep for as long as the
-label applies. Nothing in the engine bounds it further: the queue's
-deduplication squelches a re-dispatch only while the prior task is
-still in flight, and the agent's silence-on-noop carries the rest. That
+label applies. Nothing in the engine bounds it further —
+`merge-or-wait` excepted, whose re-fires the engine's re-fire bound
+spaces at one per `reconcile_interval`
+(§forgejo/decisions/loop-prevention) — the queue's deduplication
+squelches a re-dispatch only while the prior task is still in flight,
+and the agent's silence-on-noop carries the rest. That
 is the design — the state *is* the watermark, and the engine's job is
 only to stop suppressing these actions — so an operator weighing the
 cost should read the re-firing as the mechanism working, not as a fault.
