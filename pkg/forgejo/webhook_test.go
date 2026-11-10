@@ -2612,13 +2612,11 @@ func mergeGateFixtures(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store, *by
 
 func reasonFor(t *testing.T, log *bytes.Buffer, key string) string {
 	t.Helper()
-	for _, e := range parseLogLines(t, log.Bytes()) {
-		if e["msg"] == "decision" && e["key"] == key {
-			reason, _ := e["reason"].(string)
-			return reason
-		}
+	reasons := decisionReasons(t, log, key)
+	if len(reasons) == 0 {
+		return ""
 	}
-	return ""
+	return reasons[0]
 }
 
 // lastReasonFor returns the newest decision recorded for key — what a
@@ -2626,13 +2624,25 @@ func reasonFor(t *testing.T, log *bytes.Buffer, key string) string {
 // the dispatch the second one is bounded by.
 func lastReasonFor(t *testing.T, log *bytes.Buffer, key string) string {
 	t.Helper()
-	found := ""
+	reasons := decisionReasons(t, log, key)
+	if len(reasons) == 0 {
+		return ""
+	}
+	return reasons[len(reasons)-1]
+}
+
+// decisionReasons returns the reason of every decision the log holds
+// for key, oldest first.
+func decisionReasons(t *testing.T, log *bytes.Buffer, key string) []string {
+	t.Helper()
+	var reasons []string
 	for _, e := range parseLogLines(t, log.Bytes()) {
 		if e["msg"] == "decision" && e["key"] == key {
-			found, _ = e["reason"].(string)
+			reason, _ := e["reason"].(string)
+			reasons = append(reasons, reason)
 		}
 	}
-	return found
+	return reasons
 }
 
 // TestHandler_PRReviewed_ConnectedIssueBlockerHoldsOffMerge: an
@@ -3106,6 +3116,148 @@ func TestHandler_PRCommented_MergeReFireAllowedAfterInterval(t *testing.T) {
 
 	if tasks := q.all(); len(tasks) != 2 {
 		t.Fatalf("got %d tasks, want 2 (the bound has expired); all = %+v", len(tasks), tasks)
+	}
+}
+
+// TestHandler_PRCommented_MergeReFireBoundsWithoutTheWatermark: the
+// bound is the stamp, not the watermark, so a store that cannot be read
+// narrows the re-fire rather than switching the bound off — two comments
+// at one frozen head still leave one merge task while the engine logs
+// the failed read (§forgejo/decisions/loop-prevention,
+// §forgejo/state/watermark).
+func TestHandler_PRCommented_MergeReFireBoundsWithoutTheWatermark(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, q, store := newTestEngine(t)
+	eng.log = slog.New(slog.NewJSONHandler(&log, nil))
+	pr := testPR(9, "open", true)
+	pr.Labels = []string{LabelAgenticAutoMerge}
+	api.pulls[9] = pr
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
+	key := Key{Repo: "o/r", Kind: KindPR, Number: 9}
+
+	for i := 0; i < 2; i++ {
+		// The watermark cannot be read, as under a store fault: the
+		// event path logs the failure and proceeds with none.
+		if err := os.WriteFile(filepath.Join(store.dir, key.fileName()), []byte("{not json"), 0o600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
+	}
+
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (the bound holds without the watermark); all = %+v", len(tasks), tasks)
+	}
+	if reason := lastReasonFor(t, &log, "o/r/pr/9"); !strings.Contains(reason, "reconcile interval") {
+		t.Errorf("decision reason %q does not name the re-fire bound", reason)
+	}
+}
+
+// TestHandler_PRCommented_MergeReFireIgnoresAStampAtAnotherRevision:
+// the bound is keyed on the revision, so a stamp taken at a head the PR
+// no longer holds bounds nothing — the re-fire at the current head goes
+// through rather than waiting the interval out, which is the fixed point
+// #197 was filed against (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/watermark-exemptions).
+func TestHandler_PRCommented_MergeReFireIgnoresAStampAtAnotherRevision(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	pr := testPR(9, "open", true)
+	pr.Labels = []string{LabelAgenticAutoMerge}
+	api.pulls[9] = pr
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
+	key := Key{Repo: "o/r", Kind: KindPR, Number: 9}
+
+	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
+	// The head the stamp records is not the head the PR stands at.
+	eng.stampMergeReFireAt(key, "sha-older", time.Now())
+	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
+
+	tasks := q.all()
+	if len(tasks) != 2 {
+		t.Fatalf("got %d tasks, want 2 (a stamp at another revision bounds nothing); all = %+v", len(tasks), tasks)
+	}
+}
+
+// TestHandler_PRCommented_MergeReFireNeverHoldsOffAnUnstampedRevision:
+// the bound is a rate, never a hold-off on a revision the engine has
+// not dispatched at — a watermark that records the dispatch while no
+// stamp does, as after a restart, still dispatches
+// (§forgejo/decisions/loop-prevention, s-git/maitred#197).
+func TestHandler_PRCommented_MergeReFireNeverHoldsOffAnUnstampedRevision(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	pr := testPR(9, "open", true)
+	pr.Labels = []string{LabelAgenticAutoMerge}
+	api.pulls[9] = pr
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
+	if err := store.Save(Key{Repo: "o/r", Kind: KindPR, Number: 9},
+		Watermark{Action: string(ActionMergeOrWait), Revision: "sha-9"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
+
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (the first dispatch at a revision is never bounded); all = %+v", len(tasks), tasks)
+	}
+}
+
+// TestHandler_Reconcile_MergeReFireBoundedPerInterval: the sweep pays
+// the bound like every other path, so two sweeps at one frozen head
+// leave one merge task and one hold-off naming the bound — the interval
+// is the clock, not the order the paths arrived in
+// (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/watermark-exemptions).
+func TestHandler_Reconcile_MergeReFireBoundedPerInterval(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, q, _ := newTestEngine(t)
+	eng.log = slog.New(slog.NewJSONHandler(&log, nil))
+	pr := testPR(9, "open", true)
+	pr.Labels = []string{LabelAgenticAutoMerge}
+	api.pulls[9] = pr
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
+
+	for i := 0; i < 2; i++ {
+		eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	}
+
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (the second sweep is bounded); all = %+v", len(tasks), tasks)
+	}
+	if reason := lastReasonFor(t, &log, "o/r/pr/9"); !strings.Contains(reason, "reconcile interval") {
+		t.Errorf("decision reason %q does not name the re-fire bound", reason)
+	}
+}
+
+// TestEngine_MergeReFireStampEvictedWhenSpent: a stamp that no longer
+// bounds — its interval spent or its head superseded — is dropped rather
+// than kept for the life of the process, so the bound's memory follows
+// the PRs standing at a merge-eligible head rather than every PR that
+// ever was (§forgejo/decisions/loop-prevention).
+func TestEngine_MergeReFireStampEvictedWhenSpent(t *testing.T) {
+	eng, _, _, _ := newTestEngine(t)
+	stamps := func() int {
+		t.Helper()
+		eng.reFireMu.Lock()
+		defer eng.reFireMu.Unlock()
+		return len(eng.mergeReFires)
+	}
+
+	expired := Key{Repo: "o/r", Kind: KindPR, Number: 9}
+	eng.stampMergeReFireAt(expired, "sha-9", time.Now().Add(-2*eng.cfg.ReconcileInterval))
+	if eng.mergeReFiredRecently(expired, "sha-9") {
+		t.Error("an expired stamp bounds: the re-fire must go through")
+	}
+
+	moved := Key{Repo: "o/r", Kind: KindPR, Number: 10}
+	eng.stampMergeReFireAt(moved, "sha-old", time.Now())
+	if eng.mergeReFiredRecently(moved, "sha-new") {
+		t.Error("a stamp at another revision bounds: the re-fire must go through")
+	}
+
+	if n := stamps(); n != 0 {
+		t.Errorf("%d stamps kept, want 0 (both stopped bounding)", n)
 	}
 }
 
