@@ -740,8 +740,8 @@ the member or on the pull request delivering it — when it joins a set
 has the label removed by the decomposer — a member
 with both labels is the error state the approval hold-off exists to
 contain: it is never merged by `merge-or-wait`; landing is the set's
-decision, and the hold-off names the set, both opt-ins and the seat the
-merging one sits in.
+decision, and the hold-off names the set the member belongs to, the
+merging opt-in and the seat the merging one sits in.
 Retiring a set therefore includes removing `agentic-sync-merge` from
 its former members: the label is only ever a gate while an open set
 stands behind it.

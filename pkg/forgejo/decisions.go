@@ -1017,9 +1017,10 @@ func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 // reviewer), while the pure review-event path waits for a
 // changes-requested (§forgejo/decisions/transition-table). The
 // merge-or-wait dispatch additionally requires the
-// agentic-auto-merge opt-in on the PR: the sync-set hold-off and the
-// merge gate sit ahead of it, and a PR they let through without the
-// label holds off naming the missing opt-in and the connected issues
+// agentic-auto-merge opt-in — on the PR or on an issue it delivers:
+// the sync-set hold-off and the merge gate sit ahead of it, and a PR
+// they let through without the label holds off naming the missing
+// opt-in and the connected issues
 // (§forgejo/decisions/merge-gate, s-git/maitred#179). ok is
 // false when the branch does not apply — some lens has still not
 // reported at head — and the caller falls through to the fan-out
@@ -1059,15 +1060,13 @@ func decideChainReported(e Event, s State, w *Watermark, sweepComments bool) (De
 		// approved chain never re-fires merge on its own
 		// (§forgejo/reconciliation/watermark-exemptions,
 		// §forgejo/decisions/loop-prevention). The dispatch reason
-		// names the seat the opt-in was found in — the decision log
-		// then tells a pull request opted into merging from a forest
-		// that opted in through its work item
+		// names the seat the opt-in was found in
 		// (§forgejo/decisions/merge-gate,
 		// §forgejo/observability/the-decision-log).
 		if onSweep(e) {
-			where := fmt.Sprintf("its issue %s carries %s", ref, LabelAgenticAutoMerge)
-			if ref == "" {
-				where = fmt.Sprintf("carries %s", LabelAgenticAutoMerge)
+			where := fmt.Sprintf("carries %s", LabelAgenticAutoMerge)
+			if ref != "" {
+				where = issueOptInClause(ref)
 			}
 			return dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d stands at approving reviews from every lens and %s; the state calls for merge-or-wait regardless of revision %s", pr.Number, where, pr.HeadSHA)), true
 		}
@@ -1595,37 +1594,39 @@ func syncMemberSetHoldOff(pr *PullRequest, s State) (Decision, bool) {
 		// (§forgejo/decisions/sync-set).
 		return Decision{}, false
 	}
-	reason := fmt.Sprintf("PR %d stands at an approved review, but its connected issue %s is a member of a sync set; landing is the set's decision, not the PR's", pr.Number, strings.Join(members, ", "))
+	// The membership clause, composed once so the plain hold-off and
+	// the authoring-error sentence name one membership state with one
+	// sentence and cannot drift apart
+	// (§forgejo/observability/the-decision-log).
+	membership := fmt.Sprintf("its connected issue %s is a member of a sync set", strings.Join(members, ", "))
 	if direct {
 		who := fmt.Sprintf("it is a direct member of the open sync set grouped by %s", strings.Join(directSets, ", "))
 		if len(members) > 0 {
-			reason = fmt.Sprintf("PR %d stands at an approved review, but its connected issue %s is a member of a sync set and %s; landing is the set's decision, not the PR's", pr.Number, strings.Join(members, ", "), who)
+			membership = fmt.Sprintf("%s and %s", membership, who)
 		} else {
-			reason = fmt.Sprintf("PR %d stands at an approved review, but %s; landing is the set's decision, not the PR's", pr.Number, who)
+			membership = who
 		}
 	}
+	reason := fmt.Sprintf("PR %d stands at an approved review, but %s; landing is the set's decision, not the PR's", pr.Number, membership)
 	if len(dualLabelled) > 0 {
 		reason = fmt.Sprintf("PR %d stands at an approved review, but its connected issue %s carries both %s and %s%s", pr.Number, strings.Join(dualLabelled, ", "), LabelAgenticSyncMerge, LabelAgenticAutoMerge, dualOptInError)
 	} else if ref, optedIn := mergeOptedIn(pr, s.ConnectedIssues); optedIn {
 		// The merging opt-in is asked through the same predicate the
 		// merge row asks it with, whatever shape the membership arrived
-		// in, so the set read and the merge read cannot disagree about
-		// one pull request — the reason then names the set the member
-		// belongs to and the seat the merging opt-in sits in
-		// (§forgejo/decisions/sync-set, §forgejo/decisions/merge-gate).
-		membership := fmt.Sprintf("its connected issue %s is a member of a sync set", strings.Join(members, ", "))
-		if direct {
-			membership = fmt.Sprintf("it is a direct member of the sync set grouped by %s", strings.Join(directSets, ", "))
-		}
+		// in (§forgejo/decisions/sync-set, §forgejo/decisions/merge-gate).
+		// Direct membership is recorded from the PR's edge into a
+		// grouping issue's blockers — that edge, not a label on the
+		// pull request, is the set's opt-in — so the sentence names
+		// the set label only where the pull request carries it too.
 		where := fmt.Sprintf("the pull request carries %s", LabelAgenticAutoMerge)
 		switch {
 		case direct && ref == "":
-			// The direct member is the one shape whose pull request
-			// carries both opt-ins itself: its edge into the grouping
-			// issue's blockers is the set's opt-in.
-			where = fmt.Sprintf("carries both %s and %s", LabelAgenticSyncMerge, LabelAgenticAutoMerge)
+			where = fmt.Sprintf("carries %s", LabelAgenticAutoMerge)
+			if carriesLabel(pr.Labels, LabelAgenticSyncMerge) {
+				where = fmt.Sprintf("carries both %s and %s", LabelAgenticSyncMerge, LabelAgenticAutoMerge)
+			}
 		case ref != "":
-			where = fmt.Sprintf("its issue %s carries %s", ref, LabelAgenticAutoMerge)
+			where = issueOptInClause(ref)
 		}
 		reason = fmt.Sprintf("PR %d stands at an approved review, but %s and %s%s", pr.Number, membership, where, dualOptInError)
 	}
@@ -1762,6 +1763,14 @@ func mergeOptedIn(pr *PullRequest, connected []ConnectedIssue) (issueRef string,
 		}
 	}
 	return "", false
+}
+
+// issueOptInClause renders the issue seat in a reason: the reference
+// of the issue the opt-in was found on. One clause for every site
+// that names that seat, so a reader's grep finds every row that does
+// (§forgejo/observability/the-decision-log).
+func issueOptInClause(ref string) string {
+	return fmt.Sprintf("its issue %s carries %s", ref, LabelAgenticAutoMerge)
 }
 
 // dualOptInError ends every hold-off that names the authoring error of
