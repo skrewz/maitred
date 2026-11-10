@@ -1075,6 +1075,10 @@ func (e *Engine) dispatchPrompt(ev Event, st State, pc PromptConfig, subject str
 		DedupKey: fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%s", ev.Repo, ev.Kind, ev.Number, identity, rev),
 		Title:    taskTitle(dispatchVerb(action, subject), ev, st),
 		URL:      taskURL(st),
+		// The tier is decided here, at the one dispatch site, from the
+		// labels read now — never from anything cached between
+		// schedulings (§forgejo/webhook/vip-priority).
+		Priority: e.taskPriority(st),
 	}
 	if err := e.queue.AddTask(task); err != nil {
 		return fmt.Errorf("enqueue %s for %s: %w", dispatchVerb(action, subject), ev.KeyOf(), err)

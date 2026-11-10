@@ -69,4 +69,13 @@ const (
 	// only the seeding window (§forgejo/decisions/transition-table,
 	// s-git/maitred#125).
 	LabelForestSeeding = "forest-seeding"
+	// LabelVIP marks the objects whose tasks are scheduled at a higher
+	// tier than the queue's default: a pull request carrying it, an
+	// issue it delivers, or the tracker of the forest an issue belongs
+	// to makes forgejoeng submit its tasks at `teacher` priority
+	// (§forgejo/webhook/vip-priority). Unlike the kind labels above it
+	// gates no work item and asks for no action — it is an annotation
+	// read at the moment of scheduling, never retroactively, so
+	// attaching and removing it is just editing labels.
+	LabelVIP = "vip"
 )
