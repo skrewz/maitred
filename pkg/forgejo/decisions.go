@@ -1064,7 +1064,7 @@ func decideChainReported(e Event, s State, w *Watermark, sweepComments bool) (De
 		// (§forgejo/decisions/merge-gate,
 		// §forgejo/observability/the-decision-log).
 		if onSweep(e) {
-			where := fmt.Sprintf("carries %s", LabelAgenticAutoMerge)
+			where := prOptInClause
 			if ref != "" {
 				where = issueOptInClause(ref)
 			}
@@ -1198,10 +1198,10 @@ func dispatchOnState(w *Watermark, exempt bool, action Action, revision, reason 
 // and handles the feedback themselves —
 // §forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention,
 // s-git/maitred#143), and approvals across the board dispatch
-// merge-or-wait only when the PR carries the agentic-auto-merge
-// opt-in and the merge gate lets it through, no connected issue
-// having an open blocker (§forgejo/decisions/merge-gate,
-// s-git/maitred#179).
+// merge-or-wait only when the PR or an issue it delivers carries the
+// agentic-auto-merge opt-in and the merge gate lets it through, no
+// connected issue having an open blocker
+// (§forgejo/decisions/merge-gate, s-git/maitred#179).
 // A comment-only chain holds off here — the sweep is the row that
 // turns comment reports into fix-feedback — and while any lens has
 // not reported at head the decision falls through to the fan-out row
@@ -1613,21 +1613,19 @@ func syncMemberSetHoldOff(pr *PullRequest, s State) (Decision, bool) {
 	} else if ref, optedIn := mergeOptedIn(pr, s.ConnectedIssues); optedIn && ref == "" {
 		// The merging opt-in is asked through the same predicate the
 		// merge row asks it with, whatever shape the membership arrived
-		// in, but only the pull-request seat is paired with membership
-		// here: those are the seats §sync-set's remedy reaches — "on
-		// the member or on the pull request delivering it". A member
-		// issue carrying both labels is the dualLabelled case above,
-		// and an opt-in found on a co-delivered issue is that work
-		// item's own, not this member's second landing route, so it
-		// names no authoring error (§forgejo/decisions/sync-set,
-		// §forgejo/decisions/merge-gate). Direct membership is
-		// recorded from the PR's edge into a grouping issue's
-		// blockers — that edge, not a label on the pull request, is
-		// the set's opt-in — so the sentence names the set label only
-		// where the pull request carries it too.
-		where := fmt.Sprintf("the pull request carries %s", LabelAgenticAutoMerge)
+		// in, because #196 asks that the two reads cannot disagree. Only
+		// the pull-request seat is paired with membership here: those are
+		// the seats §sync-set's remedy reaches — "on the member or on the
+		// pull request delivering it". An opt-in found on a co-delivered
+		// issue is that work item's own, so it names no authoring error,
+		// and direct membership is recorded from the PR's edge into a
+		// grouping issue's blockers — that edge, not a label, is the
+		// set's opt-in, so the sentence names the set label only where
+		// the pull request carries it too
+		// (§forgejo/decisions/sync-set, §forgejo/decisions/merge-gate).
+		where := "the pull request " + prOptInClause
 		if direct {
-			where = fmt.Sprintf("carries %s", LabelAgenticAutoMerge)
+			where = prOptInClause
 			if carriesLabel(pr.Labels, LabelAgenticSyncMerge) {
 				where = fmt.Sprintf("carries both %s and %s", LabelAgenticSyncMerge, LabelAgenticAutoMerge)
 			}
@@ -1768,6 +1766,12 @@ func mergeOptedIn(pr *PullRequest, connected []ConnectedIssue) (issueRef string,
 	}
 	return "", false
 }
+
+// prOptInClause renders the pull-request seat in a reason: the clause
+// naming the opt-in, one constant for every site that names that seat,
+// as issueOptInClause is for the issue seat, so a reader's grep finds
+// every row that does (§forgejo/observability/the-decision-log).
+const prOptInClause = "carries " + LabelAgenticAutoMerge
 
 // issueOptInClause renders the issue seat in a reason: the reference
 // of the issue the opt-in was found on. One clause for every site

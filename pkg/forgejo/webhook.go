@@ -1273,7 +1273,7 @@ func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
 // re-fetched PR state decides: only a decision of merge-or-wait
 // dispatches — a PR not standing at an approved head, a PR whose gate
 // still sees an open blocker on re-fetch, a PR carrying no
-// agentic-auto-merge opt-in, and a PR whose connected issue is a
+// agentic-auto-merge opt-in on either seat, and a PR whose connected issue is a
 // member of an open landing set all dispatch nothing, each recorded
 // in the decision log with the sweep as the backstop
 // (§forgejo/decisions/merge-gate, §forgejo/decisions/sync-set). The PR
