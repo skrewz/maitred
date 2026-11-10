@@ -200,6 +200,17 @@ func TestReconcile_PRStandingAtReview(t *testing.T) {
 			want:      "action=fix-feedback",
 		},
 		{
+			// The merge-or-wait row is watermark-exempt on every path once
+			// the PR is opted in: the approved labelled PR at a frozen head
+			// is the state that is its own watermark, sweep included
+			// (s-git/maitred#197).
+			name:      "merge-or-wait already dispatched at the revision re-fires while the labelled PR stands approved at head",
+			review:    Review{Event: ReviewApproved, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt},
+			labels:    []string{LabelAgenticAutoMerge},
+			watermark: &Watermark{Action: string(ActionMergeOrWait), Revision: "sha-1"},
+			want:      "action=merge-or-wait",
+		},
+		{
 			// The merge opt-in is a precondition of the dispatch on
 			// every path: an approved PR with no agentic-auto-merge
 			// label waits on a human whatever the watermark records

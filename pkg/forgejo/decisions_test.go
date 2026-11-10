@@ -1385,10 +1385,22 @@ func TestDecide(t *testing.T) {
 			watermark: &Watermark{Action: "fix-feedback", Revision: "abc"},
 		},
 		{
-			name:      "merge-or-wait already dispatched at the revision holds off",
+			// A PR with no merge opt-in holds off on the event path
+			// whatever the watermark records: the opt-in gates the
+			// dispatch on every path, the exemption is scoped to the
+			// labelled PR (§forgejo/decisions/merge-gate,
+			// s-git/maitred#179, s-git/maitred#197).
+			name:      "merge-or-wait already dispatched at the revision holds off without the opt-in",
 			event:     prEvent(EventPRReviewed, "carol"),
-			state:     State{ReviewLenses: testLenses, PR: optedIntoMerge(openPR("abc")), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			state:     State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
+		},
+		{
+			name:       "review event re-fires merge-or-wait for a labelled PR at the recorded revision",
+			event:      prEvent(EventPRReviewed, "carol"),
+			state:      State{ReviewLenses: testLenses, PR: labelledPR("abc", LabelAgenticAutoMerge), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			watermark:  &Watermark{Action: "merge-or-wait", Revision: "abc"},
+			wantAction: ActionMergeOrWait,
 		},
 		{
 			name:       "reconcile PR fix-feedback already dispatched at the revision re-fires: the state at head is the watermark",
@@ -1396,6 +1408,12 @@ func TestDecide(t *testing.T) {
 			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
 			watermark:  &Watermark{Action: "fix-feedback", Revision: "abc"},
 			wantAction: ActionFixFeedback,
+		},
+		{
+			name:      "reconcile PR merge-or-wait already dispatched at the revision holds off without the opt-in",
+			event:     prEvent(EventReconcile, "maitred"),
+			state:     State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
 		},
 		{
 			name:       "reconcile PR standing at a comment review, fix-feedback already dispatched at the revision, re-fires",
@@ -1429,10 +1447,17 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionReview,
 		},
 		{
-			name:      "PR commented, merge-or-wait already dispatched at the revision, holds off",
+			name:      "PR commented, merge-or-wait already dispatched at the revision, holds off without the opt-in",
 			event:     prEvent(EventPRCommented, "alice"),
-			state:     State{ReviewLenses: testLenses, PR: optedIntoMerge(openPR("abc")), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			state:     State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
 			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
+		},
+		{
+			name:       "PR commented re-fires merge-or-wait for a labelled PR at the recorded revision",
+			event:      prEvent(EventPRCommented, "alice"),
+			state:      State{ReviewLenses: testLenses, PR: labelledPR("abc", LabelAgenticAutoMerge), Reviews: []Review{review("APPROVED", "carol", testTime)}},
+			watermark:  &Watermark{Action: "merge-or-wait", Revision: "abc"},
+			wantAction: ActionMergeOrWait,
 		},
 		{
 			name:  "PR commented but closed on re-fetch holds off",
@@ -3296,16 +3321,22 @@ func TestDecide_SyncSetMemberEdgeCaseReasons(t *testing.T) {
 	})
 }
 
-// TestDecide_SweepAutoMergeRowIsWatermarkExempt: the sweep's
+// TestDecide_AutoMergeRowIsWatermarkExemptOnEveryPath: the
 // merge-or-wait row is watermark-exempt when the state calls for it —
-// the PR is open, its latest review approves at head, no connected issue
-// has an open blocker, and it carries the agentic-auto-merge
-// label. The label is the opt-in and the precondition of the
-// dispatch on every path: an approved PR without it waits on a
+// the PR is open, every lens approves at head, no connected issue has
+// an open blocker, and it carries the agentic-auto-merge label — on
+// the review event, the PR-commented event, the unblock cascade's PR
+// leg and the sweep alike (s-git/maitred#197). An approved
+// `agentic-auto-merge` PR sits at a frozen head once the chain
+// approves, so a revision-keyed guard on the event paths is a fixed
+// point: a dispatch that went nowhere, or a merge run that died, never
+// recovers on an event. The label is the opt-in and the precondition
+// of the dispatch on every path: an approved PR without it waits on a
 // human, its hold-off naming the missing label and the connected
 // issues (§forgejo/reconciliation/watermark-exemptions,
-// §forgejo/decisions/merge-gate, s-git/maitred#179).
-func TestDecide_SweepAutoMergeRowIsWatermarkExempt(t *testing.T) {
+// §forgejo/decisions/merge-gate, §forgejo/decisions/loop-prevention,
+// s-git/maitred#179, s-git/maitred#197).
+func TestDecide_AutoMergeRowIsWatermarkExemptOnEveryPath(t *testing.T) {
 	approvedAtHead := func(labels ...string) State {
 		return State{
 			ReviewLenses: testLenses,
@@ -3315,45 +3346,66 @@ func TestDecide_SweepAutoMergeRowIsWatermarkExempt(t *testing.T) {
 	}
 	watermark := &Watermark{Action: string(ActionMergeOrWait), Revision: "abc"}
 
-	t.Run("sweep re-fires the labelled PR at the recorded revision", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), approvedAtHead(LabelAgenticAutoMerge), watermark)
-		if d.Action != ActionMergeOrWait {
-			t.Fatalf("decision = %+v, want merge-or-wait: an approved auto-merge PR at a frozen head is not a fixed point", d)
-		}
-		if strings.Contains(d.Reason, "already dispatched") {
-			t.Errorf("reason = %q, want the state that calls for the action, not the watermark", d.Reason)
-		}
-		if !strings.Contains(d.Reason, "regardless of revision abc") {
-			t.Errorf("reason = %q, want it to name the revision the state overrides", d.Reason)
-		}
-	})
-
-	t.Run("sweep holds off a PR without the opt-in", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), approvedAtHead(), watermark)
-		if !d.HoldOff() {
-			t.Fatalf("decision = %+v, want a hold-off: auto-merge is an opt-in", d)
-		}
-		if !strings.Contains(d.Reason, LabelAgenticAutoMerge) {
-			t.Errorf("reason = %q, want it to name the missing opt-in, not merely the watermark", d.Reason)
+	t.Run("every path re-fires the labelled PR at the recorded revision", func(t *testing.T) {
+		for _, ev := range []Event{
+			prEvent(EventPRReviewed, "carol"),
+			prEvent(EventPRCommented, "alice"),
+			prEvent(EventReconcile, ""),
+		} {
+			d := Decide(ev, approvedAtHead(LabelAgenticAutoMerge), watermark)
+			if d.Action != ActionMergeOrWait {
+				t.Errorf("event %q: decision = %+v, want merge-or-wait: an approved auto-merge PR at a frozen head is not a fixed point on any path", ev.Type, d)
+				continue
+			}
+			if strings.Contains(d.Reason, "already dispatched") {
+				t.Errorf("event %q: reason = %q, want the state that calls for the action, not the watermark", ev.Type, d.Reason)
+			}
+			if !strings.Contains(d.Reason, "regardless of revision abc") {
+				t.Errorf("event %q: reason = %q, want it to name the revision the state overrides", ev.Type, d.Reason)
+			}
 		}
 	})
 
-	t.Run("sweep holds off the labelled PR with a connected open blocker", func(t *testing.T) {
-		s := approvedAtHead(LabelAgenticAutoMerge)
-		s.ConnectedIssues = []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "open"))}
-		d := Decide(prEvent(EventReconcile, ""), s, watermark)
-		if !d.HoldOff() {
-			t.Fatalf("decision = %+v, want a hold-off: the merge gate holds on every path", d)
-		}
-		if !strings.Contains(d.Reason, "o/r#3") {
-			t.Errorf("reason = %q, want it to name the open blocker", d.Reason)
-		}
-		if strings.Contains(d.Reason, "already dispatched") {
-			t.Errorf("reason = %q, want the state that calls for no action, not the watermark", d.Reason)
+	t.Run("every path holds off a PR without the opt-in", func(t *testing.T) {
+		for _, ev := range []Event{
+			prEvent(EventPRReviewed, "carol"),
+			prEvent(EventPRCommented, "alice"),
+			prEvent(EventReconcile, ""),
+		} {
+			d := Decide(ev, approvedAtHead(), watermark)
+			if !d.HoldOff() {
+				t.Errorf("event %q: decision = %+v, want a hold-off: auto-merge is an opt-in", ev.Type, d)
+				continue
+			}
+			if !strings.Contains(d.Reason, LabelAgenticAutoMerge) {
+				t.Errorf("event %q: reason = %q, want it to name the missing opt-in, not merely the watermark", ev.Type, d.Reason)
+			}
 		}
 	})
 
-	t.Run("sweep holds off the labelled PR that is already merged", func(t *testing.T) {
+	t.Run("a labelled PR with a connected open blocker holds off naming the blocker on every path", func(t *testing.T) {
+		for _, ev := range []Event{
+			prEvent(EventPRReviewed, "carol"),
+			prEvent(EventPRCommented, "alice"),
+			prEvent(EventReconcile, ""),
+		} {
+			s := approvedAtHead(LabelAgenticAutoMerge)
+			s.ConnectedIssues = []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "open"))}
+			d := Decide(ev, s, watermark)
+			if !d.HoldOff() {
+				t.Errorf("event %q: decision = %+v, want a hold-off: the merge gate holds on every path", ev.Type, d)
+				continue
+			}
+			if !strings.Contains(d.Reason, "o/r#3") {
+				t.Errorf("event %q: reason = %q, want it to name the open blocker", ev.Type, d.Reason)
+			}
+			if strings.Contains(d.Reason, "already dispatched") {
+				t.Errorf("event %q: reason = %q, want the state that calls for no action, not the watermark", ev.Type, d.Reason)
+			}
+		}
+	})
+
+	t.Run("a labelled PR that is already merged holds off: the re-fire ends where the PR does", func(t *testing.T) {
 		pr := labelledPR("abc", LabelAgenticAutoMerge)
 		pr.State, pr.Merged = "closed", true
 		d := Decide(prEvent(EventReconcile, ""), State{
@@ -3366,18 +3418,6 @@ func TestDecide_SweepAutoMergeRowIsWatermarkExempt(t *testing.T) {
 		}
 		if !strings.Contains(d.Reason, "not open") {
 			t.Errorf("reason = %q, want it to name the PR's state", d.Reason)
-		}
-	})
-
-	t.Run("event path stays revision-keyed for the labelled PR", func(t *testing.T) {
-		for _, ev := range []Event{prEvent(EventPRReviewed, "carol"), prEvent(EventPRCommented, "alice")} {
-			d := Decide(ev, approvedAtHead(LabelAgenticAutoMerge), watermark)
-			if !d.HoldOff() {
-				t.Errorf("event %q: decision = %+v, want a hold-off: the exemption is the sweep's row alone", ev.Type, d)
-			}
-			if !strings.Contains(d.Reason, "already dispatched at revision abc") {
-				t.Errorf("event %q: reason = %q, want the revision-keyed hold-off", ev.Type, d.Reason)
-			}
 		}
 	})
 }

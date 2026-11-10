@@ -2956,9 +2956,11 @@ func TestHandler_IssueClosed_CascadePRFetchFailure(t *testing.T) {
 	}
 }
 
-// TestHandler_IssueClosed_CascadePRWatermarkHolds: a newly unblocked PR whose
-// watermark already records merge-or-wait at the current head is not
-// re-dispatched (§forgejo/decisions/unblock-cascade,
+// TestHandler_IssueClosed_CascadePRWatermarkHolds: a newly unblocked
+// PR whose watermark already records merge-or-wait at the current head
+// and which carries no merge opt-in is not re-dispatched — the
+// revision-keyed guard stays on the cascade's PR leg for a PR nobody
+// opted into merging (§forgejo/decisions/unblock-cascade,
 // §forgejo/decisions/loop-prevention).
 func TestHandler_IssueClosed_CascadePRWatermarkHolds(t *testing.T) {
 	eng, _, q, store, _ := cascadePRFixtures(t)
@@ -2971,6 +2973,64 @@ func TestHandler_IssueClosed_CascadePRWatermarkHolds(t *testing.T) {
 
 	if tasks := q.all(); len(tasks) != 0 {
 		t.Fatalf("got %d tasks, want none (already dispatched at the head)", len(tasks))
+	}
+}
+
+// TestHandler_IssueClosed_CascadePRReFiresWithOptIn: the cascade's PR
+// leg is one of the paths a ready PR re-fires merge-or-wait on, the
+// watermark notwithstanding — a PR opted into merging and approved at
+// head re-dispatches even though the watermark already records the
+// action at that frozen head, because a cascade dispatch that went
+// nowhere would otherwise never recover outside the sweep
+// (s-git/maitred#197, §forgejo/reconciliation/watermark-exemptions).
+func TestHandler_IssueClosed_CascadePRReFiresWithOptIn(t *testing.T) {
+	eng, api, q, store, _ := cascadePRFixtures(t)
+	pr := api.pulls[9]
+	pr.Labels = []string{LabelAgenticAutoMerge}
+	if err := store.Save(Key{Repo: "o/r", Kind: KindPR, Number: 9},
+		Watermark{Action: string(ActionMergeOrWait), Revision: "sha-9"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (merge-or-wait re-fired at the recorded head); all = %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=merge-or-wait repo=o/r kind=pr number=9") {
+		t.Errorf("prompt = %q, want merge-or-wait for o/r PR 9", tasks[0].Prompt)
+	}
+	w, _ := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
+	if w == nil || w.Action != string(ActionMergeOrWait) || w.Revision != "sha-9" {
+		t.Errorf("watermark = %+v, want merge-or-wait at sha-9", w)
+	}
+}
+
+// TestHandler_IssueClosed_CascadePROptedInWithBlockedConnectedIssue:
+// the re-fire is bounded by the state, not by the watermark — the
+// merge gate stays ahead of the row on the cascade's PR leg, so an
+// opted-in PR whose connected issue is still blocked records a
+// hold-off naming that blocker and enqueues nothing on a head the
+// watermark already records (s-git/maitred#197,
+// §forgejo/decisions/merge-gate).
+func TestHandler_IssueClosed_CascadePROptedInWithBlockedConnectedIssue(t *testing.T) {
+	eng, api, q, store, log := cascadePRFixtures(t)
+	api.pulls[9].Labels = []string{LabelAgenticAutoMerge}
+	api.blocks[9] = append(api.blocks[9], *testIssue(12, "open"))
+	api.deps[12] = []Issue{*testIssue(11, "open")}
+	if err := store.Save(Key{Repo: "o/r", Kind: KindPR, Number: 9},
+		Watermark{Action: string(ActionMergeOrWait), Revision: "sha-9"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want none (the merge gate holds the re-fire off)", len(tasks))
+	}
+	if reason := reasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "o/r#11") {
+		t.Errorf("hold-off reason %q does not name the open blocker", reason)
 	}
 }
 
