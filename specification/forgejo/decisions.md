@@ -511,7 +511,12 @@ the assembly already holds as the PR's connected issues — the
 auto-close references and the blocking edges
 (§forgejo/webhook/re-fetch) — so the read never invents a relation of
 its own, and widens with that assembly; where nothing is delivered it
-reduces to the pull request alone. Every row that asks the question
+reduces to the pull request alone. That breadth is the assembly's and
+not this read's: the test authorises nothing the assembly did not
+already connect, so widening or narrowing which work items may opt a
+forest into merging is a change to the admission rules of
+§forgejo/webhook/re-fetch, never a private test added to one row here.
+Every row that asks the question
 asks it through that one test — the precondition every path consults,
 the sweep's watermark-exempt `merge-or-wait` row, and the landing-set
 hold-off's both-opt-ins test alike — so no row keeps a private copy of
