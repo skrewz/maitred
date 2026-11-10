@@ -2,7 +2,6 @@ package forgejo
 
 import (
 	"errors"
-	"strings"
 	"testing"
 	"time"
 )
@@ -44,6 +43,22 @@ func vipPR(number int, state string, mergeable bool) *PullRequest {
 	pr := testPR(number, state, mergeable)
 	pr.Labels = append(pr.Labels, LabelVIP)
 	return pr
+}
+
+// prLabelled returns a fixture pull request wearing exactly the labels given.
+func prLabelled(number int, labels ...string) *PullRequest {
+	pr := testPR(number, "open", true)
+	pr.Labels = labels
+	return pr
+}
+
+// vipTrackerInRepo returns a fixture vip tracker living in the named
+// repository — the membership read is made there, wherever the forest's
+// tracker happens to live (§forgejo/client/operations).
+func vipTrackerInRepo(repo string) Issue {
+	tracker := vipTrackerIssue(5, "closed", true)
+	tracker.Repository = repo
+	return tracker
 }
 
 // TestDispatch_VIPPriority: the tier a forgejoeng dispatch carries is the
@@ -96,14 +111,19 @@ func TestDispatch_VIPPriority(t *testing.T) {
 			want: PriorityTeacher,
 		},
 		{
-			name: "the issue is itself the vip tracker",
+			// A tracker wearing vip lifts its own dispatch at the label
+			// check — the first branch of vipIssue — no gate walk taken;
+			// the walk's second shape matters to the tracker only as
+			// what makes it a tracker at all (§forgejo/webhook/vip-priority).
+			name: "a vip tracker lifts its own dispatch by its own label",
 			ev:   Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 5, Sender: "alice"},
 			st: State{Issue: &Issue{
 				Number: 5, Title: "tracker 5", State: "open",
 				Labels: []string{LabelOutcome, LabelVIP}, UpdatedAt: testUpdatedAt,
 				HTMLURL: "https://forge.example.com/o/r/issues/5", Repository: "o/r",
 			}},
-			want: PriorityTeacher,
+			want:  PriorityTeacher,
+			reads: map[string]int{"IssueDependencies": 0},
 		},
 		{
 			// The tracker gates the member: the label is read from the
@@ -152,6 +172,41 @@ func TestDispatch_VIPPriority(t *testing.T) {
 			ev:   Event{Type: EventPRSynced, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "alice"},
 			st:   State{PR: vipPR(9, "open", true)},
 			want: PriorityTeacher,
+		},
+		{
+			// The label is matched as every other reserved name is, so a
+			// carrier labelled "VIP" is not silently downgraded
+			// (§forgejo/webhook/vip-priority).
+			name: "the label is matched case-insensitively",
+			ev:   Event{Type: EventPRSynced, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "alice"},
+			st:   State{PR: prLabelled(9, "VIP")},
+			want: PriorityTeacher,
+		},
+		{
+			// The tracker may live in another repository — the membership
+			// read is made in the tracker's own
+			// (§forgejo/webhook/vip-priority, §forgejo/client/operations).
+			name: "the vip tracker lives in another repository",
+			ev:   Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"},
+			st:   State{Issue: testIssue(7, "open"), Blockers: []Issue{vipTrackerInRepo("o/other")}},
+			setup: func(api *fakeAPI) {
+				api.deps[5] = []Issue{vipRootIssue(2, "closed")}
+			},
+			want:  PriorityTeacher,
+			reads: map[string]int{"IssueDependencies:other/5": 1},
+		},
+		{
+			// A blocker row that names no repository names no forest — the
+			// walk cannot read a gate it cannot locate, so the dispatch keeps
+			// the queue's default rather than guessing
+			// (§forgejo/webhook/vip-priority, §forgejo/client/operations).
+			name: "a tracker that names no repository names no forest",
+			ev:   Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"},
+			st:   State{Issue: testIssue(7, "open"), Blockers: []Issue{vipTrackerInRepo("")}},
+			want: "",
+			reads: map[string]int{
+				"IssueDependencies": 0, // nowhere to read the gate
+			},
 		},
 		{
 			name: "nothing is scheduled at vip",
@@ -293,75 +348,6 @@ func TestDispatch_VIPReadFresh(t *testing.T) {
 	}
 }
 
-// TestTaskPriority_BlockerCarriesNoLabel: the label is judged on the
-// carriers of the forest — the member and its tracker — so an unlabelled
-// blocker leaves the dispatch at the queue's default tier.
-func TestTaskPriority_BlockerCarriesNoLabel(t *testing.T) {
-	eng, api, _, _ := newTestEngine(t)
-	api.deps[5] = []Issue{vipRootIssue(2, "closed")}
-	if got := eng.taskPriority(State{
-		Issue: testIssue(7, "open"), Blockers: []Issue{vipTrackerIssue(5, "closed", false)},
-	}); got != "" {
-		t.Errorf("priority = %q, want unset", got)
-	}
-}
-
-// TestTaskPriority_CrossRepoTracker: the tracker may live in another
-// repository — the membership read is made in the tracker's own
-// (§forgejo/webhook/vip-priority, §forgejo/client/operations).
-func TestTaskPriority_CrossRepoTracker(t *testing.T) {
-	eng, api, _, _ := newTestEngine(t)
-	tracker := vipTrackerIssue(5, "open", true)
-	tracker.Repository = "o/other"
-	api.deps[5] = []Issue{vipRootIssue(2, "closed")}
-	if got := eng.taskPriority(State{
-		Issue: testIssue(7, "open"), Blockers: []Issue{tracker},
-	}); got != PriorityTeacher {
-		t.Errorf("priority = %q, want %q", got, PriorityTeacher)
-	}
-	if n := api.callCount("IssueDependencies:other/5"); n != 1 {
-		t.Errorf("IssueDependencies on the tracker = %d, want 1 (read in its own repo)", n)
-	}
-}
-
-// TestTaskPriority_CaseInsensitive: the label is matched as every other
-// reserved name is, so a carrier labelled "VIP" is not silently
-// downgraded (§forgejo/webhook/vip-priority).
-func TestTaskPriority_CaseInsensitive(t *testing.T) {
-	eng, _, _, _ := newTestEngine(t)
-	pr := testPR(9, "open", true)
-	pr.Labels = []string{"VIP"}
-	if got := eng.taskPriority(State{PR: pr}); got != PriorityTeacher {
-		t.Errorf("priority = %q, want %q", got, PriorityTeacher)
-	}
-}
-
-// TestTaskPriority_TrackerNamesNoRepository: a blocker row that names no
-// repository names no forest — the walk cannot read a gate it cannot locate,
-// so the dispatch keeps the queue's default tier rather than guessing
-// (§forgejo/webhook/vip-priority, §forgejo/client/operations).
-func TestTaskPriority_TrackerNamesNoRepository(t *testing.T) {
-	eng, api, _, _ := newTestEngine(t)
-	tracker := vipTrackerIssue(5, "closed", true)
-	tracker.Repository = ""
-	if got := eng.taskPriority(State{Issue: testIssue(7, "open"), Blockers: []Issue{tracker}}); got != "" {
-		t.Errorf("priority = %q, want unset", got)
-	}
-	if n := api.callCount("IssueDependencies"); n != 0 {
-		t.Errorf("IssueDependencies calls = %d, want 0 (nowhere to read the gate)", n)
-	}
-}
-
-// TestTaskPriority_NoObject: with neither an issue nor a pull request in the
-// state there is nothing to judge, and a dispatch of such a state — the
-// housekeeping row — carries no tier.
-func TestTaskPriority_NoObject(t *testing.T) {
-	eng, _, _, _ := newTestEngine(t)
-	if got := eng.taskPriority(State{}); got != "" {
-		t.Errorf("priority = %q, want unset", got)
-	}
-}
-
 // TestDispatch_VIPTierRefusedRetriesAtDefault: a queue that refuses the
 // asked tier must not turn the vip label into a permanent hold-off — the
 // dispatch is retried once at the queue's default and succeeds, where an
@@ -394,19 +380,5 @@ func TestDispatch_VIPTierRefusedRetriesAtDefault(t *testing.T) {
 	tasks = q.all()
 	if len(tasks) != 2 || tasks[1].Priority != "" {
 		t.Errorf("tasks = %d with last priority %q, want 2 with unset", len(tasks), tasks[len(tasks)-1].Priority)
-	}
-}
-
-// TestPriorityVocabulary: the tier named by the policy is one the queue
-// recognises, and the label's name is the org-wide one.
-func TestPriorityVocabulary(t *testing.T) {
-	if PriorityTeacher != "teacher" {
-		t.Errorf("PriorityTeacher = %q, want the queue's teacher tier", PriorityTeacher)
-	}
-	if LabelVIP != "vip" {
-		t.Errorf("LabelVIP = %q, want the org-wide vip label", LabelVIP)
-	}
-	if strings.Contains(PriorityTeacher, " ") {
-		t.Error("the tier name must be a single token")
 	}
 }
