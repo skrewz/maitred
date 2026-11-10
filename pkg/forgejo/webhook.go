@@ -1081,7 +1081,22 @@ func (e *Engine) dispatchPrompt(ev Event, st State, pc PromptConfig, subject str
 		Priority: e.taskPriority(st),
 	}
 	if err := e.queue.AddTask(task); err != nil {
-		return fmt.Errorf("enqueue %s for %s: %w", dispatchVerb(action, subject), ev.KeyOf(), err)
+		if task.Priority != "" {
+			// The tier is an ask, not a precondition. A queue that
+			// refuses it would otherwise turn the vip label into the
+			// permanent hold-off the section says it must never cause:
+			// no watermark slot is written, so the sweep retries the
+			// same refused dispatch forever. Retry once at the queue's
+			// default — the same degradation a lost read gets
+			// (§forgejo/webhook/vip-priority).
+			e.log.Warn("enqueue at the asked tier failed; retrying once at the queue's default tier",
+				"key", ev.KeyOf().String(), "priority", task.Priority, "error", err)
+			task.Priority = ""
+			err = e.queue.AddTask(task)
+		}
+		if err != nil {
+			return fmt.Errorf("enqueue %s for %s: %w", dispatchVerb(action, subject), ev.KeyOf(), err)
+		}
 	}
 	e.log.Info("dispatched", "key", ev.KeyOf().String(), "task", task.ID)
 	return nil

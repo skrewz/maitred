@@ -362,6 +362,41 @@ func TestTaskPriority_NoObject(t *testing.T) {
 	}
 }
 
+// TestDispatch_VIPTierRefusedRetriesAtDefault: a queue that refuses the
+// asked tier must not turn the vip label into a permanent hold-off — the
+// dispatch is retried once at the queue's default and succeeds, where an
+// unset priority was never refused in the first place
+// (§forgejo/webhook/vip-priority).
+func TestDispatch_VIPTierRefusedRetriesAtDefault(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	q.priorityErr = errors.New("queue refused the tier")
+	issue := vipIssue(7, "open")
+	api.issues[7] = issue
+
+	if err := eng.dispatch(Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"}, State{Issue: issue}, ActionImplement); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(tasks))
+	}
+	if tasks[0].Priority != "" {
+		t.Errorf("priority = %q, want unset on the retry", tasks[0].Priority)
+	}
+
+	// An unlabelled dispatch asks for nothing: the refusing queue never
+	// sees the field and nothing changes on its path.
+	plain := testIssue(8, "open")
+	api.issues[8] = plain
+	if err := eng.dispatch(Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 8, Sender: "alice"}, State{Issue: plain}, ActionImplement); err != nil {
+		t.Fatalf("dispatch plain: %v", err)
+	}
+	tasks = q.all()
+	if len(tasks) != 2 || tasks[1].Priority != "" {
+		t.Errorf("tasks = %d with last priority %q, want 2 with unset", len(tasks), tasks[len(tasks)-1].Priority)
+	}
+}
+
 // TestPriorityVocabulary: the tier named by the policy is one the queue
 // recognises, and the label's name is the org-wide one.
 func TestPriorityVocabulary(t *testing.T) {
