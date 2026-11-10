@@ -291,6 +291,21 @@ needed: the root gating it is the root its forest shares. An `outcome`
 issue that wears the label without a root gating it names no forest and
 lifts nothing: membership is read, not inferred from a label.
 
+A tracker's label travels as far as its forest: it lifts every dispatch
+of every member the tracker gates, in every repository that forest
+spans, while an object's own label lifts that object alone. The forest,
+not the repository, is the unit of the carrier's reach.
+
+**Who may wear the label.** Labels in this system are not human-only —
+the decomposer writes `forest-seeding` inside its own task
+(§forgejo/decisions/transition-table) — and the identities the queue schedules
+can edit labels on the objects they work. An annotation that moves work
+between queue tiers is therefore not neutral in the way a kind label is,
+so `vip` is an org-owned label whose editing belongs to the
+organisation's humans: **a task must never attach `vip` to the object it
+was scheduled to work on**, and the tier this section promises rests on
+that convention as much as on the walk.
+
 The walk pays **no read the dispatch did not already make** when no
 carrier wears the label: an object wearing the label costs no hop, and a
 forest nobody has labelled vip costs none either, because the label is
