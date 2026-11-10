@@ -1610,23 +1610,27 @@ func syncMemberSetHoldOff(pr *PullRequest, s State) (Decision, bool) {
 	reason := fmt.Sprintf("PR %d stands at an approved review, but %s; landing is the set's decision, not the PR's", pr.Number, membership)
 	if len(dualLabelled) > 0 {
 		reason = fmt.Sprintf("PR %d stands at an approved review, but its connected issue %s carries both %s and %s%s", pr.Number, strings.Join(dualLabelled, ", "), LabelAgenticSyncMerge, LabelAgenticAutoMerge, dualOptInError)
-	} else if ref, optedIn := mergeOptedIn(pr, s.ConnectedIssues); optedIn {
+	} else if ref, optedIn := mergeOptedIn(pr, s.ConnectedIssues); optedIn && ref == "" {
 		// The merging opt-in is asked through the same predicate the
 		// merge row asks it with, whatever shape the membership arrived
-		// in (§forgejo/decisions/sync-set, §forgejo/decisions/merge-gate).
-		// Direct membership is recorded from the PR's edge into a
-		// grouping issue's blockers — that edge, not a label on the
-		// pull request, is the set's opt-in — so the sentence names
-		// the set label only where the pull request carries it too.
+		// in, but only the pull-request seat is paired with membership
+		// here: those are the seats §sync-set's remedy reaches — "on
+		// the member or on the pull request delivering it". A member
+		// issue carrying both labels is the dualLabelled case above,
+		// and an opt-in found on a co-delivered issue is that work
+		// item's own, not this member's second landing route, so it
+		// names no authoring error (§forgejo/decisions/sync-set,
+		// §forgejo/decisions/merge-gate). Direct membership is
+		// recorded from the PR's edge into a grouping issue's
+		// blockers — that edge, not a label on the pull request, is
+		// the set's opt-in — so the sentence names the set label only
+		// where the pull request carries it too.
 		where := fmt.Sprintf("the pull request carries %s", LabelAgenticAutoMerge)
-		switch {
-		case direct && ref == "":
+		if direct {
 			where = fmt.Sprintf("carries %s", LabelAgenticAutoMerge)
 			if carriesLabel(pr.Labels, LabelAgenticSyncMerge) {
 				where = fmt.Sprintf("carries both %s and %s", LabelAgenticSyncMerge, LabelAgenticAutoMerge)
 			}
-		case ref != "":
-			where = issueOptInClause(ref)
 		}
 		reason = fmt.Sprintf("PR %d stands at an approved review, but %s and %s%s", pr.Number, membership, where, dualOptInError)
 	}

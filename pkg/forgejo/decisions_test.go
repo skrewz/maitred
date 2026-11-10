@@ -3588,8 +3588,12 @@ func TestDecide_MergeOptInReadFromEitherSeat(t *testing.T) {
 // about the same pull request: it holds off naming the set it belongs
 // to, the merging opt-in and the seat that opt-in sits in, whether the
 // membership came from the PR's own edge into a grouping issue or from
-// a connected issue carrying the member label
-// (§forgejo/decisions/sync-set, §forgejo/decisions/merge-gate).
+// a connected issue carrying the member label. The authoring error is
+// paired only with the seats §sync-set's remedy reaches — the member's
+// own labels and the pull request delivering it: an opt-in on a
+// different work item the pull request co-delivers is that item's own
+// and names no authoring error (§forgejo/decisions/sync-set,
+// §forgejo/decisions/merge-gate).
 func TestDecide_SyncSetDualOptInReadFromEitherSeat(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -3598,13 +3602,18 @@ func TestDecide_SyncSetDualOptInReadFromEitherSeat(t *testing.T) {
 		wantNoError bool
 	}{
 		{
-			name: "the direct member's opt-in on a delivered issue names the error",
+			// The merging opt-in sits on a work item the pull
+			// request co-delivers, not on the member: nothing here
+			// opted the member into merging, so membership holds the
+			// merge off without an authoring error to retire.
+			name: "a direct member co-delivering an opted-in issue names no authoring error",
 			state: func() State {
 				state := directPRMemberState(openPR("abc"), 11)
 				state.ConnectedIssues = append(state.ConnectedIssues, connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge))
 				return state
 			}(),
-			want: []string{"sync set", "authoring error", "o/r#4", LabelAgenticAutoMerge},
+			wantNoError: true,
+			want:        []string{"direct member of the open sync set", "landing is the set's decision"},
 		},
 		{
 			// Direct membership comes from the PR's edge into the
@@ -3634,14 +3643,15 @@ func TestDecide_SyncSetDualOptInReadFromEitherSeat(t *testing.T) {
 			want: []string{"sync set", "authoring error", "the pull request carries", LabelAgenticAutoMerge},
 		},
 		{
-			name: "an indirect member's opt-in on a delivered issue names the seat",
+			name: "an indirect member co-delivering an opted-in issue names no authoring error",
 			state: State{
 				ReviewLenses:    testLenses,
 				PR:              openPR("abc"),
 				Reviews:         []Review{review("APPROVED", "carol", testTime)},
 				ConnectedIssues: []ConnectedIssue{syncMemberConnected(4, 11), connectedIssueLabelled("o/r", 5, LabelAgenticAutoMerge)},
 			},
-			want: []string{"sync set", "authoring error", "o/r#5", LabelAgenticAutoMerge},
+			wantNoError: true,
+			want:        []string{"sync set", "landing is the set's decision"},
 		},
 		{
 			name: "a direct member with no merging opt-in is held off by membership alone",
@@ -3675,7 +3685,6 @@ func TestDecide_SyncSetDualOptInReadFromEitherSeat(t *testing.T) {
 				if strings.Contains(d.Reason, "authoring error") {
 					t.Errorf("hold-off reason = %q, want no double opt-in named: the work is opted into the set alone", d.Reason)
 				}
-				return
 			}
 			for _, want := range tc.want {
 				if !strings.Contains(d.Reason, want) {
