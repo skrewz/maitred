@@ -192,15 +192,11 @@ the sweep because it enumerates **open** pull requests only
 and the sync-set hold-off ahead of the row hold a gated PR at a
 hold-off, and the **re-fire bound** because it lets one frozen head
 dispatch at most once per `reconcile_interval` whichever event arrived
-(§forgejo/decisions/loop-prevention). The queue's `(action, revision)`
-dedup key is not that bound: it squelches a submission whose match is
-still `PENDING` and nothing afterwards
-(§forgejo/webhook/the-pipeline), so it bounds the overlap of two merge
-tasks at one head, never their spacing — which is exactly why the
-exemption can recover a lost dispatch instead of being blocked by the
-dead one, and why the spacing needs the engine's own bound. The agent's
-silence-on-noop keeps a re-fire that found nothing to do quiet
-(§forgejo/decisions/loop-prevention). Unlike the
+— the engine's own stamp, not the queue's `(action, revision)` dedup
+key, which bounds a task's overlap and never the re-fire's spacing
+(§forgejo/webhook/the-pipeline, §forgejo/decisions/loop-prevention).
+The agent's silence-on-noop keeps a re-fire that found nothing to do
+quiet (§forgejo/decisions/loop-prevention). Unlike the
 `review` and `fix-feedback` rows — whose state test, "this lens has
 not reported at head", an event can answer falsely while a chain is
 still arriving, so their exemption reads the **event** and belongs to

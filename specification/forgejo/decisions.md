@@ -906,7 +906,11 @@ Five mechanisms, in this order:
    closes, and the **re-fire bound** — an engine guard applied after the
    decision, its hold-off recorded in the decision log like any other —
    lets one unchanged `(action, revision)` dispatch at most once per
-   `reconcile_interval`, whichever path reached it. The queue's
+   `reconcile_interval`, whichever path reached it. The bound reads the
+   engine's own stamp, so a watermark the store cannot read narrows the
+   re-fire rather than lifting the bound; the stamp is in memory, so a
+   restart admits one re-fire per key before the bound reasserts itself.
+   The queue's
    `(action, revision)` dedup key is not that bound: it squelches a
    submission whose match is still pending, so it bounds the overlap of
    two tasks at one head and not their spacing
