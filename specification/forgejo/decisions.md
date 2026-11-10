@@ -247,8 +247,8 @@ The review-following gates read the chain, not "the latest review":
   silence the lenses still reading the old head.
 - **merge-or-wait** fires when every lens holds an undismissed
   approval at head, no reviewer's latest undismissed review at
-  head is a non-approval, **and the PR carries the
-  `agentic-auto-merge` opt-in** — alongside the sync-set and
+  head is a non-approval, **and the PR or an issue it delivers
+  carries the `agentic-auto-merge` opt-in** — alongside the sync-set and
   open-blocker gates it consults today
   (§forgejo/decisions/merge-gate,
   §forgejo/decisions/sync-set, s-git/maitred#179).
@@ -289,8 +289,8 @@ re-firing (§forgejo/decisions/label-triggered-review).
 | PR carrying the `trigger-review` label (open, mergeable) | `review` fan-out for the current revision — explicit request, overriding the per-lens sender guard and re-asking even an approving lens (§forgejo/decisions/label-triggered-review) |
 | review submitted (every lens reported at head, the reports not all approvals, PR authored by the implementer identity) | `fix-feedback` (§forgejo/decisions/review-lenses) |
 | review submitted (every lens reported at head, the reports not all approvals, PR authored by anyone else) | hold off — the reason names the PR's author and the configured implementer identity (§forgejo/config/implementer-identity, s-git/maitred#143) |
-| review submitted (every lens approved at head, the PR carries `agentic-auto-merge`, no connected issue has an open blocker) | `merge-or-wait` |
-| review submitted (every lens approved at head, the PR carries no `agentic-auto-merge` label, no connected issue has an open blocker) | hold off — the reason names the missing opt-in and the connected issues: an approved PR with no merge opt-in waits on a human (§forgejo/decisions/merge-gate, s-git/maitred#179) |
+| review submitted (every lens approved at head, the PR or an issue it delivers carries `agentic-auto-merge`, no connected issue has an open blocker) | `merge-or-wait` |
+| review submitted (every lens approved at head, neither the PR nor an issue it delivers carries the `agentic-auto-merge` label, no connected issue has an open blocker) | hold off — the reason names the missing opt-in and the connected issues: an approved PR with no merge opt-in waits on a human (§forgejo/decisions/merge-gate, s-git/maitred#179) |
 | review submitted (every lens approved at head, a connected issue has an open blocker) | hold off — the reason names the open blockers (§forgejo/decisions/merge-gate) |
 | review submitted (a connected issue carries `agentic-sync-merge`, or the PR itself stands in an open grouping issue's blockers) | hold off, naming the sync set — the member never merges on its own; the member's open sync sets are emitted for a `sync` dispatch against their grouping issues. A member of **no open set** — its set retired — decides on through the merge gate, its label stale rather than a gate; a member whose work also carries `agentic-auto-merge` — on the PR or on the issue it delivers — holds off whatever sets exist, the reason naming the set it belongs to, the merging opt-in and the seat that opt-in sits in (§forgejo/decisions/sync-set, §forgejo/decisions/merge-gate) |
 | review submitted (a lens has not reported at head) | `review` fan-out for the lenses still owed; fix-feedback holds off naming the outstanding lenses (§forgejo/decisions/review-lenses) |
@@ -314,7 +314,8 @@ by holding off, never by closing: whichever path can dispatch
 `merge-or-wait` — the review event, a PR comment, the sweep's PR path,
 or the unblock cascade's — reads the connected issues' open blockers
 first (§forgejo/decisions/merge-gate) and requires the
-`agentic-auto-merge` opt-in on the PR (s-git/maitred#179), and the
+`agentic-auto-merge` opt-in on the PR or on an issue it delivers
+(s-git/maitred#179), and the
 review, rebase, fix and merge rows decide everything else. A pull request opened against work
 whose forest has not been commissioned is therefore closed nowhere,
 commented on nowhere, and treated no differently from any other pull
@@ -434,8 +435,9 @@ current head (the review's commit ID equals the head SHA), so no commit
 has been pushed since the chain spoke — decides through the
 review-following rows: approvals across the board dispatch
 `merge-or-wait` unless the merge gate holds it off on an open
-blocker (§forgejo/decisions/merge-gate) or the PR carries no
-`agentic-auto-merge` opt-in, the hold-off naming the missing label
+blocker (§forgejo/decisions/merge-gate) or neither the PR nor an
+issue it delivers carries the `agentic-auto-merge` opt-in, the hold-off
+naming the missing label
 and the connected issues (s-git/maitred#179); reports that are not
 all approvals
 dispatch `fix-feedback`, a comment report counting on the sweep's row
@@ -835,8 +837,8 @@ that removed the last blocker, exactly as a newly unblocked issue is
 dispatched with `implement`. A cascaded PR key pays the same admission,
 insurance, and watermark as an issue key: the
 re-fetch of the PR decides it, and only a decision of `merge-or-wait`
-dispatches — a PR not standing at an approved head, one carrying no
-`agentic-auto-merge` opt-in, or one whose connected issue is a member
+dispatches — a PR not standing at an approved head, one with no
+`agentic-auto-merge` opt-in on either seat, or one whose connected issue is a member
 of an **open** landing set, dispatches
 nothing and the sweep remains the backstop. The PR leg assembles the
 state the merge gate and the sync-set hold-off read exactly as the

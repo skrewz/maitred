@@ -969,8 +969,9 @@ func lensIdentities(lenses []ReviewLens) []string {
 // review at head is a non-approval, the decision dispatches
 // merge-or-wait — held off, naming the open blockers, when a
 // connected issue has one (§forgejo/decisions/merge-gate), and held
-// off, naming the missing opt-in and the connected issues, when the
-// PR carries no agentic-auto-merge label: an approved PR with no
+// off, naming the missing opt-in and the connected issues, when
+// neither the PR nor an issue it delivers carries the
+// agentic-auto-merge label: an approved PR with no
 // merge opt-in waits on a human
 // (§forgejo/decisions/merge-gate, s-git/maitred#179); when every
 // lens has reported at head and the reports are not all approvals, it
@@ -1017,9 +1018,10 @@ func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 // reviewer), while the pure review-event path waits for a
 // changes-requested (§forgejo/decisions/transition-table). The
 // merge-or-wait dispatch additionally requires the
-// agentic-auto-merge opt-in — on the PR or on an issue it delivers:
-// the sync-set hold-off and the merge gate sit ahead of it, and a PR
-// they let through without the label holds off naming the missing
+// agentic-auto-merge opt-in — on the PR or on an issue it delivers,
+// through mergeOptedIn: the sync-set hold-off and the merge gate sit
+// ahead of it, and a PR they let through with no opt-in on either
+// seat holds off naming the missing
 // opt-in and the connected issues
 // (§forgejo/decisions/merge-gate, s-git/maitred#179). ok is
 // false when the branch does not apply — some lens has still not
@@ -1039,14 +1041,12 @@ func decideChainReported(e Event, s State, w *Watermark, sweepComments bool) (De
 			return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens, but a connected issue is blocked by %s; not merging", pr.Number, issueRefs(open))), true
 		}
 		// The merge opt-in is a precondition on every path that
-		// reaches here, the cascade's PR leg included: it decides
-		// through this branch on the PR's own re-fetch. The opt-in is
-		// asked through mergeOptedIn, so a forest that opted in
-		// through its work item is held off exactly as one with no
-		// opt-in on either seat is (§forgejo/decisions/merge-gate).
+		// reaches here, the cascade's PR leg included, asked of both
+		// seats through mergeOptedIn on the PR's own re-fetch
+		// (§forgejo/decisions/merge-gate, s-git/maitred#179).
 		ref, optedIn := mergeOptedIn(pr, s.ConnectedIssues)
 		if !optedIn {
-			return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens but carries no %s label; an approved PR with no merge opt-in waits on a human (connected issues: %s)", pr.Number, LabelAgenticAutoMerge, connectedIssueNames(s))), true
+			return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens but neither the PR nor an issue it delivers carries the %s label; an approved PR with no merge opt-in waits on a human (connected issues: %s)", pr.Number, LabelAgenticAutoMerge, connectedIssueNames(s))), true
 		}
 		// The sweep's exempt row. An opted-into-merging PR sits at a
 		// frozen head sha once the chain approves, so a revision-keyed
