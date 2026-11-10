@@ -20,29 +20,14 @@ const PriorityTeacher = "teacher"
 // taskPriority is the priority a dispatch is scheduled at: the teacher tier
 // where the `vip` label stands behind the object — on it, on the issue a
 // pull request delivers, or on the tracker of the forest an issue belongs to
-// — and unset elsewhere (§forgejo/webhook/vip-priority).
+// — and unset elsewhere.
 //
 // The label is judged at the moment of scheduling and read fresh on every
 // dispatch: nothing is cached in engine state, so attaching `vip` lifts the
 // next scheduling and removing it lowers that scheduling, with no
-// retroactive change to anything already queued.
-//
-// The walk is a ladder, not a survey: it stops at the first carrier.
-// When no carrier wears the label it pays no read the dispatch's own
-// re-fetch did not make — an object wearing the label costs no read at
-// all, and a forest nobody has labelled vip costs no hop either: the
-// label is what opens the graph, so the common dispatch is exactly as
-// cheap as it was before the field existed. A labelled tracker in the
-// rows costs one hop — the tracker's gate — per dispatch, and the
-// review fan-out pays it once per lens; the cascade's issue leg reads
-// the issue's blocker rows once, being the one path that holds none
-// (§forgejo/decisions/unblock-cascade). A failed read costs the tier
-// and not the dispatch — an object whose forest cannot be read is
-// scheduled at the default like any unlabelled object, with one warn
-// line naming the failure — because the label is an annotation on a
-// dispatch that stands on its own, and holding the work back over it
-// would make the queue poorer, not safer
-// (§forgejo/webhook/the-pipeline, §forgejo/webhook/vip-priority).
+// retroactive change to anything already queued. What the walk pays per
+// path, and what a failed read or a refused tier costs, is the section's to
+// say (§forgejo/webhook/vip-priority).
 func (e *Engine) taskPriority(st State) string {
 	if e.vipObject(st) {
 		return PriorityTeacher
@@ -122,8 +107,8 @@ func (e *Engine) vipIssue(issue *Issue, blockers []Issue) bool {
 // than an outcome issue that happens to wear a label
 // (§forgejo/webhook/vip-priority). The read is made in the candidate row's
 // own repository, so a tracker across the organisation is still read where
-// it lives; a row that names none names no forest either, and the walk pays
-// a hop it cannot answer (§forgejo/client/operations).
+// it lives; a row that names none names no forest either, so the walk pays
+// no hop and lifts nothing (§forgejo/client/operations).
 func (e *Engine) vipGatedByRoot(candidate Issue) bool {
 	repo := candidate.Repository
 	if repo == "" {
