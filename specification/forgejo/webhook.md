@@ -129,6 +129,9 @@ On each `POST`:
    the issue's otherwise, and empty where the state carries neither — the
    engine never invents a link. A state with no object at all therefore
    yields a title naming only the action and the reference, and no URL.
+   Its `priority` names the tier the queue should serve the task at, and is
+   the `vip` label's doing alone: unset unless a carrier wears that label,
+   per §forgejo/webhook/vip-priority.
 7. **Watermark.** A dispatch records its watermark — the action and the
    revision (the PR head sha, or the issue's `updated_at`) — in the store
    (§forgejo/state/watermark); a hold-off records nothing. Each key of the
@@ -253,6 +256,55 @@ action (§forgejo/webhook/repository-roles), so a cascade never starts an
 agent in a repository where that action is inadmissible; a cascade
 hold-off is recorded in the decision log like any other decision,
 wherever it is made (§forgejo/observability/the-decision-log).
+
+### VIP priority
+
+The `vip` label names the tier a task is scheduled at. It is an
+**annotation, not a trigger**: it asks for no work item and gates no
+decision, and attaching or removing it is just editing labels
+(§forgejo/decisions/actions). The priority itself is the queue's own
+vocabulary, forwarded verbatim and never interpreted by maitred
+(§overview/scope); the tier this section names is `teacher`, and
+where nothing carries the label the field stays absent from the wire body
+and the queue's default tier applies — the body is the one maitred
+produced before the field existed.
+
+The label is judged **at the moment of scheduling** and read fresh on
+every dispatch: it is never cached in engine state between schedulings,
+so attaching `vip` lifts the next dispatch and removing it lowers that
+dispatch, with no retroactive change to a task already queued. The
+decision is made in the one dispatch pipeline
+(§forgejo/webhook/the-pipeline), so the event path, the sweep, the review
+fan-out, the landing set's row and the unblock cascade cannot drift apart.
+
+A dispatch is scheduled at `teacher` when one of these holds:
+
+| Carrier | Read |
+|---|---|
+| the pull request being scheduled | its own re-fetched labels |
+| an issue the pull request delivers | the connected-issue rows the merge gate already reads (§forgejo/decisions/merge-gate) |
+| the tracker of the forest an issue belongs to | the issue's blocker rows: an `outcome` issue wearing the label, gated in turn by the `ideation` root that makes it the forest's tracker (§forgejo/decisions/forest-teardown) |
+
+A tracker wearing the label lifts its **own** dispatches too — its
+decompose and wrap-up rows — since the root gating it is the root its
+forest shares. An `outcome` issue that wears the label without a root
+gating it names no forest and lifts nothing: membership is read, not
+inferred from a label.
+
+The walk pays **no read the dispatch did not already make**: an object
+wearing the label costs no hop, and a forest nobody has labelled vip
+costs none either, because the label is what opens the graph. The one
+exception is a path that dispatches an issue without reading its blocker
+rows — the unblock cascade's issue leg
+(§forgejo/decisions/unblock-cascade) — which therefore sees only the
+issue's own label; the sweep's row, which does read them, is the backstop
+that lifts the next scheduling (§forgejo/reconciliation/the-sweep).
+
+A graph read that **fails** costs the tier and not the dispatch: an
+object whose forest cannot be read is scheduled at the queue's default
+like any unlabelled object, with one debug line naming the lost read.
+Holding the work back over an annotation would leave the queue poorer and
+the issue unattended, which is the opposite of what the label asks for.
 
 ## Event mapping
 

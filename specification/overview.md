@@ -48,7 +48,11 @@ HTTP queue system.
   forwarded verbatim and never interpreted by maitred; a task that declares
   none omits the field from the wire body entirely, so the queue's default
   tier applies and the body is the one maitred produced before the field
-  existed. No maitred dispatch site sets a priority yet.
+  existed. The Forgejo engine sets one wherever the `vip` label stands
+  behind the dispatch — on the object, on the issue a pull request
+  delivers, or on its forest's tracker — per
+  §forgejo/webhook/vip-priority; a trigger's task declares none, since a
+  trigger has no labelled object to judge.
 - **Persistent state.** Each trigger's last run time and extra state is
   persisted as a JSON file per trigger under the data directory and survives
   restarts. Per-trigger execution history is recorded.
