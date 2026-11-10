@@ -1432,9 +1432,33 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 		w = nil
 	}
 	// Insurance against the re-fetched state, through the same pure
-	// decision and the same gate the event path takes.
-	d := e.boundMergeReFire(k, ev, st, Decide(ev, st, w))
-	if d.Action != ActionMergeOrWait {
+	// decision and the same gate the event path takes. The bound's check
+	// and the dispatch that stamps it run under this PR key's lock, as
+	// they do on the event path's WithKeyLock, so a cascade and an event
+	// delivery for the same PR cannot both read "no fresh stamp" and
+	// both dispatch (s-git/maitred#199). The PR was re-fetched and
+	// checked open above, so this leg takes the key's lock only after
+	// any walk that could re-enter it has excluded the merged PR
+	// (§forgejo/decisions/loop-prevention, §forgejo/state/concurrency).
+	var d Decision
+	var dispErr error
+	e.store.WithKeyLock(k, func() {
+		d = e.boundMergeReFire(k, ev, st, Decide(ev, st, w))
+		if d.Action == ActionMergeOrWait {
+			// The dispatch carries the assembled state, not the bare
+			// pull request: the delivered issue's labels are read from
+			// the connected-issue rows this path already fetched, so
+			// the merge the gate now releases is judged on the same
+			// carriers the event path judges, with no read the decision
+			// did not already pay (§forgejo/webhook/vip-priority).
+			// taskURL, taskTitle and revisionFor read st.PR, which the
+			// assembled state carries unchanged, so nothing but the
+			// tier can differ.
+			if dispErr = e.dispatch(ev, st, ActionMergeOrWait); dispErr == nil {
+				dispErr = e.store.saveLocked(k, watermarkAt(w, string(ActionMergeOrWait), pr.HeadSHA))
+			}
+			return
+		}
 		// A fork of merge-or-wait — a landing-set member, or a re-fire the
 		// bound has caught — is recorded like the sibling cascade
 		// dispatchers record theirs: this path has no backstop of its
@@ -1443,20 +1467,8 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 		// empty (§forgejo/decisions/unblock-cascade,
 		// §forgejo/observability/the-decision-log).
 		e.recordDecision(k, ev, st, d)
-		return nil
-	}
-	// The dispatch carries the assembled state, not the bare pull
-	// request: the delivered issue's labels are read from the
-	// connected-issue rows this path already fetched, so the merge the
-	// gate now releases is judged on the same carriers the event path
-	// judges, with no read the decision did not already pay
-	// (§forgejo/webhook/vip-priority). taskURL, taskTitle and
-	// revisionFor read st.PR, which the assembled state carries
-	// unchanged, so nothing but the tier can differ.
-	if err := e.dispatch(ev, st, ActionMergeOrWait); err != nil {
-		return err
-	}
-	return e.store.Save(k, watermarkAt(w, string(ActionMergeOrWait), pr.HeadSHA))
+	})
+	return dispErr
 }
 
 // dispatchSyncSet dispatches the sync-set candidate the cascade walk
