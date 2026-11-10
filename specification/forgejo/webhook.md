@@ -345,8 +345,9 @@ that is a queue-side change with its own consequences, not a condition a
 dispatch path papers over. An enqueue that fails, for the field or for
 anything else — a queue that is down, a persona that does not exist — is
 the ordinary failure every path already handles: the watermark records
-nothing, the sweep retries, and the queue's own explanation rides in the
-error rather than being guessed at.
+nothing, the sweep retries, and what the queue said in response is the
+adapter's own to log, under its response-logging opt-in
+(§overview/scope).
 
 ## Event mapping
 
