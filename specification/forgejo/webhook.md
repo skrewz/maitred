@@ -397,12 +397,15 @@ For each decision event, the re-fetch assembles the state
   row, refused as a path segment, turned away by the remit test —
   spends none of it, and a body of repeats followed by genuinely-new
   references resolves what it names rather than reading as
-  disconnected (s-git/maitred#185 review 1338). The cap's drop is not
-  silent: the first dropped
-  reference leaves a debug line naming the truncation and the
-  references after it, so a delivery the cap renders disconnected is
-  visible rather than a fail-open replay of the bug #180 exists to
-  fix. An issue reachable both ways is
+  disconnected (s-git/maitred#185 review 1338). The cap's **overflow
+  fails the re-fetch**: a body that asks for more paid reads than the
+  cap pays cannot have its relations read completely, and a partial
+  answer presented as a complete one would let the survivor set be
+  chosen by the body being read — the deliberate fail-open form #180
+  exists to close. The first reference the loop can no longer pay for
+  leaves a debug line and the re-fetch errors with a hold-off naming
+  the failure: the failure mode is a hold-off, never a merge
+  (s-git/maitred#185 review 1365). An issue reachable both ways is
   read once, the blocking-edge rows first, so it is counted once.
   Every entry is resolved: the gate's decision is
   never left to the order the listing happens to return; a failed read

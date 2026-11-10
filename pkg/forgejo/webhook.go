@@ -393,16 +393,21 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 // other cross-repository read pays (§forgejo/webhook/repository-roles):
 // outside the engine's remit it connects nothing, and an unknown scope
 // fails the re-fetch. A reference whose repository names a path segment
-// is refused before any URL is built, and the reads this loop makes are
-// capped (maxAutoCloseRefs): the budget is charged beside the call it
-// bounds, so a reference that costs no read — deduped against an edge
+// is refused before any URL is built, and the reads this loop makes
+// are capped (maxAutoCloseRefs), charged beside the paid read they
+// bound: a reference that costs no read — deduped against an edge
 // row, refused as a path segment, turned away by the remit test —
-// spends none of it. The grammar itself stays uncapped, a faithful
-// mirror for the predicate's pure in-memory read. Every drop, the cap's truncation
-// included, leaves a debug line naming the resolved reference, so a
+// spends none of the budget and cannot truncate the read. A body
+// that asks for more reads than the cap pays cannot have its
+// relations read completely, and a partial answer presented as a
+// complete one is the fail-open #180 exists to close: the re-fetch
+// fails — a hold-off naming the failure, never a merge. The grammar
+// itself stays uncapped, a faithful mirror for the predicate's pure
+// in-memory read. Every drop — a skip, a refusal, the cap's
+// overflow — leaves a debug line naming the resolved reference, so a
 // dropped relation is visible rather than silent. A pull request is
-// never a connected issue: it is a delivery, so a reference naming one
-// is skipped.
+// never a connected issue: it is a delivery, so a reference naming
+// one is skipped.
 func (e *Engine) connectedIssues(owner, name string, number int, body string) ([]ConnectedIssue, error) {
 	prRepo := owner + "/" + name
 	blocks, err := e.api.IssueBlocks(owner, name, number)
@@ -425,14 +430,6 @@ func (e *Engine) connectedIssues(owner, name string, number int, body string) ([
 	}
 	resolved := 0
 	for _, ref := range autoCloseRefs(body, prRepo) {
-		if resolved == maxAutoCloseRefs {
-			// The cap lives here, where the per-reference API fan-out
-			// is paid, not in the grammar — the predicate's read of the
-			// same body is pure in-memory matching that costs nothing
-			// per reference and stays uncapped (§forgejo/webhook/re-fetch).
-			e.logSkippedRef(prRepo, number, ref, "beyond the reference cap; every reference after it is dropped too")
-			break
-		}
 		if !validRepoRef(ref.repo) {
 			// A reference whose repository names a path segment — "." or
 			// "..", which the grammar's character class admits — names
@@ -461,10 +458,20 @@ func (e *Engine) connectedIssues(owner, name string, number int, body string) ([
 				continue
 			}
 		}
-		// The budget is charged here, beside the fan-out it bounds: a
-		// reference deduped against an edge row, refused as a path
-		// segment or turned away by the remit test costs no read and so
-		// spends none of it (§forgejo/webhook/re-fetch).
+		if resolved == maxAutoCloseRefs {
+			// A reference every refusal and test has admitted — so one
+			// that wants a read the budget can no longer pay — means the
+			// relations of this body cannot be read completely. The
+			// rows collected so far may be missing the delivery, and a
+			// partial answer presented as a complete one is the
+			// fail-open #180 exists to close: the set hold-off would
+			// read it as not-a-member and merge-or-wait would land the
+			// delivery out of turn, the survivor set chosen by the body
+			// being read. The re-fetch fails — a hold-off naming the
+			// failure, never a merge (§forgejo/webhook/re-fetch).
+			e.logSkippedRef(prRepo, number, ref, "beyond the reference cap; the read is incomplete and the re-fetch fails")
+			return nil, fmt.Errorf("connected issues of %s#%d: the body names more than %d closing references that cost a read, so the connected-issues read is incomplete", prRepo, number, maxAutoCloseRefs)
+		}
 		resolved++
 		ro, rn := splitRepo(ref.repo)
 		issue, err := e.api.GetIssue(ro, rn, ref.number)
@@ -545,11 +552,15 @@ func isNotFound(err error) bool {
 // cost the engine the delivery (§forgejo/webhook/re-fetch). It is
 // charged where that fan-out happens — beside the issue read — so a
 // reference the loop drops before reaching the API spends none of the
-// budget, and eight means eight reads rather than eight references the
-// body happened to name first. The cap belongs to that resolving loop,
-// not to the grammar: the predicate's
-// read of the same body is pure in-memory matching that costs nothing
-// per reference, and #180 asks nothing of it.
+// budget, and eight means eight reads rather than eight references
+// the body happened to name first. A reference that survives every
+// refusal and test but meets the cap marks the read as incomplete,
+// and the re-fetch fails on it rather than answering with the rows
+// it happened to collect: which references survive must never be
+// decided by the body being read. The cap belongs to that resolving
+// loop, not to the grammar: the predicate's read of the same body is
+// pure in-memory matching that costs nothing per reference, and #180
+// asks nothing of it.
 const maxAutoCloseRefs = 8
 
 // autoCloseRefs lists the issues a pull request body auto-closes, in

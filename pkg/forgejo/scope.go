@@ -117,15 +117,14 @@ func (e *Engine) tryRefreshScopeCache() error {
 // case-insensitively: the cache is keyed on lowercased full names, so a
 // caller holding a reference's spelling, a listing's or any other
 // casing of the same repository gets the same answer. The cache is
-// refreshed when it
-// has never been taken or is older than one reconcile interval;
-// concurrent deliveries finding it stale share one listing — they wait
-// on refreshMu and re-check staleness under it. A repository absent
-// from a fresh snapshot holds no role: the test fails closed. A non-nil
-// error means scope is unknown — the listing failed, or a failure is
-// waiting out the retry backoff with the snapshot gone stale — and the
-// caller must hold off naming the failure instead of acting on the
-// roles.
+// refreshed when it has never been taken or is older than one reconcile
+// interval; concurrent deliveries finding it stale share one listing —
+// they wait on refreshMu and re-check staleness under it. A repository
+// absent from a fresh snapshot holds no role: the test fails closed. A
+// non-nil error means scope is unknown — the listing failed, or a
+// failure is waiting out the retry backoff with the snapshot gone
+// stale — and the caller must hold off naming the failure instead of
+// acting on the roles.
 func (e *Engine) repoRoles(repo string) (roles, error) {
 	if e.scopeNeedsRefresh() {
 		e.refreshMu.Lock()

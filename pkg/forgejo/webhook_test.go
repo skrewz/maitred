@@ -3748,12 +3748,12 @@ func TestConnectedIssuesSkipsAreLogged(t *testing.T) {
 }
 
 // TestConnectedIssuesReferenceCap: the per-reference fan-out is
-// bounded. A body written to cost the engine one read per line resolves
-// at most maxAutoCloseRefs distinct references, and the truncation is
-// not silent: the first dropped reference — naming every reference
-// after it too — leaves a debug line, so a delivery rendered
-// disconnected by the cap is visible in the log (§forgejo/webhook/re-fetch,
-// s-git/maitred#185).
+// bounded and a body that exceeds the bound cannot be read completely,
+// so the read fails rather than answering with the rows it happened to
+// collect: the first reference the loop can no longer pay for leaves a
+// debug line and the re-fetch errors — a hold-off naming the failure,
+// never a partial set presented as a complete one (§forgejo/webhook/re-fetch,
+// s-git/maitred#185 review 1365).
 func TestConnectedIssuesReferenceCap(t *testing.T) {
 	api := newFakeAPI()
 	q := &fakeQueue{}
@@ -3764,26 +3764,66 @@ func TestConnectedIssuesReferenceCap(t *testing.T) {
 	var log bytes.Buffer
 	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewJSONHandler(&log, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	body := "Delivers a great many things."
-	dropped := 20 + maxAutoCloseRefs
+	overflow := 20 + maxAutoCloseRefs
 	for n := 20; n < 20+maxAutoCloseRefs+2; n++ {
 		api.issues[n] = testIssue(n, "open")
 		body += "\n\nFixes #" + strconv.Itoa(n)
 	}
 	got, err := eng.connectedIssues("o", "r", 9, body)
-	if err != nil {
-		t.Fatalf("connectedIssues: %v", err)
+	if err == nil {
+		t.Fatalf("connectedIssues returned %d rows and no error, want the re-fetch to fail: a truncated read is not a complete one", len(got))
 	}
-	if len(got) != maxAutoCloseRefs {
-		t.Errorf("got %d connected issues, want the cap %d", len(got), maxAutoCloseRefs)
+	if got != nil {
+		t.Errorf("connectedIssues returned %d rows beside the error, want none", len(got))
 	}
 	if n := api.callCount("GetIssue"); n != maxAutoCloseRefs {
 		t.Errorf("GetIssue called %d time(s), want the cap %d", n, maxAutoCloseRefs)
 	}
 	out := log.String()
-	for _, want := range []string{"skipping a closing reference beyond the reference cap", "o/r#" + strconv.Itoa(dropped)} {
+	for _, want := range []string{"skipping a closing reference beyond the reference cap", "o/r#" + strconv.Itoa(overflow)} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log %q does not contain %q", out, want)
 		}
+	}
+}
+
+// TestConnectedIssuesCapOverflowFailsTheReFetch: the adversarial body
+// review 1365 reproduced — disposable references placed first exhaust
+// the budget and the real delivery reference would be dropped, which
+// under the previous shape answered "these are the connected issues"
+// and let merge-or-wait land the member's delivery out of turn, the
+// deliberate form of the fail-open #180 exists to close. The read
+// fails closed instead: the failure mode is a hold-off, never a merge,
+// whichever body writes it (§forgejo/webhook/re-fetch).
+func TestConnectedIssuesCapOverflowFailsTheReFetch(t *testing.T) {
+	api := newFakeAPI()
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	var log bytes.Buffer
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewJSONHandler(&log, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	// Eight dangling references — each pays a GetIssue that answers 404
+	// and spends the budget — then the genuine delivery reference, a
+	// landing-set member the edges do not carry.
+	body := "Delivers one member behind a wall of noise."
+	for n := 9001; n < 9001+maxAutoCloseRefs; n++ {
+		body += "\n\nCloses #" + strconv.Itoa(n)
+	}
+	api.issues[100] = testIssue(100, "open")
+	body += "\n\nCloses #100"
+
+	got, err := eng.connectedIssues("o", "r", 9, body)
+	if err == nil {
+		t.Fatalf("connectedIssues returned %d rows and no error, want the re-fetch to fail: the survivor set of a truncated read must not be chosen by the body that is being read", len(got))
+	}
+	if n := api.callCount("GetIssue"); n != maxAutoCloseRefs {
+		t.Errorf("GetIssue called %d time(s), want the cap %d", n, maxAutoCloseRefs)
+	}
+	if out := log.String(); !strings.Contains(out, "skipping a closing reference beyond the reference cap") || !strings.Contains(out, "o/r#100") {
+		t.Errorf("log %q does not name the dropped reference o/r#100", out)
 	}
 }
 
