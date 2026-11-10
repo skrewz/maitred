@@ -1403,12 +1403,6 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionFixFeedback,
 		},
 		{
-			name:      "reconcile PR merge-or-wait already dispatched at the revision holds off without the opt-in",
-			event:     prEvent(EventReconcile, "maitred"),
-			state:     State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "carol", testTime)}},
-			watermark: &Watermark{Action: "merge-or-wait", Revision: "abc"},
-		},
-		{
 			name:       "reconcile PR standing at a comment review, fix-feedback already dispatched at the revision, re-fires",
 			event:      prEvent(EventReconcile, "maitred"),
 			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
@@ -3392,18 +3386,25 @@ func TestDecide_AutoMergeRowIsWatermarkExemptOnEveryPath(t *testing.T) {
 	})
 
 	t.Run("a labelled PR that is already merged holds off: the re-fire ends where the PR does", func(t *testing.T) {
-		pr := labelledPR("abc", LabelAgenticAutoMerge)
-		pr.State, pr.Merged = "closed", true
-		d := Decide(prEvent(EventReconcile, ""), State{
-			ReviewLenses: testLenses,
-			PR:           pr,
-			Reviews:      []Review{review("APPROVED", "carol", testTime)},
-		}, watermark)
-		if !d.HoldOff() {
-			t.Fatalf("decision = %+v, want a hold-off: the re-fire ends where the PR does", d)
-		}
-		if !strings.Contains(d.Reason, "not open") {
-			t.Errorf("reason = %q, want it to name the PR's state", d.Reason)
+		for _, ev := range []Event{
+			prEvent(EventPRReviewed, "carol"),
+			prEvent(EventPRCommented, "alice"),
+			prEvent(EventReconcile, ""),
+		} {
+			pr := labelledPR("abc", LabelAgenticAutoMerge)
+			pr.State, pr.Merged = "closed", true
+			d := Decide(ev, State{
+				ReviewLenses: testLenses,
+				PR:           pr,
+				Reviews:      []Review{review("APPROVED", "carol", testTime)},
+			}, watermark)
+			if !d.HoldOff() {
+				t.Errorf("event %q: decision = %+v, want a hold-off: the re-fire ends where the PR does", ev.Type, d)
+				continue
+			}
+			if !strings.Contains(d.Reason, "not open") {
+				t.Errorf("event %q: reason = %q, want it to name the PR's state", ev.Type, d.Reason)
+			}
 		}
 	})
 }
@@ -3528,7 +3529,6 @@ func TestMergeOptedIn(t *testing.T) {
 func TestDecide_MergeOptInReadFromEitherSeat(t *testing.T) {
 	watermark := &Watermark{Action: string(ActionMergeOrWait), Revision: "abc"}
 	const missingHoldOff = "an approved PR with no merge opt-in waits on a human"
-	const keyedHoldOff = "merge-or-wait already dispatched at revision abc"
 
 	// sweepState is an approved chain at head abc whose merge opt-in
 	// sits on the given seats: the PR's own labels, and the labels of
@@ -3640,13 +3640,22 @@ func TestDecide_MergeOptInReadFromEitherSeat(t *testing.T) {
 		}
 	})
 
-	t.Run("the event paths keep the revision-keyed guard", func(t *testing.T) {
+	t.Run("the event paths share the row's exemption", func(t *testing.T) {
+		// The exemption is a property of the row, not of the path that
+		// reaches it: "every lens approves at head" answers as truly on
+		// an event as on the sweep, so an approved PR whose opt-in sits on
+		// the issue it delivers re-fires merge-or-wait whatever the
+		// watermark records, and the engine's re-fire bound — not the
+		// watermark — is what keeps one unchanged head to one dispatch
+		// per reconcile interval
+		// (§forgejo/reconciliation/watermark-exemptions,
+		// §forgejo/decisions/loop-prevention).
 		for _, ev := range []Event{prEvent(EventPRReviewed, "carol"), prEvent(EventPRCommented, "alice")} {
 			s := sweepState(nil, connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge))
 			d := Decide(ev, s, watermark)
-			if d.Reason != keyedHoldOff {
-				t.Errorf("event %q: decision = %+v, want the revision-keyed hold-off %q: the exemption stays the sweep's row",
-					ev.Type, d, keyedHoldOff)
+			if d.Action != ActionMergeOrWait || !strings.Contains(d.Reason, "regardless of revision abc") {
+				t.Errorf("event %q: decision = %+v, want merge-or-wait naming the revision the state overrides: the exemption is the row's on every path",
+					ev.Type, d)
 			}
 		}
 	})
