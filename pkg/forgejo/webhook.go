@@ -1076,23 +1076,15 @@ func (e *Engine) boundMergeReFire(key Key, ev Event, st State, d Decision) Decis
 }
 
 // mergeReFiredRecently reports whether the stamp for key still bounds a
-// re-fire at revision, dropping one that no longer does — its interval
-// spent, or a head the PR has moved past — so the bound is a rate and
-// never a hold-off on a revision the engine has not dispatched at, and
-// the map tracks the PRs standing at a merge-eligible head rather than
-// every PR that ever was (§forgejo/decisions/loop-prevention).
+// re-fire at revision: an interval spent, or a head the PR has moved
+// past, bounds nothing, so the bound is a rate and never a hold-off on a
+// revision the engine has not dispatched at
+// (§forgejo/decisions/loop-prevention).
 func (e *Engine) mergeReFiredRecently(key Key, revision string) bool {
 	e.reFireMu.Lock()
 	defer e.reFireMu.Unlock()
 	last, ok := e.mergeReFires[key]
-	if !ok {
-		return false
-	}
-	if last.revision != revision || time.Since(last.at) >= e.cfg.ReconcileInterval {
-		delete(e.mergeReFires, key)
-		return false
-	}
-	return true
+	return ok && last.revision == revision && time.Since(last.at) < e.cfg.ReconcileInterval
 }
 
 // stampMergeReFire records a merge-or-wait dispatch for the bound. A

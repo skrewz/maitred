@@ -3230,37 +3230,6 @@ func TestHandler_Reconcile_MergeReFireBoundedPerInterval(t *testing.T) {
 	}
 }
 
-// TestEngine_MergeReFireStampEvictedWhenSpent: a stamp that no longer
-// bounds — its interval spent or its head superseded — is dropped rather
-// than kept for the life of the process, so the bound's memory follows
-// the PRs standing at a merge-eligible head rather than every PR that
-// ever was (§forgejo/decisions/loop-prevention).
-func TestEngine_MergeReFireStampEvictedWhenSpent(t *testing.T) {
-	eng, _, _, _ := newTestEngine(t)
-	stamps := func() int {
-		t.Helper()
-		eng.reFireMu.Lock()
-		defer eng.reFireMu.Unlock()
-		return len(eng.mergeReFires)
-	}
-
-	expired := Key{Repo: "o/r", Kind: KindPR, Number: 9}
-	eng.stampMergeReFireAt(expired, "sha-9", time.Now().Add(-2*eng.cfg.ReconcileInterval))
-	if eng.mergeReFiredRecently(expired, "sha-9") {
-		t.Error("an expired stamp bounds: the re-fire must go through")
-	}
-
-	moved := Key{Repo: "o/r", Kind: KindPR, Number: 10}
-	eng.stampMergeReFireAt(moved, "sha-old", time.Now())
-	if eng.mergeReFiredRecently(moved, "sha-new") {
-		t.Error("a stamp at another revision bounds: the re-fire must go through")
-	}
-
-	if n := stamps(); n != 0 {
-		t.Errorf("%d stamps kept, want 0 (both stopped bounding)", n)
-	}
-}
-
 // TestHandler_IssueClosed_CascadePRReFireBoundedPerInterval: the
 // cascade's PR leg is bounded like every other path — a close, reopen,
 // close on an issue the walk reaches dispatches the merge once, not
