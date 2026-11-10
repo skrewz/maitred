@@ -839,9 +839,8 @@ merge the gate held off (§forgejo/decisions/merge-gate) fires on the closure
 that removed the last blocker, exactly as a newly unblocked issue is
 dispatched with `implement`. A cascaded PR key pays the same admission,
 insurance, and watermark as an issue key — the watermark excepting the
-`merge-or-wait` exemption every path carries — so a PR opted into
-merging, approved at a head the watermark already records, re-fires
-from the cascade rather than waiting on the sweep
+`merge-or-wait` exemption every path carries, whose re-fire bound
+applies here as it does wherever the row sits
 (§forgejo/reconciliation/watermark-exemptions); the
 re-fetch of the PR decides it, and only a decision of `merge-or-wait`
 dispatches — a PR not standing at an approved head, one with no
@@ -901,11 +900,20 @@ Five mechanisms, in this order:
    `agentic-auto-merge` (§forgejo/decisions/merge-gate) — whatever the
    watermark records, because the PR sits at a frozen head once the
    chain approves and a guard keyed on that revision would be a fixed
-   point no path could fire on again. The re-firing is bounded by the
-   state, not by the watermark: the sync-set hold-off and the merge gate
-   are evaluated ahead of the row, the queue's `(action, revision)` key
-   keeps one merge task in flight at a head that is not moving, and the
-   row stops firing the moment the PR closes. The `review`
+   point no path could fire on again. The re-firing is bounded, but not
+   by the watermark: the sync-set hold-off and the merge gate are
+   evaluated ahead of the row, the row stops firing the moment the PR
+   closes, and the **re-fire bound** — an engine guard applied after the
+   decision, its hold-off recorded in the decision log like any other —
+   lets one unchanged `(action, revision)` dispatch at most once per
+   `reconcile_interval`, whichever path reached it. The queue's
+   `(action, revision)` dedup key is not that bound: it squelches a
+   submission whose match is still pending, so it bounds the overlap of
+   two tasks at one head and not their spacing
+   (§forgejo/webhook/the-pipeline). Without the bound the pace of a
+   privileged dispatch would be set by whoever comments on the PR, or
+   closes an issue the graph leads back to, rather than by the sweep's
+   cadence. The `review`
    exemption is per lens — the sweep's fan-out re-fires a lens only
    while that lens has reported nothing at the head — and the
    `fix-feedback` exemption is the sweep's row alone: a PR waiting to
