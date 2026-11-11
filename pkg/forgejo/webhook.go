@@ -86,8 +86,7 @@ type Engine struct {
 	// The merge re-fire bound: the last merge-or-wait dispatch per key,
 	// so an unchanged head re-fires at most once per reconcile interval
 	// whichever path brought the event (§forgejo/decisions/loop-
-	// prevention). The stamp is in memory, so a restart admits one re-fire
-	// per key before the bound reasserts itself.
+	// prevention).
 	reFireMu     sync.Mutex
 	mergeReFires map[Key]mergeReFire
 }
