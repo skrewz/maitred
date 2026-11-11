@@ -51,7 +51,11 @@ The sweep runs once when the engine starts, then on a **configurable
 interval** — the `reconcile_interval` config value
 (§forgejo/config/canned-prompts), positive, validated at load time.
 Overlapping sweeps do not run concurrently: a sweep that starts while
-another is in flight is skipped.
+another is in flight is skipped. Alongside the schedule a sweep can
+also be started by hand from the dashboard
+(§forgejo/observability/triggering-a-sweep); a manual start is a sweep
+start like any other, so the skip-if-in-flight rule applies to it
+unchanged.
 
 ## Failure handling
 
