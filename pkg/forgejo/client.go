@@ -104,12 +104,15 @@ type PullRequest struct {
 	// implementer identity (§forgejo/config/implementer-identity,
 	// §forgejo/decisions/loop-prevention, s-git/maitred#143).
 	Author string
-	// Body is the pull request's text. One seat reads it: the landing
+	// Body is the pull request's text. Two seats read it: the landing
 	// set's predicate resolves a member's delivering PR through the
 	// auto-close reference the PR body carries — the same pull-request-
 	// side relation the forge honours when a merged PR closes the member
 	// (§forgejo/client/operations, §forgejo/decisions/sync-set,
-	// s-git/maitred#171).
+	// s-git/maitred#171) — and the merge opt-in's issue seat is the
+	// issue that same closing grammar names in the body, so the body
+	// also gates every path that can dispatch merge-or-wait
+	// (§forgejo/decisions/merge-gate, s-git/maitred#196).
 	Body string
 	// Labels are the PR's label names.
 	Labels    []string

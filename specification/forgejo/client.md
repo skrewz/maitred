@@ -49,12 +49,15 @@ the order moves the digest while a comment or a label toggle does not
 (§forgejo/decisions/sync-set).
 
 Pull request responses likewise report the pull request's **body**
-(`body`). One seat reads it: the landing set's predicate resolves a
+(`body`). Two seats read it: the landing set's predicate resolves a
 member's delivering PR through the auto-close reference the PR body
 carries — the pull-request-side relation the forge honours by closing
 the member when the delivery merges, where no blocking edge between
 the member and its delivery exists to be read
-(§forgejo/decisions/sync-set, s-git/maitred#171).
+(§forgejo/decisions/sync-set, s-git/maitred#171) — and the merge
+opt-in's issue seat is the issue that same closing grammar names in
+the body, so the body also gates every path that can dispatch
+`merge-or-wait` (§forgejo/decisions/merge-gate, s-git/maitred#196).
 
 The repository listing also reports **whether the repository has the
 pull requests unit** (`has_pull_requests`). A repository with the unit
