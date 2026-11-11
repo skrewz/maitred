@@ -45,12 +45,17 @@ type Task struct {
 	// "teacher" or "orangutan" and answers 400 for any other non-empty
 	// value (see the hotelier API, POST /api/tasks and
 	// POST /api/tasks/{id}/priority in
-	// https://github.com/skrewz/hotelier/blob/main/README.md). Empty means
-	// nothing was decided: the field is left off the wire body and the
-	// queue's own default tier applies, so the payload an unset priority
-	// produces is the payload maitred produced before the field existed.
-	// No dispatch site in maitred sets one yet — deciding when a task is
-	// worth a higher tier is a separate concern.
+	// https://github.com/skrewz/hotelier/blob/main/README.md; the server
+	// validates the field against that vocabulary in handleCreateTask,
+	// verified at
+	// https://github.com/skrewz/hotelier/blob/17b4f6d1a135eb4bbad8a35e56f47ce376184d49/internal/server/server.go#L2023
+	// as of this writing). Empty means nothing was decided: the field is
+	// left off the wire body and the queue's own default tier applies,
+	// so the payload an unset priority produces is the payload maitred
+	// produced before the field existed. forgejoeng sets it where the
+	// `vip` label asks for the teacher tier
+	// (§forgejo/webhook/vip-priority); every other dispatch site leaves
+	// it unset.
 	Priority string `json:"priority,omitempty"`
 }
 

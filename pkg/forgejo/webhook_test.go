@@ -4882,3 +4882,329 @@ func TestHandler_ReviewFanOut_EndToEnd(t *testing.T) {
 		}
 	}
 }
+
+// vipMergeFixtures is mergeGateFixtures with the gate open: the PR is
+// approved at head by the one lens and its connected issue is blocked only
+// by that closed issue and the PR itself, so merge-or-wait dispatches at the
+// first delivery rather than being swallowed by a watermark. Labels are set
+// by the calling test — the vip label is read at scheduling, never from what
+// the graph carried earlier (§forgejo/webhook/vip-priority).
+func vipMergeFixtures(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store) {
+	t.Helper()
+	api := newFakeAPI()
+	q := &fakeQueue{}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	api.pulls[9] = testPR(9, "open", true)
+	api.issues[7] = testIssue(7, "open")
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
+	api.blocks[9] = []Issue{*testIssue(7, "open")}
+	prSelf := testIssue(9, "open")
+	prSelf.IsPull = true
+	api.deps[7] = []Issue{*testIssue(3, "closed"), *prSelf}
+	return eng, api, q, store
+}
+
+// TestHandler_PRReviewed_VIPMergeDispatchesAtTeacher: the merge dispatch
+// carries the tier the label dictates — the pull request's own label, the
+// label on the issue it delivers, and the label on the tracker gating that
+// issue's forest each lift it, and an unlabelled chain leaves the queue's
+// default (§forgejo/webhook/vip-priority, §forgejo/decisions/merge-gate).
+func TestHandler_PRReviewed_VIPMergeDispatchesAtTeacher(t *testing.T) {
+	cases := []struct {
+		name  string
+		label func(*fakeAPI)
+		want  string
+	}{
+		{
+			name:  "no carrier wears the label",
+			label: func(*fakeAPI) {},
+			want:  "",
+		},
+		{
+			name: "the pull request carries vip",
+			label: func(api *fakeAPI) {
+				api.pulls[9].Labels = append(api.pulls[9].Labels, LabelVIP)
+			},
+			want: PriorityTeacher,
+		},
+		{
+			name: "the issue the pull request delivers carries vip",
+			label: func(api *fakeAPI) {
+				api.issues[7].Labels = append(api.issues[7].Labels, LabelVIP)
+				api.blocks[9][0].Labels = api.issues[7].Labels // the delivery's row
+			},
+			want: PriorityTeacher,
+		},
+		{
+			// The delivered issue is gated by its forest's tracker, which
+			// wears the label and is itself gated by the root the whole
+			// forest shares, so the tracker's label is the member's tier
+			// (§forgejo/webhook/vip-priority).
+			name: "the forest tracker of the delivered issue carries vip",
+			label: func(api *fakeAPI) {
+				root := vipRootIssue(2, "closed")
+				prSelf := testIssue(9, "open")
+				prSelf.IsPull = true
+				api.deps[7] = []Issue{vipTrackerIssue(5, "closed", true), root, *prSelf}
+				api.deps[5] = []Issue{root}
+			},
+			want: PriorityTeacher,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, q, _ := vipMergeFixtures(t)
+			tc.label(api)
+			h := NewHandler(eng, "s3cret", nil)
+
+			rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "", prPayload("o/r", 9, "")))
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 204", rec.Code)
+			}
+			tasks := q.all()
+			if len(tasks) != 1 {
+				t.Fatalf("got %d tasks, want 1 (merge-or-wait)", len(tasks))
+			}
+			if !strings.Contains(tasks[0].Prompt, "action=merge-or-wait") {
+				t.Errorf("prompt = %q, want merge-or-wait", tasks[0].Prompt)
+			}
+			if tasks[0].Priority != tc.want {
+				t.Errorf("priority = %q, want %q", tasks[0].Priority, tc.want)
+			}
+		})
+	}
+}
+
+// TestHandler_Reconcile_VIPIssueAndTracker: the sweep's dispatch carries
+// the tier the label dictates — the issue's own vip label, and the label
+// on the tracker gating its forest, both read at scheduling time
+// (§forgejo/webhook/vip-priority).
+func TestHandler_Reconcile_VIPIssueAndTracker(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(*fakeAPI)
+		want  string
+	}{
+		{
+			name:  "the issue carries no label",
+			setup: func(*fakeAPI) {},
+			want:  "",
+		},
+		{
+			name: "the issue carries vip",
+			setup: func(api *fakeAPI) {
+				api.issues[7].Labels = append(api.issues[7].Labels, LabelVIP)
+			},
+			want: PriorityTeacher,
+		},
+		{
+			name: "the forest tracker gating the issue carries vip",
+			setup: func(api *fakeAPI) {
+				api.deps[7] = []Issue{vipTrackerIssue(5, "closed", true), vipRootIssue(2, "closed")}
+				api.deps[5] = []Issue{vipRootIssue(2, "closed")}
+			},
+			want: PriorityTeacher,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, q, _ := newTestEngine(t)
+			api.issues[7] = testIssue(7, "open")
+			api.deps[7] = []Issue{*testIssue(3, "closed")}
+			tc.setup(api)
+
+			eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: 7})
+
+			tasks := q.all()
+			if len(tasks) != 1 {
+				t.Fatalf("got %d tasks, want 1 (the sweep's row for the issue)", len(tasks))
+			}
+			if !strings.Contains(tasks[0].Prompt, "kind=issue number=7") {
+				t.Errorf("prompt = %q, want a dispatch for o/r#7", tasks[0].Prompt)
+			}
+			if tasks[0].Priority != tc.want {
+				t.Errorf("priority = %q, want %q", tasks[0].Priority, tc.want)
+			}
+		})
+	}
+}
+
+// TestHandler_IssueLabelsChanged_VIPRemovedTakesEffectNextScheduling:
+// the label is judged at the moment of scheduling and never cached in
+// engine state, so removing vip leaves the next dispatch at the queue's
+// default tier and re-applying it lifts that tier again
+// (§forgejo/webhook/vip-priority).
+func TestHandler_IssueLabelsChanged_VIPRemovedTakesEffectNextScheduling(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	vip := vipIssue(7, "open")
+	vip.UpdatedAt = testUpdatedAt.Add(time.Minute)
+	plain := testIssue(7, "open")
+	plain.UpdatedAt = testUpdatedAt.Add(2 * time.Minute)
+
+	api.issues[7] = vip
+	serve(t, h, signedRequest(t, "s3cret", "issue_label", "label_updated", issuePayload("o/r", 7, "label_updated")))
+	api.issues[7] = plain
+	serve(t, h, signedRequest(t, "s3cret", "issue_label", "label_updated", issuePayload("o/r", 7, "label_updated")))
+	api.issues[7] = vip
+	serve(t, h, signedRequest(t, "s3cret", "issue_label", "label_updated", issuePayload("o/r", 7, "label_updated")))
+
+	tasks := q.all()
+	if len(tasks) != 3 {
+		t.Fatalf("got %d tasks, want 3", len(tasks))
+	}
+	want := []string{PriorityTeacher, "", PriorityTeacher}
+	for i, w := range want {
+		if tasks[i].Priority != w {
+			t.Errorf("task %d priority = %q, want %q", i, tasks[i].Priority, w)
+		}
+	}
+}
+
+// TestHandler_IssueClosed_CascadeVIPMemberDispatchesAtTeacher: the
+// unblock cascade dispatches through the same pipeline, so a vip member
+// woken by a close is scheduled at teacher too — by its own label, and
+// by the label on the tracker gating its forest, which the leg reads
+// because the cascade carries keys rather than blocker rows
+// (§forgejo/webhook/vip-priority, §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadeVIPMemberDispatchesAtTeacher(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(*fakeAPI)
+		want  string
+	}{
+		{
+			name:  "the member carries no label",
+			setup: func(*fakeAPI) {},
+			want:  "",
+		},
+		{
+			name: "the member carries vip",
+			setup: func(api *fakeAPI) {
+				api.issues[10].Labels = append(api.issues[10].Labels, LabelVIP)
+			},
+			want: PriorityTeacher,
+		},
+		{
+			// The woken member wears nothing; the tracker gating its
+			// forest wears the label, read from the blocker rows the leg
+			// fetches for it (§forgejo/webhook/vip-priority).
+			name: "the tracker gating the member carries vip",
+			setup: func(api *fakeAPI) {
+				api.deps[10] = []Issue{vipTrackerIssue(5, "closed", true), vipRootIssue(2, "closed"), *testIssue(7, "closed")}
+				api.deps[5] = []Issue{vipRootIssue(2, "closed")}
+			},
+			want: PriorityTeacher,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, q, _ := newTestEngine(t)
+			h := NewHandler(eng, "s3cret", nil)
+			api.issues[7] = testIssue(7, "closed")
+			api.issues[10] = testIssue(10, "open")
+			api.blocks[7] = []Issue{*testIssue(10, "open")}
+			api.deps[10] = []Issue{*testIssue(7, "closed")}
+			tc.setup(api)
+
+			rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 204", rec.Code)
+			}
+			tasks := q.all()
+			if len(tasks) != 1 {
+				t.Fatalf("got %d tasks, want 1 (implement for issue 10)", len(tasks))
+			}
+			if tasks[0].Priority != tc.want {
+				t.Errorf("priority = %q, want %q", tasks[0].Priority, tc.want)
+			}
+		})
+	}
+}
+
+// TestDispatchCascade_VIPReadFailureDispatchesAtDefault: the blocker read
+// the cascade's issue leg makes for the walk is an addition to the
+// dispatch, not a precondition — a lost read sends the task out at the
+// queue's default tier rather than holding the woken member back
+// (§forgejo/webhook/vip-priority).
+func TestDispatchCascade_VIPReadFailureDispatchesAtDefault(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	api.issues[10] = testIssue(10, "open")
+	api.depsErr = errors.New("dependencies unavailable")
+
+	cd := CascadeDispatch{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 10}, Action: ActionImplement}
+	if err := eng.dispatchCascade(cd, "alice"); err != nil {
+		t.Fatalf("dispatchCascade: %v", err)
+	}
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (implement for issue 10)", len(tasks))
+	}
+	if tasks[0].Priority != "" {
+		t.Errorf("priority = %q, want unset — the lost read costs the tier, not the dispatch", tasks[0].Priority)
+	}
+}
+
+// TestHandler_IssueClosed_CascadeVIPDeliveredIssueDispatchesAtTeacher:
+// the cascade's PR leg lands the delivery, so it judges the vip label on
+// the state its re-fetch assembled — the delivered issue's label lifts
+// the merge-or-wait dispatch exactly as it lifts the approval path's
+// (§forgejo/webhook/vip-priority, §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadeVIPDeliveredIssueDispatchesAtTeacher(t *testing.T) {
+	cases := []struct {
+		name  string
+		label func(*fakeAPI)
+		want  string
+	}{
+		{
+			name:  "no carrier wears the label",
+			label: func(*fakeAPI) {},
+			want:  "",
+		},
+		{
+			name: "the delivered issue carries vip",
+			label: func(api *fakeAPI) {
+				api.issues[10].Labels = append(api.issues[10].Labels, LabelVIP)
+				api.blocks[9][0].Labels = api.issues[10].Labels // the delivery's row
+			},
+			want: PriorityTeacher,
+		},
+		{
+			name: "the pull request carries vip",
+			label: func(api *fakeAPI) {
+				api.pulls[9].Labels = append(api.pulls[9].Labels, LabelVIP)
+			},
+			want: PriorityTeacher,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, q, _, _ := cascadePRFixtures(t)
+			tc.label(api)
+			h := NewHandler(eng, "s3cret", nil)
+
+			rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 204", rec.Code)
+			}
+			tasks := q.all()
+			if len(tasks) != 1 {
+				t.Fatalf("got %d tasks, want 1 (merge-or-wait for PR 9)", len(tasks))
+			}
+			if !strings.Contains(tasks[0].Prompt, "action=merge-or-wait") {
+				t.Errorf("prompt = %q, want merge-or-wait", tasks[0].Prompt)
+			}
+			if tasks[0].Priority != tc.want {
+				t.Errorf("priority = %q, want %q", tasks[0].Priority, tc.want)
+			}
+		})
+	}
+}

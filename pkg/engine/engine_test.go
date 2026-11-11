@@ -1169,3 +1169,45 @@ triggers:
 		t.Error("expected the last history record to be a failure")
 	}
 }
+
+// TestEngine_TriggersLeavePriorityUnset: the trigger paths declare no
+// queue tier — the vip policy of §forgejo/webhook/vip-priority is
+// forgejoeng's, judged from labels a trigger has no access to — so their
+// tasks carry no priority and the queue's own default applies, exactly as
+// before the field existed (§forgejo/webhook/vip-priority).
+func TestEngine_TriggersLeavePriorityUnset(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "periodic"
+    type: periodic
+    schedule: "@every 1h"
+    prompt: "research"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mq := &mockQueue{}
+	eng, err := engine.New(engine.Config{
+		TriggerDir: dir,
+		DataDir:    t.TempDir(),
+		Queue:      mq,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating engine: %v", err)
+	}
+
+	if err := eng.FireNow("periodic"); err != nil {
+		t.Fatalf("FireNow: %v", err)
+	}
+
+	tasks := mq.Tasks()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(tasks))
+	}
+	if tasks[0].Priority != "" {
+		t.Errorf("priority = %q, want unset so the queue's default tier applies", tasks[0].Priority)
+	}
+}
