@@ -486,7 +486,7 @@
                     <div>
                         <div class="sweep-title">${escapeHtml(s.title)}</div>
                     </div>
-                    <button class="btn btn-warning sweep-trigger" onclick="openSweepModal('${escapeHtml(s.id)}')">&#x26a1; Trigger</button>
+                    <button class="btn btn-warning sweep-trigger" data-sweep-id="${escapeHtml(s.id)}">&#x26a1; Trigger</button>
                 </div>
             `).join('');
         }
@@ -549,10 +549,20 @@
         }
 
         function escapeHtml(str) {
-            const div = document.createElement('div');
-            div.textContent = str;
-            return div.innerHTML;
+            return String(str ?? '').replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[c]);
         }
+
+        // The sweep buttons carry their catalog id in a data attribute
+        // and the section delegates the click, so no catalog value is
+        // ever spliced into a JS string; an id with a quote in it
+        // would be inert text here, not broken code
+        // (§forgejo/observability/triggering-a-sweep).
+        document.getElementById('sweeps-section').addEventListener('click', (e) => {
+            const btn = e.target.closest('.sweep-trigger');
+            if (btn) openSweepModal(btn.dataset.sweepId);
+        });
 
         // Auto-refresh every 5 seconds
         refresh();
