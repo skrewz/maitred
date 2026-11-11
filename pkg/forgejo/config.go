@@ -42,19 +42,23 @@ const ConfigEnvVar = "MAITRED_FORGEJOENG_DIR"
 // unset (§forgejo/config/loading).
 const DefaultConfigPath = "/etc/maitred/forgejoeng.yaml"
 
-// ReviewLens is one configured review lens: an identity whose approval
-// the gates count, with the canned prompt and persona that dispatch a
-// review from it (§forgejo/config/review-lenses).
+// ReviewLens is one configured review lens: the identity whose approval
+// the gates count, with the canned prompt that dispatches a review from
+// it (§forgejo/config/review-lenses). After the identity/persona
+// collapse the lens declares exactly one name — the forge login — which
+// is both what the decisions compare against and what the dispatched
+// task is named by (§forgejo/config/identity-collapse).
 type ReviewLens struct {
 	// Identity is the Forgejo login the lens reviews as; the decision
 	// function compares it against review authors to decide which
 	// lenses still owe a verdict (§forgejo/decisions/review-lenses).
+	// It is also the name the lens's task runs as: one declared field,
+	// never a second key held equal by convention
+	// (§forgejo/config/identity-collapse).
 	Identity string `yaml:"identity"`
 	// Prompt is the canned prompt template, the hotelier task
 	// invocation, shaped exactly like an action's (§forgejo/config/canned-prompts).
 	Prompt string `yaml:"prompt"`
-	// Persona is the persona the lens task runs as.
-	Persona string `yaml:"persona"`
 	// Timeout is how long the lens task may run.
 	Timeout time.Duration `yaml:"timeout"`
 }
@@ -65,15 +69,21 @@ type PromptConfig struct {
 	// Prompt is the canned prompt template: the hotelier task invocation
 	// plus its pre-flight checks.
 	Prompt string `yaml:"prompt"`
-	// Persona is the persona the task runs as.
-	Persona string `yaml:"persona"`
+	// Identity is the Forgejo login the task runs as — the one declared
+	// name the collapse left standing. It travels to the queue system as
+	// the task's persona name, so the actor named on the work is the
+	// login itself rather than a second string that could drift from it
+	// (§forgejo/config/identity-collapse).
+	Identity string `yaml:"identity"`
 	// Timeout is how long the task may run.
 	Timeout time.Duration `yaml:"timeout"`
 }
 
 // Config is the engine's configuration: canned prompts plus the scalar
 // keys (§forgejo/config/canned-prompts, §forgejo/config/decomposer-identity,
-// §forgejo/config/implementer-identity).
+// §forgejo/config/implementer-identity). Its key set is exact: a key the
+// binary does not know — the retired `persona` above all — is a load
+// failure naming that key (§forgejo/config/identity-collapse).
 type Config struct {
 	// Org is the organisation whose role-holding repositories the
 	// engine tracks (§forgejo/webhook/repository-roles).
@@ -170,8 +180,8 @@ func (c *Config) Validate() error {
 		if pc.Prompt == "" {
 			return fmt.Errorf("action %q: prompt is required", a)
 		}
-		if pc.Persona == "" {
-			return fmt.Errorf("action %q: persona is required", a)
+		if pc.Identity == "" {
+			return fmt.Errorf("action %q: identity is required", a)
 		}
 		if pc.Timeout <= 0 {
 			return fmt.Errorf("action %q: timeout must be positive", a)
@@ -196,10 +206,10 @@ func (c *Config) Validate() error {
 }
 
 // validateReviewLenses checks the lens list: at least one lens, each
-// lens complete (identity, prompt, persona, positive timeout), each
-// lens's prompt parseable with only known placeholders, and no
-// duplicate identity (§forgejo/config/review-lenses,
-// §forgejo/config/validation).
+// lens complete (its one declared identity, a prompt, a positive
+// timeout), each lens's prompt parseable with only known placeholders,
+// and no duplicate identity (§forgejo/config/review-lenses,
+// §forgejo/config/identity-collapse, §forgejo/config/validation).
 func (c *Config) validateReviewLenses() error {
 	if len(c.Reviews) == 0 {
 		return fmt.Errorf("reviews: at least one review lens is required: %w", ErrActionSetMismatch)
@@ -215,9 +225,6 @@ func (c *Config) validateReviewLenses() error {
 		seen[lens.Identity] = true
 		if lens.Prompt == "" {
 			return fmt.Errorf("reviews %q: prompt is required", lens.Identity)
-		}
-		if lens.Persona == "" {
-			return fmt.Errorf("reviews %q: persona is required", lens.Identity)
 		}
 		if lens.Timeout <= 0 {
 			return fmt.Errorf("reviews %q: timeout must be positive", lens.Identity)
@@ -290,17 +297,106 @@ func LoadConfig(path string) (*Config, error) {
 	return cfg, nil
 }
 
+// configSchemaKeys is the engine config's key set, one depth per entry,
+// validated as an exact set in both directions: a required key's absence
+// fails Validate, and a key absent here fails the decode
+// (§forgejo/config/validation, §forgejo/config/identity-collapse).
+var configSchemaKeys = map[string]map[string]bool{
+	"":     {"org": true, "reconcile_interval": true, "decomposer_identity": true, "implementer_identity": true, "actions": true, "reviews": true},
+	"act":  {"prompt": true, "identity": true, "timeout": true},
+	"lens": {"identity": true, "prompt": true, "timeout": true},
+}
+
+// decodeConfigYAML decodes one config document strictly: every key must
+// be one the binary declares at its depth. The identity/persona collapse
+// is why the decode is exact rather than lenient — a deployment that has
+// not yet dropped the retired `persona` key must fail loudly as the
+// config-or-binary mismatch, not load with a silently ignored key
+// (§forgejo/config/identity-collapse, §forgejo/config/validation).
+func decodeConfigYAML(data []byte, path string) (*Config, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("parse config %q: %w: %w", path, ErrConfigUnreadable, err)
+	}
+	if doc.Kind == 0 {
+		return &Config{}, nil
+	}
+	var root yaml.Node
+	if err := doc.Decode(&root); err != nil {
+		return nil, fmt.Errorf("parse config %q: %w: %w", path, ErrConfigUnreadable, err)
+	}
+	if err := rejectUnknownKeys(&root, "", path); err != nil {
+		return nil, err
+	}
+	var cfg Config
+	if err := root.Decode(&cfg); err != nil {
+		return nil, fmt.Errorf("parse config %q: %w: %w", path, ErrConfigUnreadable, err)
+	}
+	return &cfg, nil
+}
+
+// rejectUnknownKeys walks a decoded document and refuses any mapping key
+// outside configSchemaKeys for its depth. depth names the mapping: "" is
+// the document root, "act" one action entry, "lens" one review-lens
+// entry.
+func rejectUnknownKeys(n *yaml.Node, depth, path string) error {
+	switch n.Kind {
+	case yaml.DocumentNode:
+		for _, c := range n.Content {
+			if err := rejectUnknownKeys(c, depth, path); err != nil {
+				return err
+			}
+		}
+	case yaml.MappingNode:
+		if depth == "acts" {
+			// The actions map's keys are action names, not schema keys;
+			// the action-set rule owns them. Each entry's own mapping is
+			// still checked against the action schema — the walk skips
+			// the key node, which is a plain scalar.
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				if err := rejectUnknownKeys(n.Content[i+1], "act", path); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		allowed, depthKnown := configSchemaKeys[depth]
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			key := n.Content[i]
+			value := n.Content[i+1]
+			if depthKnown && !allowed[key.Value] {
+				return fmt.Errorf("config %q: key %q is not part of the config schema the binary knows: %w", path, key.Value, ErrActionSetMismatch)
+			}
+			next := ""
+			if depth == "" {
+				switch key.Value {
+				case "actions":
+					next = "acts"
+				case "reviews":
+					next = "lens"
+				}
+			}
+			if err := rejectUnknownKeys(value, next, path); err != nil {
+				return err
+			}
+		}
+	case yaml.SequenceNode, yaml.AliasNode:
+		for _, c := range n.Content {
+			if err := rejectUnknownKeys(c, depth, path); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // loadConfigFile parses a single config file.
 func loadConfigFile(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config %q: %w: %w", path, ErrConfigUnreadable, err)
 	}
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse config %q: %w: %w", path, ErrConfigUnreadable, err)
-	}
-	return &cfg, nil
+	return decodeConfigYAML(data, path)
 }
 
 // loadConfigDir parses every .yaml/.yml file in dir, in sorted order,

@@ -274,7 +274,7 @@ func TestDispatch_VIPPriority(t *testing.T) {
 			eng, api, q, _ := newTestEngine(t)
 			if tc.prompt {
 				eng.cfg.Actions[string(ActionWrapUp)] = PromptConfig{
-					Prompt: "wrap up {{.Repo}}", Persona: "sweeper", Timeout: time.Hour,
+					Prompt: "wrap up {{.Repo}}", Identity: "sweeper", Timeout: time.Hour,
 				}
 			}
 			if tc.setup != nil {

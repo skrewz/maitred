@@ -14,9 +14,10 @@ import (
 // Fixtures for the canned-prompt config tests
 // (§forgejo/config/loading, §forgejo/config/validation).
 
-// validConfigYAML is a complete, valid engine config: every action the
-// decision function references has a prompt, persona, and timeout
-// (§forgejo/config/validation).
+// validConfigYAML is a complete, valid engine config: every entry — each
+// action the decision function references and each review lens — has one
+// declared identity, a prompt, and a positive timeout
+// (§forgejo/config/validation, §forgejo/config/identity-collapse).
 const validConfigYAML = `
 org: example-org
 reconcile_interval: 15m
@@ -25,52 +26,49 @@ implementer_identity: implementer
 actions:
   implement:
     prompt: "/issue-implementer {{.IssueURL}}"
-    persona: s-autonomics-implementer
+    identity: implementer
     timeout: 2h
   reassess:
     prompt: "/issue-reassess {{.IssueURL}}"
-    persona: s-autonomics-implementer
+    identity: implementer
     timeout: 1h
   fix-feedback:
     prompt: "/pr-feedback-fixer {{.PRURL}}"
-    persona: s-autonomics-implementer
+    identity: implementer
     timeout: 2h
   merge-or-wait:
     prompt: "/pr-merger {{.PRURL}}"
-    persona: s-autonomics-reviewer
+    identity: reviewer
     timeout: 30m
   rebase:
     prompt: "/pr-rebase {{.PRURL}}"
-    persona: s-autonomics-implementer
+    identity: implementer
     timeout: 30m
   decompose:
     prompt: "/issue-decomposer {{.IssueURL}}"
-    persona: s-autonomics-implementer
+    identity: implementer
     timeout: 1h
   wrap-up:
     prompt: "/issue-wrapper {{.IssueURL}}"
-    persona: s-autonomics-implementer
+    identity: implementer
     timeout: 1h
   teardown-forest:
     prompt: "/forest-teardown {{.IssueURL}}"
-    persona: s-autonomics-decomposer
+    identity: decomposer
     timeout: 1h
   sync:
     prompt: "/set-lander {{.IssueURL}}"
-    persona: s-autonomics-implementer
+    identity: implementer
     timeout: 1h
 reviews:
   - identity: reviewer-minimalism
     prompt: "/pr-minimalism-reviewer {{.PRURL}}"
-    persona: s-autonomics-reviewer
     timeout: 30m
   - identity: reviewer-maintainability
     prompt: "/pr-maintainability-reviewer {{.PRURL}}"
-    persona: s-autonomics-reviewer
     timeout: 30m
   - identity: reviewer-security
     prompt: "/pr-security-reviewer {{.PRURL}}"
-    persona: s-autonomics-reviewer
     timeout: 30m
 `
 
@@ -122,8 +120,8 @@ func TestLoadConfigFile(t *testing.T) {
 	if implement.Prompt != "/issue-implementer {{.IssueURL}}" {
 		t.Errorf("implement prompt = %q", implement.Prompt)
 	}
-	if implement.Persona != "s-autonomics-implementer" {
-		t.Errorf("implement persona = %q", implement.Persona)
+	if implement.Identity != "implementer" {
+		t.Errorf("implement identity = %q", implement.Identity)
 	}
 	if implement.Timeout != 2*time.Hour {
 		t.Errorf("implement timeout = %s, want 2h", implement.Timeout)
@@ -143,12 +141,12 @@ func TestLoadConfigDirectory(t *testing.T) {
 actions:
   implement:
     prompt: "/issue-implementer {{.IssueURL}}"
-    persona: s-autonomics-implementer
+    identity: implementer
     timeout: 2h
 `)
 	// The remaining actions, split across two files.
 	writeConfig(t, dir, "03-rest.yaml", strings.Replace(validConfigYAML,
-		"  implement:\n    prompt: \"/issue-implementer {{.IssueURL}}\"\n    persona: s-autonomics-implementer\n    timeout: 2h\n", "", 1))
+		"  implement:\n    prompt: \"/issue-implementer {{.IssueURL}}\"\n    identity: implementer\n    timeout: 2h\n", "", 1))
 
 	cfg, err := LoadConfig(dir)
 	if err != nil {
@@ -232,7 +230,7 @@ func TestLoadConfigValidation(t *testing.T) {
 		{
 			name: "missing action",
 			mutate: func(y string) string {
-				return strings.Replace(y, "  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    persona: s-autonomics-implementer\n    timeout: 30m\n", "", 1)
+				return strings.Replace(y, "  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n    timeout: 30m\n", "", 1)
 			},
 			wantSub: "rebase",
 		},
@@ -244,16 +242,16 @@ func TestLoadConfigValidation(t *testing.T) {
 			wantSub: "prompt",
 		},
 		{
-			name: "missing persona",
+			name: "missing identity",
 			mutate: func(y string) string {
-				return strings.Replace(y, "  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    persona: s-autonomics-implementer\n", "  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n", 1)
+				return strings.Replace(y, "  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n", "  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n", 1)
 			},
-			wantSub: "persona",
+			wantSub: "identity",
 		},
 		{
 			name: "missing timeout",
 			mutate: func(y string) string {
-				return strings.Replace(y, "  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    persona: s-autonomics-implementer\n    timeout: 30m\n", "  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    persona: s-autonomics-implementer\n", 1)
+				return strings.Replace(y, "  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n    timeout: 30m\n", "  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n", 1)
 			},
 			wantSub: "timeout",
 		},
@@ -279,9 +277,35 @@ func TestLoadConfigValidation(t *testing.T) {
 		{
 			name: "unknown action",
 			mutate: func(y string) string {
-				return strings.Replace(y, "actions:", "actions:\n  bogus:\n    prompt: x\n    persona: p\n    timeout: 1h", 1)
+				return strings.Replace(y, "actions:", "actions:\n  bogus:\n    prompt: x\n    identity: p\n    timeout: 1h", 1)
 			},
 			wantSub: "bogus",
+		},
+		{
+			// The stale half of the identity/persona collapse: an entry
+			// that still carries the retired `persona` key beside its
+			// `identity` is refused as the key it no longer knows
+			// (§forgejo/config/identity-collapse).
+			name: "stale persona key on an action",
+			mutate: func(y string) string {
+				return strings.Replace(y, "  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n",
+					"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n    persona: implementer\n", 1)
+			},
+			wantSub: "persona",
+		},
+		{
+			name: "unknown top-level key",
+			mutate: func(y string) string {
+				return strings.Replace(y, "org: example-org\n", "org: example-org\nbogus_key: x\n", 1)
+			},
+			wantSub: "bogus_key",
+		},
+		{
+			// A document that is not a mapping at all is a parse failure,
+			// not a schema one (§forgejo/config/loading).
+			name:    "config is not a mapping",
+			mutate:  func(string) string { return "just a string\n" },
+			wantSub: "parse config",
 		},
 		{
 			name:    "missing org",
@@ -327,8 +351,8 @@ func TestLoadConfigValidation(t *testing.T) {
 func TestLoadConfigDirectoryConflicts(t *testing.T) {
 	t.Run("duplicate action", func(t *testing.T) {
 		dir := t.TempDir()
-		writeConfig(t, dir, "01-a.yaml", "org: example-org\nactions:\n  implement:\n    prompt: a\n    persona: p\n    timeout: 1h\n")
-		writeConfig(t, dir, "02-b.yaml", "actions:\n  implement:\n    prompt: b\n    persona: p\n    timeout: 1h\n")
+		writeConfig(t, dir, "01-a.yaml", "org: example-org\nactions:\n  implement:\n    prompt: a\n    identity: p\n    timeout: 1h\n")
+		writeConfig(t, dir, "02-b.yaml", "actions:\n  implement:\n    prompt: b\n    identity: p\n    timeout: 1h\n")
 		if _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), "implement") {
 			t.Fatalf("expected duplicate-action error mentioning implement, got %v", err)
 		}
@@ -409,7 +433,7 @@ func TestLoadConfigSentinels(t *testing.T) {
 
 	t.Run("action the binary knows has no entry", func(t *testing.T) {
 		_, err := LoadConfig(validateFixturePath(t, strings.Replace(validConfigYAML,
-			"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    persona: s-autonomics-implementer\n    timeout: 30m\n",
+			"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n    timeout: 30m\n",
 			"", 1)))
 		if !errors.Is(err, ErrActionSetMismatch) {
 			t.Fatalf("err = %v, want one wrapping ErrActionSetMismatch", err)
@@ -420,12 +444,58 @@ func TestLoadConfigSentinels(t *testing.T) {
 	})
 
 	t.Run("action the binary does not know has an entry", func(t *testing.T) {
-		_, err := LoadConfig(validateFixturePath(t, strings.Replace(validConfigYAML, "actions:", "actions:\n  bogus:\n    prompt: x\n    persona: p\n    timeout: 1h", 1)))
+		_, err := LoadConfig(validateFixturePath(t, strings.Replace(validConfigYAML, "actions:", "actions:\n  bogus:\n    prompt: x\n    identity: p\n    timeout: 1h", 1)))
 		if !errors.Is(err, ErrActionSetMismatch) {
 			t.Fatalf("err = %v, want one wrapping ErrActionSetMismatch", err)
 		}
 		if !strings.Contains(err.Error(), "bogus") {
 			t.Errorf("error %q must name the action it failed on", err)
+		}
+	})
+
+	// The collapse's stale shape: a config that still carries the
+	// retired `persona` key is the same config-or-binary mismatch as
+	// an action-set disagreement, so a surface says "half a change
+	// landed" rather than inventing a fourth category
+	// (§forgejo/config/identity-collapse,
+	// §forgejo/observability/why-the-engine-is-off). The refusal does not
+	// care which depth the retired key sits at.
+	t.Run("entry still declares the retired persona key", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			content string
+		}{
+			{"action entry", strings.Replace(validConfigYAML,
+				"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n",
+				"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n    persona: implementer\n", 1)},
+			{"top level", strings.Replace(validConfigYAML,
+				"org: example-org\n", "org: example-org\npersona: implementer\n", 1)},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := LoadConfig(validateFixturePath(t, tc.content))
+				if !errors.Is(err, ErrActionSetMismatch) {
+					t.Fatalf("err = %v, want one wrapping ErrActionSetMismatch", err)
+				}
+				if !strings.Contains(err.Error(), "persona") {
+					t.Errorf("error %q must name the retired key it refused", err)
+				}
+			})
+		}
+	})
+
+	// The collapse's other stale shape: the new binary demands the
+	// declared identity on every entry, and an entry that never
+	// gained one is refused as a missing field, not silently
+	// defaulted (§forgejo/config/identity-collapse).
+	t.Run("entry declares no identity", func(t *testing.T) {
+		_, err := LoadConfig(validateFixturePath(t, strings.Replace(validConfigYAML,
+			"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n",
+			"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n", 1)))
+		if err == nil || !strings.Contains(err.Error(), "identity") {
+			t.Fatalf("err = %v, want a refusal naming the missing identity", err)
+		}
+		if errors.Is(err, ErrActionSetMismatch) {
+			t.Errorf("a missing required field is not a schema-key mismatch: %v", err)
 		}
 	})
 
@@ -459,8 +529,8 @@ func TestPromptFor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PromptFor(merge-or-wait): %v", err)
 	}
-	if pc.Persona != "s-autonomics-reviewer" {
-		t.Errorf("persona = %q", pc.Persona)
+	if pc.Identity != "reviewer" {
+		t.Errorf("identity = %q", pc.Identity)
 	}
 	if _, err := cfg.PromptFor(ActionReview); err == nil {
 		t.Error("PromptFor(review): expected error — review is configured through the lens list, not an action entry")
@@ -496,9 +566,9 @@ func TestRenderPlaceholders(t *testing.T) {
 
 	// A template using the full placeholder table renders every value.
 	full := &PromptConfig{
-		Prompt:  "{{.Repo}}/{{.Kind}}/{{.Number}} {{.IssueURL}} {{.PRURL}} {{.Sender}} {{.Action}}",
-		Persona: "p",
-		Timeout: time.Hour,
+		Prompt:   "{{.Repo}}/{{.Kind}}/{{.Number}} {{.IssueURL}} {{.PRURL}} {{.Sender}} {{.Action}}",
+		Identity: "p",
+		Timeout:  time.Hour,
 	}
 	got, err = full.Render(Placeholders{
 		Repo:   "o/r",
@@ -702,9 +772,10 @@ func TestShippedSampleConfigPromptsInvokeCannedPrompts(t *testing.T) {
 	}
 }
 
-// TestReviewLensesValid pins the accepted shape of the lens list:
-// identity, prompt, persona, and positive timeout per lens, order
-// preserved (§forgejo/config/review-lenses, §forgejo/config/validation).
+// TestReviewLensesValid pins the accepted shape of the lens list after
+// the collapse: one declared identity, a prompt, and a positive timeout
+// per lens, order preserved (§forgejo/config/review-lenses,
+// §forgejo/config/identity-collapse, §forgejo/config/validation).
 func TestReviewLensesValid(t *testing.T) {
 	cfg := loadValid(t)
 	if len(cfg.Reviews) != 3 {
@@ -728,12 +799,12 @@ func TestReviewLensesRejected(t *testing.T) {
 		want    string
 	}{
 		{"empty", "reviews: []\n", "at least one"},
-		{"missing identity", "reviews:\n  - prompt: \"/pr-review {{.PRURL}}\"\n    persona: p\n    timeout: 30m\n", "identity is required"},
-		{"duplicate identity", "reviews:\n  - identity: r\n    prompt: \"/a {{.PRURL}}\"\n    persona: p\n    timeout: 30m\n  - identity: r\n    prompt: \"/b {{.PRURL}}\"\n    persona: p\n    timeout: 30m\n", "duplicate lens identity"},
-		{"missing prompt", "reviews:\n  - identity: r\n    persona: p\n    timeout: 30m\n", "prompt is required"},
-		{"missing persona", "reviews:\n  - identity: r\n    prompt: \"/a {{.PRURL}}\"\n    timeout: 30m\n", "persona is required"},
-		{"zero timeout", "reviews:\n  - identity: r\n    prompt: \"/a {{.PRURL}}\"\n    persona: p\n    timeout: 0s\n", "timeout must be positive"},
-		{"bad template", "reviews:\n  - identity: r\n    prompt: \"/a {{.Nope}}\"\n    persona: p\n    timeout: 30m\n", "reviews"},
+		{"missing identity", "reviews:\n  - prompt: \"/pr-review {{.PRURL}}\"\n    timeout: 30m\n", "identity is required"},
+		{"duplicate identity", "reviews:\n  - identity: r\n    prompt: \"/a {{.PRURL}}\"\n    timeout: 30m\n  - identity: r\n    prompt: \"/b {{.PRURL}}\"\n    timeout: 30m\n", "duplicate lens identity"},
+		{"missing prompt", "reviews:\n  - identity: r\n    timeout: 30m\n", "prompt is required"},
+		{"stale persona key", "reviews:\n  - identity: r\n    prompt: \"/a {{.PRURL}}\"\n    persona: p\n    timeout: 30m\n", "persona"},
+		{"zero timeout", "reviews:\n  - identity: r\n    prompt: \"/a {{.PRURL}}\"\n    timeout: 0s\n", "timeout must be positive"},
+		{"bad template", "reviews:\n  - identity: r\n    prompt: \"/a {{.Nope}}\"\n    timeout: 30m\n", "reviews"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -763,7 +834,7 @@ func TestRetiredReviewSingletonsRejected(t *testing.T) {
 		t.Run(retired, func(t *testing.T) {
 			body := strings.Replace(validConfigYAML,
 				"  fix-feedback:",
-				"  "+retired+":\n    prompt: \"/pr-reviewer {{.PRURL}}\"\n    persona: s-autonomics-reviewer\n    timeout: 1h\n  fix-feedback:", 1)
+				"  "+retired+":\n    prompt: \"/pr-reviewer {{.PRURL}}\"\n    identity: reviewer\n    timeout: 1h\n  fix-feedback:", 1)
 			path := validateFixturePath(t, body)
 			_, err := LoadConfig(path)
 			if err == nil {
@@ -807,14 +878,12 @@ func TestReviewLensesDirectoryMerge(t *testing.T) {
 reviews:
   - identity: lens-one
     prompt: "/pr-review-one {{.PRURL}}"
-    persona: p
     timeout: 30m
 `)
 		writeConfig(t, dir, "04-lenses-b.yaml", `
 reviews:
   - identity: lens-two
     prompt: "/pr-review-two {{.PRURL}}"
-    persona: p
     timeout: 30m
 `)
 		cfg, err := LoadConfig(dir)
@@ -832,14 +901,12 @@ reviews:
 reviews:
   - identity: lens-one
     prompt: "/pr-review-one {{.PRURL}}"
-    persona: p
     timeout: 30m
 `)
 		writeConfig(t, dir, "04-lenses-b.yaml", `
 reviews:
   - identity: lens-one
     prompt: "/pr-review-two {{.PRURL}}"
-    persona: p
     timeout: 30m
 `)
 		if _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), "already defined") {

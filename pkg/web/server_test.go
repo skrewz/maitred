@@ -73,9 +73,9 @@ func testForgejoEngine(t *testing.T) *forgejo.Engine {
 	cfg.Actions = make(map[string]forgejo.PromptConfig, len(forgejo.AllActions))
 	for _, a := range forgejo.AllActions {
 		cfg.Actions[string(a)] = forgejo.PromptConfig{
-			Prompt:  string(a),
-			Persona: "test",
-			Timeout: time.Hour,
+			Prompt:   string(a),
+			Identity: "test",
+			Timeout:  time.Hour,
 		}
 	}
 	eng := forgejo.NewEngine(

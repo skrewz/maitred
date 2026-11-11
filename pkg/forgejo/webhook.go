@@ -1074,7 +1074,7 @@ func (e *Engine) dispatchPrompt(ev Event, st State, pc PromptConfig, subject str
 	task := &queue.Task{
 		ID:       fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%d", strings.ReplaceAll(ev.Repo, "/", "-"), ev.Kind, ev.Number, identity, time.Now().UnixNano()),
 		Prompt:   prompt,
-		Persona:  pc.Persona,
+		Persona:  pc.Identity,
 		Timeout:  int(pc.Timeout.Seconds()),
 		DedupKey: fmt.Sprintf("forgejoeng-%s-%s-%d-%s-%s", ev.Repo, ev.Kind, ev.Number, identity, rev),
 		Title:    taskTitle(dispatchVerb(action, subject), ev, st),
@@ -1177,7 +1177,7 @@ func watermarkKeepSlots(prev *Watermark, slots map[string]Slot) Watermark {
 // revision) still squelches while pending
 // (§forgejo/webhook/the-pipeline, §forgejo/decisions/review-lenses).
 func (e *Engine) dispatchLens(ev Event, st State, lens ReviewLens, rev string) error {
-	pc := PromptConfig{Prompt: lens.Prompt, Persona: lens.Persona, Timeout: lens.Timeout}
+	pc := PromptConfig{Prompt: lens.Prompt, Identity: lens.Identity, Timeout: lens.Timeout}
 	return e.dispatchPrompt(ev, st, pc, lens.Identity, ActionReview, rev)
 }
 

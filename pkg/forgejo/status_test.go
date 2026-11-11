@@ -175,7 +175,7 @@ func TestEngineStatusConstructionPaths(t *testing.T) {
 
 	t.Run("config omits an action the binary knows", func(t *testing.T) {
 		yaml := strings.Replace(validConfigYAML,
-			"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    persona: s-autonomics-implementer\n    timeout: 30m\n",
+			"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n    timeout: 30m\n",
 			"", 1)
 		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", yaml)
 		cause, category := EngineStatus(path, mapEnv(completeEnv()))
@@ -191,7 +191,7 @@ func TestEngineStatusConstructionPaths(t *testing.T) {
 	})
 
 	t.Run("config names an action the binary does not know", func(t *testing.T) {
-		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", strings.Replace(validConfigYAML, "actions:", "actions:\n  bogus:\n    prompt: x\n    persona: p\n    timeout: 1h", 1))
+		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", strings.Replace(validConfigYAML, "actions:", "actions:\n  bogus:\n    prompt: x\n    identity: p\n    timeout: 1h", 1))
 		cause, category := EngineStatus(path, mapEnv(completeEnv()))
 		if !errors.Is(cause, ErrActionSetMismatch) {
 			t.Fatalf("cause = %v, want ErrActionSetMismatch", cause)
