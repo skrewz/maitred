@@ -97,6 +97,9 @@ func testForgejoEngine(t *testing.T) (*forgejo.Engine, *stubForgejoAPI) {
 		store, cfg, queue.NewTaskQueue(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
+	// Stop waits the in-flight sweep out whatever a test started, so
+	// no sweep goroutine outlives the temporary directories above.
+	t.Cleanup(eng.Stop)
 	eng.HandleEvent(forgejo.Event{Type: forgejo.EventIssueOpened, Repo: "o/r", Kind: forgejo.KindIssue, Number: 7, Sender: "alice"})
 	return eng, api
 }
@@ -310,12 +313,24 @@ func TestForgejoEndpoint_SweepsCatalog(t *testing.T) {
 
 // TestSweepFire: POST /api/forgejo/sweeps/{id} with the engine up
 // answers 202 Accepted and starts the sweep now rather than at the
-// next tick (§forgejo/observability/triggering-a-sweep).
+// next tick (§forgejo/observability/triggering-a-sweep). The engine is
+// started and its start-time sweep waited out first, so the listing
+// this test observes can come only from the triggered start — the
+// tick is an hour away.
 func TestSweepFire(t *testing.T) {
 	fjEng, api := testForgejoEngine(t)
 	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
+	fjEng.Start()
 
+	deadline := time.Now().Add(5 * time.Second)
+	for api.reposCounts.Load() < 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("the engine's start-time sweep did not run")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	before := api.reposCounts.Load()
+
 	req := httptest.NewRequest(http.MethodPost, "/api/forgejo/sweeps/"+forgejo.SweepIDReconcile, nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
@@ -323,12 +338,33 @@ func TestSweepFire(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", rec.Code)
 	}
-	deadline := time.Now().Add(5 * time.Second)
 	for api.reposCounts.Load() <= before {
 		if time.Now().After(deadline) {
 			t.Fatal("the sweep did not run after the trigger")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestSweepFire_StoppedEngine: an engine that exists but does not run
+// its sweep loop has no lifecycle owner for the start; the endpoint
+// answers 503 and nothing runs (§forgejo/observability/triggering-a-sweep,
+// §forgejo/reconciliation/scheduling).
+func TestSweepFire_StoppedEngine(t *testing.T) {
+	fjEng, api := testForgejoEngine(t)
+	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
+	before := api.reposCounts.Load()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/forgejo/sweeps/"+forgejo.SweepIDReconcile, nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := api.reposCounts.Load(); n != before {
+		t.Errorf("stopped engine ran a sweep anyway: %d listings, want %d", n, before)
 	}
 }
 

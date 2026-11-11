@@ -85,11 +85,12 @@ The dashboard API serves the catalog and the trigger:
 - `POST /api/forgejo/sweeps/{id}` starts the named sweep immediately
   and answers `202 Accepted`. A sweep runs asynchronously — it can make
   many API calls — so the response reports acceptance, not completion.
-  A manual start is a sweep start like any other: one that finds a
-  sweep already in flight is skipped exactly as a scheduled one is
+  The start belongs to the loop that owns the schedule, so the
+  skip-if-in-flight rule and the stop-time wait for the in-flight
+  sweep cover a manual start exactly as they cover a scheduled one
   (§forgejo/reconciliation/scheduling). An unknown id answers `404`; an
-  engine that is not up answers `503`; a method other than POST answers
-  `405`.
+  engine that is not up — none, or one whose sweep loop is not running
+  — answers `503`; a method other than POST answers `405`.
 
 The dashboard renders **one button per sweep operation**, labelled with
 the sweep's title. Pressing it opens a **confirmation modal** before

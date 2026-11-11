@@ -260,12 +260,13 @@ func (s *Server) handleForgejo(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleForgejoSweep triggers one sweep operation by catalog id
-// (§forgejo/observability/triggering-a-sweep): POST starts the sweep
-// now and answers 202 Accepted — the sweep runs asynchronously, and a
-// start that finds a sweep already in flight is skipped exactly as a
-// scheduled one is (§forgejo/reconciliation/scheduling). An unknown id
-// answers 404, no engine up answers 503, and any method other than
-// POST answers 405.
+// (§forgejo/observability/triggering-a-sweep): POST hands the start to
+// the engine's sweep loop and answers 202 Accepted — the sweep runs
+// asynchronously, and a start that finds a sweep already in flight is
+// skipped exactly as a scheduled one is (§forgejo/reconciliation/scheduling).
+// An unknown id answers 404, an engine that is not up — absent, or one
+// whose sweep loop is not running — answers 503, and any method other
+// than POST answers 405.
 func (s *Server) handleForgejoSweep(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -276,11 +277,14 @@ func (s *Server) handleForgejoSweep(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 	if err := s.forgejoEng.FireSweep(id); err != nil {
-		if errors.Is(err, forgejo.ErrUnknownSweep) {
+		switch {
+		case errors.Is(err, forgejo.ErrUnknownSweep):
 			http.Error(w, err.Error(), http.StatusNotFound)
-			return
+		case errors.Is(err, forgejo.ErrSweepNotRunning):
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		default:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)

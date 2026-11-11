@@ -79,31 +79,47 @@ func (e *Engine) Reconcile() {
 }
 
 // Start begins the reconciliation sweep: it runs once immediately, then
-// on every ReconcileInterval tick
-// (§forgejo/reconciliation/scheduling).
+// on every ReconcileInterval tick — and on every manual start this
+// process signals through FireSweep
+// (§forgejo/reconciliation/scheduling,
+// §forgejo/observability/triggering-a-sweep).
 func (e *Engine) Start() {
+	e.schedMu.Lock()
+	defer e.schedMu.Unlock()
 	if e.stopCh != nil {
 		return
 	}
 	e.stopCh = make(chan struct{})
 	e.doneCh = make(chan struct{})
+	e.startCh = make(chan struct{}, 1)
 	go e.sweepLoop()
 }
 
-// Stop halts the reconciliation sweep and waits for the in-flight sweep,
-// if any, to finish. It is a no-op when the engine was never started
-// (§forgejo/reconciliation/scheduling).
+// Stop halts the reconciliation sweep and waits for the in-flight
+// sweep, if any, to finish — including one started by hand, because
+// the sweep loop owns every start (§forgejo/reconciliation/scheduling,
+// §forgejo/observability/triggering-a-sweep). It is a no-op when the
+// engine was never started.
 func (e *Engine) Stop() {
+	e.schedMu.Lock()
 	if e.stopCh == nil {
+		e.schedMu.Unlock()
 		return
 	}
 	close(e.stopCh)
+	e.schedMu.Unlock()
 	<-e.doneCh
-	e.stopCh = nil
-	e.doneCh = nil
+	e.schedMu.Lock()
+	e.stopCh, e.doneCh, e.startCh = nil, nil, nil
+	e.schedMu.Unlock()
 }
 
-// sweepLoop runs the sweep once, then on every tick, until Stop.
+// sweepLoop runs the sweep once, then on every tick and on every
+// manual start signal, until Stop. A manual start is a sweep start
+// like any other: it runs the sweep the catalog holds today — the
+// reconciliation sweep — and a future sweep joining the catalog
+// (§forgejo/observability/triggering-a-sweep) grows its start here
+// alone.
 func (e *Engine) sweepLoop() {
 	defer close(e.doneCh)
 	e.Reconcile()
@@ -112,6 +128,8 @@ func (e *Engine) sweepLoop() {
 	for {
 		select {
 		case <-t.C:
+			e.Reconcile()
+		case <-e.startCh:
 			e.Reconcile()
 		case <-e.stopCh:
 			return

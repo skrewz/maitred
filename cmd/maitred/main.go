@@ -263,13 +263,18 @@ func main() {
 	<-sig
 
 	log.Printf("shutting down")
+	// Stop the dashboard first: its sweep trigger hands starts to the
+	// engine's sweep loop, and the engine's Stop waits the in-flight
+	// sweep out — a dashboard still answering triggers during that
+	// wait would restart what shutdown is waiting for
+	// (§forgejo/observability/triggering-a-sweep).
+	webSrv.Stop()
 	if fjEngine != nil {
 		fjEngine.Stop()
 	}
 	if webhookSrv != nil {
 		webhookSrv.Stop()
 	}
-	webSrv.Stop()
 	eng.Stop()
 	log.Printf("stopped")
 }
