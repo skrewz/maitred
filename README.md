@@ -278,6 +278,19 @@ The webhook API runs on a separate port from the web dashboard (default `9091`,
 configurable via `MAITRED_API_PORT`). TLS termination is expected to be
 handled by a reverse proxy in front of the API port.
 
+## Web Dashboard
+
+Besides the trigger cards (fire now, pause/resume), the dashboard shows the
+Forgejo engine's sweep operations — today the reconciliation sweep — when the
+engine is up. Each sweep gets a **Trigger** button that opens a confirmation
+modal; confirming starts the sweep immediately instead of waiting for the next
+reconcile tick. A sweep is the backstop for webhook deliveries the engine
+missed, so the modal asks whether you have taken the steps that make the button
+unnecessary before anything runs. The same can be driven over the API:
+`GET /api/forgejo` lists the sweep catalog in its `sweeps` field, and
+`POST /api/forgejo/sweeps/{id}` starts one (a sweep already in flight is
+skipped, as with a scheduled sweep; see `specification/forgejo/observability.md`).
+
 ## Architecture
 
 ```
