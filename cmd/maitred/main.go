@@ -270,7 +270,9 @@ func main() {
 	// refuses triggers too once its Stop has begun, so the guarantee
 	// does not rest on the ordering alone
 	// (§forgejo/observability/triggering-a-sweep).
-	webSrv.Stop()
+	if err := webSrv.Stop(); err != nil {
+		log.Printf("dashboard shutdown incomplete: %v (the engine still refuses any trigger its Stop has begun for)", err)
+	}
 	if fjEngine != nil {
 		fjEngine.Stop()
 	}

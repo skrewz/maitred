@@ -421,7 +421,11 @@ func TestSweepFire_Method(t *testing.T) {
 func TestServerStartStop(t *testing.T) {
 	// Take a free port through the kernel, then hand its number to
 	// the server: Start binds in a goroutine, so the test learns of
-	// the socket only by polling it.
+	// the socket only by polling it. The handoff is a known race —
+	// another process can claim the port between the close here and
+	// Start's bind, and then "never started serving" is the other
+	// process's doing, not a Start regression, so re-run before
+	// chasing it.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("pick a port: %v", err)
@@ -456,5 +460,11 @@ func TestServerStartStop(t *testing.T) {
 	if res, err := http.Get(base); err == nil {
 		res.Body.Close()
 		t.Error("the dashboard still serves after Stop")
+	}
+	// Stop is a no-op once the server has stopped, so a second call
+	// reports nothing — which is what makes the deferred Stop at the
+	// top of the test safe alongside the one just above.
+	if err := srv.Stop(); err != nil {
+		t.Errorf("second Stop: %v, want the no-op to report nothing", err)
 	}
 }

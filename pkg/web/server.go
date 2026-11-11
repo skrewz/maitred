@@ -86,8 +86,9 @@ func (s *Server) Start() error {
 		// header would stall Shutdown's wait at Stop too.
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	srv := s.httpSrv
 	go func() {
-		_ = s.httpSrv.ListenAndServe()
+		_ = srv.ListenAndServe()
 	}()
 	return nil
 }
@@ -97,14 +98,18 @@ func (s *Server) Start() error {
 // triggers before shutdown moves on to the engine whose sweep loop
 // those triggers hand starts to
 // (§forgejo/observability/triggering-a-sweep). It is a no-op when the
-// server was never started.
+// server was never started and once it has stopped, so calling Stop
+// twice reports no error: the second call finds nothing left to close
+// rather than answering http.ErrServerClosed.
 func (s *Server) Stop() error {
-	if s.httpSrv == nil {
+	srv := s.httpSrv
+	if srv == nil {
 		return nil
 	}
+	s.httpSrv = nil
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return s.httpSrv.Shutdown(ctx)
+	return srv.Shutdown(ctx)
 }
 
 func (s *Server) registerRoutes() {
