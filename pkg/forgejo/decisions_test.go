@@ -3382,6 +3382,364 @@ func TestDecide_SweepAutoMergeRowIsWatermarkExempt(t *testing.T) {
 	})
 }
 
+// connectedIssueLabelled is a connected issue of a PR under test
+// carrying the given labels and no blockers: the work item whose
+// `agentic-auto-merge` opt-in the merge rows must read as the PR's own
+// (§forgejo/decisions/merge-gate).
+func connectedIssueLabelled(repo string, number int, labels ...string) ConnectedIssue {
+	c := connectedIssueOf(number)
+	c.Issue.Repository = repo
+	c.Issue.Labels = labels
+	return c
+}
+
+// closesIssues names on the pull request's body the issues it delivers,
+// each through the forge's closing-keyword grammar: the relation the
+// opt-in's issue seat is read from, so a fixture that means "the issue
+// this PR delivers" says so on the body rather than relying on the
+// assembly that connected it (§forgejo/decisions/merge-gate,
+// §forgejo/webhook/re-fetch).
+func closesIssues(pr *PullRequest, refs ...string) *PullRequest {
+	lines := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		lines = append(lines, "Fixes "+ref)
+	}
+	if len(lines) == 0 {
+		return pr
+	}
+	if pr.Body != "" {
+		pr.Body += "\n\n"
+	}
+	pr.Body += strings.Join(lines, "\n")
+	return pr
+}
+
+// TestMergeOptedIn pins the shapes of the one predicate that answers
+// "did this work opt into merging?" the decision-level tables cannot
+// see: case-folding on the issue seat, which delivered issue is named
+// when several are in play, and the closing-keyword condition the issue
+// seat carries — the maintainer's reading of the label, "this issue
+// allows PRs that implement it" being the PR that carries a closing
+// reference to it. Every other shape — the PR seat alone, a delivered
+// issue alone, another repository, neither seat, nothing delivered — is
+// pinned at the level #196's "How to verify" asks for, through Decide,
+// in TestDecide_MergeOptInReadFromEitherSeat
+// (§forgejo/decisions/merge-gate).
+func TestMergeOptedIn(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		pr        *PullRequest
+		connected []ConnectedIssue
+		wantRef   string
+		want      bool
+	}{
+		{
+			name:      "the issue's label is matched case-insensitively",
+			pr:        closesIssues(openPR("abc"), "o/r#4"),
+			connected: []ConnectedIssue{connectedIssueLabelled("o/r", 4, "AGENTIC-AUTO-MERGE")},
+			wantRef:   "o/r#4",
+			want:      true,
+		},
+		{
+			name:      "the first delivered issue naming it wins",
+			pr:        closesIssues(openPR("abc"), "o/r#4", "o/r#5"),
+			connected: []ConnectedIssue{connectedIssueLabelled("o/r", 4), connectedIssueLabelled("o/r", 5, LabelAgenticAutoMerge)},
+			wantRef:   "o/r#5",
+			want:      true,
+		},
+		{
+			// A bare reference names an issue of the pull request's own
+			// repository, which is how the grammar resolves it.
+			name:      "a bare closing reference names the issue in the PR's repository",
+			pr:        closesIssues(openPR("abc"), "#4"),
+			connected: []ConnectedIssue{connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge)},
+			wantRef:   "o/r#4",
+			want:      true,
+		},
+		{
+			// The issue reached only through a blocking edge, or one the
+			// body never claims to deliver, is not the PR's work item: its
+			// label is that item's own authoring and cannot opt this pull
+			// request into merging.
+			name:      "a labelled issue the body names nowhere is no opt-in",
+			pr:        openPR("abc"),
+			connected: []ConnectedIssue{connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge)},
+			want:      false,
+		},
+		{
+			name:      "a closing reference to a different issue is no opt-in",
+			pr:        closesIssues(openPR("abc"), "o/r#99"),
+			connected: []ConnectedIssue{connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge)},
+			want:      false,
+		},
+		{
+			// The PR seat needs no relation at all: it is the pull request
+			// the operator labelled.
+			name: "the PR's own label needs no closing reference",
+			pr:   labelledPR("abc", LabelAgenticAutoMerge),
+			want: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ref, ok := mergeOptedIn(tc.pr, "o/r", tc.connected)
+			if ok != tc.want || ref != tc.wantRef {
+				t.Errorf("mergeOptedIn = (%q, %t), want (%q, %t)", ref, ok, tc.wantRef, tc.want)
+			}
+		})
+	}
+}
+
+// TestDecide_MergeOptInReadFromEitherSeat: the merge-or-wait row asks
+// one question through one predicate, so a PR whose opt-in sits on the
+// issue it delivers fires the sweep's watermark-exempt row exactly as
+// one carrying the label itself does — the shape that left a fully
+// approved pull request in limbo until an operator labelled it by
+// hand. Where neither seat carries the label the merge opt-in
+// precondition holds off, naming the missing label and the connected
+// issues exactly as a PR-only read holds off (s-git/maitred#179), and
+// the delivered issues never widen the merge gate itself
+// (§forgejo/decisions/merge-gate, §forgejo/reconciliation/watermark-exemptions).
+func TestDecide_MergeOptInReadFromEitherSeat(t *testing.T) {
+	watermark := &Watermark{Action: string(ActionMergeOrWait), Revision: "abc"}
+	const missingHoldOff = "an approved PR with no merge opt-in waits on a human"
+	const keyedHoldOff = "merge-or-wait already dispatched at revision abc"
+
+	// sweepState is an approved chain at head abc whose merge opt-in
+	// sits on the given seats: the PR's own labels, and the labels of
+	// the issues it delivers — named on the body the way the forge's
+	// closing grammar names a delivery, which is the relation the issue
+	// seat is read from.
+	sweepState := func(prLabels []string, connected ...ConnectedIssue) State {
+		refs := make([]string, 0, len(connected))
+		for i := range connected {
+			refs = append(refs, fmt.Sprintf("%s#%d", connected[i].Issue.Repository, connected[i].Issue.Number))
+		}
+		s := State{
+			ReviewLenses: testLenses,
+			PR:           closesIssues(labelledPR("abc", prLabels...), refs...),
+			Reviews:      []Review{review("APPROVED", "carol", testTime)},
+		}
+		if len(connected) > 0 {
+			s.ConnectedIssues = connected
+		}
+		return s
+	}
+
+	for _, tc := range []struct {
+		name        string
+		state       State
+		wantFire    bool
+		wantSeat    string
+		wantHoldOff string
+	}{
+		{
+			name:     "the opt-in on the PR alone fires the row as it did",
+			state:    sweepState([]string{LabelAgenticAutoMerge}),
+			wantFire: true,
+			wantSeat: "carries agentic-auto-merge",
+		},
+		{
+			name:     "the opt-in on a delivered issue fires the row too",
+			state:    sweepState(nil, connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge)),
+			wantFire: true,
+			wantSeat: "its issue o/r#4 carries agentic-auto-merge",
+		},
+		{
+			name:     "the opt-in across repositories is found",
+			state:    sweepState(nil, connectedIssueLabelled("other/repo", 12, LabelAgenticAutoMerge)),
+			wantFire: true,
+			wantSeat: "its issue other/repo#12 carries agentic-auto-merge",
+		},
+		{
+			name:        "neither seat opts in",
+			state:       sweepState(nil, connectedIssueLabelled("o/r", 4, LabelSync)),
+			wantHoldOff: missingHoldOff + " (connected issues: o/r#4)",
+		},
+		{
+			name:        "nothing is delivered",
+			state:       sweepState(nil),
+			wantHoldOff: missingHoldOff + " (connected issues: none)",
+		},
+		{
+			name:     "the label on either seat is matched case-insensitively",
+			state:    sweepState([]string{"Agentic-Auto-Merge"}, connectedIssueLabelled("o/r", 4)),
+			wantFire: true,
+			wantSeat: "carries agentic-auto-merge",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := Decide(prEvent(EventReconcile, ""), tc.state, watermark)
+			if !tc.wantFire {
+				if !strings.Contains(d.Reason, tc.wantHoldOff) {
+					t.Errorf("decision = %+v, want the precondition hold-off naming the missing opt-in %q", d, tc.wantHoldOff)
+				}
+				return
+			}
+			if d.Action != ActionMergeOrWait {
+				t.Fatalf("decision = %+v, want merge-or-wait", d)
+			}
+			if !strings.Contains(d.Reason, tc.wantSeat) {
+				t.Errorf("reason = %q, want it to name where the opt-in was found: %q", d.Reason, tc.wantSeat)
+			}
+			if !strings.Contains(d.Reason, "regardless of revision abc") {
+				t.Errorf("reason = %q, want the state that calls for the action, not the watermark", d.Reason)
+			}
+		})
+	}
+
+	t.Run("a delivered issue's opt-in never merges past a blocker", func(t *testing.T) {
+		gate := connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge)
+		gate.Blockers = []Issue{gateBlocker("o/r", 3, "open")}
+		d := Decide(prEvent(EventReconcile, ""), sweepState(nil, gate), watermark)
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want a hold-off: the opt-in authorises merging, not merging past a blocker", d)
+		}
+		if !strings.Contains(d.Reason, "o/r#3") {
+			t.Errorf("reason = %q, want it to name the open blocker", d.Reason)
+		}
+	})
+
+	t.Run("the issue seat is the issue the body names as its delivery", func(t *testing.T) {
+		// A connected issue the pull request's own body carries no
+		// closing reference to — one reached only through a blocking edge,
+		// or a work item this PR merely co-delivers — is not the work this
+		// PR implements, so its label cannot satisfy the precondition on
+		// the pull request author's own choosing
+		// (§forgejo/decisions/merge-gate).
+		s := sweepState(nil, connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge))
+		s.PR.Body = ""
+		d := Decide(prEvent(EventReconcile, ""), s, watermark)
+		if !strings.Contains(d.Reason, missingHoldOff) {
+			t.Errorf("decision = %+v, want the precondition hold-off naming the missing opt-in %q", d, missingHoldOff)
+		}
+	})
+
+	t.Run("the event paths keep the revision-keyed guard", func(t *testing.T) {
+		for _, ev := range []Event{prEvent(EventPRReviewed, "carol"), prEvent(EventPRCommented, "alice")} {
+			s := sweepState(nil, connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge))
+			d := Decide(ev, s, watermark)
+			if d.Reason != keyedHoldOff {
+				t.Errorf("event %q: decision = %+v, want the revision-keyed hold-off %q: the exemption stays the sweep's row",
+					ev.Type, d, keyedHoldOff)
+			}
+		}
+	})
+}
+
+// TestDecide_SyncSetDualOptInReadFromEitherSeat: the hold-off that
+// contains a member opted into both landing routes asks the merging
+// question through the same predicate the merge row asks it, whatever
+// shape the membership arrived in, so the two reads cannot disagree
+// about the same pull request: it holds off naming the set it belongs
+// to, the merging opt-in and the seat that opt-in sits in, whether the
+// membership came from the PR's own edge into a grouping issue or from
+// a connected issue carrying the member label. The authoring error is
+// paired only with the seats §sync-set's remedy reaches — the member's
+// own labels and the pull request delivering it: an opt-in on a
+// different work item the pull request co-delivers is that item's own
+// and names no authoring error (§forgejo/decisions/sync-set,
+// §forgejo/decisions/merge-gate).
+func TestDecide_SyncSetDualOptInReadFromEitherSeat(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		state       State
+		want        []string
+		wantNoError bool
+	}{
+		{
+			// The merging opt-in sits on a work item the pull request
+			// co-delivers, not on the member: nothing here opted the
+			// member into merging, so membership holds the merge off
+			// without an authoring error to retire.
+			name: "a direct member co-delivering an opted-in issue names no authoring error",
+			state: func() State {
+				state := directPRMemberState(openPR("abc"), 11)
+				state.ConnectedIssues = append(state.ConnectedIssues, connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge))
+				return state
+			}(),
+			wantNoError: true,
+			want:        []string{"direct member of the open sync set", "landing is the set's decision"},
+		},
+		{
+			// Direct membership comes from the PR's edge into the
+			// grouping issue's blockers, not from a label on the pull
+			// request: the sentence names the set label only where the
+			// pull request actually carries it.
+			name:  "a direct member's opt-in on the pull request names the merging label alone",
+			state: directPRMemberState(labelledPR("abc", LabelAgenticAutoMerge), 11),
+			want:  []string{"direct member of the open sync set", "carries agentic-auto-merge", "authoring error"},
+		},
+		{
+			name:  "a direct member whose pull request carries both labels says so",
+			state: directPRMemberState(labelledPR("abc", LabelAgenticSyncMerge, LabelAgenticAutoMerge), 11),
+			want:  []string{"carries both agentic-sync-merge and agentic-auto-merge", "authoring error"},
+		},
+		{
+			// The membership the approval side reads off a connected
+			// issue's labels: the PR is no grouping issue's blocker, so
+			// nothing but this read names the opt-in it carries.
+			name: "an indirect member's opt-in on the pull request names the error",
+			state: State{
+				ReviewLenses:    testLenses,
+				PR:              labelledPR("abc", LabelAgenticAutoMerge),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberConnected(4, 11)},
+			},
+			want: []string{"sync set", "authoring error", "the pull request carries", LabelAgenticAutoMerge},
+		},
+		{
+			name: "an indirect member co-delivering an opted-in issue names no authoring error",
+			state: State{
+				ReviewLenses:    testLenses,
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberConnected(4, 11), connectedIssueLabelled("o/r", 5, LabelAgenticAutoMerge)},
+			},
+			wantNoError: true,
+			want:        []string{"sync set", "landing is the set's decision"},
+		},
+		{
+			name: "a direct member with no merging opt-in is held off by membership alone",
+			state: func() State {
+				state := directPRMemberState(openPR("abc"), 11)
+				state.ConnectedIssues = append(state.ConnectedIssues, connectedIssueLabelled("o/r", 4))
+				return state
+			}(),
+			wantNoError: true,
+		},
+		{
+			name: "an indirect member with no merging opt-in is held off by membership alone",
+			state: State{
+				ReviewLenses:    testLenses,
+				PR:              openPR("abc"),
+				Reviews:         []Review{review("APPROVED", "carol", testTime)},
+				ConnectedIssues: []ConnectedIssue{syncMemberConnected(4, 11)},
+			},
+			wantNoError: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := Decide(prEvent(EventPRReviewed, "carol"), tc.state, nil)
+			if d.Action != "" || !d.HoldOff() {
+				t.Fatalf("decision = %+v, want a hold-off dispatching nothing", d)
+			}
+			if len(tc.want) == 0 && !tc.wantNoError {
+				t.Fatal("case names neither an expected reason nor the no-opt-in control: set want or wantNoError")
+			}
+			if tc.wantNoError {
+				if strings.Contains(d.Reason, "authoring error") {
+					t.Errorf("hold-off reason = %q, want no double opt-in named: the work is opted into the set alone", d.Reason)
+				}
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(d.Reason, want) {
+					t.Errorf("hold-off reason = %q, want it to name %q", d.Reason, want)
+				}
+			}
+		})
+	}
+}
+
 // TestDecide_SweepReviewRowsAreWatermarkExempt: the sweep's rows for
 // the lens fan-out and fix-feedback are watermark-exempt — the state
 // is their watermark, so a dispatch that went nowhere recovers on the

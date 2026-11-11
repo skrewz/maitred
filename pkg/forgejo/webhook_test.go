@@ -2855,17 +2855,25 @@ func TestHandler_IssueClosed_CascadePRNotApprovedStaysSilent(t *testing.T) {
 	}
 }
 
-// TestHandler_IssueClosed_CascadePRWithoutOptInHoldsOff: the
-// agentic-auto-merge label is a precondition of the cascade's PR leg
-// too — the PR's own re-fetch decides it, and an approved PR with no
-// merge opt-in holds off, the fork recorded in the decision log
-// naming the missing label and the connected issue. Nothing is
+// TestHandler_IssueClosed_CascadePRWithoutOptInHoldsOff:
+// the agentic-auto-merge label is a precondition of the cascade's PR
+// leg too — the PR's own re-fetch decides it, asking the predicate
+// that reads both seats — and an approved PR with no merge opt-in on
+// either seat holds off, the fork recorded in the decision log naming
+// the missing label and the connected issue. Nothing is
 // dispatched, no watermark is recorded, and the hold-off has no
 // backstop of its own: the next sweep is (§forgejo/decisions/unblock-cascade,
 // §forgejo/decisions/merge-gate, s-git/maitred#179).
 func TestHandler_IssueClosed_CascadePRWithoutOptInHoldsOff(t *testing.T) {
 	eng, api, q, store, log := cascadePRFixtures(t)
 	api.pulls[9].Labels = nil
+	// The delivered issue is the other seat the predicate reads, so
+	// the no-opt-in shape is empty on both: the blocking-edge stub the
+	// re-fetch carries is where the issue's labels are read from.
+	noOptIn := testIssue(10, "open")
+	noOptIn.Labels = nil
+	api.issues[10] = noOptIn
+	api.blocks[9] = []Issue{*noOptIn}
 	h := NewHandler(eng, "s3cret", nil)
 
 	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
