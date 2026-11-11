@@ -1426,23 +1426,23 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 	if err := e.fetchPRSetState(owner, name, k.Number, &st); err != nil {
 		return err
 	}
-	w, err := e.store.Load(k)
-	if err != nil {
-		e.log.Warn("load watermark (continuing without)", "key", k.String(), "error", err)
-		w = nil
-	}
 	// Insurance against the re-fetched state, through the same pure
-	// decision and the same gate the event path takes. The bound's check
-	// and the dispatch that stamps it run under this PR key's lock, as
-	// they do on the event path's WithKeyLock, so a cascade and an event
-	// delivery for the same PR cannot both read "no fresh stamp" and
-	// both dispatch (s-git/maitred#199). The PR was re-fetched and
-	// checked open above, so this leg takes the key's lock only after
-	// any walk that could re-enter it has excluded the merged PR
-	// (§forgejo/decisions/loop-prevention, §forgejo/state/concurrency).
+	// decision and the same gate the event path takes, under this PR
+	// key's lock exactly as the event path takes it: the watermark read,
+	// the bound's check and the dispatch that stamps it are one critical
+	// section. It is reached while the cascade root's lock is held, so
+	// locks go root first and target second — the one nesting
+	// §forgejo/state/concurrency permits — and the PR is re-fetched above
+	// the lock, so no walk re-enters a key this leg holds
+	// (§forgejo/state/concurrency, §forgejo/decisions/unblock-cascade).
 	var d Decision
 	var dispErr error
 	e.store.WithKeyLock(k, func() {
+		w, err := e.store.loadLocked(k)
+		if err != nil {
+			e.log.Warn("load watermark (continuing without)", "key", k.String(), "error", err)
+			w = nil
+		}
 		d = e.boundMergeReFire(k, ev, st, Decide(ev, st, w))
 		if d.Action == ActionMergeOrWait {
 			// The dispatch carries the assembled state, not the bare

@@ -46,3 +46,15 @@ checks), never a correctness failure.
 Watermark updates for the same key are **serialised** (a per-key lock or
 equivalent), so the event path and the reconciliation sweep cannot race a
 watermark update for the same issue/PR.
+
+Where one critical section reaches into another key the order is
+**root first, target second**, and never the inverse. The engine's only
+such nesting is the unblock cascade's legs — PR, sync and issue — all
+reached while `HandleEvent` still holds the cascade root's key lock, and
+the only holder allowed to take a second key's lock while holding one,
+so a future leg that dispatched from inside another key's lock would be
+out of bounds. Inverting the order would need one object to be a cascade
+root in one delivery and a cascade target in another at the same
+instant — a cycle in the blocker graph, which the forge's blocker check
+rejects and which the walk's own visited set would break whatever the
+forge allowed (§forgejo/decisions/unblock-cascade).
