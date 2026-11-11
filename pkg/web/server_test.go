@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -281,8 +282,8 @@ func TestForgejoEndpoint_Method(t *testing.T) {
 }
 
 // TestForgejoEndpoint_SweepsCatalog: with the engine up the view
-// carries the sweep catalog — the reconciliation sweep, ided, titled,
-// and described — and with no engine the catalog is empty
+// carries the sweep catalog — the reconciliation sweep, ided and
+// titled — and with no engine the catalog is empty
 // (§forgejo/observability/triggering-a-sweep).
 func TestForgejoEndpoint_SweepsCatalog(t *testing.T) {
 	fjEng, _ := testForgejoEngine(t)
@@ -338,6 +339,10 @@ func TestSweepFire(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", rec.Code)
 	}
+	// A fresh budget for the triggered start: the wait above may
+	// have consumed the old deadline, and a failure here should not
+	// read like a trigger regression on a slow machine.
+	deadline = time.Now().Add(5 * time.Second)
 	for api.reposCounts.Load() <= before {
 		if time.Now().After(deadline) {
 			t.Fatal("the sweep did not run after the trigger")
@@ -406,5 +411,50 @@ func TestSweepFire_Method(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", rec.Code)
+	}
+}
+
+// TestServerStartStop: Start serves the dashboard and Stop closes the
+// listener, so the dashboard stops answering sweep triggers before
+// shutdown moves on to the engine whose wait those triggers could
+// otherwise restart (§forgejo/observability/triggering-a-sweep).
+func TestServerStartStop(t *testing.T) {
+	// Take a free port through the kernel, then hand its number to
+	// the server: Start binds in a goroutine, so the test learns of
+	// the socket only by polling it.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("pick a port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatalf("release the port: %v", err)
+	}
+
+	srv := New(port, nil, "test", nil, forgejo.EngineStateWord(false, nil))
+	if err := srv.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer srv.Stop()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d/api/forgejo", port)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if res, err := http.Get(base); err == nil {
+			res.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the dashboard never started serving")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if err := srv.Stop(); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if res, err := http.Get(base); err == nil {
+		res.Body.Close()
+		t.Error("the dashboard still serves after Stop")
 	}
 }
