@@ -746,7 +746,7 @@ async function testSweepTriggering(page, results) {
   const view = await (await fetch(`${baseUrl}/api/forgejo`)).json();
   const sweeps = view.sweeps ?? [];
   results.push(assert(
-    sweeps.some(s => s.id === 'reconcile' && s.title && s.description),
+    sweeps.some(s => s.id === 'reconcile' && s.title),
     `The forgejo view lists the reconciliation sweep (got: ${JSON.stringify(sweeps)})`
   ));
 

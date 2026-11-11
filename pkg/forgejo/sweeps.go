@@ -21,9 +21,8 @@ const SweepIDReconcile = "reconcile"
 // whole set of sweeps: every surface that lets a human trigger a sweep
 // reads it, so adding a sweep never means touching those surfaces.
 type Sweep struct {
-	ID          string `json:"id"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
+	ID    string `json:"id"`
+	Title string `json:"title"`
 }
 
 // Sweeps is the engine's catalog of sweep operations — the
@@ -33,10 +32,6 @@ func (e *Engine) Sweeps() []Sweep {
 	return []Sweep{{
 		ID:    SweepIDReconcile,
 		Title: "Reconciliation sweep",
-		// The description is user-facing dashboard text; the
-		// specification it summarises is referenced in this comment,
-		// not in the string (§forgejo/reconciliation/the-sweep).
-		Description: "Re-enumerates the organisation's open issues and pull requests and reconciles each through the decision pipeline.",
 	}}
 }
 

@@ -8,7 +8,7 @@ import (
 
 // TestSweepsCatalog: the engine declares its sweep operations as a
 // catalog — the reconciliation sweep today — and every entry is
-// renderable by the dashboard: an id, a title, and a description
+// renderable by the dashboard: an id and a title
 // (§forgejo/observability/triggering-a-sweep).
 func TestSweepsCatalog(t *testing.T) {
 	eng, _, _, _ := newTestEngine(t)
@@ -18,7 +18,7 @@ func TestSweepsCatalog(t *testing.T) {
 	}
 	var found bool
 	for _, s := range sweeps {
-		if s.ID == "" || s.Title == "" || s.Description == "" {
+		if s.ID == "" || s.Title == "" {
 			t.Errorf("sweep %+v has an empty field", s)
 		}
 		if s.ID == SweepIDReconcile {

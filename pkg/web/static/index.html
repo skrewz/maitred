@@ -85,7 +85,6 @@
         .sweeps-title { font-size: 0.75rem; color: #64748b; text-transform: uppercase; margin-bottom: 0.5rem; }
         .sweep-card { background: #1e293b; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; border-left: 3px solid #f59e0b; display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
         .sweep-title { font-weight: 600; font-size: 0.9rem; }
-        .sweep-description { font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem; }
         .modal-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.8); display: flex; align-items: center; justify-content: center; z-index: 100; }
         .modal { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; padding: 1.5rem; max-width: 480px; }
         .modal h2 { font-size: 1rem; color: #fde68a; margin-bottom: 0.75rem; }
@@ -129,7 +128,6 @@
     <div id="sweep-modal" class="modal-overlay" style="display: none;" role="dialog" aria-modal="true">
         <div class="modal">
             <h2 id="sweep-modal-title">Trigger sweep</h2>
-            <p id="sweep-modal-description"></p>
             <p class="modal-warning">A sweep is the backstop for what the automatic paths missed: running it now re-reads and re-decides everything the engine tracks. Have you taken the steps that would make this button unnecessary — working webhook deliveries, a healthy engine?</p>
             <div class="modal-actions">
                 <button class="btn btn-ghost" id="sweep-modal-cancel" onclick="closeSweepModal()">Cancel</button>
@@ -487,7 +485,6 @@
                 <div class="sweep-card">
                     <div>
                         <div class="sweep-title">${escapeHtml(s.title)}</div>
-                        <div class="sweep-description">${escapeHtml(s.description)}</div>
                     </div>
                     <button class="btn btn-warning sweep-trigger" onclick="openSweepModal('${escapeHtml(s.id)}')">&#x26a1; Trigger</button>
                 </div>
@@ -499,7 +496,6 @@
             if (!sweep) return;
             pendingSweepId = id;
             document.getElementById('sweep-modal-title').textContent = 'Trigger ' + sweep.title + '?';
-            document.getElementById('sweep-modal-description').textContent = sweep.description;
             document.getElementById('sweep-modal').style.display = 'flex';
         }
 

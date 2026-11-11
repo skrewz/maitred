@@ -288,7 +288,6 @@ func (s *Server) handleForgejoSweep(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{"status": "triggered", "id": id})
 }
 
 func (s *Server) handleTriggerAPI(w http.ResponseWriter, r *http.Request, path string) {

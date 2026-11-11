@@ -293,7 +293,7 @@ func TestForgejoEndpoint_SweepsCatalog(t *testing.T) {
 	}
 	var found bool
 	for _, s := range view.Sweeps {
-		if s.ID == forgejo.SweepIDReconcile && s.Title != "" && s.Description != "" {
+		if s.ID == forgejo.SweepIDReconcile && s.Title != "" {
 			found = true
 		}
 	}

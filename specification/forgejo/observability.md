@@ -70,8 +70,8 @@ on restart (the watermark store is unaffected, §forgejo/state/persistence).
 The sweeps are the backstop for deliveries the event path missed, and a
 human who has just fixed such a miss wants one to run now rather than at
 the next tick. The engine therefore declares its **sweep operations**:
-a catalog of named sweeps, each with an `id`, a `title`, and a
-one-line `description`. The catalog is the whole set of sweeps the
+a catalog of named sweeps, each with an `id` and a `title`. The catalog
+is the whole set of sweeps the
 engine offers — today the reconciliation sweep alone
 (§forgejo/reconciliation/the-sweep) — and every surface that lets a
 human trigger a sweep reads it from the catalog, so adding a sweep
