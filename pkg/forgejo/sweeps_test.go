@@ -2,6 +2,7 @@ package forgejo
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -66,6 +67,128 @@ func TestFireSweepStartsSweep(t *testing.T) {
 			t.Fatal("FireSweep did not start a sweep that lists the org's repositories")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestFireSweepThenStopWaitsTheStartOut: a start accepted while the
+// loop cannot take it is waited out by Stop, not dropped — whichever
+// arm the loop's select takes on the way out
+// (§forgejo/observability/triggering-a-sweep: no start is ever
+// accepted that nothing would wait out).
+//
+// The loop is parked inside a sweep — blocked in the org listing —
+// when the start buffers and Stop closes stopCh, so releasing the
+// block leaves the loop at a select with both arms ready, and Go
+// picks between them at random: the startCh arm runs the start, and
+// the stopCh arm must take it through the drain on its exit. The
+// interleaving is therefore a coin toss per pass, so it is repeated
+// until the toss has landed on stopCh as well; delete the drain and
+// every stopCh toss fails the assertion.
+func TestFireSweepThenStopWaitsTheStartOut(t *testing.T) {
+	for pass := 0; pass < drainTosses; pass++ {
+		eng, api, _, _ := newTestEngine(t)
+		api.repos = []Repository{testRepo("o/r")}
+		api.listReposEntered = make(chan struct{})
+		api.blockListRepos = make(chan struct{})
+		release := sync.OnceFunc(func() { close(api.blockListRepos) })
+		t.Cleanup(release)
+
+		eng.Start()
+		select {
+		case <-api.listReposEntered:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("pass %d: the sweep never reached the org listing", pass)
+		}
+
+		// The buffer is the only place this start can sit: the loop is
+		// inside the sweep and cannot read it.
+		if err := eng.FireSweep(SweepIDReconcile); err != nil {
+			t.Fatalf("pass %d: FireSweep: %v", pass, err)
+		}
+
+		stopped := make(chan struct{})
+		go func() {
+			eng.Stop()
+			close(stopped)
+		}()
+		release()
+
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("pass %d: Stop did not return", pass)
+		}
+		if n := api.callCount("ListOrgRepositories"); n < 2 {
+			t.Errorf("pass %d: Stop returned after %d listing(s), want the parked sweep's and the accepted start's", pass, n)
+		}
+	}
+}
+
+// drainTosses is how many times
+// TestFireSweepThenStopWaitsTheStartOut repeats the coin-toss
+// interleaving: each pass lands on the stopCh arm — the one the drain
+// exists for — with probability a half, so a drain that has been
+// removed survives this many passes with probability 2^-drainTosses.
+const drainTosses = 16
+
+// TestFireSweepDuringStopIsRefused: once Stop has begun, a trigger is
+// refused rather than accepted — a start buffered into a loop on its
+// way out would be answered 202 for nothing
+// (§forgejo/observability/triggering-a-sweep,
+// §forgejo/reconciliation/scheduling). The engine is parked inside its
+// start-time sweep, so Stop is waiting that sweep out while the
+// trigger is fired: the interleaving the refusal exists for.
+func TestFireSweepDuringStopIsRefused(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{testRepo("o/r")}
+	api.listReposEntered = make(chan struct{})
+	api.blockListRepos = make(chan struct{})
+	release := sync.OnceFunc(func() { close(api.blockListRepos) })
+	t.Cleanup(release)
+
+	eng.Start()
+	select {
+	case <-api.listReposEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the engine's start-time sweep never reached the org listing")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		eng.Stop()
+		close(stopped)
+	}()
+
+	// A trigger fired before Stop reached stopCh is accepted, and must
+	// then be waited out; once stopCh is closed, triggers are refused.
+	accepted := false
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := eng.FireSweep(SweepIDReconcile)
+		if errors.Is(err, ErrSweepNotRunning) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("FireSweep: %v", err)
+		}
+		accepted = true
+		if time.Now().After(deadline) {
+			t.Fatal("FireSweep never reported a loop that had begun stopping")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	duringStop := api.callCount("ListOrgRepositories")
+
+	release()
+	<-stopped
+
+	n := api.callCount("ListOrgRepositories")
+	if accepted {
+		if n <= duringStop {
+			t.Errorf("a start accepted while Stop was beginning was not waited out: %d listing(s), want more than %d", n, duringStop)
+		}
+	} else if n != duringStop {
+		t.Errorf("a refused start ran anyway: %d listing(s), want %d", n, duringStop)
 	}
 }
 
