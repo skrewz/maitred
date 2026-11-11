@@ -282,18 +282,6 @@ func TestLoadConfigValidation(t *testing.T) {
 			wantSub: "bogus",
 		},
 		{
-			// The stale half of the identity/persona collapse: an entry
-			// that still carries the retired `persona` key beside its
-			// `identity` is refused as the key it no longer knows
-			// (§forgejo/config/identity-collapse).
-			name: "stale persona key on an action",
-			mutate: func(y string) string {
-				return strings.Replace(y, "  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n",
-					"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n    persona: implementer\n", 1)
-			},
-			wantSub: "persona",
-		},
-		{
 			name: "unknown top-level key",
 			mutate: func(y string) string {
 				return strings.Replace(y, "org: example-org\n", "org: example-org\nbogus_key: x\n", 1)
@@ -453,13 +441,13 @@ func TestLoadConfigSentinels(t *testing.T) {
 		}
 	})
 
-	// The collapse's stale shape: a config that still carries the
-	// retired `persona` key is the same config-or-binary mismatch as
-	// an action-set disagreement, so a surface says "half a change
+	// The collapse's stale shape: a config that carries the `persona`
+	// key the schema no longer has is the same config-or-binary mismatch
+	// as an action-set disagreement, so a surface says "half a change
 	// landed" rather than inventing a fourth category
 	// (§forgejo/config/identity-collapse,
-	// §forgejo/observability/why-the-engine-is-off). The refusal does not
-	// care which depth the retired key sits at.
+	// §forgejo/observability/why-the-engine-is-off). One site per depth
+	// the key can sit at, each making both assertions.
 	t.Run("entry still declares the retired persona key", func(t *testing.T) {
 		for _, tc := range []struct {
 			name    string
@@ -468,6 +456,9 @@ func TestLoadConfigSentinels(t *testing.T) {
 			{"action entry", strings.Replace(validConfigYAML,
 				"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n",
 				"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n    persona: implementer\n", 1)},
+			{"lens entry", strings.Replace(validConfigYAML,
+				"  - identity: reviewer-security\n    prompt: \"/pr-security-reviewer {{.PRURL}}\"\n",
+				"  - identity: reviewer-security\n    prompt: \"/pr-security-reviewer {{.PRURL}}\"\n    persona: reviewer\n", 1)},
 			{"top level", strings.Replace(validConfigYAML,
 				"org: example-org\n", "org: example-org\npersona: implementer\n", 1)},
 		} {
@@ -480,6 +471,26 @@ func TestLoadConfigSentinels(t *testing.T) {
 					t.Errorf("error %q must name the retired key it refused", err)
 				}
 			})
+		}
+	})
+
+	// A merge key is YAML's own way of including one mapping in another,
+	// not a key the deployment invented, so the decode that refuses keys
+	// beyond the schema must not refuse it: nine near-identical action
+	// entries are exactly where an operator reaches for it
+	// (§forgejo/config/validation).
+	t.Run("a merge key includes another entry", func(t *testing.T) {
+		body := strings.Replace(validConfigYAML,
+			"  implement:\n", "  implement: &impl\n", 1)
+		body = strings.Replace(body,
+			"  reassess:\n    prompt: \"/issue-reassess {{.IssueURL}}\"\n    identity: implementer\n    timeout: 1h\n",
+			"  reassess:\n    <<: *impl\n", 1)
+		cfg, err := LoadConfig(validateFixturePath(t, body))
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if got := cfg.Actions["reassess"]; got.Identity != "implementer" || got.Timeout != 2*time.Hour {
+			t.Errorf("reassess = %+v, want the merged entry's identity and timeout", got)
 		}
 	})
 
@@ -802,7 +813,6 @@ func TestReviewLensesRejected(t *testing.T) {
 		{"missing identity", "reviews:\n  - prompt: \"/pr-review {{.PRURL}}\"\n    timeout: 30m\n", "identity is required"},
 		{"duplicate identity", "reviews:\n  - identity: r\n    prompt: \"/a {{.PRURL}}\"\n    timeout: 30m\n  - identity: r\n    prompt: \"/b {{.PRURL}}\"\n    timeout: 30m\n", "duplicate lens identity"},
 		{"missing prompt", "reviews:\n  - identity: r\n    timeout: 30m\n", "prompt is required"},
-		{"stale persona key", "reviews:\n  - identity: r\n    prompt: \"/a {{.PRURL}}\"\n    persona: p\n    timeout: 30m\n", "persona"},
 		{"zero timeout", "reviews:\n  - identity: r\n    prompt: \"/a {{.PRURL}}\"\n    timeout: 0s\n", "timeout must be positive"},
 		{"bad template", "reviews:\n  - identity: r\n    prompt: \"/a {{.Nope}}\"\n    timeout: 30m\n", "reviews"},
 	}

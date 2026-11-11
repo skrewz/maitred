@@ -23,8 +23,10 @@ const (
 	// be read or parsed.
 	CategoryConfigUnreadable
 	// CategoryConfigBinaryMismatch is a config and a binary that
-	// disagree about the action set — half a landing set deployed
-	// (§forgejo/config/validation).
+	// disagree about the config's key set — a missing or unknown action,
+	// or a key the binary does not declare — which is half a landing set
+	// deployed (§forgejo/config/validation,
+	// §forgejo/config/identity-collapse).
 	CategoryConfigBinaryMismatch
 	// CategoryCredentialsMissing is a config that enables the engine
 	// while the environment cannot serve it.

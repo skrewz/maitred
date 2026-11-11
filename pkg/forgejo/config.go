@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -44,16 +45,16 @@ const DefaultConfigPath = "/etc/maitred/forgejoeng.yaml"
 
 // ReviewLens is one configured review lens: the identity whose approval
 // the gates count, with the canned prompt that dispatches a review from
-// it (§forgejo/config/review-lenses). After the identity/persona
-// collapse the lens declares exactly one name — the forge login — which
-// is both what the decisions compare against and what the dispatched
-// task is named by (§forgejo/config/identity-collapse).
+// it (§forgejo/config/review-lenses). It declares exactly one name — the
+// forge login — which is both what the decisions compare against and
+// what the dispatched task is named by
+// (§forgejo/config/identity-collapse).
 type ReviewLens struct {
 	// Identity is the Forgejo login the lens reviews as; the decision
 	// function compares it against review authors to decide which
-	// lenses still owe a verdict (§forgejo/decisions/review-lenses).
-	// It is also the name the lens's task runs as: one declared field,
-	// never a second key held equal by convention
+	// lenses still owe a verdict (§forgejo/decisions/review-lenses). It
+	// is also the name the lens's task runs as, so the verdict a gate
+	// counts and the work it counts are named by one field
 	// (§forgejo/config/identity-collapse).
 	Identity string `yaml:"identity"`
 	// Prompt is the canned prompt template, the hotelier task
@@ -69,11 +70,9 @@ type PromptConfig struct {
 	// Prompt is the canned prompt template: the hotelier task invocation
 	// plus its pre-flight checks.
 	Prompt string `yaml:"prompt"`
-	// Identity is the Forgejo login the task runs as — the one declared
-	// name the collapse left standing. It travels to the queue system as
-	// the task's persona name, so the actor named on the work is the
-	// login itself rather than a second string that could drift from it
-	// (§forgejo/config/identity-collapse).
+	// Identity is the Forgejo login the task runs as. It travels to the
+	// queue system as the task's persona name, so the actor named on the
+	// work is the login itself (§forgejo/config/identity-collapse).
 	Identity string `yaml:"identity"`
 	// Timeout is how long the task may run.
 	Timeout time.Duration `yaml:"timeout"`
@@ -82,8 +81,8 @@ type PromptConfig struct {
 // Config is the engine's configuration: canned prompts plus the scalar
 // keys (§forgejo/config/canned-prompts, §forgejo/config/decomposer-identity,
 // §forgejo/config/implementer-identity). Its key set is exact: a key the
-// binary does not know — the retired `persona` above all — is a load
-// failure naming that key (§forgejo/config/identity-collapse).
+// binary does not declare is a load failure naming that key
+// (§forgejo/config/identity-collapse).
 type Config struct {
 	// Org is the organisation whose role-holding repositories the
 	// engine tracks (§forgejo/webhook/repository-roles).
@@ -260,9 +259,11 @@ var (
 	// read, or parse (§forgejo/config/loading).
 	ErrConfigUnreadable = errors.New("config unreadable")
 	// ErrActionSetMismatch means the config and the binary disagree
-	// about the action set, in either direction — the signature of half
-	// a config-and-binary change having landed
-	// (§forgejo/config/validation).
+	// about the config's key set, in either direction: an action the
+	// other side does not have, or a key the running binary does not
+	// declare at all. Either is the signature of half a
+	// config-and-binary change having landed
+	// (§forgejo/config/validation, §forgejo/config/identity-collapse).
 	ErrActionSetMismatch = errors.New("config and binary disagree")
 )
 
@@ -272,7 +273,8 @@ var (
 // fails is recognisable with errors.Is: ErrConfigNotFound when nothing
 // is at path, ErrConfigUnreadable when the path or its contents cannot
 // be read, ErrActionSetMismatch when the config and the binary disagree
-// about the action set.
+// about the config's key set — a missing or unknown action, or a key the
+// binary does not declare.
 func LoadConfig(path string) (*Config, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -297,97 +299,38 @@ func LoadConfig(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// configSchemaKeys is the engine config's key set, one depth per entry,
-// validated as an exact set in both directions: a required key's absence
-// fails Validate, and a key absent here fails the decode
+// decodeConfigYAML decodes one config document, refusing any key the
+// binary does not declare at the depth it appears — a `persona` key,
+// which belongs to a shape this config no longer has, above all — so a
+// config that disagrees with the binary fails loudly rather than loading
+// with a silently ignored key
 // (§forgejo/config/validation, §forgejo/config/identity-collapse).
-var configSchemaKeys = map[string]map[string]bool{
-	"":     {"org": true, "reconcile_interval": true, "decomposer_identity": true, "implementer_identity": true, "actions": true, "reviews": true},
-	"act":  {"prompt": true, "identity": true, "timeout": true},
-	"lens": {"identity": true, "prompt": true, "timeout": true},
-}
-
-// decodeConfigYAML decodes one config document strictly: every key must
-// be one the binary declares at its depth. The identity/persona collapse
-// is why the decode is exact rather than lenient — a deployment that has
-// not yet dropped the retired `persona` key must fail loudly as the
-// config-or-binary mismatch, not load with a silently ignored key
-// (§forgejo/config/identity-collapse, §forgejo/config/validation).
+//
+// The schema is stated once, by the structs' own field tags: yaml's
+// strict mode (KnownFields) derives the exact key set from them, so
+// adding a field to Config, PromptConfig or ReviewLens cannot leave a
+// second copy of the schema behind to drift. Two passes over the same
+// bytes keep the two load failures apart: the lenient pass owns
+// everything that is not a key problem — a document that is not a
+// mapping, a value of the wrong type, a duplicate key, a
+// section nested somewhere the structs do not reach — and fails as
+// unreadable; a document that survives it and then fails the strict pass
+// is therefore carrying keys beyond the schema, which is the
+// config-or-binary mismatch. A strict failure after a clean lenient one
+// can only be the unknown-field kind, so the classification needs no
+// parsing of the decoder's message.
 func decodeConfigYAML(data []byte, path string) (*Config, error) {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("parse config %q: %w: %w", path, ErrConfigUnreadable, err)
-	}
-	if doc.Kind == 0 {
-		return &Config{}, nil
-	}
-	var root yaml.Node
-	if err := doc.Decode(&root); err != nil {
-		return nil, fmt.Errorf("parse config %q: %w: %w", path, ErrConfigUnreadable, err)
-	}
-	if err := rejectUnknownKeys(&root, "", path); err != nil {
-		return nil, err
-	}
 	var cfg Config
-	if err := root.Decode(&cfg); err != nil {
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config %q: %w: %w", path, ErrConfigUnreadable, err)
+	}
+	strict := yaml.NewDecoder(bytes.NewReader(data))
+	strict.KnownFields(true)
+	var check Config
+	if err := strict.Decode(&check); err != nil && !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("parse config %q: a key is not part of the schema this binary declares: %w: %w", path, ErrActionSetMismatch, err)
 	}
 	return &cfg, nil
-}
-
-// rejectUnknownKeys walks a decoded document and refuses any mapping key
-// outside configSchemaKeys for its depth. depth names the mapping: "" is
-// the document root, "act" one action entry, "lens" one review-lens
-// entry.
-func rejectUnknownKeys(n *yaml.Node, depth, path string) error {
-	switch n.Kind {
-	case yaml.DocumentNode:
-		for _, c := range n.Content {
-			if err := rejectUnknownKeys(c, depth, path); err != nil {
-				return err
-			}
-		}
-	case yaml.MappingNode:
-		if depth == "acts" {
-			// The actions map's keys are action names, not schema keys;
-			// the action-set rule owns them. Each entry's own mapping is
-			// still checked against the action schema — the walk skips
-			// the key node, which is a plain scalar.
-			for i := 0; i+1 < len(n.Content); i += 2 {
-				if err := rejectUnknownKeys(n.Content[i+1], "act", path); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-		allowed, depthKnown := configSchemaKeys[depth]
-		for i := 0; i+1 < len(n.Content); i += 2 {
-			key := n.Content[i]
-			value := n.Content[i+1]
-			if depthKnown && !allowed[key.Value] {
-				return fmt.Errorf("config %q: key %q is not part of the config schema the binary knows: %w", path, key.Value, ErrActionSetMismatch)
-			}
-			next := ""
-			if depth == "" {
-				switch key.Value {
-				case "actions":
-					next = "acts"
-				case "reviews":
-					next = "lens"
-				}
-			}
-			if err := rejectUnknownKeys(value, next, path); err != nil {
-				return err
-			}
-		}
-	case yaml.SequenceNode, yaml.AliasNode:
-		for _, c := range n.Content {
-			if err := rejectUnknownKeys(c, depth, path); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 // loadConfigFile parses a single config file.
