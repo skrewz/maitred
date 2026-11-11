@@ -60,10 +60,11 @@ const (
 	// dispatch: an approved, unblocked PR whose work carries it on
 	// neither seat waits on a human on every path, the sweep's
 	// watermark-exempt row included, while a PR whose work carries it
-	// is re-fired whatever its watermark records
+	// on either seat is re-fired whatever its watermark records on
+	// every path, the sweep included
 	// (§forgejo/decisions/merge-gate, §forgejo/decisions/sync-set,
 	// §forgejo/reconciliation/watermark-exemptions,
-	// s-git/maitred#179).
+	// s-git/maitred#179, s-git/maitred#197).
 	LabelAgenticAutoMerge = "agentic-auto-merge"
 	// LabelForestSeeding is the transient hold-off on a newborn forest
 	// member: the decomposer attaches it atomically at the member's
