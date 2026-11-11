@@ -835,6 +835,53 @@ func TestReviewLensesRejected(t *testing.T) {
 	}
 }
 
+// TestReviewLensIdentityIsNoActorLogin pins the rule the single declared
+// name puts on the load: a lens's login must not be a login the config
+// also declares as an actor. One field is now both what a decision
+// compares a review author against and the persona the task is
+// materialised with, so a lens naming an actor would let that account
+// satisfy a gate whose whole purpose is somebody else's verdict
+// (§forgejo/config/review-lenses, §forgejo/config/identity-collapse).
+func TestReviewLensIdentityIsNoActorLogin(t *testing.T) {
+	// withoutReviews drops the fixture's lens list so a case can name
+	// the one lens it is about.
+	withoutReviews := func(y string) string {
+		if i := strings.Index(y, "reviews:"); i >= 0 {
+			return y[:i]
+		}
+		return y
+	}
+	lensNaming := func(login string) string {
+		return "reviews:\n  - identity: " + login + "\n    prompt: \"/a {{.PRURL}}\"\n    timeout: 30m\n"
+	}
+	rename := func(y, key, login string) string {
+		return strings.Replace(y, key+": "+login+"\n", key+": solo-actor\n", 1)
+	}
+	cases := []struct {
+		name   string
+		mutate func(string) string
+	}{
+		{"an action entry declares it", func(y string) string {
+			return withoutReviews(y) + lensNaming("implementer")
+		}},
+		{"implementer_identity declares it", func(y string) string {
+			return withoutReviews(rename(y, "implementer_identity", "implementer")) + lensNaming("solo-actor")
+		}},
+		{"decomposer_identity declares it", func(y string) string {
+			return withoutReviews(rename(y, "decomposer_identity", "decomposer")) + lensNaming("solo-actor")
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := validateFixturePath(t, tc.mutate(validConfigYAML))
+			_, err := LoadConfig(path)
+			if err == nil || !strings.Contains(err.Error(), "also declared as an actor") {
+				t.Fatalf("LoadConfig: want a refusal naming the actor collision, got %v", err)
+			}
+		})
+	}
+}
+
 // TestRetiredReviewSingletonsRejected pins the config-or-binary
 // mismatch when a deployment still names the retired singletons: the
 // binary no longer dispatches them, so the config must stop naming

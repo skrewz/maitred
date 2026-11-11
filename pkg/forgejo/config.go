@@ -205,14 +205,16 @@ func (c *Config) Validate() error {
 }
 
 // validateReviewLenses checks the lens list: at least one lens, each
-// lens complete (its one declared identity, a prompt, a positive
-// timeout), each lens's prompt parseable with only known placeholders,
-// and no duplicate identity (§forgejo/config/review-lenses,
+// lens complete (its declared identity, a prompt, a positive timeout),
+// each lens's prompt parseable with only known placeholders, no
+// duplicate identity, and no lens sharing a login with an actor the
+// config declares (§forgejo/config/review-lenses,
 // §forgejo/config/identity-collapse, §forgejo/config/validation).
 func (c *Config) validateReviewLenses() error {
 	if len(c.Reviews) == 0 {
 		return fmt.Errorf("reviews: at least one review lens is required: %w", ErrActionSetMismatch)
 	}
+	actors := c.actorIdentities()
 	seen := map[string]bool{}
 	for i, lens := range c.Reviews {
 		if lens.Identity == "" {
@@ -222,6 +224,15 @@ func (c *Config) validateReviewLenses() error {
 			return fmt.Errorf("reviews: duplicate lens identity %q", lens.Identity)
 		}
 		seen[lens.Identity] = true
+		// One declared name is both the login a decision compares a
+		// review author against and the persona the task is materialised
+		// with, so a lens that names an actor's login would let that
+		// account satisfy a gate whose whole purpose is somebody else's
+		// verdict. The rule is load-time or it is nothing
+		// (§forgejo/config/identity-collapse).
+		if actors[lens.Identity] {
+			return fmt.Errorf("reviews: lens identity %q is also declared as an actor: the lens that reviews must not be the account whose work it reviews", lens.Identity)
+		}
 		if lens.Prompt == "" {
 			return fmt.Errorf("reviews %q: prompt is required", lens.Identity)
 		}
@@ -233,6 +244,25 @@ func (c *Config) validateReviewLenses() error {
 		}
 	}
 	return nil
+}
+
+// actorIdentities is the set of logins the config declares as actors:
+// the two scalar identities and every entry's declared login
+// (§forgejo/config/identity-collapse).
+func (c *Config) actorIdentities() map[string]bool {
+	actors := map[string]bool{}
+	if c.DecomposerIdentity != "" {
+		actors[c.DecomposerIdentity] = true
+	}
+	if c.ImplementerIdentity != "" {
+		actors[c.ImplementerIdentity] = true
+	}
+	for _, pc := range c.Actions {
+		if pc.Identity != "" {
+			actors[pc.Identity] = true
+		}
+	}
+	return actors
 }
 
 // isKnownAction reports whether name is one of the decision function's
