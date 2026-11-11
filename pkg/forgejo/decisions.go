@@ -1762,9 +1762,12 @@ func syncSetRevision(issue *Issue, members []SyncMember, lenses []ReviewLens) st
 // issue the body names nowhere — a grouping issue's blocker row, a
 // co-delivered sibling, a blocking edge into a repository the body
 // never mentions — is that work item's own authoring and opts nothing
-// in, so no author satisfies the operator's opt-in by pointing their
-// body at someone else's labelled issue. prRepo is the pull request's
-// repository, which is where the grammar resolves a bare #N. The
+// in, so the seat is never a relation the assembly walked in passing;
+// what it cannot refuse is a body that claims someone else's labelled
+// issue as its delivery, which is the relation the label's meaning
+// requires the author to state (§forgejo/decisions/merge-gate). prRepo
+// is the pull request's repository, which is where the grammar
+// resolves a bare #N. The
 // reference of the issue the opt-in was found on is returned with it,
 // empty when the label sits on the pull request itself, so the caller
 // can name the seat in its reason; ok is false when neither seat
