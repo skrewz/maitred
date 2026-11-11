@@ -830,9 +830,13 @@ var closeKeywordRef = regexp.MustCompile(
 
 // prAutoClosesIssue reports whether the pull request body auto-closes
 // the given issue — the relation the forge honours by closing the
-// issue when the pull request merges, and the relation the sync
-// predicate reads a member's delivering PR through
-// (§forgejo/decisions/sync-set, s-git/maitred#171). A bare #N
+// issue when the pull request merges, the relation the sync predicate
+// reads a member's delivering PR through, and the relation the merge
+// opt-in's issue seat is read from: the label means the pull requests
+// that implement an issue may auto-merge, and implementing it is
+// carrying a closing reference to it
+// (§forgejo/decisions/sync-set, §forgejo/decisions/merge-gate,
+// s-git/maitred#171). A bare #N
 // resolves in the pull request's own repository; a qualified
 // owner/repo#N in the repository it names. The resolution itself lives
 // in autoCloseRefs, so the predicate's read and the approval path's

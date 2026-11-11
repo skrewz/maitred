@@ -3393,14 +3393,37 @@ func connectedIssueLabelled(repo string, number int, labels ...string) Connected
 	return c
 }
 
-// TestMergeOptedIn pins the two shapes of the one predicate that
-// answers "did this work opt into merging?" the decision-level tables
-// cannot see: case-folding on the issue seat, and which delivered
-// issue is named when several are in play. Every other shape — the
-// PR seat alone, a delivered issue alone, another repository, neither
-// seat, nothing delivered — is pinned at the level #196's "How to
-// verify" asks for, through Decide, in
-// TestDecide_MergeOptInReadFromEitherSeat
+// closesIssues names on the pull request's body the issues it delivers,
+// each through the forge's closing-keyword grammar: the relation the
+// opt-in's issue seat is read from, so a fixture that means "the issue
+// this PR delivers" says so on the body rather than relying on the
+// assembly that connected it (§forgejo/decisions/merge-gate,
+// §forgejo/webhook/re-fetch).
+func closesIssues(pr *PullRequest, refs ...string) *PullRequest {
+	lines := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		lines = append(lines, "Fixes "+ref)
+	}
+	if len(lines) == 0 {
+		return pr
+	}
+	if pr.Body != "" {
+		pr.Body += "\n\n"
+	}
+	pr.Body += strings.Join(lines, "\n")
+	return pr
+}
+
+// TestMergeOptedIn pins the shapes of the one predicate that answers
+// "did this work opt into merging?" the decision-level tables cannot
+// see: case-folding on the issue seat, which delivered issue is named
+// when several are in play, and the closing-keyword condition the issue
+// seat carries — the maintainer's reading of the label, "this issue
+// allows PRs that implement it" being the PR that carries a closing
+// reference to it. Every other shape — the PR seat alone, a delivered
+// issue alone, another repository, neither seat, nothing delivered — is
+// pinned at the level #196's "How to verify" asks for, through Decide,
+// in TestDecide_MergeOptInReadFromEitherSeat
 // (§forgejo/decisions/merge-gate).
 func TestMergeOptedIn(t *testing.T) {
 	for _, tc := range []struct {
@@ -3412,21 +3435,53 @@ func TestMergeOptedIn(t *testing.T) {
 	}{
 		{
 			name:      "the issue's label is matched case-insensitively",
-			pr:        openPR("abc"),
+			pr:        closesIssues(openPR("abc"), "o/r#4"),
 			connected: []ConnectedIssue{connectedIssueLabelled("o/r", 4, "AGENTIC-AUTO-MERGE")},
 			wantRef:   "o/r#4",
 			want:      true,
 		},
 		{
 			name:      "the first delivered issue naming it wins",
-			pr:        openPR("abc"),
+			pr:        closesIssues(openPR("abc"), "o/r#4", "o/r#5"),
 			connected: []ConnectedIssue{connectedIssueLabelled("o/r", 4), connectedIssueLabelled("o/r", 5, LabelAgenticAutoMerge)},
 			wantRef:   "o/r#5",
 			want:      true,
 		},
+		{
+			// A bare reference names an issue of the pull request's own
+			// repository, which is how the grammar resolves it.
+			name:      "a bare closing reference names the issue in the PR's repository",
+			pr:        closesIssues(openPR("abc"), "#4"),
+			connected: []ConnectedIssue{connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge)},
+			wantRef:   "o/r#4",
+			want:      true,
+		},
+		{
+			// The issue reached only through a blocking edge, or one the
+			// body never claims to deliver, is not the PR's work item: its
+			// label is that item's own authoring and cannot opt this pull
+			// request into merging.
+			name:      "a labelled issue the body names nowhere is no opt-in",
+			pr:        openPR("abc"),
+			connected: []ConnectedIssue{connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge)},
+			want:      false,
+		},
+		{
+			name:      "a closing reference to a different issue is no opt-in",
+			pr:        closesIssues(openPR("abc"), "o/r#99"),
+			connected: []ConnectedIssue{connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge)},
+			want:      false,
+		},
+		{
+			// The PR seat needs no relation at all: it is the pull request
+			// the operator labelled.
+			name: "the PR's own label needs no closing reference",
+			pr:   labelledPR("abc", LabelAgenticAutoMerge),
+			want: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ref, ok := mergeOptedIn(tc.pr, tc.connected)
+			ref, ok := mergeOptedIn(tc.pr, "o/r", tc.connected)
 			if ok != tc.want || ref != tc.wantRef {
 				t.Errorf("mergeOptedIn = (%q, %t), want (%q, %t)", ref, ok, tc.wantRef, tc.want)
 			}
@@ -3451,11 +3506,17 @@ func TestDecide_MergeOptInReadFromEitherSeat(t *testing.T) {
 
 	// sweepState is an approved chain at head abc whose merge opt-in
 	// sits on the given seats: the PR's own labels, and the labels of
-	// the issues it delivers.
+	// the issues it delivers — named on the body the way the forge's
+	// closing grammar names a delivery, which is the relation the issue
+	// seat is read from.
 	sweepState := func(prLabels []string, connected ...ConnectedIssue) State {
+		refs := make([]string, 0, len(connected))
+		for i := range connected {
+			refs = append(refs, fmt.Sprintf("%s#%d", connected[i].Issue.Repository, connected[i].Issue.Number))
+		}
 		s := State{
 			ReviewLenses: testLenses,
-			PR:           labelledPR("abc", prLabels...),
+			PR:           closesIssues(labelledPR("abc", prLabels...), refs...),
 			Reviews:      []Review{review("APPROVED", "carol", testTime)},
 		}
 		if len(connected) > 0 {
@@ -3535,6 +3596,21 @@ func TestDecide_MergeOptInReadFromEitherSeat(t *testing.T) {
 		}
 		if !strings.Contains(d.Reason, "o/r#3") {
 			t.Errorf("reason = %q, want it to name the open blocker", d.Reason)
+		}
+	})
+
+	t.Run("the issue seat is the issue the body names as its delivery", func(t *testing.T) {
+		// A connected issue the pull request's own body carries no
+		// closing reference to — one reached only through a blocking edge,
+		// or a work item this PR merely co-delivers — is not the work this
+		// PR implements, so its label cannot satisfy the precondition on
+		// the pull request author's own choosing
+		// (§forgejo/decisions/merge-gate).
+		s := sweepState(nil, connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge))
+		s.PR.Body = ""
+		d := Decide(prEvent(EventReconcile, ""), s, watermark)
+		if !strings.Contains(d.Reason, missingHoldOff) {
+			t.Errorf("decision = %+v, want the precondition hold-off naming the missing opt-in %q", d, missingHoldOff)
 		}
 	})
 

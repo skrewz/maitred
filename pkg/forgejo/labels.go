@@ -45,7 +45,10 @@ const (
 	// decision (§forgejo/decisions/sync-set).
 	LabelAgenticSyncMerge = "agentic-sync-merge"
 	// LabelAgenticAutoMerge is the work item's opt-in to merging on
-	// its own once approved and unblocked. It sits on the work item and
+	// its own once approved and unblocked: it says "the pull requests
+	// that implement this issue may auto-merge", and implementing it is
+	// the pull request carrying a closing reference to the issue. It
+	// sits on the work item and
 	// is read from there or from the pull request delivering it — one
 	// seat is enough, and one predicate (mergeOptedIn) asks, so no row
 	// holds a narrower copy of the test. The merge-or-wait prompt's

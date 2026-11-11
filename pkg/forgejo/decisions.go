@@ -970,7 +970,7 @@ func lensIdentities(lenses []ReviewLens) []string {
 // merge-or-wait — held off, naming the open blockers, when a
 // connected issue has one (§forgejo/decisions/merge-gate), and held
 // off, naming the missing opt-in and the connected issues, when
-// neither the PR nor an issue it delivers carries the
+// neither the PR nor the issue its body closes carries the
 // agentic-auto-merge label: an approved PR with no
 // merge opt-in waits on a human
 // (§forgejo/decisions/merge-gate, s-git/maitred#179); when every
@@ -988,7 +988,7 @@ func lensIdentities(lenses []ReviewLens) []string {
 // The fix-feedback row is watermark-exempt on the sweep, and the
 // approved row is exempt only when the work it delivers opts into
 // merging on its own — the agentic-auto-merge label on the PR or on
-// the issue it delivers (§forgejo/decisions/merge-gate): a PR standing
+// the issue its body closes (§forgejo/decisions/merge-gate): a PR standing
 // at a fully reported chain at a frozen head sha is then re-fired
 // whatever its
 // watermark records (§forgejo/reconciliation/watermark-exemptions).
@@ -1018,8 +1018,9 @@ func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 // reviewer), while the pure review-event path waits for a
 // changes-requested (§forgejo/decisions/transition-table). The
 // merge-or-wait dispatch additionally requires the
-// agentic-auto-merge opt-in — on the PR or on an issue it delivers,
-// through mergeOptedIn: the sync-set hold-off and the merge gate sit
+// agentic-auto-merge opt-in — on the PR, or on the issue its own body
+// names as the one it delivers, through mergeOptedIn: the sync-set
+// hold-off and the merge gate sit
 // ahead of it, and a PR they let through with no opt-in on either
 // seat holds off naming the missing
 // opt-in and the connected issues
@@ -1034,7 +1035,7 @@ func decideChainReported(e Event, s State, w *Watermark, sweepComments bool) (De
 		return Decision{}, false
 	}
 	if gate.mergeFires() {
-		if d, ok := syncMemberSetHoldOff(pr, s); ok {
+		if d, ok := syncMemberSetHoldOff(pr, e.Repo, s); ok {
 			return d, true
 		}
 		if open := mergeGateOpenBlockers(e, s); len(open) > 0 {
@@ -1042,9 +1043,12 @@ func decideChainReported(e Event, s State, w *Watermark, sweepComments bool) (De
 		}
 		// The merge opt-in is a precondition on every path that
 		// reaches here, the cascade's PR leg included, asked of both
-		// seats through mergeOptedIn on the PR's own re-fetch
+		// seats through mergeOptedIn on the PR's own re-fetch: the issue
+		// seat only counts the issue the PR's body closes, so the
+		// precondition is never satisfiable by a relation the author
+		// picked in passing
 		// (§forgejo/decisions/merge-gate, s-git/maitred#179).
-		ref, optedIn := mergeOptedIn(pr, s.ConnectedIssues)
+		ref, optedIn := mergeOptedIn(pr, e.Repo, s.ConnectedIssues)
 		if !optedIn {
 			return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens but neither the PR nor an issue it delivers carries the %s label; an approved PR with no merge opt-in waits on a human (connected issues: %s)", pr.Number, LabelAgenticAutoMerge, connectedIssueNames(s))), true
 		}
@@ -1198,7 +1202,7 @@ func dispatchOnState(w *Watermark, exempt bool, action Action, revision, reason 
 // and handles the feedback themselves —
 // §forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention,
 // s-git/maitred#143), and approvals across the board dispatch
-// merge-or-wait only when the PR or an issue it delivers carries the
+// merge-or-wait only when the PR or the issue its body closes carries the
 // agentic-auto-merge opt-in and the merge gate lets it through, no
 // connected issue having an open blocker
 // (§forgejo/decisions/merge-gate, s-git/maitred#179).
@@ -1538,7 +1542,7 @@ func openBlockers(blockers []Issue) []Issue {
 // triggers it without waiting for the sweep
 // (§forgejo/decisions/sync-set). Two readings of the label decide
 // alone: a member whose work also carries agentic-auto-merge — on the
-// PR or on the issue it delivers — is the authoring error the hold-off
+// PR or on the member itself — is the authoring error the hold-off
 // exists to contain and holds off whatever sets exist, naming the set
 // it belongs to, the merging opt-in and the seat that opt-in sits in; a
 // member of no open set — its set
@@ -1547,7 +1551,7 @@ func openBlockers(blockers []Issue) []Issue {
 // approved deliverable with no backstop, so its stale label is no
 // gate and ok is false, letting the caller's merge gate decide on.
 // ok is likewise false when no connected issue is a member at all.
-func syncMemberSetHoldOff(pr *PullRequest, s State) (Decision, bool) {
+func syncMemberSetHoldOff(pr *PullRequest, prRepo string, s State) (Decision, bool) {
 	var members, dualLabelled, directSets []string
 	var emissions []CascadeDispatch
 	seen := map[Key]bool{}
@@ -1610,7 +1614,7 @@ func syncMemberSetHoldOff(pr *PullRequest, s State) (Decision, bool) {
 	reason := fmt.Sprintf("PR %d stands at an approved review, but %s; landing is the set's decision, not the PR's", pr.Number, membership)
 	if len(dualLabelled) > 0 {
 		reason = fmt.Sprintf("PR %d stands at an approved review, but its connected issue %s carries both %s and %s%s", pr.Number, strings.Join(dualLabelled, ", "), LabelAgenticSyncMerge, LabelAgenticAutoMerge, dualOptInError)
-	} else if ref, optedIn := mergeOptedIn(pr, s.ConnectedIssues); optedIn && ref == "" {
+	} else if ref, optedIn := mergeOptedIn(pr, prRepo, s.ConnectedIssues); optedIn && ref == "" {
 		// The merging opt-in is asked through the same predicate the
 		// merge row asks it with, whatever shape the membership arrived
 		// in, because #196 asks that the two reads cannot disagree. Only
@@ -1747,22 +1751,38 @@ func syncSetRevision(issue *Issue, members []SyncMember, lenses []ReviewLens) st
 
 // mergeOptedIn answers the one question every merge row asks: did this
 // work opt into merging on its own? It did when the pull request
-// carries agentic-auto-merge, or any issue it delivers does — matched
+// carries agentic-auto-merge, or the issue it implements does — matched
 // case-insensitively on either seat, as every label read in this
-// package is, and the pull request is asked first. The reference of
-// the issue the opt-in was found on is returned with it, empty when
-// the label sits on the pull request itself, so the caller can name
-// the seat in its reason; ok is false when neither seat carries the
-// label, and the caller decides exactly as it decides today
+// package is, and the pull request is asked first. The issue seat is
+// the issue the pull request's **own body** names as its delivery
+// through the forge's closing-keyword grammar (prAutoClosesIssue): the
+// label means "this issue allows the PRs that implement it to be
+// auto-merged", and implementing it is a relation the pull request
+// states, not a relation the assembly happened to walk. A connected
+// issue the body names nowhere — a grouping issue's blocker row, a
+// co-delivered sibling, a blocking edge into a repository the body
+// never mentions — is that work item's own authoring and opts nothing
+// in, so no author satisfies the operator's opt-in by pointing their
+// body at someone else's labelled issue. prRepo is the pull request's
+// repository, which is where the grammar resolves a bare #N. The
+// reference of the issue the opt-in was found on is returned with it,
+// empty when the label sits on the pull request itself, so the caller
+// can name the seat in its reason; ok is false when neither seat
+// carries the label, and the caller decides exactly as it decides today
 // (§forgejo/decisions/merge-gate).
-func mergeOptedIn(pr *PullRequest, connected []ConnectedIssue) (issueRef string, ok bool) {
+func mergeOptedIn(pr *PullRequest, prRepo string, connected []ConnectedIssue) (issueRef string, ok bool) {
 	if carriesLabel(pr.Labels, LabelAgenticAutoMerge) {
 		return "", true
 	}
 	for i := range connected {
-		if hasLabel(&connected[i].Issue, LabelAgenticAutoMerge) {
-			return fmt.Sprintf("%s#%d", connected[i].Issue.Repository, connected[i].Issue.Number), true
+		issue := &connected[i].Issue
+		if !hasLabel(issue, LabelAgenticAutoMerge) {
+			continue
 		}
+		if !prAutoClosesIssue(pr.Body, prRepo, issue.Repository, issue.Number) {
+			continue
+		}
+		return fmt.Sprintf("%s#%d", issue.Repository, issue.Number), true
 	}
 	return "", false
 }
