@@ -17,20 +17,21 @@ decomposer_identity: decomposer
 # s-git/maitred#143).
 implementer_identity: implementer
 
-# Every prompt invokes an identity's Pi canned prompt: Pi expands a
-# prompt template only when the dispatched message starts with
-# "/<template-name>", so a prompt without the leading slash travels to
-# the agent verbatim — the canned prompt never runs and its parameter
-# value (the issue or pull request URL) never arrives. Each prompt
-# therefore begins with the slash invocation and passes the URL the
-# dispatch kind fills (§forgejo/config/canned-prompts). The command names
-# are the convention §forgejo/config/canned-prompts pins: the identity's Pi
-# prompt directory must hold a template of that name, or Pi passes the
-# message verbatim and nothing expands. Each entry declares exactly one
-# `identity` — the forge login the task runs as, the same name a decision
-# would compare against were it reviewing. The retired `persona` key is
-# gone: a config still carrying it is refused as the schema mismatch it
-# is (§forgejo/config/identity-collapse).
+# Every prompt invokes the runner-side Pi canned prompt of the identity
+# the task runs as: Pi expands a prompt template only when the
+# dispatched message starts with "/<template-name>", so a prompt without
+# the leading slash travels to the agent verbatim — the canned prompt
+# never runs and its parameter value (the issue or pull request URL)
+# never arrives. Each prompt therefore begins with the slash invocation
+# and passes the URL the dispatch kind fills
+# (§forgejo/config/canned-prompts). The command names are the convention
+# that section pins: the identity's Pi prompt directory must hold a
+# template of that name, or Pi passes the message verbatim and nothing
+# expands. Each entry declares exactly one `identity` — the forge login
+# the task runs as, the same name a decision would compare against were
+# it reviewing — and no other name: `persona` is not part of this
+# config's schema, and a config carrying it is refused as the schema
+# mismatch it is (§forgejo/config/identity-collapse).
 actions:
   implement:
     prompt: "/issue-implementer {{.IssueURL}}"

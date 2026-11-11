@@ -441,11 +441,10 @@ func TestLoadConfigSentinels(t *testing.T) {
 		}
 	})
 
-	// The collapse's stale shape: a config that carries the `persona`
-	// key the schema no longer has is the same config-or-binary mismatch
-	// as an action-set disagreement, so a surface says "half a change
-	// landed" rather than inventing a fourth category
-	// (§forgejo/config/identity-collapse,
+	// A config that carries a `persona` key is the same
+	// config-or-binary mismatch as an action-set disagreement, so a
+	// surface says "half a change landed" rather than inventing a fourth
+	// category (§forgejo/config/identity-collapse,
 	// §forgejo/observability/why-the-engine-is-off). One site per depth
 	// the key can sit at, each making both assertions.
 	t.Run("entry still declares the retired persona key", func(t *testing.T) {
@@ -494,10 +493,9 @@ func TestLoadConfigSentinels(t *testing.T) {
 		}
 	})
 
-	// The collapse's other stale shape: the new binary demands the
-	// declared identity on every entry, and an entry that never
-	// gained one is refused as a missing field, not silently
-	// defaulted (§forgejo/config/identity-collapse).
+	// Every entry must declare its identity: an entry that declares none
+	// is refused as a missing field, never silently defaulted
+	// (§forgejo/config/identity-collapse).
 	t.Run("entry declares no identity", func(t *testing.T) {
 		_, err := LoadConfig(validateFixturePath(t, strings.Replace(validConfigYAML,
 			"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n",
@@ -783,9 +781,9 @@ func TestShippedSampleConfigPromptsInvokeCannedPrompts(t *testing.T) {
 	}
 }
 
-// TestReviewLensesValid pins the accepted shape of the lens list after
-// the collapse: one declared identity, a prompt, and a positive timeout
-// per lens, order preserved (§forgejo/config/review-lenses,
+// TestReviewLensesValid pins the accepted shape of the lens list: one
+// declared identity, a prompt, and a positive timeout per lens, order
+// preserved (§forgejo/config/review-lenses,
 // §forgejo/config/identity-collapse, §forgejo/config/validation).
 func TestReviewLensesValid(t *testing.T) {
 	cfg := loadValid(t)

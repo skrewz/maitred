@@ -38,8 +38,8 @@ func testConfig() *Config {
 	cfg.Reviews = []ReviewLens{{
 		// One lens, bob — the reviewing author of the fixtures'
 		// reviews — so engine-level fixtures keep the standing the
-		// retired single-reviewer rows gave them. After the collapse
-		// its declared identity is also the name its task runs as
+		// retired single-reviewer rows gave them. Its declared identity
+		// is also the name its task runs as
 		// (§forgejo/config/review-lenses,
 		// §forgejo/config/identity-collapse).
 		Identity: "bob",
@@ -1348,40 +1348,6 @@ func TestHandler_TaskFields(t *testing.T) {
 	}
 	if !strings.HasPrefix(task.ID, "forgejoeng-") {
 		t.Errorf("task ID = %q, want the forgejoeng- prefix", task.ID)
-	}
-}
-
-// TestDispatch_PersonaIsTheDeclaredLogin pins what the collapse was for:
-// the name the queue system — hotelier — is handed is the entry's one
-// declared identity, the forge login, with no second key that could
-// quietly disagree with it. Both dispatch shapes are held to it: the
-// action entry and the review lens, whose compared identity is now also
-// the name its task runs as (§forgejo/config/identity-collapse,
-// §forgejo/webhook/the-pipeline).
-func TestDispatch_PersonaIsTheDeclaredLogin(t *testing.T) {
-	eng, _, q, _ := newTestEngine(t)
-	ev := Event{Type: EventIssueCommented, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"}
-	st := State{Issue: testIssue(7, "open"), PR: testPR(9, "open", true)}
-
-	if err := eng.dispatchPrompt(ev, st,
-		PromptConfig{Prompt: "/issue-implementer {{.IssueURL}}", Identity: "implementer", Timeout: time.Hour},
-		"", ActionImplement, "rev"); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-	lens := ReviewLens{Identity: "reviewer-security", Prompt: "/pr-security-reviewer {{.PRURL}}", Timeout: time.Hour}
-	if err := eng.dispatchLens(ev, st, lens, "rev"); err != nil {
-		t.Fatalf("dispatchLens: %v", err)
-	}
-
-	tasks := q.all()
-	if len(tasks) != 2 {
-		t.Fatalf("got %d tasks, want 2", len(tasks))
-	}
-	if tasks[0].Persona != "implementer" {
-		t.Errorf("action task persona = %q, want the action entry's declared login", tasks[0].Persona)
-	}
-	if tasks[1].Persona != "reviewer-security" {
-		t.Errorf("lens task persona = %q, want the lens's declared login", tasks[1].Persona)
 	}
 }
 

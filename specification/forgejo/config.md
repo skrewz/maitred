@@ -91,7 +91,7 @@ carries the ordered **review lens list** (§forgejo/config/review-lenses).
 
 Reviews are not one action with one prompt: the config declares an
 ordered list of **review lenses**, each with its own identity, canned
-prompt, identity, and timeout:
+prompt, and timeout:
 
 ```yaml
 reviews:
@@ -116,10 +116,15 @@ lens comes back through the earlier ones (§forgejo/decisions/review-lenses).
 standing as `implementer_identity` and `decomposer_identity`: the
 decision function compares it against review authors by exact,
 case-sensitive equality to decide which lenses owe a verdict, and the
-engine never infers the roster from the reviews it reads. Like the
-other identity keys it grants no privilege — a lens's rights live on
-the forge, and its task runs under the login the entry names
-(§forgejo/config/identity-collapse).
+engine never infers the roster from the reviews it reads. It grants no
+privilege **on the forge** — a lens's rights live there, not in this
+key. It is not privilege-free in the deployment, though: this key is
+also the persona name the queue resolves, so it decides whose
+environment variables and file copies land in the task's working
+directory, and the login it names must not be an actor's
+(§forgejo/config/identity-collapse). An audit of which config keys name
+credentials therefore reads every `identity` in the file, not just the
+ones spelled `persona` elsewhere.
 
 Per lens: `identity` and `prompt` are required, `timeout` must be
 positive, and the prompt is held to the same canned-prompt

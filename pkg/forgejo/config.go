@@ -330,10 +330,10 @@ func LoadConfig(path string) (*Config, error) {
 }
 
 // decodeConfigYAML decodes one config document, refusing any key the
-// binary does not declare at the depth it appears — a `persona` key,
-// which belongs to a shape this config no longer has, above all — so a
-// config that disagrees with the binary fails loudly rather than loading
-// with a silently ignored key
+// binary does not declare at the depth it appears — above all a
+// `persona` key, which no entry may declare — so a config that
+// disagrees with the binary fails loudly rather than loading with a
+// silently ignored key
 // (§forgejo/config/validation, §forgejo/config/identity-collapse).
 //
 // The schema is stated once, by the structs' own field tags: yaml's

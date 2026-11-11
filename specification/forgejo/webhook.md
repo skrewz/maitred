@@ -101,7 +101,8 @@ On each `POST`:
    provider, with the timeout and the declared identity from the config
    (§forgejo/config/canned-prompts, §forgejo/config/identity-collapse):
    the identity is what the queue payload carries as the task's persona,
-   so the actor named on the work is the forge login itself. The task carries a **dedup key** — the
+   so the actor named on the work is the forge login itself. The task
+   carries a **dedup key** — the
    dispatch identity: the key's repo, kind, and number, the action, the
    **subject** for a fan-out dispatch (the lens identity
    §forgejo/decisions/review-lenses), and the revision — so a queue system
@@ -119,8 +120,8 @@ On each `POST`:
    watermarked, so a later sweep or event tries again. A review fan-out
    (the decision naming several lenses, §forgejo/decisions/review-lenses)
    is one dispatch per lens in config order, each filling that lens's
-   canned prompt under that lens's declared login and timeout, and each writing
-   its own subject slot in the watermark.
+   canned prompt under that lens's declared login and timeout, and each
+   writing its own subject slot in the watermark.
    The task also **names its work**: its `title` is composed by one helper
    for both event kinds — the action's verb, the title of the object the
    state carries (the pull request where one is present, the issue
