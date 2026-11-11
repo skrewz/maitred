@@ -468,13 +468,11 @@
         // arrives with the forgejo view, and the dashboard renders one
         // button per sweep operation
         // (§forgejo/observability/triggering-a-sweep).
-        let sweepsCatalog = [];
         let pendingSweepId = null;
 
         function renderSweeps(payload) {
             const section = document.getElementById('sweeps-section');
             const sweeps = (payload && payload.sweeps) || [];
-            sweepsCatalog = sweeps;
             if (sweeps.length === 0) {
                 section.style.display = 'none';
                 section.innerHTML = '';
@@ -486,16 +484,15 @@
                     <div>
                         <div class="sweep-title">${escapeHtml(s.title)}</div>
                     </div>
-                    <button class="btn btn-warning sweep-trigger" data-sweep-id="${escapeHtml(s.id)}">&#x26a1; Trigger</button>
+                    <button class="btn btn-warning sweep-trigger" data-sweep-id="${escapeHtml(s.id)}" data-sweep-title="${escapeHtml(s.title)}">&#x26a1; Trigger</button>
                 </div>
             `).join('');
         }
 
-        function openSweepModal(id) {
-            const sweep = sweepsCatalog.find(s => s.id === id);
-            if (!sweep) return;
+        function openSweepModal(id, title) {
+            if (!id) return;
             pendingSweepId = id;
-            document.getElementById('sweep-modal-title').textContent = 'Trigger ' + sweep.title + '?';
+            document.getElementById('sweep-modal-title').textContent = 'Trigger ' + title + '?';
             document.getElementById('sweep-modal').style.display = 'flex';
         }
 
@@ -554,14 +551,15 @@
             })[c]);
         }
 
-        // The sweep buttons carry their catalog id in a data attribute
-        // and the section delegates the click, so no catalog value is
-        // ever spliced into a JS string; an id with a quote in it
-        // would be inert text here, not broken code
+        // The sweep buttons carry their catalog id and title in data
+        // attributes and the section delegates the click, so no catalog
+        // value is ever spliced into a JS string and no module state
+        // has to stay in sync with the rendered catalog; a value with a
+        // quote in it would be inert text here, not broken code
         // (§forgejo/observability/triggering-a-sweep).
         document.getElementById('sweeps-section').addEventListener('click', (e) => {
             const btn = e.target.closest('.sweep-trigger');
-            if (btn) openSweepModal(btn.dataset.sweepId);
+            if (btn) openSweepModal(btn.dataset.sweepId, btn.dataset.sweepTitle);
         });
 
         // Auto-refresh every 5 seconds
