@@ -80,6 +80,11 @@ func (s *Server) Start() error {
 	s.httpSrv = &http.Server{
 		Addr:    addr,
 		Handler: s.mux,
+		// The port answers unauthenticated callers on whatever network
+		// it binds, so a stranger must not be able to pin a handler
+		// goroutine open by trickling out headers — and a stalled
+		// header would stall Shutdown's wait at Stop too.
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
 		_ = s.httpSrv.ListenAndServe()
