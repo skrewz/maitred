@@ -71,11 +71,10 @@ The sweeps are the backstop for deliveries the event path missed, and a
 human who has just fixed such a miss wants one to run now rather than at
 the next tick. The engine therefore declares its **sweep operations**:
 a catalog of named sweeps, each with an `id` and a `title`. The catalog
-is the whole set of sweeps the
-engine offers — today the reconciliation sweep alone
-(§forgejo/reconciliation/the-sweep) — and every surface that lets a
-human trigger a sweep reads it from the catalog, so adding a sweep
-never means touching those surfaces.
+is the whole set of sweeps the engine offers — today the reconciliation
+sweep alone (§forgejo/reconciliation/the-sweep) — and every surface
+that lets a human trigger a sweep reads it from the catalog, so adding
+a sweep never means touching those surfaces.
 
 The dashboard API serves the catalog and the trigger:
 
@@ -101,6 +100,13 @@ they have taken the steps that would make the button unnecessary —
 working webhook deliveries, a healthy engine — so it is not pressed as
 a substitute for fixing what made it needed. Nothing is sent until the
 modal is confirmed; cancelling it closes it without a request.
+
+The trigger is a state-changing endpoint on the dashboard port, and it
+rides the dashboard's standing trust model: the dashboard serves its
+interactive controls unauthenticated, on the assumption that the port
+reaches only its operator's network — the assumption the README's Web
+Dashboard section spells out. A deployment that cannot keep that
+assumption must place its own access control in front of the port.
 
 ## Why the engine is off
 

@@ -291,6 +291,16 @@ unnecessary before anything runs. The same can be driven over the API:
 `POST /api/forgejo/sweeps/{id}` starts one (a sweep already in flight is
 skipped, as with a scheduled sweep; see `specification/forgejo/observability.md`).
 
+The dashboard has no authentication of its own: like the trigger cards'
+fire-now and pause/resume controls, the sweep trigger is reachable by anyone
+who can reach the web port, which binds every interface. It is therefore
+meant to sit on a trusted network or behind a reverse proxy that authenticates
+before forwarding — the port must not be reachable from networks the operator
+does not trust, including indirectly: a script on any web page open in a
+machine that can reach the port can POST to it without a CORS preflight. If
+the dashboard must outgrow that trust model, identity enforcement belongs in
+one middleware over every mutating endpoint, not in one endpoint here.
+
 ## Architecture
 
 ```
