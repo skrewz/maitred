@@ -4,6 +4,7 @@
 package web
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"maitred/pkg/engine"
 	"maitred/pkg/forgejo"
@@ -34,6 +36,7 @@ type Server struct {
 	forgejoStatus string
 	webhookProvs  []webhook.ProviderConfig
 	mux           *http.ServeMux
+	httpSrv       *http.Server
 }
 
 // New creates a new web server. The Forgejo engine, when non-nil, is
@@ -74,15 +77,29 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.port)
 	s.log.Printf("web dashboard listening on %s", addr)
+	s.httpSrv = &http.Server{
+		Addr:    addr,
+		Handler: s.mux,
+	}
 	go func() {
-		_ = http.ListenAndServe(addr, s.mux)
+		_ = s.httpSrv.ListenAndServe()
 	}()
 	return nil
 }
 
-// Stop gracefully shuts down the HTTP server.
+// Stop gracefully shuts down the HTTP server: the listener closes and
+// in-flight requests are waited out, so the dashboard stops answering
+// triggers before shutdown moves on to the engine whose sweep loop
+// those triggers hand starts to
+// (§forgejo/observability/triggering-a-sweep). It is a no-op when the
+// server was never started.
 func (s *Server) Stop() error {
-	return nil
+	if s.httpSrv == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.httpSrv.Shutdown(ctx)
 }
 
 func (s *Server) registerRoutes() {

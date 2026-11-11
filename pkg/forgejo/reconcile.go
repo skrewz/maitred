@@ -132,6 +132,16 @@ func (e *Engine) sweepLoop() {
 		case <-e.startCh:
 			e.Reconcile()
 		case <-e.stopCh:
+			// A start accepted before Stop closed stopCh may still sit
+			// buffered: run it rather than drop it, because Stop is
+			// already waiting doneCh and so waits this sweep out
+			// (§forgejo/observability/triggering-a-sweep: no start is
+			// ever accepted that nothing would wait out).
+			select {
+			case <-e.startCh:
+				e.Reconcile()
+			default:
+			}
 			return
 		}
 	}

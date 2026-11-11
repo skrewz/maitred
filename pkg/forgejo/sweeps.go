@@ -45,7 +45,8 @@ func (e *Engine) Sweeps() []Sweep {
 // cover it unchanged (§forgejo/observability/triggering-a-sweep,
 // §forgejo/reconciliation/scheduling). An id outside the catalog is
 // refused and nothing runs; an engine whose sweep loop is not running
-// is refused too.
+// is refused too — including one mid-Stop, so no start is ever
+// accepted after the wait has begun.
 func (e *Engine) FireSweep(id string) error {
 	for _, s := range e.Sweeps() {
 		if s.ID != id {
@@ -53,6 +54,14 @@ func (e *Engine) FireSweep(id string) error {
 		}
 		e.schedMu.Lock()
 		defer e.schedMu.Unlock()
+		// A closed stopCh means Stop has begun waiting the loop out;
+		// a nil one means the loop was never started (or has already
+		// finished stopping). Both leave a start with no owner.
+		select {
+		case <-e.stopCh:
+			return ErrSweepNotRunning
+		default:
+		}
 		if e.startCh == nil {
 			return ErrSweepNotRunning
 		}

@@ -266,7 +266,9 @@ func main() {
 	// Stop the dashboard first: its sweep trigger hands starts to the
 	// engine's sweep loop, and the engine's Stop waits the in-flight
 	// sweep out — a dashboard still answering triggers during that
-	// wait would restart what shutdown is waiting for
+	// wait would restart what shutdown is waiting for. The engine
+	// refuses triggers too once its Stop has begun, so the guarantee
+	// does not rest on the ordering alone
 	// (§forgejo/observability/triggering-a-sweep).
 	webSrv.Stop()
 	if fjEngine != nil {
