@@ -1050,7 +1050,7 @@ func decideChainReported(e Event, s State, w *Watermark, sweepComments bool) (De
 		// (§forgejo/decisions/merge-gate, s-git/maitred#179).
 		ref, optedIn := mergeOptedIn(pr, e.Repo, s.ConnectedIssues)
 		if !optedIn {
-			return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens but neither the PR nor an issue it delivers carries the %s label; an approved PR with no merge opt-in waits on a human (connected issues: %s)", pr.Number, LabelAgenticAutoMerge, connectedIssueNames(s))), true
+			return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens but neither the PR nor the issue its body closes carries the %s label; an approved PR with no merge opt-in waits on a human (connected issues: %s)", pr.Number, LabelAgenticAutoMerge, connectedIssueNames(s))), true
 		}
 		// The sweep's exempt row. An opted-into-merging PR sits at a
 		// frozen head sha once the chain approves, so a revision-keyed
