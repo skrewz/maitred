@@ -6,6 +6,7 @@ package web
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -154,6 +155,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleWebhooks(w, r)
 	case path == "forgejo":
 		s.handleForgejo(w, r)
+	case strings.HasPrefix(path, "forgejo/sweeps/"):
+		s.handleForgejoSweep(w, r, strings.TrimPrefix(path, "forgejo/sweeps/"))
 	case strings.HasPrefix(path, "triggers/"):
 		s.handleTriggerAPI(w, r, path)
 	default:
@@ -220,31 +223,68 @@ func (s *Server) handleWebhooks(w http.ResponseWriter, r *http.Request) {
 // handleForgejo serves the dashboard view of the issues and pull
 // requests the Forgejo engine tracks: each with its current state,
 // watermark, and last decision. The response is an object carrying
-// that list alongside one engine-status field, so a configured-but-
-// broken engine does not read like a healthy one with nothing tracked
+// that list alongside the engine's sweep catalog and one engine-status
+// field, so a configured-but-broken engine does not read like a
+// healthy one with nothing tracked
 // (§forgejo/observability/the-dashboard-view,
-// §forgejo/observability/why-the-engine-is-off). Without the engine
-// (or with no decisions yet) the list is empty.
+// §forgejo/observability/triggering-a-sweep). Without the engine
+// (or with no decisions yet) the list is empty; without the engine the
+// sweep catalog is empty too.
 func (s *Server) handleForgejo(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var tracked []forgejo.Tracked
+	var sweeps []forgejo.Sweep
 	if s.forgejoEng != nil {
 		tracked = s.forgejoEng.Tracked()
+		sweeps = s.forgejoEng.Sweeps()
 	}
 	if tracked == nil {
 		tracked = []forgejo.Tracked{}
 	}
+	if sweeps == nil {
+		sweeps = []forgejo.Sweep{}
+	}
 	response := struct {
 		EngineStatus string            `json:"engine_status"`
 		Items        []forgejo.Tracked `json:"items"`
+		Sweeps       []forgejo.Sweep   `json:"sweeps"`
 	}{
 		EngineStatus: s.forgejoStatus,
 		Items:        tracked,
+		Sweeps:       sweeps,
 	}
 	json.NewEncoder(w).Encode(response)
+}
+
+// handleForgejoSweep triggers one sweep operation by catalog id
+// (§forgejo/observability/triggering-a-sweep): POST starts the sweep
+// now and answers 202 Accepted — the sweep runs asynchronously, and a
+// start that finds a sweep already in flight is skipped exactly as a
+// scheduled one is (§forgejo/reconciliation/scheduling). An unknown id
+// answers 404, no engine up answers 503, and any method other than
+// POST answers 405.
+func (s *Server) handleForgejoSweep(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.forgejoEng == nil {
+		http.Error(w, "forgejo engine not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.forgejoEng.FireSweep(id); err != nil {
+		if errors.Is(err, forgejo.ErrUnknownSweep) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{"status": "triggered", "id": id})
 }
 
 func (s *Server) handleTriggerAPI(w http.ResponseWriter, r *http.Request, path string) {
