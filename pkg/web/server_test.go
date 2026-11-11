@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,12 +20,18 @@ import (
 // (§forgejo/observability/the-dashboard-view).
 type stubForgejoAPI struct {
 	issue *forgejo.Issue
+
+	// reposCounts lists how often the stub has been asked for the
+	// org's repositories, so a test can see a manually fired sweep
+	// run (§forgejo/observability/triggering-a-sweep).
+	reposCounts atomic.Int32
 }
 
 // The stub's organisation holds the one maitred-enabled repository the
 // tests dispatch in — the event path's scope test consults the listing
 // (§forgejo/webhook/the-scope-cache).
 func (s *stubForgejoAPI) ListOrgRepositories(string) ([]forgejo.Repository, error) {
+	s.reposCounts.Add(1)
 	return []forgejo.Repository{{
 		Name:     "r",
 		FullName: "o/r",
@@ -61,9 +68,10 @@ func (s *stubForgejoAPI) ListPullRequestReviews(string, string, int) ([]forgejo.
 	return nil, nil
 }
 
-// testForgejoEngine builds an engine that has made one dispatching decision
+// testForgejoEngine builds an engine that has made one dispatching
+// decision, alongside the API stub it reads through
 // (§forgejo/observability/the-dashboard-view).
-func testForgejoEngine(t *testing.T) *forgejo.Engine {
+func testForgejoEngine(t *testing.T) (*forgejo.Engine, *stubForgejoAPI) {
 	t.Helper()
 	store, err := forgejo.NewStore(t.TempDir())
 	if err != nil {
@@ -78,18 +86,19 @@ func testForgejoEngine(t *testing.T) *forgejo.Engine {
 			Timeout: time.Hour,
 		}
 	}
+	api := &stubForgejoAPI{issue: &forgejo.Issue{
+		Number:     7,
+		State:      "open",
+		UpdatedAt:  time.Date(2026, 9, 16, 13, 25, 18, 0, time.UTC),
+		Repository: "o/r",
+	}}
 	eng := forgejo.NewEngine(
-		&stubForgejoAPI{issue: &forgejo.Issue{
-			Number:     7,
-			State:      "open",
-			UpdatedAt:  time.Date(2026, 9, 16, 13, 25, 18, 0, time.UTC),
-			Repository: "o/r",
-		}},
+		api,
 		store, cfg, queue.NewTaskQueue(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 	eng.HandleEvent(forgejo.Event{Type: forgejo.EventIssueOpened, Repo: "o/r", Kind: forgejo.KindIssue, Number: 7, Sender: "alice"})
-	return eng
+	return eng, api
 }
 
 // trackedJSON mirrors one tracked entry of the /api/forgejo response
@@ -112,11 +121,13 @@ type trackedJSON struct {
 }
 
 // forgejoViewJSON mirrors the /api/forgejo response shape: the tracked
-// list alongside the one engine-status field
-// (§forgejo/observability/the-dashboard-view).
+// list, the sweep catalog, and the one engine-status field
+// (§forgejo/observability/the-dashboard-view,
+// §forgejo/observability/triggering-a-sweep).
 type forgejoViewJSON struct {
-	EngineStatus string        `json:"engine_status"`
-	Items        []trackedJSON `json:"items"`
+	EngineStatus string          `json:"engine_status"`
+	Items        []trackedJSON   `json:"items"`
+	Sweeps       []forgejo.Sweep `json:"sweeps"`
 }
 
 func getForgejo(t *testing.T, srv *Server) *httptest.ResponseRecorder {
@@ -131,7 +142,8 @@ func getForgejo(t *testing.T, srv *Server) *httptest.ResponseRecorder {
 // their state, watermark, and last decision
 // (§forgejo/observability/the-dashboard-view).
 func TestForgejoEndpoint(t *testing.T) {
-	srv := New(0, nil, "test", testForgejoEngine(t), forgejo.EngineStateWord(true, nil))
+	fjEng, _ := testForgejoEngine(t)
+	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
 	rec := getForgejo(t, srv)
 
 	if rec.Code != http.StatusOK {
@@ -257,6 +269,102 @@ func TestForgejoEndpoint_EngineStates(t *testing.T) {
 func TestForgejoEndpoint_Method(t *testing.T) {
 	srv := New(0, nil, "test", nil, forgejo.EngineStateWord(false, nil))
 	req := httptest.NewRequest(http.MethodPost, "/api/forgejo", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rec.Code)
+	}
+}
+
+// TestForgejoEndpoint_SweepsCatalog: with the engine up the view
+// carries the sweep catalog — the reconciliation sweep, ided, titled,
+// and described — and with no engine the catalog is empty
+// (§forgejo/observability/triggering-a-sweep).
+func TestForgejoEndpoint_SweepsCatalog(t *testing.T) {
+	fjEng, _ := testForgejoEngine(t)
+	rec := getForgejo(t, New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil)))
+	var view forgejoViewJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var found bool
+	for _, s := range view.Sweeps {
+		if s.ID == forgejo.SweepIDReconcile && s.Title != "" && s.Description != "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("sweeps = %+v, want the reconciliation sweep", view.Sweeps)
+	}
+
+	rec = getForgejo(t, New(0, nil, "test", nil, forgejo.EngineStateWord(false, nil)))
+	view = forgejoViewJSON{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(view.Sweeps) != 0 {
+		t.Errorf("sweeps = %+v, want empty without an engine", view.Sweeps)
+	}
+}
+
+// TestSweepFire: POST /api/forgejo/sweeps/{id} with the engine up
+// answers 202 Accepted and starts the sweep now rather than at the
+// next tick (§forgejo/observability/triggering-a-sweep).
+func TestSweepFire(t *testing.T) {
+	fjEng, api := testForgejoEngine(t)
+	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
+
+	before := api.reposCounts.Load()
+	req := httptest.NewRequest(http.MethodPost, "/api/forgejo/sweeps/"+forgejo.SweepIDReconcile, nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", rec.Code)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for api.reposCounts.Load() <= before {
+		if time.Now().After(deadline) {
+			t.Fatal("the sweep did not run after the trigger")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestSweepFire_UnknownSweep: an id outside the catalog answers 404
+// (§forgejo/observability/triggering-a-sweep).
+func TestSweepFire_UnknownSweep(t *testing.T) {
+	fjEng, _ := testForgejoEngine(t)
+	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
+	req := httptest.NewRequest(http.MethodPost, "/api/forgejo/sweeps/no-such-sweep", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+// TestSweepFire_NoEngine: with no engine up there is nothing to
+// trigger; the endpoint answers 503 (§forgejo/observability/triggering-a-sweep).
+func TestSweepFire_NoEngine(t *testing.T) {
+	srv := New(0, nil, "test", nil, forgejo.EngineStateWord(false, nil))
+	req := httptest.NewRequest(http.MethodPost, "/api/forgejo/sweeps/"+forgejo.SweepIDReconcile, nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+}
+
+// TestSweepFire_Method: only POST triggers; a GET answers 405
+// (§forgejo/observability/triggering-a-sweep).
+func TestSweepFire_Method(t *testing.T) {
+	fjEng, _ := testForgejoEngine(t)
+	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
+	req := httptest.NewRequest(http.MethodGet, "/api/forgejo/sweeps/"+forgejo.SweepIDReconcile, nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 
