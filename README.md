@@ -288,7 +288,9 @@ pull-requests tab under each, and click-to-open watermark and reason cells
 whose embedded newlines are respected (see
 `specification/forgejo/observability.md`). The dashboard re-reads this view on
 a timer and rebuilds it only when what it read has changed, so your tab
-choice, opened cells and cursor position survive a refresh. Each sweep gets a **Trigger**
+choice, opened cells and cursor position survive a refresh. A poll it cannot
+read forgets nothing but renders the section empty until a read succeeds again
+— the rows come back with their state intact. Each sweep gets a **Trigger**
 button that opens a confirmation modal; confirming starts the sweep
 immediately instead of waiting for the next
 reconcile tick. A sweep is the backstop for webhook deliveries the engine

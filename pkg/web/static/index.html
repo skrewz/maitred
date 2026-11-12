@@ -152,9 +152,9 @@
     <script>
         let refreshInterval;
         let pausedSet = new Set(); // track paused trigger IDs
-        // The forgejo payload last rendered, so an unchanged poll does
-        // not rebuild the view (§forgejo/observability/the-dashboard-
-        // view). undefined until the first render, which always runs.
+        // The forgejo payload last rendered by refresh(); undefined
+        // until the first render, which always runs
+        // (§forgejo/observability/the-dashboard-view).
         let lastForgejoJson;
 
         async function refresh() {
@@ -184,14 +184,10 @@
 
                 document.getElementById('version').textContent = version;
                 renderTriggers(defs, history, webhooks);
-                // The view holds focusable controls and scrollable
-                // cells, and both renderers rebuild their section with
-                // innerHTML, so re-rendering a payload that has not
-                // changed would drop the operator's focus, scroll
-                // position and text selection on every cycle. Render
-                // only what differs from the last payload read; a
-                // failed poll reads null, which differs from any
-                // payload and so renders once, not every cycle.
+                // Render only a payload that differs from the last
+                // one read (§forgejo/observability/the-dashboard-
+                // view); a failed poll reads null, so the empty view
+                // renders once rather than every cycle.
                 const forgejoJson = JSON.stringify(forgejo);
                 if (forgejoJson !== lastForgejoJson) {
                     lastForgejoJson = forgejoJson;
@@ -444,14 +440,10 @@
             const section = document.getElementById('forgejo-section');
             const tracked = (payload && payload.items) || [];
             const status = (payload && payload.engine_status) || '';
-            // State recorded for rows that have left tracking (swept
-            // away, repo gone) is stale from that moment on; pruning
-            // both maps to the current rows keeps the maps' lifetime
-            // the view's rather than the tab's. A payload we could not
-            // read is not evidence that the tracked set went empty —
-            // pruning on it would reset the operator's tab choices and
-            // collapse their opened cells on any transient failure —
-            // so only a payload that was actually read prunes.
+            // State recorded for rows that have left tracking is
+            // stale; both maps are pruned to the current rows, and
+            // only a payload that was actually read is evidence about
+            // them (§forgejo/observability/the-dashboard-view).
             const liveOpen = new Set();
             const liveRepos = new Set();
             for (const t of tracked) {
