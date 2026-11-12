@@ -81,7 +81,6 @@
         .forgejo-tab.active { color: #a78bfa; background: #1e293b; border-bottom-color: #a78bfa; }
         .forgejo-tab-count { font-weight: 400; opacity: 0.7; }
         .forgejo-panel { min-height: 1rem; }
-        .forgejo-panel[hidden] { display: none; }
         .forgejo-empty { font-size: 0.8rem; color: #475569; padding: 0.25rem 0 0.75rem; }
         details.forgejo-details { margin-top: 0.5rem; }
         details.forgejo-details summary { font-size: 0.65rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer; user-select: none; list-style: none; }
@@ -396,33 +395,53 @@
         // state's category — the category word alone, never raw error
         // text — so a configured-but-broken engine does not look like a
         // healthy one with nothing tracked
-        // (§forgejo/observability/why-the-engine-is-off).
-        //
-        // The rows are grouped by-repo: each tracked repo forms a
-        // section introduced by a heading carrying an anchor id, and
-        // under each heading two tabs — issues and pull requests —
-        // switch between the rows of each kind. The active tab is
-        // module state (forgejoTabState) so the auto-refresh's
-        // re-render keeps the operator's choice; a repo with nothing
-        // tracked of the stored kind falls back to an explicit empty
-        // panel rather than hiding rows. The watermark and reason of
-        // each row are click-to-open (details elements, open state
-        // kept in forgejoOpenState), and their content renders with
-        // white-space: pre-wrap so embedded newlines stay visible
+        // (§forgejo/observability/why-the-engine-is-off). The rows are
+        // grouped by-repo into anchored sections with issues/PRs tabs
+        // and click-to-open watermark and reason cells; the spec holds
+        // the full paragraph
         // (§forgejo/observability/the-dashboard-view).
         const forgejoTabState = new Map(); // repo -> 'issue' | 'pr'
         const forgejoOpenState = new Map(); // "key/what" -> bool
 
         // anchorSlug derives the heading's anchor id from a repository
-        // full name: anything an id cannot carry becomes a hyphen.
+        // full name: anything an id cannot carry becomes a hyphen. The
+        // slug is not injective — repo names differing only in
+        // characters an id cannot carry (foo.bar vs foo-bar) share an
+        // anchor, in which case the anchor lands on the first section.
+        // Disambiguating would cost a pre-pass over every repo name
+        // for a collision shape no forge has been seen to hit, so the
+        // trade-off is stated here rather than hidden.
         function anchorSlug(repo) {
             return String(repo ?? '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+        }
+
+        // detailsKey composes the forgejoOpenState key prefix for one
+        // row — repo/kind/number. The rendering and the toggle
+        // listener must agree on this string exactly (the dataset
+        // decodes the attribute back to the raw form), so it is built
+        // in one place; escape it only where it enters an attribute.
+        function detailsKey(repo, kind, number) {
+            return `${repo}/${kind}/${number}`;
         }
 
         function renderForgejo(payload) {
             const section = document.getElementById('forgejo-section');
             const tracked = (payload && payload.items) || [];
             const status = (payload && payload.engine_status) || '';
+            // State recorded for rows that have left tracking (swept
+            // away, repo gone) is stale from that moment on; pruning
+            // both maps to the current rows keeps the maps' lifetime
+            // the view's rather than the tab's.
+            const liveOpen = new Set();
+            const liveRepos = new Set();
+            for (const t of tracked) {
+                const key = detailsKey(t.repo, t.kind, t.number);
+                liveOpen.add(`${key}/watermark`);
+                liveOpen.add(`${key}/reason`);
+                liveRepos.add(t.repo);
+            }
+            for (const k of forgejoOpenState.keys()) if (!liveOpen.has(k)) forgejoOpenState.delete(k);
+            for (const r of forgejoTabState.keys()) if (!liveRepos.has(r)) forgejoTabState.delete(r);
             // The two words below are the states that are not a fault:
             // the up word and the not-configured word. Go pins them as
             // exactly that pair — TestNonFaultWords in
@@ -477,13 +496,13 @@
                 const decision = t.decision.dispatched
                     ? `${escapeHtml(t.decision.action)} <span style="color:#64748b;">(${escapeHtml(t.decision.event)})</span>`
                     : `hold-off <span style="color:#64748b;">(${escapeHtml(t.decision.event)})</span>`;
-                const key = `${escapeHtml(t.repo)}/${escapeHtml(t.kind)}/${t.number}`;
-                const wmOpen = forgejoOpenState.get(`${t.repo}/${t.kind}/${t.number}/watermark`) ? ' open' : '';
-                const reasonOpen = forgejoOpenState.get(`${t.repo}/${t.kind}/${t.number}/reason`) ? ' open' : '';
+                const key = detailsKey(t.repo, t.kind, t.number);
+                const wmOpen = forgejoOpenState.get(`${key}/watermark`) ? ' open' : '';
+                const reasonOpen = forgejoOpenState.get(`${key}/reason`) ? ' open' : '';
                 return `
                     <div class="forgejo-card">
                         <div class="forgejo-header">
-                            <span class="forgejo-obj">${escapeHtml(t.kind)} #${t.number}</span>
+                            <span class="forgejo-obj">${escapeHtml(t.kind)} #${escapeHtml(t.number)}</span>
                             <span class="badge ${badgeClass}">${escapeHtml(stateLabel)}</span>
                         </div>
                         <div class="trigger-meta">
@@ -492,11 +511,11 @@
                                 <span class="meta-value">${decision}</span>
                             </div>
                         </div>
-                        <details class="forgejo-details" data-key="${key}" data-what="watermark"${wmOpen}>
+                        <details class="forgejo-details" data-key="${escapeHtml(key)}" data-what="watermark"${wmOpen}>
                             <summary>Watermark</summary>
                             <div class="forgejo-details-content">${watermark}</div>
                         </details>
-                        <details class="forgejo-details" data-key="${key}" data-what="reason"${reasonOpen}>
+                        <details class="forgejo-details" data-key="${escapeHtml(key)}" data-what="reason"${reasonOpen}>
                             <summary>Reason</summary>
                             <div class="forgejo-details-content">${escapeHtml(t.decision.reason)}</div>
                         </details>
