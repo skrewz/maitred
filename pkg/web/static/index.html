@@ -184,15 +184,18 @@
 
                 document.getElementById('version').textContent = version;
                 renderTriggers(defs, history, webhooks);
-                // Render only a payload that differs from the last
-                // one read (§forgejo/observability/the-dashboard-
-                // view); a failed poll reads null, so the empty view
-                // renders once rather than every cycle.
+                // Render only a payload that differs from the one
+                // last rendered; a failed poll reads null, so the
+                // empty view renders once rather than every cycle
+                // (§forgejo/observability/the-dashboard-view).
                 const forgejoJson = JSON.stringify(forgejo);
                 if (forgejoJson !== lastForgejoJson) {
-                    lastForgejoJson = forgejoJson;
                     renderForgejo(forgejo);
                     renderSweeps(forgejo);
+                    // Recorded only once both renderers returned:
+                    // a render that throws must leave the next poll
+                    // free to retry, not skip an unrendered payload.
+                    lastForgejoJson = forgejoJson;
                 }
                 updateStats(defs, history);
                 document.getElementById('status-text').textContent = 'Updated ' + new Date().toLocaleTimeString();
