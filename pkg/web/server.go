@@ -78,7 +78,7 @@ func (s *Server) Handler() http.Handler {
 // Start binds the dashboard port and then serves HTTP in a
 // goroutine, returning immediately once bound. The bind happens
 // inside Start so that a port already in use is an error the caller
-// can see, not a process logging a dashboard while nothing serves.
+// can see.
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.port)
 	ln, err := net.Listen("tcp", addr)
@@ -117,8 +117,12 @@ func (s *Server) Addr() string {
 // (§forgejo/observability/triggering-a-sweep). It is a no-op when the
 // server was never started, and calling it twice reports no error:
 // http.Server.Shutdown is itself idempotent — a second call finds no
-// listener and no active connections and returns nil — so the handle
-// is kept rather than dropped.
+// listener and no active connections and returns nil. Here and in
+// Addr, the handle and the address are read without synchronisation,
+// so Start, Stop and Addr belong to one goroutine, as main's startup
+// and shutdown sequence keeps them: a Stop concurrent with Start could
+// read a nil handle and report success while the dashboard went on
+// answering triggers.
 func (s *Server) Stop() error {
 	srv := s.httpSrv
 	if srv == nil {
