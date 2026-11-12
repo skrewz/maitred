@@ -202,6 +202,25 @@ func TestForestDigestTracksActionableFacts(t *testing.T) {
 			t.Error("gaining a member did not move the digest")
 		}
 	})
+	t.Run("row labelled outcome and ideation folds as a member", func(t *testing.T) {
+		// The digest reads "tracker" through isTracker, the one reading
+		// the decision code applies, so a row carrying both labels — a
+		// root to the order, decompose winning over wrap-up — keeps its
+		// labels and its blockers folded rather than being spared as a
+		// tracker (§forgejo/decisions/transition-table).
+		withLanding := digestForest()
+		withLanding.blocks[1] = append(withLanding.blocks[1],
+			digestIssue("o/r", 6, "open", LabelOutcome, LabelIdeation, LabelAgenticAutoMerge))
+		moved := digestForest()
+		moved.blocks[1] = append(moved.blocks[1],
+			digestIssue("o/r", 6, "open", LabelOutcome, LabelIdeation, LabelAgenticSyncMerge))
+		if digest(t, withLanding) == digest(t, moved) {
+			t.Error("moving the landing label of a row carrying both outcome and ideation did not move the digest")
+		}
+		if got := moved.callCount("IssueDependencies:r/6"); got != 1 {
+			t.Errorf("a row carrying both labels was spared as a tracker: IssueDependencies:r/6 called %d times, want 1", got)
+		}
+	})
 	t.Run("human comment added on root", func(t *testing.T) {
 		f := digestForest()
 		f.comments[1] = append(f.comments[1], Comment{Author: "operator", Body: "one more thing"})

@@ -1037,8 +1037,10 @@ consulted: storing a forest's previous digest and gating dispatch on the
 digest moving are separate work.
 
 The forest is named by its `ideation` root and read through the issues
-the root **blocks**: those carrying `outcome` are the forest's trackers,
-the rest are its members. The folded facts:
+the root **blocks**: `isTracker`'s reading of those rows — `outcome`
+without `ideation` — names the forest's trackers, the rest its members,
+so the digest and the decision code cannot disagree about what a row is
+(§forgejo/decisions/transition-table). The folded facts:
 
 - the root's state, its labels as listed, and its body;
 - every member's state and its kind/landing labels — `ideation`,

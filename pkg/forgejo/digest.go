@@ -35,10 +35,12 @@ var digestMemberLabels = []string{
 // dispatch on the digest moving are separate work.
 //
 // The forest is named by its ideation root and read through the issues
-// the root blocks: those carrying the outcome label are the forest's
-// trackers, the rest are its members. Folded in are the root's state,
-// labels and body; every member's state and kind/landing labels; the
-// state of every blocker of every member — read through
+// the root blocks: isTracker's reading of those rows — the outcome label
+// without ideation — names the forest's trackers, the rest its members,
+// so the digest and the decision code cannot disagree about what a row
+// is. Folded in are the root's state, labels and body; every member's
+// state and kind/landing labels; the state of every blocker of every
+// member — read through
 // IssueDependencies so blockers outside the forest are included,
 // because a member becoming implementable when an unrelated issue
 // closes is exactly what should be allowed to change the plan; and
@@ -80,8 +82,8 @@ func ForestDigest(api API, root *Issue, engineAccount, decomposerIdentity string
 		return "", fmt.Errorf("forgejo: forest digest: issues root %s blocks: %w", rootRef, err)
 	}
 
-	// The root's blocks are the forest: outcome-labelled rows are its
-	// trackers, the rest its members. A row that lists no repository
+	// The root's blocks are the forest: isTracker rows are its trackers,
+	// the rest its members. A row that lists no repository
 	// lives where the root does — the blocks listing is the root's own
 	// relation. Refs are deduplicated, so a row named twice is read
 	// and folded once.
@@ -99,16 +101,22 @@ func ForestDigest(api API, root *Issue, engineAccount, decomposerIdentity string
 		seen[ref] = true
 		b.Repository = repo
 		kind := "member"
-		if hasLabel(&b, LabelOutcome) {
-			// A tracker contributes its state — a closed tracker ends
-			// the forest — and its outside comments; its body, whose
-			// current-state block the engine rewrites every run, and
-			// its updated_at are the facts this digest must never read
-			// (§forgejo/decisions/actionable-state-digest).
+		tracker := isTracker(&b)
+		if tracker {
 			kind = "tracker"
-			f.fact(kind, ref, "state", b.State)
-		} else {
-			f.fact(kind, ref, "state", b.State)
+		}
+		// Every forest row contributes its state: a closed tracker ends
+		// the forest and a closed member is done, either of which is
+		// plainly actionable.
+		f.fact(kind, ref, "state", b.State)
+		if !tracker {
+			// A member adds its kind/landing labels and the state of every
+			// blocker it has, read through IssueDependencies so blockers
+			// outside the forest are included. A tracker contributes nothing
+			// further: its blockers say nothing about what the plan can do
+			// next, and its body — the current-state block the engine
+			// rewrites every run — and its updated_at are the facts this
+			// digest must never read (§forgejo/decisions/actionable-state-digest).
 			for _, label := range digestMemberLabels {
 				if hasLabel(&b, label) {
 					f.fact(kind, ref, "label", label)
