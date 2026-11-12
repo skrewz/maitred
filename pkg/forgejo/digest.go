@@ -83,11 +83,8 @@ func ForestDigest(api API, root *Issue, engineAccount, decomposerIdentity string
 	}
 
 	// The root's blocks are the forest: isTracker rows are its trackers,
-	// the rest its members. A row that lists no repository
-	// lives where the root does — the blocks listing is the root's own
-	// relation. Refs are deduplicated, so a row named twice is read
-	// and folded once.
-	seen := map[string]bool{rootRef: true}
+	// the rest its members. A row that lists no repository lives where
+	// the root does — the blocks listing is the root's own relation.
 	blockers := map[string]string{}
 	for _, b := range blocked {
 		repo := b.Repository
@@ -95,10 +92,6 @@ func ForestDigest(api API, root *Issue, engineAccount, decomposerIdentity string
 			repo = root.Repository
 		}
 		ref := forestRef(repo, b.Number)
-		if seen[ref] {
-			continue
-		}
-		seen[ref] = true
 		b.Repository = repo
 		kind := "member"
 		tracker := isTracker(&b)
