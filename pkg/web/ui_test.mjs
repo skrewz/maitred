@@ -592,6 +592,157 @@ async function testForgejoTracking(page, results) {
   const stateBadges = await page.locator('#forgejo-section .badge').allTextContents();
   results.push(assert(stateBadges.some(b => b.toLowerCase() === 'open'), `Forgejo section shows an open state badge (got: ${stateBadges.join(', ')})`));
 
+  // The by-repo layout (§forgejo/observability/the-dashboard-view):
+  // each tracked repo forms a section introduced by a heading-level
+  // anchor, and under each repo two tabs split the rows into issues
+  // and pull requests.
+  const repoHeadings = await page.locator('#forgejo-section h3.forgejo-repo-heading');
+  const headingTexts = await repoHeadings.allTextContents();
+  results.push(assert(
+    headingTexts.includes('o/r'),
+    `Tracked repos get heading-level sections (headings: ${headingTexts.join(', ')})`
+  ));
+  const anchorId = headingTexts.length > 0 ? await repoHeadings.first().getAttribute('id') : null;
+  results.push(assert(
+    typeof anchorId === 'string' && anchorId.length > 0,
+    `The repo heading carries an anchor id (got: "${anchorId}")`
+  ));
+
+  const tabButtons = await page.locator('#forgejo-section .forgejo-tab');
+  const tabTexts = await tabButtons.allTextContents();
+  results.push(assert(
+    tabTexts.length === 2
+      && tabTexts.some(t => t.toLowerCase().includes('issue'))
+      && tabTexts.some(t => t.toLowerCase().includes('pull request')),
+    `Each repo gets an issues tab and a pull-requests tab (got: ${tabTexts.join(' | ')})`
+  ));
+
+  // The pull requests tab is the other panel: with the issues tab
+  // active the PR card is not shown, and clicking the pull-requests
+  // tab swaps the panels.
+  const prTab = page.locator('#forgejo-section .forgejo-tab[data-kind="pr"]');
+  const issuePanel = page.locator('#forgejo-section .forgejo-panel[data-repo="o/r"][data-kind="issue"]');
+  const prPanel = page.locator('#forgejo-section .forgejo-panel[data-repo="o/r"][data-kind="pr"]');
+  const issueVisibleFirst = await issuePanel.isVisible().catch(() => false);
+  const prVisibleFirst = await prPanel.isVisible().catch(() => false);
+  results.push(assert(
+    issueVisibleFirst && !prVisibleFirst,
+    `Issues tab is active by default and the PR panel is hidden (issue: ${issueVisibleFirst}, pr: ${prVisibleFirst})`
+  ));
+  await prTab.click();
+  await page.waitForTimeout(200);
+  const prVisibleAfter = await prPanel.isVisible().catch(() => false);
+  const issueVisibleAfter = await issuePanel.isVisible().catch(() => false);
+  results.push(assert(
+    prVisibleAfter && !issueVisibleAfter,
+    `Clicking the pull-requests tab swaps the panels (pr: ${prVisibleAfter}, issue: ${issueVisibleAfter})`
+  ));
+  // Restore the issues tab for anything that follows.
+  await page.locator('#forgejo-section .forgejo-tab[data-kind="issue"]').click();
+
+  // The watermark and reason cells are click-to-open: collapsed by
+  // default, one click opens them (§forgejo/observability/the-dashboard-view).
+  const detailsTotal = await page.locator('#forgejo-section details.forgejo-details').count();
+  results.push(assert(
+    detailsTotal >= 2,
+    `Watermark and reason render as click-to-open elements per row (got: ${detailsTotal})`
+  ));
+  const openBefore = await page.locator('#forgejo-section details.forgejo-details[open]').count();
+  results.push(assert(
+    openBefore === 0,
+    `Click-to-open elements are collapsed by default (got: ${openBefore} open)`
+  ));
+  await page.locator('#forgejo-section details.forgejo-details[data-what="watermark"] summary').first().click();
+  await page.waitForTimeout(200);
+  const openAfter = await page.locator('#forgejo-section details.forgejo-details[open]').count();
+  results.push(assert(
+    openAfter === 1,
+    `One click opens the watermark element (got: ${openAfter} open)`
+  ));
+  await page.locator('#forgejo-section details.forgejo-details[data-what="watermark"] summary').first().click();
+
+  // Newline handling and per-repo grouping, exercised on a synthetic
+  // payload (two repos, a multi-row watermark, a reason with an
+  // embedded newline) rendered through the page's own renderForgejo:
+  // the live instance cannot produce those shapes (§forgejo/observability/the-dashboard-view).
+  const synthetic = await page.evaluate(() => {
+    const payload = {
+      engine_status: 'enabled',
+      sweeps: [],
+      items: [
+        {
+          repo: 'a/x', kind: 'issue', number: 1, state: 'open', merged: false,
+          watermark: { action: 'implement', revision: 'rev-1', subjects: { 'reviewer-x': { action: 'review', revision: 'rev-2' } } },
+          decision: { event: 'issues', dispatched: true, action: 'implement', reason: 'first line\nsecond line', at: '2026-11-12T00:00:00Z' },
+        },
+        {
+          repo: 'a/x', kind: 'pr', number: 2, state: 'open', merged: false,
+          watermark: { action: 'review', revision: 'rev-3' },
+          decision: { event: 'pull_request', dispatched: false, action: '', reason: 'holding', at: '2026-11-12T00:00:00Z' },
+        },
+        {
+          repo: 'b/y', kind: 'pr', number: 3, state: 'closed', merged: true,
+          decision: { event: 'pull_request', dispatched: false, action: '', reason: 'nothing to do', at: '2026-11-12T00:00:00Z' },
+        },
+      ],
+    };
+    renderForgejo(payload);
+    const section = document.getElementById('forgejo-section');
+    const headings = [...section.querySelectorAll('h3.forgejo-repo-heading')].map(h => h.textContent.trim());
+    const bPr = section.querySelector('.forgejo-panel[data-repo="b/y"][data-kind="pr"]');
+    const bIssue = section.querySelector('.forgejo-panel[data-repo="b/y"][data-kind="issue"]');
+    const watermark = section.querySelector('details.forgejo-details[data-what="watermark"] .forgejo-details-content');
+    const reason = section.querySelector('details.forgejo-details[data-what="reason"] .forgejo-details-content');
+    return {
+      headings,
+      bPrDefaultVisible: bPr && !bPr.hasAttribute('hidden'),
+      bIssueDefaultHidden: bIssue && bIssue.hasAttribute('hidden'),
+      watermarkText: watermark ? watermark.textContent : '',
+      watermarkWhitespace: watermark ? getComputedStyle(watermark).whiteSpace : '',
+      reasonText: reason ? reason.textContent : '',
+      reasonWhitespace: reason ? getComputedStyle(reason).whiteSpace : '',
+    };
+  });
+  results.push(assert(
+    synthetic.headings.length === 2 && synthetic.headings.includes('a/x') && synthetic.headings.includes('b/y'),
+    `Synthetic payload splits into one anchored section per repo (got: ${synthetic.headings.join(', ')})`
+  ));
+  results.push(assert(
+    synthetic.bPrDefaultVisible && synthetic.bIssueDefaultHidden,
+    'A repo with only pull requests defaults to the pull-requests tab'
+  ));
+  results.push(assert(
+    synthetic.watermarkText.includes('\n') && synthetic.watermarkWhitespace === 'pre-wrap',
+    'Watermark rows keep their newlines and render them as breaks'
+  ));
+  results.push(assert(
+    synthetic.reasonText.includes('first line\nsecond line') && synthetic.reasonWhitespace === 'pre-wrap',
+    'An embedded newline in the reason is respected'
+  ));
+
+  // The active tab is module state, so a re-render (the auto-refresh
+  // rebuilds the section every few seconds) keeps the operator's
+  // choice: open the a/x pull-requests tab, re-render, and it stays.
+  const tabPersistence = await page.evaluate(() => {
+    const before = document.querySelector('#forgejo-section .forgejo-tab[data-repo="a/x"][data-kind="pr"]');
+    before.click();
+    renderForgejo({
+      engine_status: 'enabled',
+      sweeps: [],
+      items: [
+        { repo: 'a/x', kind: 'issue', number: 1, state: 'open', decision: { event: 'issues', dispatched: false, reason: 'r', at: '' } },
+        { repo: 'a/x', kind: 'pr', number: 2, state: 'open', decision: { event: 'pull_request', dispatched: false, reason: 'r', at: '' } },
+      ],
+    });
+    const pr = document.querySelector('#forgejo-section .forgejo-panel[data-repo="a/x"][data-kind="pr"]');
+    const issue = document.querySelector('#forgejo-section .forgejo-panel[data-repo="a/x"][data-kind="issue"]');
+    return { prVisible: pr && !pr.hasAttribute('hidden'), issueHidden: issue && issue.hasAttribute('hidden') };
+  });
+  results.push(assert(
+    tabPersistence.prVisible && tabPersistence.issueHidden,
+    'The chosen tab survives a re-render'
+  ));
+
   // Navigate back and let the page settle for the remaining suites.
   await page.waitForLoadState('networkidle').catch(() => {});
   await page.waitForTimeout(1000);

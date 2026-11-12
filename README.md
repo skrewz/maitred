@@ -282,8 +282,13 @@ handled by a reverse proxy in front of the API port.
 
 Besides the trigger cards (fire now, pause/resume), the dashboard shows the
 Forgejo engine's sweep operations — today the reconciliation sweep — when the
-engine is up. Each sweep gets a **Trigger** button that opens a confirmation
-modal; confirming starts the sweep immediately instead of waiting for the next
+engine is up, and the issues and pull requests it tracks. The tracked view is
+laid out by-repo: one anchored heading per repository, an issues tab and a
+pull-requests tab under each, and click-to-open watermark and reason cells
+whose embedded newlines are respected (see
+`specification/forgejo/observability.md`). Each sweep gets a **Trigger**
+button that opens a confirmation modal; confirming starts the sweep
+immediately instead of waiting for the next
 reconcile tick. A sweep is the backstop for webhook deliveries the engine
 missed, so the modal asks whether you have taken the steps that make the button
 unnecessary before anything runs. The same can be driven over the API:

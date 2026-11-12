@@ -74,9 +74,23 @@
         .prompt-content { margin-top: 0.5rem; padding: 0.75rem; background: #0f172a; border-radius: 0.375rem; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.75rem; line-height: 1.5; color: #94a3b8; white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto; }
         .forgejo-section { margin-top: 1.5rem; }
         .forgejo-title { font-size: 0.75rem; color: #64748b; text-transform: uppercase; margin-bottom: 0.5rem; }
+        .forgejo-repo-heading { font-size: 1rem; color: #a78bfa; font-family: 'SF Mono', 'Fira Code', monospace; margin: 1.5rem 0 0.5rem; scroll-margin-top: 1rem; }
+        .forgejo-tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid #334155; margin-bottom: 0.75rem; }
+        .forgejo-tab { padding: 0.35rem 0.75rem; border: none; border-radius: 0.375rem 0.375rem 0 0; background: transparent; color: #64748b; font-size: 0.75rem; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; }
+        .forgejo-tab:hover { color: #e2e8f0; }
+        .forgejo-tab.active { color: #a78bfa; background: #1e293b; border-bottom-color: #a78bfa; }
+        .forgejo-tab-count { font-weight: 400; opacity: 0.7; }
+        .forgejo-panel { min-height: 1rem; }
+        .forgejo-panel[hidden] { display: none; }
+        .forgejo-empty { font-size: 0.8rem; color: #475569; padding: 0.25rem 0 0.75rem; }
+        details.forgejo-details { margin-top: 0.5rem; }
+        details.forgejo-details summary { font-size: 0.65rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer; user-select: none; list-style: none; }
+        details.forgejo-details summary::-webkit-details-marker { display: none; }
+        details.forgejo-details summary::before { content: '\25B6'; font-size: 0.6rem; margin-right: 0.35rem; display: inline-block; }
+        details.forgejo-details[open] summary::before { content: '\25BC'; }
+        .forgejo-details-content { margin-top: 0.4rem; padding: 0.6rem 0.75rem; background: #0f172a; border-radius: 0.375rem; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.7rem; line-height: 1.5; color: #94a3b8; white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto; }
         .forgejo-card { background: #1e293b; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; border-left: 3px solid #818cf8; }
         .forgejo-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; }
-        .forgejo-repo { font-weight: 600; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.85rem; }
         .forgejo-obj { color: #94a3b8; font-size: 0.8rem; }
         .badge-open { background: #052e16; color: #22c55e; }
         .badge-closed { background: #1e293b; color: #94a3b8; }
@@ -383,6 +397,28 @@
         // text — so a configured-but-broken engine does not look like a
         // healthy one with nothing tracked
         // (§forgejo/observability/why-the-engine-is-off).
+        //
+        // The rows are grouped by-repo: each tracked repo forms a
+        // section introduced by a heading carrying an anchor id, and
+        // under each heading two tabs — issues and pull requests —
+        // switch between the rows of each kind. The active tab is
+        // module state (forgejoTabState) so the auto-refresh's
+        // re-render keeps the operator's choice; a repo with nothing
+        // tracked of the stored kind falls back to an explicit empty
+        // panel rather than hiding rows. The watermark and reason of
+        // each row are click-to-open (details elements, open state
+        // kept in forgejoOpenState), and their content renders with
+        // white-space: pre-wrap so embedded newlines stay visible
+        // (§forgejo/observability/the-dashboard-view).
+        const forgejoTabState = new Map(); // repo -> 'issue' | 'pr'
+        const forgejoOpenState = new Map(); // "key/what" -> bool
+
+        // anchorSlug derives the heading's anchor id from a repository
+        // full name: anything an id cannot carry becomes a hyphen.
+        function anchorSlug(repo) {
+            return String(repo ?? '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+        }
+
         function renderForgejo(payload) {
             const section = document.getElementById('forgejo-section');
             const tracked = (payload && payload.items) || [];
@@ -413,11 +449,13 @@
             // at the revision — so a review fan-out is visible even
             // where no singleton dispatch preceded it
             // (§forgejo/state/watermark, §forgejo/observability/the-dashboard-view).
-            function watermarkText(watermark) {
-                if (!watermark) return '\u2014';
+            // The rows are newline-joined and rendered pre-wrap, so
+            // they break as lines rather than as markup.
+            function watermarkRows(watermark) {
+                if (!watermark) return [];
                 const rows = [];
                 if (watermark.action) {
-                    rows.push(`${escapeHtml(watermark.action)} @ ${escapeHtml(watermark.revision)}`);
+                    rows.push(`${watermark.action} @ ${watermark.revision}`);
                 }
                 const subjects = Object.entries(watermark.subjects || {}).sort((a, b) => a[0].localeCompare(b[0]));
                 const groups = new Map();
@@ -427,42 +465,108 @@
                     groups.get(key).identities.push(identity);
                 }
                 for (const group of groups.values()) {
-                    rows.push(`${escapeHtml(group.action)}: ${group.identities.map(escapeHtml).join(', ')} @ ${escapeHtml(group.revision)}`);
+                    rows.push(`${group.action}: ${group.identities.join(', ')} @ ${group.revision}`);
                 }
-                return rows.length > 0 ? rows.join('<br>') : '\u2014';
+                return rows;
             }
-            section.innerHTML = statusNote + trackedTitle + tracked.map(t => {
+            function cardHtml(t) {
                 const stateLabel = t.merged ? 'merged' : (t.state || 'unknown');
                 const badgeClass = t.merged ? 'badge-merged' : (t.state === 'open' ? 'badge-open' : 'badge-closed');
-                const watermark = watermarkText(t.watermark);
+                const rows = watermarkRows(t.watermark);
+                const watermark = rows.length > 0 ? escapeHtml(rows.join('\n')) : '\u2014';
                 const decision = t.decision.dispatched
                     ? `${escapeHtml(t.decision.action)} <span style="color:#64748b;">(${escapeHtml(t.decision.event)})</span>`
                     : `hold-off <span style="color:#64748b;">(${escapeHtml(t.decision.event)})</span>`;
+                const key = `${escapeHtml(t.repo)}/${escapeHtml(t.kind)}/${t.number}`;
+                const wmOpen = forgejoOpenState.get(`${t.repo}/${t.kind}/${t.number}/watermark`) ? ' open' : '';
+                const reasonOpen = forgejoOpenState.get(`${t.repo}/${t.kind}/${t.number}/reason`) ? ' open' : '';
                 return `
                     <div class="forgejo-card">
                         <div class="forgejo-header">
-                            <span class="forgejo-repo">${escapeHtml(t.repo)}</span>
                             <span class="forgejo-obj">${escapeHtml(t.kind)} #${t.number}</span>
                             <span class="badge ${badgeClass}">${escapeHtml(stateLabel)}</span>
                         </div>
                         <div class="trigger-meta">
                             <div class="meta-item">
-                                <span class="meta-label">Watermark</span>
-                                <span class="meta-value" style="font-family:monospace;font-size:0.7rem;">${watermark}</span>
-                            </div>
-                            <div class="meta-item">
                                 <span class="meta-label">Last decision</span>
                                 <span class="meta-value">${decision}</span>
                             </div>
-                            <div class="meta-item" style="grid-column: 1 / -1;">
-                                <span class="meta-label">Reason</span>
-                                <span class="meta-value" style="font-size:0.75rem;">${escapeHtml(t.decision.reason)}</span>
-                            </div>
                         </div>
+                        <details class="forgejo-details" data-key="${key}" data-what="watermark"${wmOpen}>
+                            <summary>Watermark</summary>
+                            <div class="forgejo-details-content">${watermark}</div>
+                        </details>
+                        <details class="forgejo-details" data-key="${key}" data-what="reason"${reasonOpen}>
+                            <summary>Reason</summary>
+                            <div class="forgejo-details-content">${escapeHtml(t.decision.reason)}</div>
+                        </details>
+                    </div>
+                `;
+            }
+            // Group the rows by repo, keeping the API's order (sorted
+            // by repo, kind, and number).
+            const repos = new Map();
+            for (const t of tracked) {
+                if (!repos.has(t.repo)) repos.set(t.repo, { issue: [], pr: [] });
+                repos.get(t.repo)[t.kind === 'pr' ? 'pr' : 'issue'].push(t);
+            }
+            const bodyHtml = [...repos.entries()].map(([repo, group]) => {
+                // The active tab is the stored choice; a repo seen
+                // for the first time opens on issues, or on pull
+                // requests when it has no tracked issues to show.
+                const active = forgejoTabState.get(repo)
+                    || (group.issue.length > 0 ? 'issue' : 'pr');
+                forgejoTabState.set(repo, active);
+                const tab = (kind, label, count) => `
+                    <button class="forgejo-tab${active === kind ? ' active' : ''}" role="tab"
+                            aria-selected="${active === kind}" data-repo="${escapeHtml(repo)}" data-kind="${kind}">${label} <span class="forgejo-tab-count">(${count})</span></button>
+                `;
+                const panel = (kind, rows, emptyText) => `
+                    <div class="forgejo-panel" role="tabpanel" data-repo="${escapeHtml(repo)}" data-kind="${kind}"${active === kind ? '' : ' hidden'}>
+                        ${rows.length > 0 ? rows.map(cardHtml).join('') : `<div class="forgejo-empty">${emptyText}</div>`}
+                    </div>
+                `;
+                return `
+                    <div class="forgejo-repo-section" data-repo="${escapeHtml(repo)}">
+                        <h3 class="forgejo-repo-heading" id="forgejo-repo-${anchorSlug(repo)}">${escapeHtml(repo)}</h3>
+                        <div class="forgejo-tabs" role="tablist">${tab('issue', 'Issues', group.issue.length)}${tab('pr', 'Pull requests', group.pr.length)}</div>
+                        ${panel('issue', group.issue, 'No tracked issues in this repository.')}
+                        ${panel('pr', group.pr, 'No tracked pull requests in this repository.')}
                     </div>
                 `;
             }).join('');
+            section.innerHTML = statusNote + trackedTitle + bodyHtml;
         }
+
+        // The forgejo section delegates its clicks: a tab button
+        // records the choice per repo and swaps that section's panels
+        // without a re-render, and a toggle listener (captured, since
+        // toggle does not bubble) records the click-to-open state so
+        // the auto-refresh's re-render reopens what the operator
+        // opened. As with the sweep buttons, no value is ever spliced
+        // into a JS string (§forgejo/observability/the-dashboard-view).
+        document.getElementById('forgejo-section').addEventListener('click', (e) => {
+            const btn = e.target.closest('.forgejo-tab');
+            if (!btn) return;
+            const { repo, kind } = btn.dataset;
+            forgejoTabState.set(repo, kind);
+            const container = btn.closest('.forgejo-repo-section');
+            container.querySelectorAll('.forgejo-tab').forEach(t => {
+                const on = t.dataset.kind === kind;
+                t.classList.toggle('active', on);
+                t.setAttribute('aria-selected', on);
+            });
+            container.querySelectorAll('.forgejo-panel').forEach(p => {
+                if (p.dataset.kind === kind) p.removeAttribute('hidden');
+                else p.setAttribute('hidden', '');
+            });
+        });
+        document.getElementById('forgejo-section').addEventListener('toggle', (e) => {
+            const d = e.target;
+            if (d.matches && d.matches('details.forgejo-details')) {
+                forgejoOpenState.set(`${d.dataset.key}/${d.dataset.what}`, d.open);
+            }
+        }, true);
 
         // Sweeps are the engine's backstop operations; the catalog
         // arrives with the forgejo view, and the dashboard renders one
