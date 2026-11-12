@@ -329,18 +329,15 @@ func LoadConfig(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// decodeConfigYAML decodes one config document, refusing any key the
-// binary does not declare at the depth it appears — above all a
-// `persona` key, which no entry may declare — so a config that
-// disagrees with the binary fails loudly rather than loading with a
-// silently ignored key
+// loadConfigFile parses a single config file, refusing any key the
+// binary does not declare — above all a `persona` key, which no entry
+// may declare — so a config that disagrees with the binary fails loudly
+// rather than loading with a silently ignored key
 // (§forgejo/config/validation, §forgejo/config/identity-collapse).
 //
-// The schema is stated once, by the structs' own field tags: yaml's
-// strict mode (KnownFields) derives the exact key set from them, so
-// adding a field to Config, PromptConfig or ReviewLens cannot leave a
-// second copy of the schema behind to drift. Two passes over the same
-// bytes keep the two load failures apart: the lenient pass owns
+// The exact key set comes from the structs' own field tags: yaml's
+// strict mode (KnownFields) derives it from them. Two passes over the
+// same bytes keep the two load failures apart: the lenient pass owns
 // everything that is not a key problem — a document that is not a
 // mapping, a value of the wrong type, a duplicate key, a
 // section nested somewhere the structs do not reach — and fails as
@@ -349,7 +346,11 @@ func LoadConfig(path string) (*Config, error) {
 // config-or-binary mismatch. A strict failure after a clean lenient one
 // can only be the unknown-field kind, so the classification needs no
 // parsing of the decoder's message.
-func decodeConfigYAML(data []byte, path string) (*Config, error) {
+func loadConfigFile(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config %q: %w: %w", path, ErrConfigUnreadable, err)
+	}
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config %q: %w: %w", path, ErrConfigUnreadable, err)
@@ -361,15 +362,6 @@ func decodeConfigYAML(data []byte, path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config %q: a key is not part of the schema this binary declares: %w: %w", path, ErrActionSetMismatch, err)
 	}
 	return &cfg, nil
-}
-
-// loadConfigFile parses a single config file.
-func loadConfigFile(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read config %q: %w: %w", path, ErrConfigUnreadable, err)
-	}
-	return decodeConfigYAML(data, path)
 }
 
 // loadConfigDir parses every .yaml/.yml file in dir, in sorted order,
