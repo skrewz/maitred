@@ -98,9 +98,11 @@ func (e *Engine) Start() {
 // Stop halts the reconciliation sweep and waits for the in-flight
 // sweep, if any, to finish — including one started by hand, because
 // the sweep loop owns every start (§forgejo/reconciliation/scheduling,
-// §forgejo/observability/triggering-a-sweep). Every scheduling channel
-// is read and written under schedMu here, as it is in Start and
-// FireSweep. It is a no-op when the engine was never started.
+// §forgejo/observability/triggering-a-sweep). The scheduling channel
+// values are all read and written under schedMu here, as they are in
+// Start and FireSweep; the wait on done happens outside the lock, so
+// the mutex is never held through a sweep. It is a no-op when the
+// engine was never started.
 func (e *Engine) Stop() {
 	e.schedMu.Lock()
 	if e.stopCh == nil {
