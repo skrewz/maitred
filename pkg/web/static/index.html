@@ -152,6 +152,10 @@
     <script>
         let refreshInterval;
         let pausedSet = new Set(); // track paused trigger IDs
+        // The forgejo payload last rendered, so an unchanged poll does
+        // not rebuild the view (§forgejo/observability/the-dashboard-
+        // view). undefined until the first render, which always runs.
+        let lastForgejoJson;
 
         async function refresh() {
             try {
@@ -180,8 +184,20 @@
 
                 document.getElementById('version').textContent = version;
                 renderTriggers(defs, history, webhooks);
-                renderForgejo(forgejo);
-                renderSweeps(forgejo);
+                // The view holds focusable controls and scrollable
+                // cells, and both renderers rebuild their section with
+                // innerHTML, so re-rendering a payload that has not
+                // changed would drop the operator's focus, scroll
+                // position and text selection on every cycle. Render
+                // only what differs from the last payload read; a
+                // failed poll reads null, which differs from any
+                // payload and so renders once, not every cycle.
+                const forgejoJson = JSON.stringify(forgejo);
+                if (forgejoJson !== lastForgejoJson) {
+                    lastForgejoJson = forgejoJson;
+                    renderForgejo(forgejo);
+                    renderSweeps(forgejo);
+                }
                 updateStats(defs, history);
                 document.getElementById('status-text').textContent = 'Updated ' + new Date().toLocaleTimeString();
             } catch (e) {

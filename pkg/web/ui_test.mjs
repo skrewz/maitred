@@ -661,6 +661,42 @@ async function testForgejoTracking(page, results) {
   ));
   await page.locator('#forgejo-section details.forgejo-details[data-what="watermark"] summary').first().click();
 
+  // The view holds focusable controls, so an unchanged poll must not
+  // rebuild it: the node the operator is on, and their focus, survive
+  // a refresh cycle. The payload is pinned for the two refreshes so
+  // only the skip can decide the outcome
+  // (§forgejo/observability/the-dashboard-view).
+  const unchangedPoll = await page.evaluate(async () => {
+    const payload = await (await fetch('/api/forgejo')).json();
+    const realFetch = window.fetch;
+    window.fetch = (url, opts) => String(url) === '/api/forgejo'
+      ? Promise.resolve(new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      : realFetch(url, opts);
+    try {
+      await refresh();
+      const tab = document.querySelector('#forgejo-section .forgejo-tab');
+      if (!tab) return { sameNode: false, keptFocus: false };
+      tab.setAttribute('data-ui-marker', 'kept');
+      tab.focus();
+      await refresh();
+      const again = document.querySelector('#forgejo-section .forgejo-tab');
+      return {
+        sameNode: again === tab,
+        keptFocus: document.activeElement === again,
+      };
+    } finally {
+      window.fetch = realFetch;
+    }
+  });
+  results.push(assert(
+    unchangedPoll.sameNode,
+    'A poll whose payload has not changed does not rebuild the view'
+  ));
+  results.push(assert(
+    unchangedPoll.keptFocus,
+    'Keyboard focus on a tab button survives a refresh cycle'
+  ));
+
   // Newline handling and per-repo grouping, exercised on a synthetic
   // payload (two repos, a multi-row watermark, a reason with an
   // embedded newline) rendered through the page's own renderForgejo:

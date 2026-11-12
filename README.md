@@ -286,7 +286,9 @@ engine is up, and the issues and pull requests it tracks. The tracked view is
 laid out by-repo: one anchored heading per repository, an issues tab and a
 pull-requests tab under each, and click-to-open watermark and reason cells
 whose embedded newlines are respected (see
-`specification/forgejo/observability.md`). Each sweep gets a **Trigger**
+`specification/forgejo/observability.md`). The dashboard re-reads this view on
+a timer and rebuilds it only when what it read has changed, so your tab
+choice, opened cells and cursor position survive a refresh. Each sweep gets a **Trigger**
 button that opens a confirmation modal; confirming starts the sweep
 immediately instead of waiting for the next
 reconcile tick. A sweep is the backstop for webhook deliveries the engine
