@@ -111,8 +111,8 @@ On each `POST`:
    from squelching another's at the same revision; singletons carry no
    subject slot. A different revision (a new commit, an edited issue) is a
    different key and dispatches freely. The key carries the repo verbatim
-   (slash retained — it is opaque to the queue system), so
-   two distinct repos never produce the same key. A prompt that references a
+   (slash retained — it is opaque to the queue system), so two distinct repos
+   never produce the same key. A prompt that references a
    URL the re-fetched state cannot fill fails the dispatch instead of
    enqueueing an invocation that names no object
    (§forgejo/config/canned-prompts); the failure is logged and nothing is

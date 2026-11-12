@@ -175,9 +175,8 @@ enumeration of those logins, and the refusal of a lens identity equal to
 one, belong to §forgejo/config/review-lenses. Before the collapse that
 collision needed two coincidences to matter; with one name that is
 simultaneously what the decisions compare review authors against and the
-persona the task is materialised with, one mistyped lens entry would hand
-the implementing account a gate whose whole job is to be somebody else's
-verdict.
+persona the task is materialised with, one mistyped lens entry would hand the
+implementing account a gate whose whole job is to be somebody else's verdict.
 
 **The name travels, so the pairing downstream must fail closed.** The
 persona name the queue system receives is read off a key the operator
@@ -199,8 +198,7 @@ has the key-set check that names the mismatch. The engine-side half lives
 here; the deployment half is s-puppet's, and the two land together as the
 landing set named on the forest's tracker. In the meantime the in-repo
 sample (`config/forgejoeng.yaml`) carries the new shape, so anything
-built from
-this repository is already speaking it.
+built from this repository is already speaking it.
 
 What the collapse does **not** touch: the queue payload's `persona`
 field, which is the queue system's name for the actor and now simply
