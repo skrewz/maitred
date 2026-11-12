@@ -431,7 +431,11 @@
             // State recorded for rows that have left tracking (swept
             // away, repo gone) is stale from that moment on; pruning
             // both maps to the current rows keeps the maps' lifetime
-            // the view's rather than the tab's.
+            // the view's rather than the tab's. A payload we could not
+            // read is not evidence that the tracked set went empty —
+            // pruning on it would reset the operator's tab choices and
+            // collapse their opened cells on any transient failure —
+            // so only a payload that was actually read prunes.
             const liveOpen = new Set();
             const liveRepos = new Set();
             for (const t of tracked) {
@@ -440,8 +444,10 @@
                 liveOpen.add(`${key}/reason`);
                 liveRepos.add(t.repo);
             }
-            for (const k of forgejoOpenState.keys()) if (!liveOpen.has(k)) forgejoOpenState.delete(k);
-            for (const r of forgejoTabState.keys()) if (!liveRepos.has(r)) forgejoTabState.delete(r);
+            if (payload) {
+                for (const k of forgejoOpenState.keys()) if (!liveOpen.has(k)) forgejoOpenState.delete(k);
+                for (const r of forgejoTabState.keys()) if (!liveRepos.has(r)) forgejoTabState.delete(r);
+            }
             // The two words below are the states that are not a fault:
             // the up word and the not-configured word. Go pins them as
             // exactly that pair — TestNonFaultWords in

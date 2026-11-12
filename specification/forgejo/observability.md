@@ -69,7 +69,11 @@ choice and survives the dashboard's periodic re-render; a repository
 with nothing tracked of the shown kind says so in the panel rather
 than hiding rows. Each row's **watermark** and **reason** are
 click-to-open: collapsed by default, opened by a click, and rendered
-so embedded newlines appear as line breaks. The restructure hides
+so embedded newlines appear as line breaks. The tab choices and
+opened cells are state of the view: they are forgotten when a successful read shows a row or a
+repository has left tracking, and forgotten by nothing else — a read
+that failed is not evidence that nothing is tracked, so one transient
+failure does not reset the operator's view. The restructure hides
 nothing that was visible before — repo, kind, number, state, the
 watermark's slots, the last decision and its reason all remain
 reachable. The view reflects the engine's in-memory record of

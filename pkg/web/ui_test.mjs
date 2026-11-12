@@ -777,6 +777,56 @@ async function testForgejoTracking(page, results) {
     'A cell closed again stays closed across a re-render'
   ));
 
+  // Which state is stale, and which merely could not be read: a
+  // successful render forgets the rows and repos that left tracking,
+  // a render of a payload that could not be read forgets nothing.
+  // Deleting the pruning loops fails the last two assertions;
+  // pruning regardless of whether a payload arrived fails the first
+  // (§forgejo/observability/the-dashboard-view).
+  const pruning = await page.evaluate(async () => {
+    const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+    const decision = (event) => ({ event, dispatched: false, reason: 'r', at: '' });
+    const issueRow = { repo: 'a/x', kind: 'issue', number: 1, state: 'open', decision: decision('issues') };
+    const prRow = { repo: 'a/x', kind: 'pr', number: 2, state: 'open', decision: decision('pull_request') };
+    const departedRow = { repo: 'b/y', kind: 'pr', number: 3, state: 'open', decision: decision('pull_request') };
+    const view = (items) => ({ engine_status: 'enabled', sweeps: [], items });
+    const all = view([issueRow, prRow, departedRow]);
+    const cell = () => document.querySelector('#forgejo-section details.forgejo-details[data-key="a/x/issue/1"][data-what="watermark"]');
+    const bOnPr = () => {
+      const p = document.querySelector('#forgejo-section .forgejo-panel[data-repo="b/y"][data-kind="pr"]');
+      return !!p && !p.hasAttribute('hidden');
+    };
+    renderForgejo(all);
+    cell().open = true; // opens it exactly as a click does
+    document.querySelector('#forgejo-section .forgejo-tab[data-repo="b/y"][data-kind="issue"]').click();
+    await tick(); // the toggle event is queued as a task
+    // A poll that failed says nothing about what is tracked.
+    renderForgejo(null);
+    renderForgejo(all);
+    const survivedFailedPoll = cell().open === true && bOnPr() === false;
+    // A repo that left tracking has its state forgotten, so returning
+    // is a first sight of it and not a replay of the old choice.
+    renderForgejo(view([issueRow, prRow]));
+    renderForgejo(all);
+    const repoForgotten = bOnPr();
+    // Same for a single row that left and came back.
+    renderForgejo(view([prRow]));
+    renderForgejo(all);
+    return { survivedFailedPoll, repoForgotten, rowForgotten: cell().open === false };
+  });
+  results.push(assert(
+    pruning.survivedFailedPoll,
+    'A poll that could not be read keeps the tab choice and the opened cells'
+  ));
+  results.push(assert(
+    pruning.repoForgotten,
+    'State for a repo that left tracking is not replayed when it returns'
+  ));
+  results.push(assert(
+    pruning.rowForgotten,
+    'State for a row that left tracking is not replayed when it returns'
+  ));
+
   // Navigate back and let the page settle for the remaining suites.
   await page.waitForLoadState('networkidle').catch(() => {});
   await page.waitForTimeout(1000);
