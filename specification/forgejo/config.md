@@ -170,14 +170,14 @@ key the binary does not declare classifies into, belong to
 §forgejo/config/validation.
 
 One rule the collapse itself puts on the load: **the login whose verdict
-a gate counts must not be a login the config declares as an actor**. A
-lens identity equal to `implementer_identity`, `decomposer_identity`, or
-an action entry's `identity` is refused (§forgejo/config/review-lenses).
-Before the collapse that collision needed two coincidences to matter;
-with one name that is simultaneously what the decisions compare review
-authors against and the persona the task is materialised with, one
-mistyped lens entry would hand the implementing account a gate whose
-whole job is to be somebody else's verdict.
+a gate counts must not be a login the config declares as an actor**; the
+enumeration of those logins, and the refusal of a lens identity equal to
+one, belong to §forgejo/config/review-lenses. Before the collapse that
+collision needed two coincidences to matter; with one name that is
+simultaneously what the decisions compare review authors against and the
+persona the task is materialised with, one mistyped lens entry would hand
+the implementing account a gate whose whole job is to be somebody else's
+verdict.
 
 **The name travels, so the pairing downstream must fail closed.** The
 persona name the queue system receives is read off a key the operator
@@ -193,11 +193,13 @@ so the failure mode has a home in the specification.
 **The deployed config must land in the same window as the binary.** A
 deployment that ships this binary over a config that still carries
 `persona:` does not start — loudly, with the mismatch named — and a
-config written for this binary run by the older one fails the same way
-for want of a persona. The engine-side half lives here; the deployment
-half is s-puppet's, and the two land together as the landing set named on
-the forest's tracker. In the meantime the in-repo sample
-(`config/forgejoeng.yaml`) carries the new shape, so anything built from
+config written for this binary run by the older one does not start
+either, but as *other fault* for want of a persona: only the newer binary
+has the key-set check that names the mismatch. The engine-side half lives
+here; the deployment half is s-puppet's, and the two land together as the
+landing set named on the forest's tracker. In the meantime the in-repo
+sample (`config/forgejoeng.yaml`) carries the new shape, so anything
+built from
 this repository is already speaking it.
 
 What the collapse does **not** touch: the queue payload's `persona`

@@ -102,17 +102,16 @@ On each `POST`:
    (§forgejo/config/canned-prompts, §forgejo/config/identity-collapse):
    the identity is what the queue payload carries as the task's persona,
    so the actor named on the work is the forge login itself. The task
-   carries a **dedup key** — the
-   dispatch identity: the key's repo, kind, and number, the action, the
-   **subject** for a fan-out dispatch (the lens identity
-   §forgejo/decisions/review-lenses), and the revision — so a queue system
-   with de-duplication (hotelier's `dedup_key`) squelches a re-dispatch of
-   the same `(action, subject, revision)` while the first task is still
-   pending. The subject is what keeps one lens's review task from squelching
-   another's at the same revision; singletons carry no subject slot. A
-   different revision (a new commit, an edited issue) is a different key and
-   dispatches freely. The key carries
-   the repo verbatim (slash retained — it is opaque to the queue system), so
+   carries a **dedup key** — the dispatch identity: the key's repo, kind,
+   and number, the action, the **subject** for a fan-out dispatch (the lens
+   identity §forgejo/decisions/review-lenses), and the revision — so a queue
+   system with de-duplication (hotelier's `dedup_key`) squelches a
+   re-dispatch of the same `(action, subject, revision)` while the first
+   task is still pending. The subject is what keeps one lens's review task
+   from squelching another's at the same revision; singletons carry no
+   subject slot. A different revision (a new commit, an edited issue) is a
+   different key and dispatches freely. The key carries the repo verbatim
+   (slash retained — it is opaque to the queue system), so
    two distinct repos never produce the same key. A prompt that references a
    URL the re-fetched state cannot fill fails the dispatch instead of
    enqueueing an invocation that names no object

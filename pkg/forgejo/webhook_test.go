@@ -4819,9 +4819,10 @@ func TestHandler_RootPerformsNoForestHop(t *testing.T) {
 
 // TestHandler_ReviewFanOut_EndToEnd: a PR opened dispatches one task
 // per configured lens — distinct dedup keys, each task named by the
-// lens's declared login, and the lens timeout — and records one subject slot per lens while leaving the
-// main slot alone; the following fix-feedback dispatch writes the
-// main slot and keeps the slots (§forgejo/decisions/review-lenses,
+// lens's declared login, and the lens timeout — and records one
+// subject slot per lens while leaving the main slot alone; the
+// following fix-feedback dispatch writes the main slot and keeps the
+// slots (§forgejo/decisions/review-lenses,
 // §forgejo/state/watermark, §forgejo/webhook/the-pipeline).
 func TestHandler_ReviewFanOut_EndToEnd(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
