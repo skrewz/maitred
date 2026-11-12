@@ -331,8 +331,13 @@ func TestLoadConfigValidation(t *testing.T) {
 			path := writeConfig(t, dir, "forgejoeng.yaml", tc.mutate(validConfigYAML))
 			if _, err := LoadConfig(path); err == nil {
 				t.Fatalf("LoadConfig: expected error for %s", tc.name)
-			} else if !strings.Contains(err.Error(), tc.wantSub) {
-				t.Errorf("error %q does not mention %q", err, tc.wantSub)
+			} else {
+				if !strings.Contains(err.Error(), tc.wantSub) {
+					t.Errorf("error %q does not mention %q", err, tc.wantSub)
+				}
+				if tc.wantNotMismatch && errors.Is(err, ErrActionSetMismatch) {
+					t.Errorf("%s: a missing required field is not a schema-key mismatch: %v", tc.name, err)
+				}
 			}
 		})
 	}
