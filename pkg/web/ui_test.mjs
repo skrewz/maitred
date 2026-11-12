@@ -663,30 +663,20 @@ async function testForgejoTracking(page, results) {
 
   // The view holds focusable controls, so an unchanged poll must not
   // rebuild it: the node the operator is on, and their focus, survive
-  // a refresh cycle. The payload is pinned for the two refreshes so
-  // only the skip can decide the outcome
-  // (§forgejo/observability/the-dashboard-view).
+  // a refresh cycle. Nothing in the harness changes the tracked set
+  // between two consecutive polls, so only the skip can decide the
+  // outcome (§forgejo/observability/the-dashboard-view).
   const unchangedPoll = await page.evaluate(async () => {
-    const payload = await (await fetch('/api/forgejo')).json();
-    const realFetch = window.fetch;
-    window.fetch = (url, opts) => String(url) === '/api/forgejo'
-      ? Promise.resolve(new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-      : realFetch(url, opts);
-    try {
-      await refresh();
-      const tab = document.querySelector('#forgejo-section .forgejo-tab');
-      if (!tab) return { sameNode: false, keptFocus: false };
-      tab.setAttribute('data-ui-marker', 'kept');
-      tab.focus();
-      await refresh();
-      const again = document.querySelector('#forgejo-section .forgejo-tab');
-      return {
-        sameNode: again === tab,
-        keptFocus: document.activeElement === again,
-      };
-    } finally {
-      window.fetch = realFetch;
-    }
+    await refresh();
+    const tab = document.querySelector('#forgejo-section .forgejo-tab');
+    if (!tab) return { sameNode: false, keptFocus: false };
+    tab.focus();
+    await refresh();
+    const again = document.querySelector('#forgejo-section .forgejo-tab');
+    return {
+      sameNode: again === tab,
+      keptFocus: document.activeElement === again,
+    };
   });
   results.push(assert(
     unchangedPoll.sameNode,
@@ -861,6 +851,63 @@ async function testForgejoTracking(page, results) {
   results.push(assert(
     pruning.rowForgotten,
     'State for a row that left tracking is not replayed when it returns'
+  ));
+
+  // Fail then recover through refresh() itself, not a direct
+  // renderForgejo call: a poll that could not be read renders the
+  // empty tracked set (so an implementation that cached the failure
+  // without rendering would fail the first assertion) and forgets
+  // nothing; the next successful read brings the rows back with the
+  // tab choice and opened cell they had before the failure. Fetch
+  // is pinned in phases — failing until lifted, not consumed once —
+  // so a background 5s tick can neither swallow the failure nor
+  // race the recovery (§forgejo/observability/the-dashboard-view).
+  const failRecover = await page.evaluate(async () => {
+    const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+    const decision = (event) => ({ event, dispatched: false, reason: 'r', at: '' });
+    const payload = {
+      engine_status: 'enabled',
+      sweeps: [],
+      items: [
+        { repo: 'a/x', kind: 'issue', number: 1, state: 'open', decision: decision('issues') },
+        { repo: 'a/x', kind: 'pr', number: 2, state: 'open', decision: decision('pull_request') },
+      ],
+    };
+    const realFetch = window.fetch;
+    let failing = false;
+    window.fetch = (url, opts) => String(url) !== '/api/forgejo'
+      ? realFetch(url, opts)
+      : failing
+        ? Promise.resolve(new Response('gone', { status: 500 }))
+        : Promise.resolve(new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    try {
+      await refresh(); // the pinned payload is now on screen
+      const cell = () => document.querySelector('#forgejo-section details.forgejo-details[data-key="a/x/issue/1"][data-what="watermark"]');
+      cell().open = true; // opens it exactly as a click does
+      document.querySelector('#forgejo-section .forgejo-tab[data-repo="a/x"][data-kind="pr"]').click();
+      await tick(); // the toggle event is queued as a task
+      failing = true;
+      await refresh(); // a failed read renders the empty tracked set
+      const blankedWhileFailing = !document.querySelector('#forgejo-section .forgejo-repo-heading');
+      failing = false;
+      await refresh(); // the recovering read renders the rows and their state
+      const pr = document.querySelector('#forgejo-section .forgejo-panel[data-repo="a/x"][data-kind="pr"]');
+      return {
+        blankedWhileFailing,
+        tabRestored: !!pr && !pr.hasAttribute('hidden'),
+        cellRestored: cell().open === true,
+      };
+    } finally {
+      window.fetch = realFetch;
+    }
+  });
+  results.push(assert(
+    failRecover.blankedWhileFailing,
+    'A failed read renders the empty tracked view rather than stale rows'
+  ));
+  results.push(assert(
+    failRecover.tabRestored && failRecover.cellRestored,
+    'After a failed poll the next read restores the rows with their tab and open state'
   ));
 
   // Navigate back and let the page settle for the remaining suites.
