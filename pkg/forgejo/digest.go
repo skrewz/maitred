@@ -92,7 +92,6 @@ func ForestDigest(api API, root *Issue, engineAccount, decomposerIdentity string
 			repo = root.Repository
 		}
 		ref := forestRef(repo, b.Number)
-		b.Repository = repo
 		kind := "member"
 		tracker := isTracker(&b)
 		if tracker {
