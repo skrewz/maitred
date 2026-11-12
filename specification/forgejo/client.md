@@ -20,6 +20,7 @@ authenticated with a bearer token:
 | list the issues an issue **blocks** (`issue-blocks`) | the unblock cascade, including cross-repo blockers |
 | list the issues that block an issue (`issue-dependencies`) | the unblock cascade, including cross-repo blockers |
 | list a pull request's reviews (event + author + commit) | the review transitions |
+| list an issue's comments (author + body) | the forest's actionable-state digest, which folds comments by anyone other than the engine's own account or the configured decomposer identity (§forgejo/decisions/actionable-state-digest) |
 
 Issue responses also report **who opened the issue** (`user.login`): the
 author is carried on the issue model and read by nothing in the engine
@@ -41,6 +42,13 @@ Forgejo represents pull requests as issues, and the API marks them with a
 non-null `pull_request` object. The re-fetch uses this to tell connected PRs
 apart from connected issues among blockers and blocks
 (§forgejo/webhook/re-fetch).
+
+Comment responses report only **who wrote the comment** (`user.login`)
+and the comment's **body**: nothing else about a comment — its timestamps,
+reactions, or the object it hangs off — is mapped, because the digest that
+reads them counts a comment as its author and text alone
+(§forgejo/decisions/actionable-state-digest). A response without a `user`
+object yields an empty author.
 
 Issue responses also report the issue's **body** (`body`). One seat reads
 it: the landing set's revision digests the grouping issue's body, the

@@ -1025,3 +1025,47 @@ alone. Both guards are inert when the identity is unset.
 
 **Watermark** — the last dispatch for the object's key
 (§forgejo/state/watermark), or none.
+
+## Actionable-state digest
+
+The engine can compute an **actionable-state digest** of one forest: a
+hex-encoded SHA-256 over exactly the facts a `decompose` re-run could act
+on. The digest is deterministic and order-insensitive — the same state
+yields a byte-identical digest whatever order the listings arrive in, and
+a change to any folded fact moves it. The digest is computed, not yet
+consulted: storing a forest's previous digest and gating dispatch on the
+digest moving are separate work.
+
+The forest is named by its `ideation` root and read through the issues
+the root **blocks**: those carrying `outcome` are the forest's trackers,
+the rest are its members. The folded facts:
+
+- the root's state, its labels as listed, and its body;
+- every member's state and its kind/landing labels — `ideation`,
+  `outcome`, `sync`, `human-task`, `agentic-auto-merge` and
+  `agentic-sync-merge` — matched as everywhere else in the engine
+  case-insensitively (§forgejo/decisions/transition-table);
+- the state of every blocker of every member, read through
+  issue-dependencies so blockers **outside the forest** are included: a
+  member becoming implementable because an unrelated issue closed is
+  exactly the kind of move that should change the plan;
+- comments on the root, the trackers and the members whose author is
+  neither the engine's own account nor the configured decomposer
+  identity (§forgejo/config/decomposer-identity): the operator's comment
+  must be a trigger, not a side effect. Each counts as its author and
+  its body.
+
+Deliberately excluded — because each would re-trigger the run that wrote
+it — are the trackers' bodies (which carry the current-state block the
+engine rewrites every run), the trackers' `updated_at`, and any comment
+authored by the configured decomposer identity or the engine's own
+account. Members' bodies are not folded either: the member's state and
+kind/landing labels are what make it actionable. An unset identity
+excludes nothing, matching the optional-identity convention
+(§forgejo/config/decomposer-identity). The digest reads no other fact
+about any issue: no timestamp of a folded issue, no member body, and no
+pull-request-only field (a pull request seen among a member's blockers
+contributes its issue row's state, not its mergeability or head sha).
+A failed read is an error, not an omission: the
+digest reports no value rather than a partial one, and the caller
+decides what a missing digest means.

@@ -544,6 +544,40 @@ func TestListPullRequestReviews(t *testing.T) {
 	}
 }
 
+// TestListIssueComments pins the comment read the forest digest uses:
+// only the author login and the body are mapped, and a comment without
+// a user object yields an empty author (§forgejo/client/operations,
+// §forgejo/decisions/actionable-state-digest).
+func TestListIssueComments(t *testing.T) {
+	srv, rec := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"body": "human words", "user": map[string]any{"login": "operator"}},
+			{"body": "anonymous words"},
+		})
+	})
+
+	c := New(srv.URL, "test-token", nil)
+	comments, err := c.ListIssueComments("acme", "maitred", 12)
+	if err != nil {
+		t.Fatalf("ListIssueComments: %v", err)
+	}
+	if rec.path != "/api/v1/repos/acme/maitred/issues/12/comments" {
+		t.Errorf("path = %q, want /api/v1/repos/acme/maitred/issues/12/comments", rec.path)
+	}
+	want := []Comment{
+		{Author: "operator", Body: "human words"},
+		{Author: "", Body: "anonymous words"},
+	}
+	if len(comments) != len(want) {
+		t.Fatalf("got %d comments, want %d", len(comments), len(want))
+	}
+	for i, c := range comments {
+		if c != want[i] {
+			t.Errorf("comments[%d] = %+v, want %+v", i, c, want[i])
+		}
+	}
+}
+
 func TestServerError(t *testing.T) {
 	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
