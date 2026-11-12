@@ -126,10 +126,13 @@ func ForestDigest(api API, root *Issue, engineAccount, decomposerIdentity string
 					depRepo = repo
 				}
 				// Blockers fold by key alone: the same issue blocking
-				// two members is one fact, and its state is read from
-				// whichever listing named it first — one snapshot
-				// cannot state two states for one issue.
-				blockers[forestRef(depRepo, dep.Number)] = dep.State
+				// two members is one fact, and the first listing to name
+				// it states its state — one snapshot cannot state two
+				// states for one issue.
+				key := forestRef(depRepo, dep.Number)
+				if _, ok := blockers[key]; !ok {
+					blockers[key] = dep.State
+				}
 			}
 		}
 		if err := foldComments(f, api, ref, repo, b.Number, engineAccount, decomposerIdentity); err != nil {
