@@ -743,6 +743,40 @@ async function testForgejoTracking(page, results) {
     'The chosen tab survives a re-render'
   ));
 
+  // The open state is module state too, and this assertion is what
+  // makes the toggle listener and the reopen attributes load-bearing:
+  // opening and closing a watermark cell must survive the auto-
+  // refresh's re-render, exactly as the tab choice above does
+  // (§forgejo/observability/the-dashboard-view).
+  const openPersistence = await page.evaluate(async () => {
+    const payload = {
+      engine_status: 'enabled',
+      sweeps: [],
+      items: [
+        { repo: 'a/x', kind: 'issue', number: 1, state: 'open', decision: { event: 'issues', dispatched: false, reason: 'r', at: '' } },
+        { repo: 'a/x', kind: 'pr', number: 2, state: 'open', decision: { event: 'pull_request', dispatched: false, reason: 'r', at: '' } },
+      ],
+    };
+    const cell = () => document.querySelector('#forgejo-section details.forgejo-details[data-what="watermark"]');
+    renderForgejo(payload);
+    cell().open = true; // opens it exactly as a click does
+    await new Promise(resolve => setTimeout(resolve, 0)); // the toggle event is queued as a task
+    renderForgejo(payload);
+    const stillOpen = cell().open;
+    cell().open = false;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    renderForgejo(payload);
+    return { stillOpen, stayedClosed: cell().open === false };
+  });
+  results.push(assert(
+    openPersistence.stillOpen,
+    'An opened watermark cell survives a re-render'
+  ));
+  results.push(assert(
+    openPersistence.stayedClosed,
+    'A cell closed again stays closed across a re-render'
+  ));
+
   // Navigate back and let the page settle for the remaining suites.
   await page.waitForLoadState('networkidle').catch(() => {});
   await page.waitForTimeout(1000);
