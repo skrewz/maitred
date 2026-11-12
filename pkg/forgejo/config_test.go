@@ -850,7 +850,10 @@ func TestReviewLensIdentityIsNoActorLogin(t *testing.T) {
 		mutate func(string) string
 	}{
 		{"an action entry declares it", func(y string) string {
-			return withoutReviews(y) + lensNaming("implementer")
+			// "reviewer" is declared by merge-or-wait and by neither
+			// scalar key, so this case can only be fired by the loop
+			// over the entries.
+			return withoutReviews(y) + lensNaming("reviewer")
 		}},
 		{"implementer_identity declares it", func(y string) string {
 			return withoutReviews(rename(y, "implementer_identity", "implementer")) + lensNaming("solo-actor")
