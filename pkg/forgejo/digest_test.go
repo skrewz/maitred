@@ -9,10 +9,11 @@ import (
 // Fixtures for the actionable-state digest tests
 // (§forgejo/decisions/actionable-state-digest).
 //
-// The forest these tests fold: root #1 (ideation) blocks tracker #2
-// (outcome) and members #3 and #5; member #3 is blocked by in-forest
-// blocker #4 and by cross-repo blocker #10; member #5 is blocked by #3.
-// Comments live on the root, the tracker, and member #3.
+// The forest these tests fold: root #1 (ideation, built by digestRoot)
+// blocks tracker #2 (outcome) and members #3 and #5; member #3 is
+// blocked by in-forest blocker #4 and by cross-repo blocker #10; member
+// #5 is blocked by #3. Comments live on the root, the tracker, and
+// member #3.
 
 const (
 	digestEngine     = "engine-bot"
@@ -34,8 +35,6 @@ func digestIssue(repo string, number int, state string, labels ...string) Issue 
 // from it.
 func digestForest() *fakeAPI {
 	f := newFakeAPI()
-	root := digestIssue("o/r", 1, "open", LabelIdeation)
-	root.Body = "the root's intent"
 	tracker := digestIssue("o/r", 2, "open", LabelOutcome)
 	tracker.Body = "current-state block, rewritten every run"
 	member := digestIssue("o/r", 3, "open", LabelAgenticAutoMerge)
@@ -55,10 +54,18 @@ func digestForest() *fakeAPI {
 	return f
 }
 
-func digest(t *testing.T, f *fakeAPI) string {
-	t.Helper()
+// digestRoot is the fixture forest's root. Every test that needs the
+// root — whole or with one fact mutated — starts here, so a fixture
+// change cannot half-land.
+func digestRoot() Issue {
 	root := digestIssue("o/r", 1, "open", LabelIdeation)
 	root.Body = "the root's intent"
+	return root
+}
+
+func digest(t *testing.T, f *fakeAPI) string {
+	t.Helper()
+	root := digestRoot()
 	return digestOf(t, f, &root)
 }
 
@@ -147,22 +154,22 @@ func TestForestDigestTracksActionableFacts(t *testing.T) {
 		}
 	})
 	t.Run("root state flipped", func(t *testing.T) {
-		root := digestIssue("o/r", 1, "closed", LabelIdeation)
-		root.Body = "the root's intent"
+		root := digestRoot()
+		root.State = "closed"
 		if got := digestOf(t, digestForest(), &root); got == base {
 			t.Error("closing the root did not move the digest")
 		}
 	})
 	t.Run("root body edited", func(t *testing.T) {
-		root := digestIssue("o/r", 1, "open", LabelIdeation)
+		root := digestRoot()
 		root.Body = "the root's intent, restated"
 		if got := digestOf(t, digestForest(), &root); got == base {
 			t.Error("editing the root's body did not move the digest")
 		}
 	})
 	t.Run("root label changed", func(t *testing.T) {
-		root := digestIssue("o/r", 1, "open", LabelIdeation, LabelVIP)
-		root.Body = "the root's intent"
+		root := digestRoot()
+		root.Labels = append(root.Labels, LabelVIP)
 		if got := digestOf(t, digestForest(), &root); got == base {
 			t.Error("adding a label to the root did not move the digest")
 		}
@@ -278,7 +285,7 @@ func TestForestDigestOrderInsensitive(t *testing.T) {
 // an omission: the digest reports no value rather than a partial one
 // (§forgejo/decisions/actionable-state-digest).
 func TestForestDigestReadFailures(t *testing.T) {
-	root := digestIssue("o/r", 1, "open", LabelIdeation)
+	root := digestRoot()
 	t.Run("no root", func(t *testing.T) {
 		if _, err := ForestDigest(digestForest(), nil, digestEngine, digestDecomposer); err == nil {
 			t.Fatal("a forest with no root digested without error")
@@ -312,7 +319,7 @@ func TestForestDigestReadFailures(t *testing.T) {
 // other author's, matching the optional-identity convention
 // (§forgejo/config/decomposer-identity).
 func TestForestDigestOptionalIdentities(t *testing.T) {
-	root := digestIssue("o/r", 1, "open", LabelIdeation)
+	root := digestRoot()
 	f := digestForest()
 	withDecomposer, err := ForestDigest(f, &root, digestEngine, digestDecomposer)
 	if err != nil {
@@ -341,9 +348,7 @@ func TestForestDigestOptionalIdentities(t *testing.T) {
 // (§forgejo/decisions/actionable-state-digest).
 func TestForestDigestReadsOnlyTheNamedReads(t *testing.T) {
 	f := digestForest()
-	if _, err := digestFixture(f); err != nil {
-		t.Fatalf("ForestDigest: %v", err)
-	}
+	digest(t, f)
 	want := map[string]int{
 		"IssueBlocks:r/1":       1,
 		"IssueDependencies:r/3": 1,
@@ -361,12 +366,4 @@ func TestForestDigestReadsOnlyTheNamedReads(t *testing.T) {
 			t.Errorf("op %s called %d times, want %d (calls: %v)", op, got, countWant, f.calls)
 		}
 	}
-}
-
-// digestFixture runs ForestDigest against the fixture root so the call
-// accounting covers one complete digest.
-func digestFixture(f *fakeAPI) (string, error) {
-	root := digestIssue("o/r", 1, "open", LabelIdeation)
-	root.Body = "the root's intent"
-	return ForestDigest(f, &root, digestEngine, digestDecomposer)
 }
