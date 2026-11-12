@@ -301,6 +301,19 @@ func TestLoadConfigValidation(t *testing.T) {
 			wantSub: "parse config",
 		},
 		{
+			// A repeated key is owned by the lenient pass, like the
+			// non-mapping document above: it is a broken file, not a
+			// disagreement with the binary's key set, so it names the
+			// repeated key and never classifies as the
+			// config-or-binary mismatch (§forgejo/config/validation).
+			name: "duplicate key",
+			mutate: func(y string) string {
+				return strings.Replace(y, "org: example-org\n", "org: example-org\norg: other\n", 1)
+			},
+			wantSub:         "already defined",
+			wantNotMismatch: true,
+		},
+		{
 			name:    "missing org",
 			mutate:  func(y string) string { return strings.Replace(y, "org: example-org\n", "", 1) },
 			wantSub: "org",
