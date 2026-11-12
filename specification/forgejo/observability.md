@@ -45,8 +45,10 @@ the view shows:
   its reason and the event that produced it.
 
 The view is served by a dashboard API endpoint whose response is an
-object carrying two things: the tracked list, and **one engine-status
-field** rendering the engine's state in the words of the category enum
+object carrying three things: the tracked list, the engine's catalog of
+**sweep operations** (§forgejo/observability/triggering-a-sweep), and
+**one engine-status field** rendering the engine's state in the words
+of the category enum
 (§forgejo/observability/why-the-engine-is-off) — while the engine is up
 the view's own word for it and no category, while it is off the
 fault's category, and when nothing is configured the not-configured
@@ -62,6 +64,49 @@ like a healthy one with nothing tracked. The view reflects the
 engine's in-memory record of decisions: the tracked list is empty when
 the engine is disabled or has made no decisions yet, and it is cleared
 on restart (the watermark store is unaffected, §forgejo/state/persistence).
+
+## Triggering a sweep
+
+The sweeps are the backstop for deliveries the event path missed, and a
+human who has just fixed such a miss wants one to run now rather than at
+the next tick. The engine therefore declares its **sweep operations**:
+a catalog of named sweeps, each with an `id` and a `title`. The catalog
+is the whole set of sweeps the engine offers — today the reconciliation
+sweep alone (§forgejo/reconciliation/the-sweep) — and every surface
+that lets a human trigger a sweep reads it from the catalog, so adding
+a sweep never means touching those surfaces.
+
+The dashboard API serves the catalog and the trigger:
+
+- the forgejo view's response carries the catalog as its **sweeps**
+  field — one entry per sweep operation, and an empty list while no
+  engine is up (§forgejo/observability/the-dashboard-view),
+- `POST /api/forgejo/sweeps/{id}` starts the named sweep immediately
+  and answers `202 Accepted`. A sweep runs asynchronously — it can make
+  many API calls — so the response reports acceptance, not completion.
+  The start belongs to the loop that owns the schedule, so the
+  skip-if-in-flight rule and the stop-time wait for the in-flight
+  sweep cover a manual start exactly as they cover a scheduled one
+  (§forgejo/reconciliation/scheduling). An unknown id answers `404`; an
+  engine that is not up — none, or one whose sweep loop is not running
+  — answers `503`; a method other than POST answers `405`.
+
+The dashboard renders **one button per sweep operation**, labelled with
+the sweep's title. Pressing it opens a **confirmation modal** before
+anything runs: the button is an admission that the automatic paths
+missed something, so the modal names the sweep, warns that it re-reads
+and re-decides everything the engine tracks, and asks the user whether
+they have taken the steps that would make the button unnecessary —
+working webhook deliveries, a healthy engine — so it is not pressed as
+a substitute for fixing what made it needed. Nothing is sent until the
+modal is confirmed; cancelling it closes it without a request.
+
+The trigger is a state-changing endpoint on the dashboard port, and it
+rides the dashboard's standing trust model: the dashboard serves its
+interactive controls unauthenticated, on the assumption that the port
+reaches only its operator's network — the assumption the README's Web
+Dashboard section spells out. A deployment that cannot keep that
+assumption must place its own access control in front of the port.
 
 ## Why the engine is off
 

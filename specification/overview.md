@@ -58,7 +58,8 @@ HTTP queue system.
   persisted as a JSON file per trigger under the data directory and survives
   restarts. Per-trigger execution history is recorded.
 - **Web dashboard.** A web UI on the web port shows trigger cards (schedule,
-  state, countdown), stats, and interactive controls (fire now, pause/resume).
+  state, countdown), stats, and interactive controls (fire now, pause/resume,
+  trigger a sweep — §forgejo/observability/triggering-a-sweep).
 - **Health check.** `maitred --health` exits 0 if the configuration is
   valid. It answers for the Forgejo engine too, using the offline
   classification of §forgejo/observability/why-the-engine-is-off: a

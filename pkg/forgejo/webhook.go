@@ -63,10 +63,20 @@ type Engine struct {
 	decMu     sync.Mutex
 	decisions map[Key]DecisionRecord
 
-	// Reconciliation sweep scheduling state
-	// (§forgejo/reconciliation/scheduling).
+	// Reconciliation sweep scheduling state. startCh is the hand-off
+	// for manual starts: FireSweep signals it and the sweep loop, the
+	// one owner of sweep starts, runs the sweep
+	// (§forgejo/reconciliation/scheduling,
+	// §forgejo/observability/triggering-a-sweep). The signal carries no
+	// id, so the loop runs the reconciliation sweep for every id the
+	// catalog accepts — sound only while the catalog holds that one
+	// entry alone, and a second entry must give this channel an id to
+	// carry and dispatch on it in sweepLoop. schedMu guards the three
+	// channels against a trigger racing a Stop.
 	stopCh   chan struct{}
 	doneCh   chan struct{}
+	startCh  chan struct{}
+	schedMu  sync.Mutex
 	sweeping atomic.Bool
 
 	// The scope cache: the roles each of the org's repositories holds,

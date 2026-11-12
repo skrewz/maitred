@@ -71,6 +71,7 @@ function startMockForgejo(port) {
       res.end(JSON.stringify(obj));
     };
     const p = new URL(req.url, `http://localhost:${port}`).pathname;
+    if (p === '/api/v1/orgs/o/repos') mockReposListings++;
     switch (p) {
       case '/api/v1/orgs/o/repos':
         return send(200, [{
@@ -106,6 +107,12 @@ function startMockForgejo(port) {
 function forgejoSignature(body) {
   return createHmac('sha256', forgejoSecret).update(body).digest('hex');
 }
+
+// Counts the org-repository listings the mock has served. The sweep
+// lists the org's repositories as its first act, so the count rising
+// is how a test sees a manually triggered sweep run
+// (§forgejo/observability/triggering-a-sweep).
+let mockReposListings = 0;
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 
@@ -673,6 +680,15 @@ async function testForgejoEngineStates(page, results) {
     (faultView.items ?? []).length === 0,
     `Fault instance tracks nothing (got: ${(faultView.items ?? []).length})`
   ));
+  results.push(assert(
+    (faultView.sweeps ?? []).length === 0,
+    `Fault instance offers no sweeps to trigger (got: ${JSON.stringify(faultView.sweeps)})`
+  ));
+  const faultFire = await fetch(`${faultUrl}/api/forgejo/sweeps/reconcile`, { method: 'POST' });
+  results.push(assert(
+    faultFire.status === 503,
+    `Triggering a sweep without an engine answers 503 (got: ${faultFire.status})`
+  ));
 
   await page.goto(faultUrl);
   await page.waitForSelector('#forgejo-section', { state: 'visible', timeout: 20000 })
@@ -709,9 +725,83 @@ async function testForgejoEngineStates(page, results) {
     getComputedStyle(document.getElementById('forgejo-section')).display === 'none');
   results.push(assert(noneHidden, 'Unconfigured instance keeps the Forgejo section hidden'));
 
+  const noneSweepsHidden = await page.evaluate(() =>
+    getComputedStyle(document.getElementById('sweeps-section')).display === 'none');
+  results.push(assert(noneSweepsHidden, 'Unconfigured instance keeps the sweep section hidden'));
+
   // Return to the main instance for anything that follows.
   await page.goto(baseUrl);
   await page.waitForLoadState('networkidle').catch(() => {});
+}
+
+// testSweepTriggering covers the manual sweep trigger: the catalog in
+// the forgejo view, the one-button-per-sweep section, the confirmation
+// modal (which runs nothing until confirmed), and the POST that starts
+// the sweep now (§forgejo/observability/triggering-a-sweep).
+async function testSweepTriggering(page, results) {
+  console.log('  Sweep triggering');
+
+  // The API: the view carries the sweep catalog with the
+  // reconciliation sweep.
+  const view = await (await fetch(`${baseUrl}/api/forgejo`)).json();
+  const sweeps = view.sweeps ?? [];
+  results.push(assert(
+    sweeps.some(s => s.id === 'reconcile' && s.title),
+    `The forgejo view lists the reconciliation sweep (got: ${JSON.stringify(sweeps)})`
+  ));
+
+  await page.goto(baseUrl);
+  await page.waitForTimeout(1500);
+
+  const sectionVisible = await page.locator('#sweeps-section').isVisible();
+  results.push(assert(sectionVisible, 'Sweep section is visible with the engine up'));
+  const buttons = await page.locator('#sweeps-section .sweep-trigger').count();
+  results.push(assert(buttons >= 1, `One button per sweep operation (got: ${buttons})`));
+
+  // The modal asks for confirmation and says why; cancelling sends
+  // nothing.
+  const listingsBeforeCancel = mockReposListings;
+  await page.locator('#sweeps-section .sweep-trigger').first().click();
+  await page.waitForSelector('#sweep-modal', { state: 'visible', timeout: 5000 });
+  const modalText = await page.locator('#sweep-modal').textContent();
+  results.push(assert(
+    modalText?.includes('Reconciliation sweep'),
+    `Modal names the sweep (got: "${modalText?.trim().slice(0, 80)}")`
+  ));
+  results.push(assert(
+    modalText?.includes('steps'),
+    'Modal asks whether the steps to avoid the button were taken'
+  ));
+
+  await page.click('#sweep-modal-cancel');
+  await page.waitForTimeout(500);
+  const modalHidden = await page.evaluate(() =>
+    getComputedStyle(document.getElementById('sweep-modal')).display === 'none');
+  results.push(assert(modalHidden, 'Cancel closes the modal'));
+  results.push(assert(
+    mockReposListings === listingsBeforeCancel,
+    'A cancelled modal triggers no sweep'
+  ));
+
+  // Confirming starts the sweep now: the mock sees the sweep's org
+  // repository listing.
+  const listingsBefore = mockReposListings;
+  await page.locator('#sweeps-section .sweep-trigger').first().click();
+  await page.waitForSelector('#sweep-modal', { state: 'visible', timeout: 5000 });
+  await page.click('#sweep-modal-confirm');
+  let sweepRan = false;
+  for (let i = 0; i < 40; i++) {
+    if (mockReposListings > listingsBefore) { sweepRan = true; break; }
+    await new Promise(res => setTimeout(res, 250));
+  }
+  results.push(assert(sweepRan, 'Confirming the modal starts the sweep immediately'));
+
+  // The endpoint's refusals: unknown id 404, non-POST 405
+  // (§forgejo/observability/triggering-a-sweep).
+  const unknown = await fetch(`${baseUrl}/api/forgejo/sweeps/no-such-sweep`, { method: 'POST' });
+  results.push(assert(unknown.status === 404, `Unknown sweep id answers 404 (got: ${unknown.status})`));
+  const wrongMethod = await fetch(`${baseUrl}/api/forgejo/sweeps/reconcile`);
+  results.push(assert(wrongMethod.status === 405, `GET on the trigger answers 405 (got: ${wrongMethod.status})`));
 }
 
 // ─── Main ────────────────────────────────────────────────────────────
@@ -758,6 +848,7 @@ async function main() {
   await testPersonaDisplay(page, results);
   await testPromptSection(page, results);
   await testForgejoTracking(page, results);
+  await testSweepTriggering(page, results);
   if (faultUrl && unconfiguredUrl) {
     await testForgejoEngineStates(page, results);
   }
