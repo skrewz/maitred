@@ -271,7 +271,7 @@ func main() {
 	// does not rest on the ordering alone
 	// (§forgejo/observability/triggering-a-sweep).
 	if err := webSrv.Stop(); err != nil {
-		log.Printf("dashboard shutdown incomplete: %v (the engine still refuses any trigger its Stop has begun for)", err)
+		log.Printf("dashboard shutdown incomplete: %v (the dashboard may still be serving; the engine refuses triggers once its own Stop has begun)", err)
 	}
 	if fjEngine != nil {
 		fjEngine.Stop()
