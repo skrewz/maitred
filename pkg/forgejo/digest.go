@@ -52,9 +52,12 @@ var digestMemberLabels = []string{
 // would re-trigger the run that wrote it, are the trackers' bodies
 // (which carry the current-state block the engine rewrites every run),
 // the trackers' updated_at, members' bodies, and any comment authored
-// by the decomposer identity or the engine's own account. An empty
-// identity excludes nothing, matching the optional-identity convention;
-// an empty comment author is never treated as an empty identity.
+// by the decomposer identity or the engine's own account. The engine's
+// own account is required: unlike the optional decomposer identity, an
+// unset one folds the engine's own report comments, so the digest moves
+// on every sweep and each run re-triggers the run that wrote it once
+// dispatch is gated on it. An empty comment author is never treated as
+// an unset identity.
 //
 // A failed read is an error, not an omission: no digest is reported
 // rather than a partial one, and the caller decides what a missing
@@ -64,6 +67,9 @@ var digestMemberLabels = []string{
 func ForestDigest(api API, root *Issue, engineAccount, decomposerIdentity string) (string, error) {
 	if root == nil {
 		return "", fmt.Errorf("forgejo: forest digest: no root given")
+	}
+	if engineAccount == "" {
+		return "", fmt.Errorf("forgejo: forest digest: no engine account given")
 	}
 	f := &fold{}
 	rootRef := forestRef(root.Repository, root.Number)
@@ -147,9 +153,11 @@ func ForestDigest(api API, root *Issue, engineAccount, decomposerIdentity string
 // foldComments folds the comments on one forest issue that count as
 // triggers: those authored by neither the engine's own account nor the
 // configured decomposer identity (§forgejo/decisions/actionable-state-
-// digest). An unset identity excludes nothing; an empty comment author
-// — the shape of a response without a user object — is never treated
-// as an unset identity, so only the identity's own login is excluded.
+// digest). An unset decomposer identity excludes nothing; the engine's
+// own account is required, so it is never blank here. An empty comment
+// author — the shape of a response without a user object — is never
+// treated as an unset identity, so only the identity's own login is
+// excluded.
 func foldComments(f *fold, api API, ref, repo string, number int, engineAccount, decomposerIdentity string) error {
 	owner, name := splitRepo(repo)
 	comments, err := api.ListIssueComments(owner, name, number)

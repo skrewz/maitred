@@ -333,11 +333,14 @@ func TestForestDigestReadFailures(t *testing.T) {
 	})
 }
 
-// TestForestDigestOptionalIdentities pins that an unset identity excludes
-// nothing: with the decomposer identity empty its comments fold like any
-// other author's, matching the optional-identity convention
-// (§forgejo/config/decomposer-identity).
-func TestForestDigestOptionalIdentities(t *testing.T) {
+// TestForestDigestIdentities pins the two identities' different
+// semantics: the decomposer identity is optional, so with it empty its
+// comments fold like any other author's
+// (§forgejo/config/decomposer-identity), while the engine's own account
+// is required — an unset one would fold the engine's own report comments
+// and re-trigger every run once dispatch is gated on the digest
+// (§forgejo/decisions/actionable-state-digest).
+func TestForestDigestIdentities(t *testing.T) {
 	root := digestRoot()
 	f := digestForest()
 	withDecomposer, err := ForestDigest(f, &root, digestEngine, digestDecomposer)
@@ -351,12 +354,8 @@ func TestForestDigestOptionalIdentities(t *testing.T) {
 	if withDecomposer == withoutDecomposer {
 		t.Error("an unset decomposer identity still excluded the decomposer's comments")
 	}
-	withoutEngine, err := ForestDigest(f, &root, "", digestDecomposer)
-	if err != nil {
-		t.Fatalf("ForestDigest: %v", err)
-	}
-	if withDecomposer == withoutEngine {
-		t.Error("an unset engine account still excluded its comments")
+	if _, err := ForestDigest(f, &root, "", digestDecomposer); err == nil {
+		t.Error("an unset engine account digested without error")
 	}
 }
 

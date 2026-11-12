@@ -1062,9 +1062,15 @@ it — are the trackers' bodies (which carry the current-state block the
 engine rewrites every run), the trackers' `updated_at`, and any comment
 authored by the configured decomposer identity or the engine's own
 account. Members' bodies are not folded either: the member's state and
-kind/landing labels are what make it actionable. An unset identity
-excludes nothing, matching the optional-identity convention
-(§forgejo/config/decomposer-identity). The digest reads no other fact
+kind/landing labels are what make it actionable. The engine's own account
+is **required**: an unset one would fold the engine's own report
+comments, so the digest would move on every sweep and each run would
+re-trigger the run that wrote it — the very pathology this exclusion list
+exists to prevent. That is why it is a parameter the caller must supply,
+not a blank the optional-identity convention opts out of. The decomposer
+identity stays optional
+(§forgejo/config/decomposer-identity): an unset one excludes nothing, a
+liveness wart rather than a loop. The digest reads no other fact
 about any issue: no timestamp of a folded issue, no member body, and no
 pull-request-only field (a pull request seen among a member's blockers
 contributes its issue row's state, not its mergeability or head sha).
