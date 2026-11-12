@@ -223,9 +223,10 @@ func TestLoadConfigMalformedYAML(t *testing.T) {
 // (§forgejo/config/validation).
 func TestLoadConfigValidation(t *testing.T) {
 	cases := []struct {
-		name    string
-		mutate  func(yaml string) string
-		wantSub string
+		name            string
+		mutate          func(yaml string) string
+		wantSub         string
+		wantNotMismatch bool
 	}{
 		{
 			name: "missing action",
@@ -242,11 +243,15 @@ func TestLoadConfigValidation(t *testing.T) {
 			wantSub: "prompt",
 		},
 		{
+			// An entry that declares no identity is a missing required
+			// field, never a schema-key mismatch and never defaulted
+			// (§forgejo/config/identity-collapse).
 			name: "missing identity",
 			mutate: func(y string) string {
 				return strings.Replace(y, "  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n", "  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n", 1)
 			},
-			wantSub: "identity",
+			wantSub:         "identity",
+			wantNotMismatch: true,
 		},
 		{
 			name: "missing timeout",
@@ -490,21 +495,6 @@ func TestLoadConfigSentinels(t *testing.T) {
 		}
 		if got := cfg.Actions["reassess"]; got.Identity != "implementer" || got.Timeout != 2*time.Hour {
 			t.Errorf("reassess = %+v, want the merged entry's identity and timeout", got)
-		}
-	})
-
-	// Every entry must declare its identity: an entry that declares none
-	// is refused as a missing field, never silently defaulted
-	// (§forgejo/config/identity-collapse).
-	t.Run("entry declares no identity", func(t *testing.T) {
-		_, err := LoadConfig(validateFixturePath(t, strings.Replace(validConfigYAML,
-			"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n",
-			"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n", 1)))
-		if err == nil || !strings.Contains(err.Error(), "identity") {
-			t.Fatalf("err = %v, want a refusal naming the missing identity", err)
-		}
-		if errors.Is(err, ErrActionSetMismatch) {
-			t.Errorf("a missing required field is not a schema-key mismatch: %v", err)
 		}
 	})
 
