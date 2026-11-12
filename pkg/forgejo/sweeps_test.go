@@ -8,14 +8,17 @@ import (
 )
 
 // TestSweepsCatalog: the engine declares its sweep operations as a
-// catalog — the reconciliation sweep today — and every entry is
-// renderable by the dashboard: an id and a title
-// (§forgejo/observability/triggering-a-sweep).
+// catalog, and every entry is renderable by the dashboard: an id and a
+// title (§forgejo/observability/triggering-a-sweep). The catalog holds
+// the reconciliation sweep alone: startCh's hand-off carries no id, so
+// sweepLoop answers every accepted id with that one sweep. A second
+// entry is a change to that hand-off, not only to the catalog, and
+// this test is where it stops being silent.
 func TestSweepsCatalog(t *testing.T) {
 	eng, _, _, _ := newTestEngine(t)
 	sweeps := eng.Sweeps()
-	if len(sweeps) == 0 {
-		t.Fatal("the engine offers no sweep operations")
+	if len(sweeps) != 1 {
+		t.Errorf("catalog %v holds %d entries, but the manual-start hand-off carries no id and runs the reconciliation sweep for all of them: give startCh an id to carry and dispatch on it in sweepLoop", sweeps, len(sweeps))
 	}
 	var found bool
 	for _, s := range sweeps {

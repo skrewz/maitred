@@ -120,10 +120,11 @@ func (e *Engine) Stop() {
 
 // sweepLoop runs the sweep once, then on every tick and on every
 // manual start signal, until Stop. A manual start is a sweep start
-// like any other: it runs the sweep the catalog holds today — the
-// reconciliation sweep — and a future sweep joining the catalog
-// (§forgejo/observability/triggering-a-sweep) grows its start here
-// alone.
+// like any other. The signal carries no id, so every id the catalog
+// accepts runs the reconciliation sweep it holds today; a second entry
+// (§forgejo/observability/triggering-a-sweep) leaves the dashboard and
+// the endpoint alone but must give startCh an id to carry and dispatch
+// on it here.
 func (e *Engine) sweepLoop() {
 	defer close(e.doneCh)
 	e.Reconcile()
