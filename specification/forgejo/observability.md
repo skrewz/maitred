@@ -60,10 +60,33 @@ the view never guesses it from a nil engine.
 The dashboard renders the view as a section that appears when there is
 at least one tracked issue or PR, and — when the state names a fault —
 names that category, so a configured-but-broken engine never looks
-like a healthy one with nothing tracked. The view reflects the
-engine's in-memory record of decisions: the tracked list is empty when
-the engine is disabled or has made no decisions yet, and it is cleared
-on restart (the watermark store is unaffected, §forgejo/state/persistence).
+like a healthy one with nothing tracked. The rows are grouped
+**by-repo**: each tracked repository forms a section introduced by a
+heading carrying an anchor id derived from the repo's full name, and
+under each heading two **tabs** — issues and pull requests — switch
+between the rows of each kind. The active tab is the operator's
+choice and survives the dashboard's periodic re-render; a repository
+with nothing tracked of the shown kind says so in the panel rather
+than hiding rows. Each row's **watermark** and **reason** are
+click-to-open: collapsed by default, opened by a click, and rendered
+so embedded newlines appear as line breaks. The dashboard re-reads
+the view on a timer and rebuilds it — the sweep controls with it —
+only when what it read differs, so the operator's focus, scroll
+position and text selection inside it outlive a refresh rather than
+resetting on it. The tab choices and opened cells are state of the
+view: they are forgotten when a successful read shows a row or a
+repository has left tracking, and forgotten by nothing else — a read
+that failed is not evidence that nothing is tracked, so it forgets
+none of the view's state. A failed read does render the empty tracked
+set, as it did before this restructure: the section blanks while
+reads fail, and the rows return with their state on the next
+successful read. The restructure hides
+nothing that was visible before — repo, kind, number, state, the
+watermark's slots, the last decision and its reason all remain
+reachable. The view reflects the engine's in-memory record of
+decisions: the tracked list is empty when the engine is disabled or
+has made no decisions yet, and it is cleared on restart (the
+watermark store is unaffected, §forgejo/state/persistence).
 
 ## Triggering a sweep
 
