@@ -419,40 +419,27 @@ func TestSweepFire_Method(t *testing.T) {
 // shutdown moves on to the engine whose wait those triggers could
 // otherwise restart (§forgejo/observability/triggering-a-sweep).
 func TestServerStartStop(t *testing.T) {
-	// Take a free port through the kernel, then hand its number to
-	// the server: Start binds in a goroutine, so the test learns of
-	// the socket only by polling it. The handoff is a known race —
-	// another process can claim the port between the close here and
-	// Start's bind, and then "never started serving" is the other
-	// process's doing, not a Start regression, so re-run before
-	// chasing it.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("pick a port: %v", err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	if err := ln.Close(); err != nil {
-		t.Fatalf("release the port: %v", err)
-	}
-
-	srv := New(port, nil, "test", nil, forgejo.EngineStateWord(false, nil))
+	// Port 0 lets the kernel pick the port and Start binds it before
+	// returning, so the test neither hands a port number across a
+	// close-then-rebind window nor polls for the socket to appear;
+	// Addr reports what the bind was actually given.
+	srv := New(0, nil, "test", nil, forgejo.EngineStateWord(false, nil))
 	if err := srv.Start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	defer srv.Stop()
 
-	base := fmt.Sprintf("http://127.0.0.1:%d/api/forgejo", port)
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if res, err := http.Get(base); err == nil {
-			res.Body.Close()
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the dashboard never started serving")
-		}
-		time.Sleep(20 * time.Millisecond)
+	_, port, err := net.SplitHostPort(srv.Addr())
+	if err != nil {
+		t.Fatalf("addr %q: %v", srv.Addr(), err)
 	}
+	base := fmt.Sprintf("http://127.0.0.1:%s/api/forgejo", port)
+
+	res, err := http.Get(base)
+	if err != nil {
+		t.Fatalf("get %s: %v", base, err)
+	}
+	res.Body.Close()
 
 	if err := srv.Stop(); err != nil {
 		t.Fatalf("stop: %v", err)

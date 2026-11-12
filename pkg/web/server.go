@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -37,6 +38,7 @@ type Server struct {
 	webhookProvs  []webhook.ProviderConfig
 	mux           *http.ServeMux
 	httpSrv       *http.Server
+	addr          string
 }
 
 // New creates a new web server. The Forgejo engine, when non-nil, is
@@ -73,11 +75,19 @@ func (s *Server) Handler() http.Handler {
 	return s.mux
 }
 
-// Start begins serving HTTP in a goroutine. Returns immediately.
+// Start binds the dashboard port and then serves HTTP in a
+// goroutine, returning immediately once bound. The bind happens
+// inside Start so that a port already in use is an error the caller
+// can see, not a process logging a dashboard while nothing serves.
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.port)
-	s.log.Printf("web dashboard listening on %s", addr)
-	s.httpSrv = &http.Server{
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	s.addr = ln.Addr().String()
+	s.log.Printf("web dashboard listening on %s", s.addr)
+	srv := &http.Server{
 		Addr:    addr,
 		Handler: s.mux,
 		// The port answers unauthenticated callers on whatever network
@@ -86,11 +96,18 @@ func (s *Server) Start() error {
 		// header would stall Shutdown's wait at Stop too.
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	srv := s.httpSrv
+	s.httpSrv = srv
 	go func() {
-		_ = srv.ListenAndServe()
+		_ = srv.Serve(ln)
 	}()
 	return nil
+}
+
+// Addr returns the address the dashboard is listening on, as the
+// kernel resolved the bind — so a port-0 Start reports the port it
+// was actually given. It is empty before Start succeeds.
+func (s *Server) Addr() string {
+	return s.addr
 }
 
 // Stop gracefully shuts down the HTTP server: the listener closes and
