@@ -386,3 +386,26 @@ func TestForestDigestReadsOnlyTheNamedReads(t *testing.T) {
 		}
 	}
 }
+
+// TestForestDigestRowsWithoutRepository pins the two repository
+// fallbacks: a blocks row listing none lives where the root does, and a
+// blocker listing none lives where the member naming it does, so a blank
+// repository cannot move the digest from the explicit spelling
+// (§forgejo/decisions/actionable-state-digest).
+func TestForestDigestRowsWithoutRepository(t *testing.T) {
+	base := digest(t, digestForest())
+	t.Run("member listing no repository", func(t *testing.T) {
+		f := digestForest()
+		f.blocks[1][1].Repository = ""
+		if got := digest(t, f); got != base {
+			t.Errorf("a member listing no repository digested differently: %s vs %s", got, base)
+		}
+	})
+	t.Run("blocker listing no repository", func(t *testing.T) {
+		f := digestForest()
+		f.deps[3][0].Repository = ""
+		if got := digest(t, f); got != base {
+			t.Errorf("a blocker listing no repository digested differently: %s vs %s", got, base)
+		}
+	})
+}
