@@ -1057,23 +1057,33 @@ so the digest and the decision code cannot disagree about what a row is
   must be a trigger, not a side effect. Each counts as its author and
   its body.
 
+This exclusion is a **self-trigger guard** and nothing more. A digest
+that moves says a fact changed; it does not say the sender of that fact
+is authorised to commission work. On an instance anyone may register on,
+"someone commented" is no authorisation at all, so the member that gates
+dispatch on the digest must establish the sender's authority before it
+dispatches — the digest is change detection, not an allowlist.
+
 Deliberately excluded — because each would re-trigger the run that wrote
 it — are the trackers' bodies (which carry the current-state block the
 engine rewrites every run), the trackers' `updated_at`, and any comment
 authored by the configured decomposer identity or the engine's own
 account. Members' bodies are not folded either: the member's state and
-kind/landing labels are what make it actionable. The engine's own account
-is **required**: an unset one would fold the engine's own report
-comments, so the digest would move on every sweep and each run would
-re-trigger the run that wrote it — the very pathology this exclusion list
-exists to prevent. That is why it is a parameter the caller must supply,
-not a blank the optional-identity convention opts out of. The decomposer
-identity stays optional
-(§forgejo/config/decomposer-identity): an unset one excludes nothing, a
-liveness wart rather than a loop. The digest reads no other fact
-about any issue: no timestamp of a folded issue, no member body, and no
-pull-request-only field (a pull request seen among a member's blockers
-contributes its issue row's state, not its mergeability or head sha).
-A failed read is an error, not an omission: the
-digest reports no value rather than a partial one, and the caller
+kind/landing labels are what make it actionable.
+
+The two identities do not fail the same way, so they are not taken the
+same way. The engine's own account is **required**: an unset one would
+fold the engine's own report comments, so the digest would move on every
+sweep and each run would re-trigger the run that wrote it — the very
+pathology this exclusion list exists to prevent. That is why it is a
+parameter the caller must supply, and its absence an error, rather than a
+blank the optional-identity convention quietly opts out of. The decomposer
+identity stays optional (§forgejo/config/decomposer-identity): an unset
+one excludes nothing, which is a liveness wart rather than a loop.
+
+The digest reads no other fact about any issue: no timestamp of a folded
+issue, no member body, and no pull-request-only field (a pull request
+seen among a member's blockers contributes its issue row's state, not its
+mergeability or head sha). A failed read is an error, not an omission:
+the digest reports no value rather than a partial one, and the caller
 decides what a missing digest means.

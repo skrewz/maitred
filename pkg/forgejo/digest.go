@@ -150,14 +150,16 @@ func ForestDigest(api API, root *Issue, engineAccount, decomposerIdentity string
 	return f.sum(), nil
 }
 
-// foldComments folds the comments on one forest issue that count as
-// triggers: those authored by neither the engine's own account nor the
-// configured decomposer identity (§forgejo/decisions/actionable-state-
-// digest). An unset decomposer identity excludes nothing; the engine's
-// own account is required, so it is never blank here. An empty comment
-// author — the shape of a response without a user object — is never
-// treated as an unset identity, so only the identity's own login is
-// excluded.
+// foldComments folds the comments on one forest issue that are not the
+// engine's own side effect: those authored by neither the engine's own
+// account nor the configured decomposer identity
+// (§forgejo/decisions/actionable-state-digest). It is a self-trigger
+// guard, not an authorisation test — a comment surviving it says a fact
+// moved, not that its sender may commission work. An unset decomposer
+// identity excludes nothing; the engine's own account is required, so it
+// is never blank here. An empty comment author — the shape of a response
+// without a user object — is never treated as an unset identity, so only
+// the identity's own login is excluded.
 func foldComments(f *fold, api API, ref, repo string, number int, engineAccount, decomposerIdentity string) error {
 	owner, name := splitRepo(repo)
 	comments, err := api.ListIssueComments(owner, name, number)
