@@ -82,7 +82,9 @@ revision: the engine's **re-fire bound** lets one unchanged
 `(action, revision)` dispatch at most once per `reconcile_interval`,
 whichever path brought the event (§forgejo/decisions/loop-prevention).
 The sweep is safe to run at any time, and re-running it is a
-no-op until Forgejo's state or the watermarks move.
+no-op until Forgejo's state or the watermarks move — or, on the
+state-governed rows, until the re-fire bound's interval is spent
+(§forgejo/reconciliation/the-state-is-the-watermark).
 
 ## The state is the watermark
 
@@ -106,9 +108,26 @@ is their watermark and their re-fires are bounded by the re-fire bound.
 Because the sweep enumerates open objects only and each eligibility
 predicate is cleared by the action's own success — a delivered
 implementation opens a connected pull request, a rebase moves the head —
-state-governed re-firing is self-limiting, and a dispatch that died
-recovers within one interval instead of stranding at a revision it
-cannot move.
+state-governed re-firing is self-limiting wherever the action **can**
+succeed, and a dispatch that died recovers within one interval instead
+of stranding at a revision it cannot move.
+
+"Connected" is exact here: a pull request is connected to an issue when
+it is among that issue's blockers (§forgejo/webhook/re-fetch), an edge
+the delivery itself wires. Where the predicate cannot be cleared by a
+successful dispatch, the bound spaces a re-fire that never ends, and it
+is honest to say so: an issue whose delivering pull request was closed
+without merging is open, unblocked, unlabelled and without a connected
+pull request from here to the archive; so is one whose implementation
+the agent declined without labelling it; and a delivery that opened a
+pull request but wired no edge reads as undelivered whatever happened
+to the branch. What stops those loops is the state changing — a human
+labelling the issue (`human-task`, §forgejo/decisions/actions) or
+closing it — and nothing in the engine: the bound is a rate on one
+unchanged `(action, revision)`, never a cap on the number of attempts.
+Whether a state-governed row should also give up after a fixed number of
+re-fires at an unchanged revision, and say so loudly rather than go
+quiet, is a deployment decision the bound does not make for it.
 
 ## Watermark exemptions
 
@@ -235,7 +254,9 @@ definition nobody is pushing to it while it waits — so a
 revision-keyed watermark makes it a fixed point the sweep can never
 fire on, and a review dispatch that went nowhere never recovers. The
 state is therefore its watermark: the sweep re-fires until the state
-changes, and every state in the table above is self-limiting — a
+changes, and every state in the table above is self-limiting wherever
+the action can succeed (§forgejo/reconciliation/the-state-is-the-watermark
+names the shapes no successful dispatch clears) — a
 lens reporting at head ends that lens's `review` exemption and a
 chain fully reported at head hands the PR to the review-following
 rows (§forgejo/decisions/review-lenses,
