@@ -3129,7 +3129,7 @@ func TestHandler_PRCommented_MergeReFireAllowedAfterInterval(t *testing.T) {
 		t.Fatalf("got %d tasks after the first comment, want 1", len(tasks))
 	}
 	// The interval the bound waits out is spent.
-	eng.stampMergeReFireAt(key, "sha-9", time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+	eng.stampReFireAt(key, "sha-9", time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
 
 	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
 
@@ -3188,7 +3188,7 @@ func TestHandler_PRCommented_MergeReFireIgnoresAStampAtAnotherRevision(t *testin
 
 	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
 	// The head the stamp records is not the head the PR stands at.
-	eng.stampMergeReFireAt(key, "sha-older", time.Now())
+	eng.stampReFireAt(key, "sha-older", time.Now())
 	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
 
 	tasks := q.all()
@@ -4971,8 +4971,10 @@ func TestHandler_TeardownEventPath_DispatchesTeardown(t *testing.T) {
 // TestHandler_TeardownSweepRefiresWhileTheForestStands pins the sweep's
 // exemption at the engine: while the label stands on an open root the
 // sweep dispatches again, so a teardown that died half way through is
-// retried rather than remembered as done
-// (§forgejo/reconciliation/watermark-exemptions).
+// retried rather than remembered as done — spaced, like every
+// state-governed re-fire, by the re-fire bound of one dispatch per
+// reconcile interval (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/decisions/loop-prevention).
 func TestHandler_TeardownSweepRefiresWhileTheForestStands(t *testing.T) {
 	eng, api, q, _ := newOutcomesEngine(t)
 	api.issues[7] = teardownRootIssue("o/out", 7)
@@ -4982,8 +4984,17 @@ func TestHandler_TeardownSweepRefiresWhileTheForestStands(t *testing.T) {
 		eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "maitred"})
 	}
 	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks across two sweeps inside one interval, want 1 (the re-fire is bounded): %v", len(tasks), tasks)
+	}
+	// The interval the bound waits out is spent: the forest standing
+	// is the state that calls for the order again.
+	key := Key{Repo: "o/out", Kind: KindIssue, Number: 7}
+	eng.stampReFireAt(key, issueRevision(api.issues[7]), time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "maitred"})
+	tasks = q.all()
 	if len(tasks) != 2 {
-		t.Fatalf("got %d tasks across two sweeps, want 2: %v", len(tasks), tasks)
+		t.Fatalf("got %d tasks after the interval is spent, want 2: %v", len(tasks), tasks)
 	}
 	for _, task := range tasks {
 		if !strings.Contains(task.Prompt, "action="+string(ActionTeardownForest)) {

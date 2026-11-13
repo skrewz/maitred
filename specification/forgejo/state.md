@@ -13,6 +13,15 @@ A watermark records, for one issue or pull request:
 - the **revision/activity** it was dispatched at (e.g. the PR head sha, or
   the issue's `updated_at`).
 
+The revision records *what the engine last reacted to*, never whether an
+object is actionable: eligibility is a predicate over re-fetched state
+alone (§forgejo/reconciliation/the-state-is-the-watermark). On an event
+path the guard compares the revision as a cursor over events — a newer
+revision is newer information, an unchanged one was already handled. On
+the sweep the guard is not consulted for eligibility at all;
+state-governed rows re-fire on the state and are spaced by the re-fire
+bound (§forgejo/decisions/loop-prevention).
+
 Fan-out dispatches — the review lenses (§forgejo/decisions/review-lenses) —
 give the record a **per-subject dimension**: alongside that main
 `(action, revision)` slot sits one `(action, revision)` **slot per

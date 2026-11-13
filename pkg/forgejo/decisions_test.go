@@ -1571,10 +1571,15 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionDecompose,
 		},
 		{
-			name:      "reconcile unlabelled issue implement already dispatched at the revision holds off",
-			event:     issueEvent(EventReconcile),
-			state:     State{ReviewLenses: testLenses, Issue: openIssue()},
-			watermark: &Watermark{Action: "implement", Revision: testRev},
+			// The sweep's implement row is state-governed: the recorded
+			// revision is a record of reaction, not an eligibility test, so
+			// an attempt that left no connected PR re-fires on the state
+			// (§forgejo/reconciliation/the-state-is-the-watermark).
+			name:       "reconcile unlabelled issue re-fires implement at the recorded revision",
+			event:      issueEvent(EventReconcile),
+			state:      State{ReviewLenses: testLenses, Issue: openIssue()},
+			watermark:  &Watermark{Action: "implement", Revision: testRev},
+			wantAction: ActionImplement,
 		},
 		// The event path dispatches `decompose` for an open ideation
 		// root — the label, not the repository and not the title, is
@@ -1863,7 +1868,7 @@ func TestDecide_MergeGateHoldOffNamesBlockers(t *testing.T) {
 // §forgejo/observability/the-decision-log).
 func TestDecide_HoldOffReasons(t *testing.T) {
 	t.Run("a revision-keyed hold-off names the revision", func(t *testing.T) {
-		d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: openIssue()}, &Watermark{Action: "implement", Revision: testRev})
+		d := Decide(issueEvent(EventIssueOpened), State{ReviewLenses: testLenses, Issue: openIssue()}, &Watermark{Action: "implement", Revision: testRev})
 		if !d.HoldOff() {
 			t.Fatalf("expected hold-off, got dispatch of %q", d.Action)
 		}
@@ -3865,13 +3870,19 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 		}
 	})
 
-	t.Run("a PR that is not mergeable still decides rebase, revision-keyed", func(t *testing.T) {
+	t.Run("a PR that is not mergeable decides rebase on the sweep, state-governed", func(t *testing.T) {
 		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: notMergeablePR("abc")}, &Watermark{Action: string(ActionRebase), Revision: "abc"})
-		if !d.HoldOff() {
-			t.Fatalf("decision = %+v, want a hold-off: rebase is real work and stays revision-keyed", d)
+		if d.HoldOff() {
+			t.Fatalf("decision = %+v, want the sweep's rebase row to dispatch: a head a dead rebase left unmoved is the state that calls for it again", d)
 		}
-		if !strings.Contains(d.Reason, "rebase already dispatched at revision abc") {
-			t.Errorf("reason = %q, want the revision-keyed hold-off", d.Reason)
+		if d.Action != ActionRebase {
+			t.Errorf("decision = %+v, want rebase", d)
+		}
+		if !d.StateGoverned {
+			t.Errorf("decision = %+v, want the dispatch marked state-governed so the re-fire bound spaces it", d)
+		}
+		if !strings.Contains(d.Reason, "regardless of revision abc") {
+			t.Errorf("reason = %q, want it to state the revision the state carries past", d.Reason)
 		}
 	})
 
@@ -4243,4 +4254,90 @@ func TestDecide_ApprovedPRWithoutMergeOptInHoldsOff(t *testing.T) {
 			t.Errorf("reason = %q, want it to say the PR is connected to no issue", d.Reason)
 		}
 	})
+}
+
+// TestDecide_ReconcileImplementIsStateGoverned: the sweep's implement
+// row dispatches revision notwithstanding — the state (open, unblocked,
+// unlabelled, no connected PR) is the watermark, so an attempt that died
+// before opening a connected pull request recovers on the next sweep
+// instead of stranding at the revision the watermark records
+// (§forgejo/reconciliation/the-state-is-the-watermark,
+// §forgejo/decisions/actions).
+func TestDecide_ReconcileImplementIsStateGoverned(t *testing.T) {
+	w := &Watermark{Action: string(ActionImplement), Revision: testRev}
+	d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: openIssue()}, w)
+	if !d.Dispatched || d.Action != ActionImplement {
+		t.Fatalf("decision = %+v, want the sweep re-dispatching implement at the recorded revision", d)
+	}
+	if !d.StateGoverned {
+		t.Errorf("decision = %+v, want the dispatch marked state-governed so the re-fire bound spaces it", d)
+	}
+	if strings.Contains(d.Reason, "already dispatched") {
+		t.Errorf("reason = %q, want the state fact, not a revision-keyed hold-off", d.Reason)
+	}
+}
+
+// TestDecide_IssueOpenedImplementStaysRevisionGated: the event path
+// keeps the revision-keyed guard — eligibility is the same predicate on
+// both paths, only the suppression differs, so an opened issue whose
+// revision the watermark already records was reacted to and holds off
+// (§forgejo/reconciliation/the-state-is-the-watermark).
+func TestDecide_IssueOpenedImplementStaysRevisionGated(t *testing.T) {
+	w := &Watermark{Action: string(ActionImplement), Revision: testRev}
+	d := Decide(issueEvent(EventIssueOpened), State{ReviewLenses: testLenses, Issue: openIssue()}, w)
+	if !d.HoldOff() {
+		t.Fatalf("decision = %+v, want the event path to hold off at the recorded revision", d)
+	}
+	if d.StateGoverned {
+		t.Errorf("decision = %+v, want the event-path dispatch unmarked: a revision-gated row consults no stamp", d)
+	}
+}
+
+// TestDecide_ReconcileRebaseIsStateGoverned: the sweep's rebase row is
+// state-governed like implement — a head a dead rebase left unmoved is
+// the state that calls for the rebase again, bounded by the re-fire
+// bound (§forgejo/reconciliation/the-state-is-the-watermark,
+// §forgejo/decisions/actions).
+func TestDecide_ReconcileRebaseIsStateGoverned(t *testing.T) {
+	pr := openPR("abc")
+	pr.Mergeable = false
+	w := &Watermark{Action: string(ActionRebase), Revision: "abc"}
+	d := Decide(prEvent(EventReconcile, "maitred"), State{ReviewLenses: testLenses, PR: pr}, w)
+	if !d.Dispatched || d.Action != ActionRebase {
+		t.Fatalf("decision = %+v, want the sweep re-dispatching rebase at the unmoved head", d)
+	}
+	if !d.StateGoverned {
+		t.Errorf("decision = %+v, want the dispatch marked state-governed so the re-fire bound spaces it", d)
+	}
+}
+
+// TestDecide_PRSyncedRebaseStaysRevisionGated: the PR-synced event path
+// keeps the revision-keyed rebase guard; the exemption is the sweep's
+// row alone (§forgejo/reconciliation/the-state-is-the-watermark).
+func TestDecide_PRSyncedRebaseStaysRevisionGated(t *testing.T) {
+	pr := openPR("abc")
+	pr.Mergeable = false
+	w := &Watermark{Action: string(ActionRebase), Revision: "abc"}
+	d := Decide(prEvent(EventPRSynced, "alice"), State{ReviewLenses: testLenses, PR: pr}, w)
+	if !d.HoldOff() {
+		t.Fatalf("decision = %+v, want the event path to hold off at the recorded head", d)
+	}
+	if d.StateGoverned {
+		t.Errorf("decision = %+v, want the event-path dispatch unmarked: a revision-gated row consults no stamp", d)
+	}
+}
+
+// TestDecide_ReassessGainsNoSweepRow: reassess stays an event-path
+// action — the sweep's unlabelled-issue row is implement, whether or not
+// the watermark records a reassess at this revision
+// (§forgejo/decisions/actions).
+func TestDecide_ReassessGainsNoSweepRow(t *testing.T) {
+	w := &Watermark{Action: string(ActionReassess), Revision: testRev}
+	d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: openIssue()}, w)
+	if d.Action == ActionReassess {
+		t.Fatalf("decision = %+v, want the sweep to dispatch no reassess row", d)
+	}
+	if !d.Dispatched || d.Action != ActionImplement {
+		t.Fatalf("decision = %+v, want implement on the sweep's unlabelled-issue row", d)
+	}
 }

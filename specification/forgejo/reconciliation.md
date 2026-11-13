@@ -84,6 +84,32 @@ whichever path brought the event (§forgejo/decisions/loop-prevention).
 The sweep is safe to run at any time, and re-running it is a
 no-op until Forgejo's state or the watermarks move.
 
+## The state is the watermark
+
+The time an object was last updated is never an eligibility criterion.
+Whether an object is actionable is a predicate over its re-fetched state
+alone — open state, labels, blockers, connected pull requests,
+mergeability, and the review chain at head. The revision
+(`updated_at`, or a pull request head sha) answers one question only:
+"have I already reacted to the latest event?". On an event path it is a
+cursor over events — a newer revision is newer information. On the sweep
+it is not consulted for eligibility at all: the state answers whether the
+object is actionable and the re-fire bound spaces one dispatch per
+unchanged state to one per `reconcile_interval`
+(§forgejo/decisions/loop-prevention).
+
+This is the engine's whole rule, not the rule for a favoured few; the
+watermark-exempt actions named below are simply the ones whose state
+relation emits no delivery, so they show the default at its clearest.
+`implement` and `rebase` follow the same rule on the sweep: their state
+is their watermark and their re-fires are bounded by the re-fire bound.
+Because the sweep enumerates open objects only and each eligibility
+predicate is cleared by the action's own success — a delivered
+implementation opens a connected pull request, a rebase moves the head —
+state-governed re-firing is self-limiting, and a dispatch that died
+recovers within one interval instead of stranding at a revision it
+cannot move.
+
 ## Watermark exemptions
 
 Dependency edges emit no webhook delivery: attaching or removing a
@@ -125,6 +151,8 @@ re-fire bound keeps one unchanged head to one dispatch per
 | `merge-or-wait` | the PR is open, **every configured review lens holds an undismissed approval at head**, no reviewer's latest undismissed review at head is a non-approval (§forgejo/decisions/review-lenses), no connected issue has an open blocker (the merge gate, §forgejo/decisions/merge-gate), and the work it delivers is opted into merging: the PR **or** the issue its body closes carries the `agentic-auto-merge` label (§forgejo/decisions/merge-gate) — the label is the whole point and a precondition of the dispatch on every path, not just this row: an approved PR with no opt-in on either seat waits on a human whatever the watermark records (§forgejo/decisions/merge-gate, s-git/maitred#179). And unlike the other exemptions this one is not the sweep's row alone: an approved, unblocked PR whose work is opted in re-fires on every path, its frozen head being the reason the revision cannot be the watermark (§forgejo/decisions/loop-prevention). |
 | `review`, per lens | the PR is open, mergeable, and **this lens has reported nothing at the current head sha** — the report the sweep would ask for has still not happened, whether because no dispatch reached the lens or the head moved past its last one; a lens that has reported at head is exempt no more, its dispatch having landed (§forgejo/decisions/review-lenses) |
 | `fix-feedback` | the PR is open, mergeable, **every lens has reported at the current head**, and some reviewer's latest undismissed review at head is not an approval — a comment report counts on this row, as feedback the sweep hands to the implementer — and the head has not moved since (§forgejo/decisions/review-lenses) |
+| `implement` | the issue is open, carries no reserved or transient hold-off label, has no open blocker, and has no connected open pull request; the state that calls for a first attempt calls for a fresh one whenever an attempt left no connected pull request, bounded by the re-fire bound (§forgejo/decisions/actions) |
+| `rebase` | the pull request is open and not mergeable; a head a dead rebase left unmoved is the state that calls for the rebase again, bounded by the re-fire bound (§forgejo/decisions/actions) |
 
 `ideation` and `outcome` are reserved label names, not configuration.
 They match **case-insensitively**: a label name is a user-authored

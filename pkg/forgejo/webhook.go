@@ -93,12 +93,14 @@ type Engine struct {
 	// burst costs one listing rather than one each.
 	refreshMu sync.Mutex
 
-	// The merge re-fire bound: the last merge-or-wait dispatch per key,
-	// so an unchanged head re-fires at most once per reconcile interval
-	// whichever path brought the event (§forgejo/decisions/loop-
-	// prevention).
-	reFireMu     sync.Mutex
-	mergeReFires map[Key]mergeReFire
+	// The re-fire bound: the last landed singleton dispatch per key and
+	// the moment it landed, so an unchanged revision re-fires at most
+	// once per reconcile interval whichever path reached it. Only
+	// state-governed rows consult the stamp; a revision-gated row
+	// consults none (§forgejo/decisions/loop-prevention,
+	// §forgejo/reconciliation/the-state-is-the-watermark).
+	reFireMu sync.Mutex
+	reFires  map[Key]reFireStamp
 }
 
 // NewEngine creates the event path over the given Forgejo API, watermark
@@ -108,13 +110,13 @@ func NewEngine(api API, store *Store, cfg *Config, q queue.TaskQueueProvider, lo
 		logger = slog.Default()
 	}
 	return &Engine{
-		api:          api,
-		store:        store,
-		cfg:          cfg,
-		queue:        q,
-		log:          logger,
-		decisions:    make(map[Key]DecisionRecord),
-		mergeReFires: make(map[Key]mergeReFire),
+		api:       api,
+		store:     store,
+		cfg:       cfg,
+		queue:     q,
+		log:       logger,
+		decisions: make(map[Key]DecisionRecord),
+		reFires:   make(map[Key]reFireStamp),
 	}
 }
 
@@ -176,7 +178,7 @@ func (e *Engine) HandleEvent(ev Event) {
 		if d.Dispatched && !admissibleInRoles(d.Action, r) {
 			d = holdOffActionInadmissible(d.Action, ev.Repo)
 		}
-		d = e.boundMergeReFire(key, ev, st, d)
+		d = e.boundReFire(key, ev, st, d)
 		e.recordDecision(key, ev, st, d)
 		if d.Dispatched {
 			if len(d.Lenses) > 0 {
@@ -1049,67 +1051,70 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	if err := e.dispatchPrompt(ev, st, *pc, "", action, rev); err != nil {
 		return err
 	}
-	if action == ActionMergeOrWait {
-		// Stamp the dispatch for the re-fire bound: a merge-or-wait that
-		// landed starts the interval during which an unchanged head may
-		// not re-fire again (§forgejo/decisions/loop-prevention).
-		e.stampMergeReFire(ev.KeyOf(), rev)
-	}
+	// Stamp the landed dispatch for the re-fire bound: every path that
+	// lands a singleton dispatch starts the interval during which an
+	// unchanged revision may not re-fire again on a state-governed row
+	// (§forgejo/decisions/loop-prevention, "whichever path reached
+	// it" — the gated rows themselves consult no stamp).
+	e.stampReFire(ev.KeyOf(), rev)
 	return nil
 }
 
-// mergeReFire is one merge-or-wait dispatch the engine remembers for
-// the re-fire bound: the revision it landed at, and when
+// reFireStamp is one landed dispatch the engine remembers for the
+// re-fire bound: the revision it landed at, and when
 // (§forgejo/decisions/loop-prevention).
-type mergeReFire struct {
+type reFireStamp struct {
 	revision string
 	at       time.Time
 }
 
-// boundMergeReFire applies the re-fire bound to Decide's answer: a
-// merge-or-wait the engine dispatched at this revision inside one
-// reconcile interval becomes a hold-off naming the bound, whichever path
-// brought the event (§forgejo/decisions/loop-prevention). The bound is
-// the engine's own stamp rather than the watermark, so a store that
-// cannot be read narrows the re-fire instead of switching the bound off;
-// a revision with no stamp is a first dispatch, which is never touched.
-func (e *Engine) boundMergeReFire(key Key, ev Event, st State, d Decision) Decision {
-	if !d.Dispatched || d.Action != ActionMergeOrWait {
+// boundReFire applies the re-fire bound to Decide's answer: a
+// state-governed dispatch the engine landed at this revision inside one
+// reconcile interval becomes a hold-off naming the bound, whichever
+// path brought the event (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/the-state-is-the-watermark). A revision-gated
+// decision consults nothing: the bound exists to pace the rows the
+// watermark does not gate. The bound is the engine's own stamp rather
+// than the watermark, so a store that cannot be read narrows the re-fire
+// instead of switching the bound off; a revision with no stamp is a
+// first dispatch, which is never touched.
+func (e *Engine) boundReFire(key Key, ev Event, st State, d Decision) Decision {
+	if !d.Dispatched || !d.StateGoverned {
 		return d
 	}
 	rev := revisionFor(ev, st)
-	if e.mergeReFiredRecently(key, rev) {
-		return holdOffMergeReFireBound(rev, e.cfg.ReconcileInterval)
+	if e.reFiredRecently(key, rev) {
+		return holdOffReFireBound(d.Action, rev, e.cfg.ReconcileInterval)
 	}
 	return d
 }
 
-// mergeReFiredRecently reports whether the stamp for key still bounds a
-// re-fire at revision: an interval spent, or a head the PR has moved
-// past, bounds nothing, so the bound is a rate and never a hold-off on a
-// revision the engine has not dispatched at
+// reFiredRecently reports whether the stamp for key still bounds a
+// re-fire at revision: an interval spent, or a revision the object has
+// moved past, bounds nothing, so the bound is a rate and never a
+// hold-off on a revision the engine has not dispatched at
 // (§forgejo/decisions/loop-prevention).
-func (e *Engine) mergeReFiredRecently(key Key, revision string) bool {
+func (e *Engine) reFiredRecently(key Key, revision string) bool {
 	e.reFireMu.Lock()
 	defer e.reFireMu.Unlock()
-	last, ok := e.mergeReFires[key]
+	last, ok := e.reFires[key]
 	return ok && last.revision == revision && time.Since(last.at) < e.cfg.ReconcileInterval
 }
 
-// stampMergeReFire records a merge-or-wait dispatch for the bound. A
-// head that moved is a new revision, so the stamp is replaced rather
-// than kept: the bound is one per unchanged head, never a hold-off on a
-// revision the engine has not dispatched at.
-func (e *Engine) stampMergeReFire(key Key, revision string) {
-	e.stampMergeReFireAt(key, revision, time.Now())
+// stampReFire records a landed dispatch for the bound. A revision the
+// object has moved past is a new revision, so the stamp is replaced
+// rather than kept: the bound is one per unchanged revision, never a
+// hold-off on a revision the engine has not dispatched at.
+func (e *Engine) stampReFire(key Key, revision string) {
+	e.stampReFireAt(key, revision, time.Now())
 }
 
-// stampMergeReFireAt records the stamp at a given moment; the tests
+// stampReFireAt records the stamp at a given moment; the tests
 // that need an interval spent use it rather than waiting one out.
-func (e *Engine) stampMergeReFireAt(key Key, revision string, at time.Time) {
+func (e *Engine) stampReFireAt(key Key, revision string, at time.Time) {
 	e.reFireMu.Lock()
 	defer e.reFireMu.Unlock()
-	e.mergeReFires[key] = mergeReFire{revision: revision, at: at}
+	e.reFires[key] = reFireStamp{revision: revision, at: at}
 }
 
 // dispatchPrompt is the one dispatch pipeline: it fills the canned
@@ -1452,7 +1457,7 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 			e.log.Warn("load watermark (continuing without)", "key", k.String(), "error", err)
 			w = nil
 		}
-		d = e.boundMergeReFire(k, ev, st, Decide(ev, st, w))
+		d = e.boundReFire(k, ev, st, Decide(ev, st, w))
 		if d.Action == ActionMergeOrWait {
 			// The dispatch carries the assembled state, not the bare
 			// pull request: the delivered issue's labels are read from

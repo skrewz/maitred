@@ -348,6 +348,14 @@ type Decision struct {
 	// cascade shape (Cascade) is the precedent for a multi-emission
 	// decision.
 	Lenses []LensDispatch
+	// StateGoverned marks a dispatch whose row reached its answer on the
+	// state, skipping the revision-keyed guard on the path that arrived:
+	// the engine spaces such a re-fire with the re-fire bound — one per
+	// reconcile interval per key and revision — instead of the watermark.
+	// A revision-gated row leaves it false and consults no stamp
+	// (§forgejo/reconciliation/the-state-is-the-watermark,
+	// §forgejo/decisions/loop-prevention).
+	StateGoverned bool
 }
 
 // LensDispatch is one emission of the review fan-out: the identity of
@@ -422,8 +430,11 @@ func Decide(e Event, s State, w *Watermark) Decision {
 // commissioned, so its root's row is the pulse, or gated by no root at
 // all — and the reason names that fact, so the decision log reads
 // "state calls for no action", never "already dispatched at this
-// revision". An issue carrying neither reserved label decides as issue
-// opened (§forgejo/decisions/transition-table).
+// revision". An issue carrying neither reserved label dispatches implement on
+// the state, revision notwithstanding and bounded by the re-fire bound, so an
+// attempt that left no connected PR recovers within one interval
+// (§forgejo/decisions/transition-table,
+// §forgejo/reconciliation/the-state-is-the-watermark).
 func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 	issue := s.Issue
 	if issue == nil || issue.State != "open" {
@@ -462,12 +473,12 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 			if remaining == 0 {
 				return holdOff(fmt.Sprintf("issue %d is an open %s root carrying %s but blocking no issue other than an %s tracker, which the order spares: its forest has nothing left to delete", issue.Number, LabelIdeation, LabelTeardownForest, LabelOutcome))
 			}
-			return dispatch(ActionTeardownForest, fmt.Sprintf("issue %d is an open %s root carrying %s and still blocking %d issue(s) the order would delete; the state calls for teardown regardless of revision %s", issue.Number, LabelIdeation, LabelTeardownForest, remaining, issueRevision(issue)))
+			return stateGoverned(dispatch(ActionTeardownForest, fmt.Sprintf("issue %d is an open %s root carrying %s and still blocking %d issue(s) the order would delete; the state calls for teardown regardless of revision %s", issue.Number, LabelIdeation, LabelTeardownForest, remaining, issueRevision(issue))))
 		}
 		// A root is decomposed even when a tracker's wrap-up would
 		// also apply: decompose wins over wrap-up
 		// (§forgejo/reconciliation/watermark-exemptions).
-		return dispatch(ActionDecompose, fmt.Sprintf("issue %d is an open %s issue; the state calls for decompose regardless of revision %s", issue.Number, LabelIdeation, issueRevision(issue)))
+		return stateGoverned(dispatch(ActionDecompose, fmt.Sprintf("issue %d is an open %s issue; the state calls for decompose regardless of revision %s", issue.Number, LabelIdeation, issueRevision(issue))))
 	}
 	if hasLabel(issue, LabelOutcome) {
 		if open := openBlockers(s.Blockers); len(open) > 0 {
@@ -482,9 +493,9 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 			if gate.State == "open" {
 				return holdOff(fmt.Sprintf("issue %d is an open %s tracker whose %s root %d is still open; its own row carries the curation", issue.Number, LabelOutcome, LabelIdeation, gate.Number))
 			}
-			return dispatch(ActionDecompose, fmt.Sprintf("issue %d is an open %s tracker commissioned by %s %d and still blocked by %d open issue(s); the state calls for decompose regardless of revision %s", issue.Number, LabelOutcome, LabelIdeation, gate.Number, len(open), issueRevision(issue)))
+			return stateGoverned(dispatch(ActionDecompose, fmt.Sprintf("issue %d is an open %s tracker commissioned by %s %d and still blocked by %d open issue(s); the state calls for decompose regardless of revision %s", issue.Number, LabelOutcome, LabelIdeation, gate.Number, len(open), issueRevision(issue))))
 		}
-		return dispatch(ActionWrapUp, fmt.Sprintf("issue %d is an open, fully unblocked %s tracker; the state calls for wrap-up regardless of revision %s", issue.Number, LabelOutcome, issueRevision(issue)))
+		return stateGoverned(dispatch(ActionWrapUp, fmt.Sprintf("issue %d is an open, fully unblocked %s tracker; the state calls for wrap-up regardless of revision %s", issue.Number, LabelOutcome, issueRevision(issue))))
 	}
 	return decideIssueOpened(e, s, w)
 }
@@ -507,7 +518,10 @@ func otherKindLabel(issue *Issue) string {
 // carrying the ideation label is a root and dispatches decompose — the
 // label, not the repository and not the title, is what makes a root
 // (§forgejo/decisions/transition-table); otherwise dispatch implement
-// if the re-fetched issue is open, unblocked, and has no connected PR.
+// if the re-fetched issue is open, unblocked, and has no connected PR. The
+// eligibility is the same on both paths; only the suppression differs — the
+// event path guards on the revision, the sweep decides on the state bounded by
+// the re-fire bound (§forgejo/reconciliation/the-state-is-the-watermark).
 // Authorship is not a gate: what gates a forest member is the
 // forest-seeding hold-off, and once the label is gone the member is
 // an ordinary work item on every path — the sweep included, which is
@@ -540,10 +554,18 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 		return holdOff(fmt.Sprintf("issue %d has %d connected open PR(s)", issue.Number, len(s.ConnectedPRs)))
 	}
 	rev := issueRevision(issue)
-	if alreadyDispatched(w, ActionImplement, rev) {
+	// Eligibility is the same predicate on both paths; only the
+	// suppression differs: the event path guards on the revision as a
+	// cursor over events, the sweep decides on the state and is spaced
+	// by the re-fire bound, so an attempt that died before opening a
+	// connected PR recovers within one interval instead of stranding at
+	// a revision it cannot move
+	// (§forgejo/reconciliation/the-state-is-the-watermark,
+	// §forgejo/decisions/loop-prevention).
+	if !onSweep(e) && alreadyDispatched(w, ActionImplement, rev) {
 		return holdOff(fmt.Sprintf("implement already dispatched at revision %s", rev))
 	}
-	return dispatch(ActionImplement, fmt.Sprintf("issue %d opened: open, unblocked, no connected PR", issue.Number))
+	return dispatchOnState(w, onSweep(e), ActionImplement, rev, fmt.Sprintf("issue %d opened: open, unblocked, no connected PR", issue.Number))
 }
 
 // decideIssueActivity handles an edited issue, a label change, or a
@@ -735,7 +757,11 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 
 // decidePRSynced handles new commits on a PR (or the reconciliation
 // sweep's synthetic current-state event): dispatch rebase when the
-// re-fetched PR is not mergeable, otherwise the review fan-out — the
+// re-fetched PR is not mergeable — on the sweep that row is
+// state-governed, dispatching revision notwithstanding and bounded by the
+// re-fire bound, so a rebase that died at an unmoved head recovers within
+// one interval (§forgejo/reconciliation/the-state-is-the-watermark) —
+// otherwise the review fan-out — the
 // lenses with no undismissed approving review at the current head
 // (§forgejo/decisions/review-lenses). A push invalidates every
 // approval (stale-approval dismissal), so a sync re-fires the whole
@@ -763,10 +789,16 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 		return holdOff(fmt.Sprintf("PR %d is not open", pr.Number))
 	}
 	if !pr.Mergeable {
-		if alreadyDispatched(w, ActionRebase, pr.HeadSHA) {
+		// The rebase row is path-aware like the implement row: the event
+		// path guards on the head, the sweep decides on the state — an
+		// open PR that is not mergeable — and is spaced by the re-fire
+		// bound, so a rebase that died at an unmoved head recovers
+		// within one interval (§forgejo/reconciliation/the-state-is-the-watermark,
+		// §forgejo/decisions/loop-prevention).
+		if !onSweep(e) && alreadyDispatched(w, ActionRebase, pr.HeadSHA) {
 			return holdOff(fmt.Sprintf("rebase already dispatched at revision %s", pr.HeadSHA))
 		}
-		return dispatch(ActionRebase, fmt.Sprintf("PR %d synced with merge conflicts", pr.Number))
+		return dispatchOnState(w, onSweep(e), ActionRebase, pr.HeadSHA, fmt.Sprintf("PR %d synced with merge conflicts", pr.Number))
 	}
 	return decideReviewFanOut(e, pr, s, w, carriesLabel(pr.Labels, LabelTriggerReview))
 }
@@ -1068,7 +1100,7 @@ func decideChainReported(e Event, s State, w *Watermark, sweepComments bool) (De
 		if ref != "" {
 			where = issueOptInClause(ref)
 		}
-		return dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d stands at approving reviews from every lens and %s; the state calls for merge-or-wait regardless of revision %s", pr.Number, where, pr.HeadSHA)), true
+		return stateGoverned(dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d stands at approving reviews from every lens and %s; the state calls for merge-or-wait regardless of revision %s", pr.Number, where, pr.HeadSHA))), true
 	}
 	if gate.fixFires(sweepComments) {
 		if d, held := holdOffPRNotOwned(pr, s.ImplementerIdentity); held {
@@ -1170,19 +1202,38 @@ func holdOffPRNotOwned(pr *PullRequest, identity string) (Decision, bool) {
 }
 
 // dispatchOnState dispatches an exempt sweep row: the state is the
-// watermark, so the row never consults the guard. When the watermark
-// does happen to already record the action at this revision — the
-// stalled shape the exemption exists to recover — the reason names
+// watermark, so the row never consults the guard, and the dispatch is
+// marked state-governed — the engine paces its re-fire with the re-fire
+// bound instead of the watermark
+// (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/the-state-is-the-watermark). When the
+// watermark does happen to already record the action at this revision —
+// the stalled shape the exemption exists to recover — the reason names
 // the revision the state carries past it, so the decision log keeps
 // stating the state fact and never "already dispatched at this
 // revision" (§forgejo/reconciliation/watermark-exemptions,
 // §forgejo/observability/the-decision-log). On a guarded row
-// (exempt false) it is a plain dispatch.
+// (exempt false) it is a plain dispatch, gated by the guard its caller
+// applied and consulting no stamp.
 func dispatchOnState(w *Watermark, exempt bool, action Action, revision, reason string) Decision {
-	if exempt && alreadyDispatched(w, action, revision) {
-		reason = fmt.Sprintf("%s; the state calls for %s regardless of revision %s", reason, action, revision)
+	d := dispatch(action, reason)
+	if !exempt {
+		return d
 	}
-	return dispatch(action, reason)
+	if alreadyDispatched(w, action, revision) {
+		d.Reason = fmt.Sprintf("%s; the state calls for %s regardless of revision %s", reason, action, revision)
+	}
+	return stateGoverned(d)
+}
+
+// stateGoverned marks a dispatch whose row reached its answer on the
+// state, skipping the revision-keyed guard on the path that arrived: the
+// engine spaces the re-fire with the re-fire bound
+// (§forgejo/reconciliation/the-state-is-the-watermark,
+// §forgejo/decisions/loop-prevention).
+func stateGoverned(d Decision) Decision {
+	d.StateGoverned = true
+	return d
 }
 
 // decidePRReviewed handles a submitted review: the re-fetched lens
@@ -2028,13 +2079,14 @@ func holdOffActionInadmissible(a Action, repo string) Decision {
 	return holdOff(fmt.Sprintf("action %s is admitted by no maitred role", a))
 }
 
-// holdOffMergeReFireBound is the re-fire bound's hold-off: the exempt
-// merge row reached a state that calls for merge-or-wait, but the
-// engine already dispatched it at this revision inside one reconcile
-// interval, so the bound — not the watermark — is what holds the re-fire
-// off, and the reason says so (§forgejo/decisions/loop-prevention).
-func holdOffMergeReFireBound(revision string, interval time.Duration) Decision {
-	return holdOff(fmt.Sprintf("merge-or-wait re-fired at revision %s within the last %s: the re-fire is bounded to one per reconcile interval", revision, interval))
+// holdOffReFireBound is the re-fire bound's hold-off: a state-governed
+// row reached a state that calls for the action, but the engine already
+// dispatched it at this revision inside one reconcile interval, so the
+// bound — not the watermark — is what holds the re-fire off, and the
+// reason says so (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/the-state-is-the-watermark).
+func holdOffReFireBound(action Action, revision string, interval time.Duration) Decision {
+	return holdOff(fmt.Sprintf("%s re-fired at revision %s within the last %s: the re-fire is bounded to one per reconcile interval", action, revision, interval))
 }
 
 // holdOffNeverImplement and holdOffNeverReassess are the reserved-label

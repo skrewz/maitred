@@ -71,23 +71,109 @@ func TestReconcile_StaleWatermarkRedispatches(t *testing.T) {
 	}
 }
 
-// TestReconcile_FreshWatermarkNoRedispatch: an already-dispatched
-// (action, revision) is not re-dispatched
-// (§forgejo/reconciliation/idempotency).
-func TestReconcile_FreshWatermarkNoRedispatch(t *testing.T) {
+// TestReconcile_FreshWatermarkImplementRefiresOnce: the sweep's
+// implement row is state-governed — an open, unblocked, unlabelled
+// issue with no connected pull request dispatches revision
+// notwithstanding, so an attempt that died before opening a PR
+// recovers instead of stranding at the watermark. The re-fire bound
+// spaces it: a second sweep inside one reconcile interval holds off
+// naming the bound, and once the interval is spent the same unchanged
+// state dispatches again (§forgejo/reconciliation/the-state-is-the-watermark,
+// §forgejo/decisions/loop-prevention).
+func TestReconcile_FreshWatermarkImplementRefiresOnce(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
 	api.repos = []Repository{testRepo("o/r")}
 	issue := &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r"}
 	api.issues[7] = issue
 	api.openIssues["r"] = []Issue{*issue}
-	if err := store.Save(Key{Repo: "o/r", Kind: KindIssue, Number: 7}, Watermark{Action: string(ActionImplement), Revision: issueRevision(issue)}); err != nil {
+	key := Key{Repo: "o/r", Kind: KindIssue, Number: 7}
+	if err := store.Save(key, Watermark{Action: string(ActionImplement), Revision: issueRevision(issue)}); err != nil {
 		t.Fatalf("save watermark: %v", err)
 	}
 
 	eng.Reconcile()
 
-	if len(q.all()) != 0 {
-		t.Fatalf("expected no re-dispatch, got %d", len(q.all()))
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks after the first sweep, want 1 (the state, not the revision, decides); all = %+v", len(tasks), tasks)
+	}
+
+	// A second sweep inside the interval the first one stamped is
+	// bounded: the unchanged state waits the interval out.
+	eng.Reconcile()
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks after the second sweep, want 1 (the re-fire is bounded); all = %+v", len(tasks), tasks)
+	}
+
+	// The interval the bound waits out is spent: the same unchanged
+	// state dispatches again — the recovery pace a stranded attempt
+	// was denied under the revision-keyed guard.
+	eng.stampReFireAt(key, issueRevision(issue), time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+	eng.Reconcile()
+	if tasks := q.all(); len(tasks) != 2 {
+		t.Fatalf("got %d tasks after the interval is spent, want 2; all = %+v", len(tasks), tasks)
+	}
+}
+
+// TestReconcile_RebaseRefiresAtUnmovedHeadBounded: the matching rebase
+// row — an open PR the sweep finds not mergeable dispatches rebase
+// whatever the watermark records at the unmoved head, and the re-fire
+// bound spaces it to one dispatch per reconcile interval
+// (§forgejo/reconciliation/the-state-is-the-watermark,
+// §forgejo/decisions/actions).
+func TestReconcile_RebaseRefiresAtUnmovedHeadBounded(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.repos = []Repository{testRepo("o/r")}
+	pr := PullRequest{Number: 1, State: "open", Mergeable: false, HeadSHA: "sha-1"}
+	api.pulls[1] = &pr
+	api.openPulls["r"] = []PullRequest{pr}
+	key := Key{Repo: "o/r", Kind: KindPR, Number: 1}
+	if err := store.Save(key, Watermark{Action: string(ActionRebase), Revision: "sha-1"}); err != nil {
+		t.Fatalf("save watermark: %v", err)
+	}
+
+	eng.Reconcile()
+
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks after the first sweep, want 1 (the unmoved head is the state that re-calls the rebase); all = %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=rebase") {
+		t.Errorf("prompt = %q, want the rebase action", tasks[0].Prompt)
+	}
+
+	eng.Reconcile()
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks after the second sweep, want 1 (the re-fire is bounded); all = %+v", len(tasks), tasks)
+	}
+
+	eng.stampReFireAt(key, "sha-1", time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+	eng.Reconcile()
+	if tasks := q.all(); len(tasks) != 2 {
+		t.Fatalf("got %d tasks after the interval is spent, want 2; all = %+v", len(tasks), tasks)
+	}
+}
+
+// TestReconcile_RevisionGatedRowConsultsNoStamp: the re-fire bound's
+// stamp is consulted only by state-governed rows. A revision-gated row
+// — the event path's implement row with nothing recorded in the
+// watermark — dispatches whatever a fresh stamp records, so generalising
+// the bound changes no behaviour on the gated rows
+// (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/the-state-is-the-watermark).
+func TestReconcile_RevisionGatedRowConsultsNoStamp(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	api.repos = []Repository{testRepo("o/r")}
+	issue := &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r"}
+	api.issues[7] = issue
+	key := Key{Repo: "o/r", Kind: KindIssue, Number: 7}
+	// A stamp taken moments ago at this revision — the shape a
+	// state-governed row leaves behind. The gated row must ignore it.
+	eng.stampReFireAt(key, issueRevision(issue), time.Now())
+
+	eng.HandleEvent(Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (a revision-gated row consults no stamp); all = %+v", len(tasks), tasks)
 	}
 }
 
