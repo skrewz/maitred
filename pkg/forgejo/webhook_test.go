@@ -3129,7 +3129,7 @@ func TestHandler_PRCommented_MergeReFireAllowedAfterInterval(t *testing.T) {
 		t.Fatalf("got %d tasks after the first comment, want 1", len(tasks))
 	}
 	// The interval the bound waits out is spent.
-	eng.stampMergeReFireAt(key, "sha-9", time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+	eng.stampReFireAt(key, ActionMergeOrWait, "sha-9", time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
 
 	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
 
@@ -3188,12 +3188,108 @@ func TestHandler_PRCommented_MergeReFireIgnoresAStampAtAnotherRevision(t *testin
 
 	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
 	// The head the stamp records is not the head the PR stands at.
-	eng.stampMergeReFireAt(key, "sha-older", time.Now())
+	eng.stampReFireAt(key, ActionMergeOrWait, "sha-older", time.Now())
 	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
 
 	tasks := q.all()
 	if len(tasks) != 2 {
 		t.Fatalf("got %d tasks, want 2 (a stamp at another revision bounds nothing); all = %+v", len(tasks), tasks)
+	}
+}
+
+// TestHandler_PRCommented_LandedRebaseDoesNotBoundTheMergeAtItsHead: the
+// bound paces one `(action, revision)`, so the rebase a sweep landed at a
+// conflicted head starts no interval for the merge row — once that same
+// head stands mergeable and approved, merge-or-wait is a first dispatch
+// and goes out inside the interval the rebase stamped, and the decision
+// log states no re-fire that did not happen
+// (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/the-state-is-the-watermark).
+func TestHandler_PRCommented_LandedRebaseDoesNotBoundTheMergeAtItsHead(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, q, _ := newTestEngine(t)
+	eng.log = slog.New(slog.NewJSONHandler(&log, nil))
+	pr := testPR(9, "open", false)
+	api.pulls[9] = pr
+
+	// The sweep finds the PR conflicted and lands a rebase at the head;
+	// the head is the revision that stamp records.
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks after the sweep, want 1 (the rebase); all = %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=rebase") {
+		t.Fatalf("prompt = %q, want the rebase the sweep landed", tasks[0].Prompt)
+	}
+
+	// The same head is now mergeable and stands approved: a first
+	// merge-or-wait at it is not a re-fire of anything.
+	api.pulls[9].Mergeable = true
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
+	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
+
+	tasks = q.all()
+	if len(tasks) != 2 {
+		t.Fatalf("got %d tasks, want 2 (another action's stamp bounds no first merge); all = %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[1].Prompt, "action=merge-or-wait") {
+		t.Errorf("prompt = %q, want merge-or-wait for o/r PR 9", tasks[1].Prompt)
+	}
+	if reason := lastReasonFor(t, &log, "o/r/pr/9"); strings.Contains(reason, "re-fired") {
+		t.Errorf("decision reason %q states a re-fire that never happened", reason)
+	}
+}
+
+// TestHandler_PRCommented_InterleavedRebaseKeepsTheMergeBound: the bound
+// keeps one stamp per key and action, so a rebase landed at a head the
+// merge row already dispatched at erases none of that row's pacing —
+// when that head turns mergeable again inside the interval the merge
+// stamped, merge-or-wait is a re-fire the bound holds rather than a
+// second dispatch (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/the-state-is-the-watermark).
+func TestHandler_PRCommented_InterleavedRebaseKeepsTheMergeBound(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, q, _ := newTestEngine(t)
+	eng.log = slog.New(slog.NewJSONHandler(&log, nil))
+	api.pulls[9] = testPR(9, "open", true)
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
+
+	// A first merge-or-wait lands at the head, starting the interval the
+	// merge row is paced by.
+	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (the first merge-or-wait); all = %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=merge-or-wait") {
+		t.Fatalf("prompt = %q, want merge-or-wait for o/r PR 9", tasks[0].Prompt)
+	}
+
+	// The base moves under an unchanged head: the sweep finds the PR
+	// conflicted and lands a rebase at that same head.
+	api.pulls[9].Mergeable = false
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	tasks = q.all()
+	if len(tasks) != 2 {
+		t.Fatalf("got %d tasks after the sweep, want 2 (the rebase); all = %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[1].Prompt, "action=rebase") {
+		t.Fatalf("prompt = %q, want the rebase the sweep landed", tasks[1].Prompt)
+	}
+
+	// The head stands mergeable and approved again inside the interval
+	// the merge stamped: its own stamp bounds the re-fire, whatever the
+	// rebase stamped alongside it.
+	api.pulls[9].Mergeable = true
+	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "dave"})
+
+	tasks = q.all()
+	if len(tasks) != 2 {
+		t.Fatalf("got %d tasks, want 2 (one action's landing must not knock another's bound out); all = %+v", len(tasks), tasks)
+	}
+	if reason := lastReasonFor(t, &log, "o/r/pr/9"); !strings.Contains(reason, "reconcile interval") {
+		t.Errorf("decision reason %q does not name the re-fire bound", reason)
 	}
 }
 
@@ -4971,8 +5067,10 @@ func TestHandler_TeardownEventPath_DispatchesTeardown(t *testing.T) {
 // TestHandler_TeardownSweepRefiresWhileTheForestStands pins the sweep's
 // exemption at the engine: while the label stands on an open root the
 // sweep dispatches again, so a teardown that died half way through is
-// retried rather than remembered as done
-// (§forgejo/reconciliation/watermark-exemptions).
+// retried rather than remembered as done — spaced, like every
+// state-governed re-fire, by the re-fire bound of one dispatch per
+// reconcile interval (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/decisions/loop-prevention).
 func TestHandler_TeardownSweepRefiresWhileTheForestStands(t *testing.T) {
 	eng, api, q, _ := newOutcomesEngine(t)
 	api.issues[7] = teardownRootIssue("o/out", 7)
@@ -4982,8 +5080,17 @@ func TestHandler_TeardownSweepRefiresWhileTheForestStands(t *testing.T) {
 		eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "maitred"})
 	}
 	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks across two sweeps inside one interval, want 1 (the re-fire is bounded): %v", len(tasks), tasks)
+	}
+	// The interval the bound waits out is spent: the forest standing
+	// is the state that calls for the order again.
+	key := Key{Repo: "o/out", Kind: KindIssue, Number: 7}
+	eng.stampReFireAt(key, ActionTeardownForest, issueRevision(api.issues[7]), time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "maitred"})
+	tasks = q.all()
 	if len(tasks) != 2 {
-		t.Fatalf("got %d tasks across two sweeps, want 2: %v", len(tasks), tasks)
+		t.Fatalf("got %d tasks after the interval is spent, want 2: %v", len(tasks), tasks)
 	}
 	for _, task := range tasks {
 		if !strings.Contains(task.Prompt, "action="+string(ActionTeardownForest)) {

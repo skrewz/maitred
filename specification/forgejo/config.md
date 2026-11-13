@@ -59,6 +59,22 @@ config it deploys (§forgejo/config/loading).
 | `teardown-forest` | `/forest-teardown` |
 | `sync` | `/set-lander` |
 
+The `implement` prompt's pre-flight checks must, before creating any
+branch or pull request, establish whether a connected pull request
+already exists for the issue and, if one does, report and stay silent
+rather than start a second delivery: the sweep re-dispatches `implement`
+revision notwithstanding, so what keeps a re-fire of a delivered
+implementation quiet is the **pair** — the engine's eligibility predicate
+(no connected open pull request, §forgejo/decisions/actions) and this
+pre-flight. Neither replaces the other, and neither is the guard on its
+own: the predicate reads the issue's blocker rows and nothing else, so a
+delivery that wired no edge is invisible to it, and an instruction in a
+prompt is defence in depth rather than enforcement. Both read the same
+relation, which is why a delivery must wire the pull request to the
+issue it delivers
+(§forgejo/reconciliation/the-state-is-the-watermark,
+§forgejo/config/canned-prompts).
+
 Reviews are configured separately, as the ordered lens list
 (§forgejo/config/review-lenses); the retired `review` and `re-review`
 entries have no row here, and `/pr-reviewer` is retired with them.

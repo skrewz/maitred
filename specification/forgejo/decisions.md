@@ -182,12 +182,12 @@ prompts:
 
 | Action | Dispatched when |
 |---|---|
-| `implement` | the issue is open, unblocked (all its blockers closed), has no connected open PR, carries no reserved label and does not carry `forest-seeding`, and is not an `outcome` tracker (one that becomes unblocked is a `wrap-up` candidate) — the issue was opened, became unblocked, or was reconciled into that state (§forgejo/decisions/loop-prevention, §forgejo/decisions/commissioning) |
+| `implement` | the issue is open, unblocked (all its blockers closed), has no connected open PR, carries no reserved label and does not carry `forest-seeding`, and is not an `outcome` tracker (one that becomes unblocked is a `wrap-up` candidate) — the issue was opened, became unblocked, or was reconciled into that state; **on the sweep the row is state-governed, dispatching revision notwithstanding and bounded by the re-fire bound**, so an attempt that died before opening a connected pull request recovers within one interval (§forgejo/reconciliation/the-state-is-the-watermark, §forgejo/decisions/loop-prevention, §forgejo/decisions/commissioning) |
 | `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement), and it carries no reserved label |
 | `review` | the **fan-out over the configured lenses**: a mergeable PR opened, or synced, dispatches each lens with no undismissed approval at the head (§forgejo/decisions/review-lenses); so does an open mergeable PR carrying the `trigger-review` label, at the current revision (§forgejo/decisions/label-triggered-review); watermark-exempt per lens on the sweep while that lens has reported nothing at the head (§forgejo/reconciliation/watermark-exemptions) |
 | `fix-feedback` | every configured review lens has reported at the PR's current head and the reports are not all approvals (§forgejo/decisions/review-lenses) — **and** the PR's author is the configured implementer identity; a PR authored by anyone else holds off, its feedback theirs to fix (§forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention, s-git/maitred#143); while any lens has not reported at head the action holds off naming the outstanding lenses, whose dispatches the fan-out row advances; watermark-exempt on the sweep while the chain reports feedback at the current head (§forgejo/reconciliation/watermark-exemptions) |
 | `merge-or-wait` | **every configured lens holds an undismissed approval at the PR's current head**, no reviewer's latest undismissed review at head is a non-approval (§forgejo/decisions/review-lenses), **the work it delivers carries the `agentic-auto-merge` opt-in — on the PR or on the issue its body closes** — the label is a precondition of the dispatch on every path, so an approved PR with no merge opt-in on either seat holds off, its reason naming the missing label and the connected issues (§forgejo/decisions/merge-gate, s-git/maitred#179) — **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's; never for a PR whose connected issue is a member of an open sync set — landing is the set's decision (§forgejo/decisions/sync-set); a labelled member of no open set — its set retired — reads as stale authoring, not a gate, and the merge gate decides on (§forgejo/decisions/sync-set); watermark-exempt on every path when the work it delivers carries `agentic-auto-merge` — on the PR or on the issue its body closes — its approved head being frozen (§forgejo/reconciliation/watermark-exemptions) |
-| `rebase` | an open PR is not mergeable (conflicts) |
+| `rebase` | an open PR is not mergeable (conflicts); **on the sweep the row is state-governed, dispatching revision notwithstanding and bounded by the re-fire bound**, so a rebase that died at an unmoved head recovers within one interval (§forgejo/reconciliation/the-state-is-the-watermark, §forgejo/decisions/loop-prevention) |
 | `decompose` | an open issue carrying the `ideation` label was opened, edited, had its labels changed, or received a comment authored by anyone other than the configured decomposer identity (§forgejo/decisions/loop-prevention, s-git/maitred#147); or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes; watermark-exempt on the sweep (§forgejo/reconciliation/watermark-exemptions) |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions); or the unblock cascade newly unblocks an open issue carrying the `outcome` label (§forgejo/decisions/unblock-cascade) |
 | `teardown-forest` | an open issue carrying the `ideation` label **also** carries the `teardown-forest` label, **and blocks at least one issue that is not an `outcome` tracker**: the human has ordered the forest that root commissioned to be deleted, and a member the order would delete remains to delete (§forgejo/decisions/forest-teardown); watermark-exempt on the sweep while such a member stands (§forgejo/reconciliation/watermark-exemptions) |
@@ -910,7 +910,20 @@ Five mechanisms, in this order:
    engine's own stamp, so a watermark the store cannot read narrows the
    re-fire rather than lifting the bound; the stamp is in memory, so a
    restart admits one re-fire per key before the bound reasserts itself.
-   The queue's
+   The bound is the engine's general guard for state-governed re-fires,
+   not a property of any one action: every landed singleton dispatch
+   stamps its key, action and revision, and a re-fire of that unchanged
+   `(action, revision)` by a state-governed row inside one interval
+   becomes a hold-off naming the bound
+   (§forgejo/reconciliation/the-state-is-the-watermark). The action is
+   part of the stamp because the bound is a rate on one
+   unchanged `(action, revision)`: a dispatch may pace the same action's
+   re-fire and never another action's, so an event that landed one action
+   at a revision cannot hold a different action's row there off, and one
+   action's landing erases no sibling's pacing. Only a
+   state-governed row consults a stamp; a row still revision-gated
+   consults none, so generalising the mechanism changes no behaviour
+   there. The queue's
    `(action, revision)` dedup key is not that bound: it squelches a
    submission whose match is still pending, so it bounds the overlap of
    two tasks at one head and not their spacing
