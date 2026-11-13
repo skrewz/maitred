@@ -137,7 +137,7 @@ func TestMountForgejoRoute_TriggerFallbackUnchanged(t *testing.T) {
 func writeForgejoConfig(t *testing.T, dir string) {
 	t.Helper()
 	var b strings.Builder
-	b.WriteString("org: example-org\nreconcile_interval: 15m\nactions:\n")
+	b.WriteString("org: example-org\nreconcile_interval: 15m\nengine_account: maitred-bot\nactions:\n")
 	for _, a := range forgejo.AllActions {
 		fmt.Fprintf(&b, "  %s:\n    prompt: \"do {{.IssueURL}}\"\n    identity: actor\n    timeout: 1h\n", a)
 	}
@@ -279,7 +279,7 @@ func healthTriggerDirs(t *testing.T) (string, string) {
 func writeForgejoConfigVariant(t *testing.T, dir, omit, extra string) {
 	t.Helper()
 	var b strings.Builder
-	b.WriteString("org: example-org\nreconcile_interval: 15m\nactions:\n")
+	b.WriteString("org: example-org\nreconcile_interval: 15m\nengine_account: maitred-bot\nactions:\n")
 	for _, a := range forgejo.AllActions {
 		if string(a) == omit {
 			continue

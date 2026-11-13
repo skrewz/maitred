@@ -288,6 +288,33 @@ the churn of an implementer dispatched onto a human's PR, answering
 reviews the human is handling themselves, is what the gate prevents
 (s-git/s-puppet#118, s-git/maitred#143).
 
+## Engine account
+
+One required key names the Forgejo login of the engine's own account —
+the identity its reads and direct writes are authored as:
+
+| Key | Required | Value |
+|---|---|---|
+| `engine_account` | yes | the login of the engine's own account; the forest's actionable-state digest excludes its comments, so the digest gate needs it to tell the engine's own reports from a human's words (§forgejo/decisions/actionable-state-digest, s-git/maitred#209) |
+
+The key is **required**: an unset one is a load error
+(§forgejo/config/validation), never a silently inert gate. Without it
+the digest would fold the engine's own report comments, move on every
+sweep and re-trigger the run that wrote them — the pathology the
+digest's exclusion list exists to prevent — so a blank is worse than
+no digest at all, and the digest refuses to read a forest without an
+account (§forgejo/decisions/actionable-state-digest, s-git/maitred#209).
+In a directory merge, files that set the key must agree, exactly as
+with the org and the two identity keys; a conflict is a load error.
+
+The key grants no privilege and admits nothing: like the two identity
+keys it is the operator's declaration, and it is stale in the same way
+— a renamed account folds its old login's comments forever, a
+reproducible diagnosis in the decision log rather than a silent loop
+(§forgejo/config/decomposer-identity, s-git/maitred#147). Unlike them
+it names no persona that runs a task: the queue resolves the actions'
+and lenses' identities, never this one (§forgejo/config/identity-collapse).
+
 ## Placeholders
 
 Prompt templates are Go `text/template` templates. The engine fills the
@@ -328,6 +355,9 @@ Loading **fails at load time** — mirroring the trigger `Validate()` — when:
 - the org is missing, or a directory's files disagree about it, about
   `reconcile_interval`, about `decomposer_identity`, or about
   `implementer_identity`,
+- the engine's own account (`engine_account`) is missing: the digest
+  gate cannot exclude the engine's own comments without it
+  (§forgejo/config/engine-account),
 - a directory's files define the same action twice.
 
 The lens list is validated with the actions: it must hold at least one

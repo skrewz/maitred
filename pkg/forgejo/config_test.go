@@ -23,6 +23,7 @@ org: example-org
 reconcile_interval: 15m
 decomposer_identity: decomposer
 implementer_identity: implementer
+engine_account: maitred-bot
 actions:
   implement:
     prompt: "/issue-implementer {{.IssueURL}}"
@@ -113,6 +114,9 @@ func TestLoadConfigFile(t *testing.T) {
 	if cfg.ImplementerIdentity != "implementer" {
 		t.Errorf("implementer_identity = %q, want %q", cfg.ImplementerIdentity, "implementer")
 	}
+	if cfg.EngineAccount != "maitred-bot" {
+		t.Errorf("engine_account = %q, want %q", cfg.EngineAccount, "maitred-bot")
+	}
 	if len(cfg.Actions) != len(AllActions) {
 		t.Fatalf("loaded %d actions, want %d", len(cfg.Actions), len(AllActions))
 	}
@@ -136,7 +140,7 @@ func TestLoadConfigFile(t *testing.T) {
 // merged in sorted order (§forgejo/config/loading).
 func TestLoadConfigDirectory(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, "01-org.yaml", "org: example-org\ndecomposer_identity: decomposer\nimplementer_identity: implementer\n")
+	writeConfig(t, dir, "01-org.yaml", "org: example-org\ndecomposer_identity: decomposer\nimplementer_identity: implementer\nengine_account: maitred-bot\n")
 	writeConfig(t, dir, "02-implement.yaml", `
 actions:
   implement:
@@ -198,6 +202,21 @@ func TestLoadConfigDecomposerIdentityAbsent(t *testing.T) {
 	}
 	if cfg.DecomposerIdentity != "" {
 		t.Errorf("decomposer_identity = %q, want empty", cfg.DecomposerIdentity)
+	}
+}
+
+// TestLoadConfigEngineAccountRequired pins that the engine's own
+// account is required, not an optional identity: without it the
+// digest would fold the engine's own report comments and move every
+// sweep, so the absence is a load error, never a silently inert gate
+// (§forgejo/config/engine-account, §forgejo/config/validation,
+// s-git/maitred#209).
+func TestLoadConfigEngineAccountRequired(t *testing.T) {
+	dir := t.TempDir()
+	yaml := strings.Replace(validConfigYAML, "engine_account: maitred-bot\n", "", 1)
+	path := writeConfig(t, dir, "forgejoeng.yaml", yaml)
+	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "engine_account") {
+		t.Fatalf("LoadConfig without engine_account: err = %v, want an engine_account-is-required error", err)
 	}
 }
 
@@ -398,6 +417,14 @@ func TestLoadConfigDirectoryConflicts(t *testing.T) {
 		writeConfig(t, dir, "02-b.yaml", "implementer_identity: two\n")
 		if _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), "implementer_identity") {
 			t.Fatalf("expected conflicting-implementer_identity error, got %v", err)
+		}
+	})
+	t.Run("conflicting engine_account", func(t *testing.T) {
+		dir := t.TempDir()
+		writeConfig(t, dir, "01-a.yaml", "org: example-org\nengine_account: one\n")
+		writeConfig(t, dir, "02-b.yaml", "engine_account: two\n")
+		if _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), "engine_account") {
+			t.Fatalf("expected conflicting-engine_account error, got %v", err)
 		}
 	})
 }

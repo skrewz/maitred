@@ -568,6 +568,51 @@ func TestStore_ForestDigest_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestStore_ForestDigestParts_RoundTrip: the forest slot additionally
+// persists the fold's per-component sub-digests, so the next observation
+// can name which component moved (§forgejo/state/forest-digest,
+// s-git/maitred#209). An issue watermark's on-disk file gains no
+// digest_parts field: omitempty keeps the dispatch records byte-identical
+// to before the gate.
+func TestStore_ForestDigestParts_RoundTrip(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	const digest = "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+	parts := map[string]string{"root": "aa", "blocker": "bb"}
+	forest := ForestKey("acme/maitred", 49)
+	if err := s.Save(forest, Watermark{Digest: digest, DigestParts: parts}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := s.Load(forest)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got == nil || got.Digest != digest {
+		t.Fatalf("loaded slot = %+v, want digest %q", got, digest)
+	}
+	if len(got.DigestParts) != 2 || got.DigestParts["root"] != "aa" || got.DigestParts["blocker"] != "bb" {
+		t.Errorf("loaded parts = %v, want %v", got.DigestParts, parts)
+	}
+
+	issue := Key{Repo: "acme/maitred", Kind: KindIssue, Number: 49}
+	if err := s.Save(issue, Watermark{Action: "implement", Revision: "rev"}); err != nil {
+		t.Fatalf("Save issue: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(s.dir, issue.fileName()))
+	if err != nil {
+		t.Fatalf("read on-disk file: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("on-disk file is not JSON: %v", err)
+	}
+	if _, present := fields["digest_parts"]; present {
+		t.Errorf("issue watermark on-disk JSON carries digest_parts: %v", fields)
+	}
+}
+
 // TestStore_ForestDigest_RestartSurvival: a store newly opened on the
 // same directory sees the forest digests a previous instance saved — a
 // quiet forest stays quiet across restarts

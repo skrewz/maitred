@@ -29,12 +29,11 @@ const (
 	ActionFixFeedback Action = "fix-feedback"
 	ActionMergeOrWait Action = "merge-or-wait"
 	ActionRebase      Action = "rebase"
-	// ActionDecompose and ActionWrapUp are the actions the sweep's
-	// watermark-exempt rows dispatch, where the state is the
-	// watermark. On the event path decompose has rows of its own,
-	// under the ordinary revision-keyed guard — the exemption
-	// belongs to the sweep's rows, not to the action
-	// (§forgejo/reconciliation/watermark-exemptions).
+	// ActionWrapUp is the sweep's watermark-exempt action, where the
+	// state is the watermark. decompose's rows on every path consult
+	// the forest's actionable-state digest gate, dispatching only when
+	// the digest moved (§forgejo/reconciliation/watermark-exemptions,
+	// §forgejo/decisions/actionable-state-digest, s-git/maitred#209).
 	ActionDecompose Action = "decompose"
 	ActionWrapUp    Action = "wrap-up"
 	// ActionSync is the third meta-action on outcomes repos: it
@@ -241,6 +240,67 @@ type State struct {
 	// spared tracker has no forest left to delete
 	// (§forgejo/decisions/forest-teardown).
 	Blocked []Issue
+	// ForestGate is what the re-fetch observed of the forest whose
+	// decompose row this decision considers, assembled exactly when the
+	// issue under consideration can reach a digest-gated decompose row
+	// (§forgejo/decisions/actionable-state-digest,
+	// §forgejo/reconciliation/watermark-exemptions, s-git/maitred#209).
+	// Nil exactly when the gate is unarmed for this issue: no gated row
+	// is reachable (the issue is closed, under a teardown order, or a
+	// kind conflict the sweep holds off before any decompose row; on
+	// the event path a kind-conflicting root does still reach its root
+	// row, which there keeps its revision-keyed guard). While armed,
+	// the digest comparison replaces the revision-keyed guard on every
+	// path that dispatches decompose, so all paths give the same answer
+	// for this action.
+	ForestGate *ForestDigestGate
+}
+
+// ForestDigestGate is what the re-fetch observed of one forest's
+// actionable-state digest: the digest as it now stands with its
+// per-component sub-digests, and the digest the store last observed
+// with its sub-digests (§forgejo/decisions/actionable-state-digest,
+// §forgejo/state/forest-digest). The decision function only compares
+// them — the reads and the refresh belong to the pipeline, keeping
+// Decide pure. The root names the forest: its repository and number
+// key the store slot the refresh writes (§forgejo/state/forest-digest).
+type ForestDigestGate struct {
+	// RootRepo and RootNumber name the forest's ideation root.
+	RootRepo   string
+	RootNumber int
+	// Current is the digest of the forest as the re-fetch found it;
+	// CurrentParts its sub-digest per component
+	// (§forgejo/decisions/actionable-state-digest).
+	Current      string
+	CurrentParts map[string]string
+	// Stored is the forest slot's last observed digest; StoredParts its
+	// sub-digests. Empty when the forest has never been observed.
+	Stored      string
+	StoredParts map[string]string
+}
+
+// movedComponents names the components of the forest's actionable
+// state whose sub-digests differ between the two observations, in the
+// fixed digestComponents order so the reason is deterministic, each
+// named by its reporting phrase. A fold
+// that gained or lost a component entirely shows as that component
+// moving. A stored slot written before sub-digests existed carries no
+// parts to compare against: its forest's digest moved — that much the
+// overall digests say — but no component can be localised, so the
+// reason names the digest as a whole and nothing else
+// (§forgejo/state/forest-digest,
+// §forgejo/decisions/actionable-state-digest, s-git/maitred#209).
+func (g *ForestDigestGate) movedComponents() []string {
+	if g.Stored != "" && len(g.StoredParts) == 0 {
+		return []string{"the digest as a whole"}
+	}
+	var moved []string
+	for _, component := range digestComponents {
+		if g.CurrentParts[component.key] != g.StoredParts[component.key] {
+			moved = append(moved, component.phrase)
+		}
+	}
+	return moved
 }
 
 // ConnectedIssue is one non-PR issue a pull request blocks, with the
@@ -419,20 +479,24 @@ func Decide(e Event, s State, w *Watermark) Decision {
 // decideIssueReconcile handles the reconciliation sweep's synthetic
 // current-state event for an issue. The watermark-exempt rows come
 // first, and they are the exemption: unlike every other path, they
-// decide without consulting the watermark, so an open ideation root
-// dispatches decompose, an open outcome tracker of a commissioned forest
-// dispatches decompose too, and an open, fully unblocked outcome tracker
-// dispatches wrap-up, revision notwithstanding — state is the watermark
-// (§forgejo/reconciliation/watermark-exemptions). These rows are the exempt
-// set: the exemption is scoped to the sweep, and an exempt action reached
-// from an event keeps the revision-keyed guard like any other action. A
-// tracker holds off only when there is nothing to curate — not yet
-// commissioned, so its root's row is the pulse, or gated by no root at
-// all — and the reason names that fact, so the decision log reads
-// "state calls for no action", never "already dispatched at this
-// revision". An issue carrying neither reserved label dispatches implement on
-// the state, revision notwithstanding and bounded by the re-fire bound, so an
-// attempt that left no connected PR recovers within one interval
+// decide without consulting the watermark, so an open, fully unblocked
+// outcome tracker dispatches wrap-up, revision notwithstanding — state
+// is the watermark (§forgejo/reconciliation/watermark-exemptions). The
+// `decompose` rows stand outside the exempt set and are the digest
+// gate's: an open ideation root, and a commissioned tracker still
+// blocked, dispatch decompose only when the forest's actionable-state
+// digest moved since the store last observed it, on this path and on
+// the event path alike (§forgejo/decisions/actionable-state-digest,
+// s-git/maitred#209). The exemption is scoped to the sweep, and an
+// exempt action reached from an event keeps the revision-keyed guard
+// like any other action. A tracker holds off only when there is
+// nothing to curate — not yet commissioned, so its root's row is the
+// pulse, or gated by no root at all — and the reason names that fact,
+// so the decision log reads "state calls for no action", never
+// "already dispatched at this revision". An issue carrying neither
+// reserved label dispatches implement on the state, revision
+// notwithstanding and bounded by the re-fire bound, so an attempt that
+// left no connected PR recovers within one interval
 // (§forgejo/decisions/transition-table,
 // §forgejo/reconciliation/the-state-is-the-watermark).
 func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
@@ -477,8 +541,19 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 		}
 		// A root is decomposed even when a tracker's wrap-up would
 		// also apply: decompose wins over wrap-up
-		// (§forgejo/reconciliation/watermark-exemptions).
-		return stateGoverned(dispatch(ActionDecompose, fmt.Sprintf("issue %d is an open %s issue; the state calls for decompose regardless of revision %s", issue.Number, LabelIdeation, issueRevision(issue))))
+		// (§forgejo/reconciliation/watermark-exemptions). The digest
+		// gate is this row's whole decision: the forest dispatches only
+		// when its actionable-state digest moved since the store last
+		// observed it (§forgejo/decisions/actionable-state-digest,
+		// s-git/maitred#209). A sweep root always reaches this row with
+		// the gate armed — a root whose kind labels conflict was held
+		// off in the sync branch above — so a row arriving with no
+		// observation is a wiring fault, and it holds off like any
+		// missing digest does (§forgejo/webhook/re-fetch).
+		if d, ok := digestGateDecision(s.ForestGate, fmt.Sprintf("issue %d is an open %s issue", issue.Number, LabelIdeation)); ok {
+			return d
+		}
+		return holdOff(fmt.Sprintf("issue %d is an open %s issue: the digest gate assembled no observation of its forest; nothing dispatches on a missing digest", issue.Number, LabelIdeation))
 	}
 	if hasLabel(issue, LabelOutcome) {
 		if open := openBlockers(s.Blockers); len(open) > 0 {
@@ -493,7 +568,16 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 			if gate.State == "open" {
 				return holdOff(fmt.Sprintf("issue %d is an open %s tracker whose %s root %d is still open; its own row carries the curation", issue.Number, LabelOutcome, LabelIdeation, gate.Number))
 			}
-			return stateGoverned(dispatch(ActionDecompose, fmt.Sprintf("issue %d is an open %s tracker commissioned by %s %d and still blocked by %d open issue(s); the state calls for decompose regardless of revision %s", issue.Number, LabelOutcome, LabelIdeation, gate.Number, len(open), issueRevision(issue))))
+			// The commissioned tracker carries its forest's curation
+			// under the same digest gate as the root's row: one forest,
+			// one answer, whichever row the sweep reaches. The gate arms
+			// wherever this row dispatches, so a missing observation is
+			// a wiring fault and holds off like any missing digest does
+			// (§forgejo/decisions/actionable-state-digest, s-git/maitred#209).
+			if d, ok := digestGateDecision(s.ForestGate, fmt.Sprintf("issue %d is an open %s tracker commissioned by %s %d and still blocked by %d open issue(s)", issue.Number, LabelOutcome, LabelIdeation, gate.Number, len(open))); ok {
+				return d
+			}
+			return holdOff(fmt.Sprintf("issue %d is an open %s tracker whose forest the digest gate assembled no observation of: nothing dispatches on a missing digest", issue.Number, LabelOutcome))
 		}
 		return stateGoverned(dispatch(ActionWrapUp, fmt.Sprintf("issue %d is an open, fully unblocked %s tracker; the state calls for wrap-up regardless of revision %s", issue.Number, LabelOutcome, issueRevision(issue))))
 	}
@@ -563,11 +647,13 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 
 // decideIssueActivity handles an edited issue, a label change, or a
 // feedback comment: on an open issue carrying the ideation label the
-// edit or label change is the revision of intent the decomposer
-// re-cures against and dispatches decompose — attaching the label is
-// the first trigger — and so is a comment, by the same guard: the
-// comment bumps the root's updated_at, so it reads as a new revision
-// (s-git/maitred#147). The row is author-scoped, not blanket: a comment
+// decomposer re-cures — attaching the label is the first trigger — and
+// so is a comment (s-git/maitred#147). decideDecompose answers the
+// dispatch from the forest's digest wherever the gate is armed; where
+// it is unarmed — an event on a root whose kind labels conflict, an
+// issue the sweep holds off as a conflict before any decompose row —
+// the row keeps its revision-keyed guard. The row
+// is author-scoped, not blanket: a comment
 // authored by the configured decomposer identity holds off naming the
 // authorship, so the decomposer's own question never re-triggers it
 // (§forgejo/decisions/loop-prevention); otherwise dispatch reassess if
@@ -585,8 +671,9 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	if hasLabel(issue, LabelIdeation) {
 		// The comment row is guarded by authorship, not blanket: the
 		// decomposer's own comment on its root holds off silently,
-		// every other author's re-cures the forest under the ordinary
-		// revision-keyed watermark guard (§forgejo/decisions/loop-prevention,
+		// every other author's comment reaches the root row, where the
+		// digest gate answers in place of the revision guard whenever
+		// it is armed (§forgejo/decisions/actionable-state-digest,
 		// s-git/maitred#147). The fall-through is the root row in full:
 		// a root that also carries a teardown order takes the teardown
 		// row, exactly as an edit does — the order is the label, not
@@ -619,10 +706,17 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	return dispatch(ActionReassess, fmt.Sprintf("issue %d: %s", issue.Number, e.Type))
 }
 
-// decideDecompose is the event path's root row: an open ideation issue
-// dispatches decompose under the ordinary revision-keyed watermark
-// guard — the watermark exemption is a property of the sweep's row,
-// not of the action (§forgejo/reconciliation/watermark-exemptions). A
+// decideDecompose is the event path's root row. Wherever the gate is
+// armed it answers here, in place of the revision-keyed guard: the gate
+// is the same comparison the sweep's rows make, so both paths give the
+// same answer for this action, and an edge move — which moves the
+// digest and no revision — cannot be suppressed by a watermark
+// (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/decisions/actionable-state-digest, s-git/maitred#209). The
+// gate is unarmed only for a root whose kind labels conflict: the
+// sweep holds that issue off as a conflict before any decompose row,
+// while the event path's row for it keeps the revision-keyed guard
+// below (§forgejo/decisions/transition-table). A
 // root is decomposed whatever blocks it; a closed root holds off
 // upstream, because closing it commissions the forest and the unblock
 // cascade dispatches the forest members
@@ -631,11 +725,7 @@ func decideDecompose(e Event, issue *Issue, s State, w *Watermark) Decision {
 	if hasLabel(issue, LabelTeardownForest) {
 		return decideTeardown(issue, s, w)
 	}
-	rev := issueRevision(issue)
-	if alreadyDispatched(w, ActionDecompose, rev) {
-		return holdOff(fmt.Sprintf("decompose already dispatched at revision %s", rev))
-	}
-	reason := fmt.Sprintf("issue %d is an open %s root: the label makes the root", issue.Number, LabelIdeation)
+	subject := fmt.Sprintf("issue %d is an open %s root: the label makes the root", issue.Number, LabelIdeation)
 	if e.Type == EventIssueCommented {
 		// The author guard on the comment row is this row's whole loop
 		// prevention, so the dispatch names the comment's author: when
@@ -645,9 +735,48 @@ func decideDecompose(e Event, issue *Issue, s State, w *Watermark) Decision {
 		// stream of decompose dispatches authored by that account
 		// (§forgejo/config/decomposer-identity,
 		// §forgejo/decisions/loop-prevention, s-git/maitred#147).
-		reason = fmt.Sprintf("issue %d is an open %s root: a comment by %s", issue.Number, LabelIdeation, e.Sender)
+		subject = fmt.Sprintf("issue %d is an open %s root: a comment by %s", issue.Number, LabelIdeation, e.Sender)
 	}
-	return dispatch(ActionDecompose, reason)
+	// The gate's answer is the same one the sweep's rows give for this
+	// forest, and while the gate is armed it stands in place of the
+	// revision-keyed guard: an edge move changes the digest and no
+	// revision, so a revision guard beside the gate would suppress the
+	// very re-curation the gate exists to allow
+	// (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#209).
+	// Only a kind-conflicting root reaches the guard below, with the
+	// gate unarmed.
+	if d, ok := digestGateDecision(s.ForestGate, subject); ok {
+		return d
+	}
+	rev := issueRevision(issue)
+	if alreadyDispatched(w, ActionDecompose, rev) {
+		return holdOff(fmt.Sprintf("decompose already dispatched at revision %s", rev))
+	}
+	return dispatch(ActionDecompose, subject)
+}
+
+// digestGateDecision is the digest gate's whole decision, shared by
+// every row that dispatches decompose while the gate is armed, so all
+// paths give the same answer for this action: unchanged digests hold
+// off, a moved digest dispatches with a reason naming the component
+// that moved, and a forest the store has never observed dispatches as
+// a first observation (§forgejo/decisions/actionable-state-digest,
+// §forgejo/reconciliation/watermark-exemptions, s-git/maitred#209).
+// ok reports whether the gate carries an observation at all: a nil
+// gate is an unarmed one, whose row keeps its own guard — only the
+// event path's kind-conflicting root reaches that case. subject
+// phrases the state the row found; the gate's clause follows it.
+func digestGateDecision(g *ForestDigestGate, subject string) (Decision, bool) {
+	if g == nil || g.Current == "" {
+		return Decision{}, false
+	}
+	if g.Current == g.Stored {
+		return holdOff(fmt.Sprintf("%s: the forest's actionable-state digest is unchanged since it was last observed: nothing a decompose run could act on has moved", subject)), true
+	}
+	if g.Stored == "" {
+		return dispatch(ActionDecompose, fmt.Sprintf("%s: the forest's actionable-state digest is observed for the first time; the state calls for decompose", subject)), true
+	}
+	return dispatch(ActionDecompose, fmt.Sprintf("%s: the forest's actionable-state digest moved (%s); the state calls for decompose", subject, strings.Join(g.movedComponents(), ", "))), true
 }
 
 // decideTeardown is the event path's teardown row: an open root carrying

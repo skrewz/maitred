@@ -1508,16 +1508,16 @@ func TestDecide(t *testing.T) {
 		{
 			name:  "reconcile commissioned unfinished tracker dispatches decompose",
 			event: issueEvent(EventReconcile),
-			state: State{ReviewLenses: testLenses, Issue: trackerIssue(), Blockers: []Issue{
+			state: State{ReviewLenses: testLenses, Issue: trackerIssue(), ForestGate: firstObservation(), Blockers: []Issue{
 				{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
 				{Number: 8, State: "open", Repository: "o/r"},
 			}},
 			wantAction: ActionDecompose,
 		},
 		{
-			name:  "reconcile re-fires decompose for a commissioned tracker already dispatched at an unchanged revision",
+			name:  "reconcile dispatches decompose for a commissioned tracker whose forest the store has not observed, whatever the watermark records",
 			event: issueEvent(EventReconcile),
-			state: State{ReviewLenses: testLenses, Issue: trackerIssue(), Blockers: []Issue{
+			state: State{ReviewLenses: testLenses, Issue: trackerIssue(), ForestGate: firstObservation(), Blockers: []Issue{
 				{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
 				{Number: 8, State: "open", Repository: "o/r"},
 			}},
@@ -1549,13 +1549,13 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "reconcile open ideation issue dispatches decompose",
 			event:      issueEvent(EventReconcile),
-			state:      State{ReviewLenses: testLenses, Issue: ideationIssue()},
+			state:      State{ReviewLenses: testLenses, Issue: ideationIssue(), ForestGate: firstObservation()},
 			wantAction: ActionDecompose,
 		},
 		{
-			name:       "reconcile re-fires decompose for an ideation issue already dispatched at an unchanged revision",
+			name:       "reconcile dispatches decompose for an ideation issue whose forest the store has not observed, whatever the watermark records",
 			event:      issueEvent(EventReconcile),
-			state:      State{ReviewLenses: testLenses, Issue: ideationIssue()},
+			state:      State{ReviewLenses: testLenses, Issue: ideationIssue(), ForestGate: firstObservation()},
 			watermark:  &Watermark{Action: "decompose", Revision: testRev},
 			wantAction: ActionDecompose,
 		},
@@ -1567,7 +1567,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "an ideation label takes precedence over an outcome label",
 			event:      issueEvent(EventReconcile),
-			state:      State{ReviewLenses: testLenses, Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{LabelOutcome, LabelIdeation}}},
+			state:      State{ReviewLenses: testLenses, Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{LabelOutcome, LabelIdeation}}, ForestGate: firstObservation()},
 			wantAction: ActionDecompose,
 		},
 		// The event path dispatches `decompose` for an open ideation
@@ -1692,7 +1692,7 @@ func TestDecide(t *testing.T) {
 			// (§forgejo/reconciliation/watermark-exemptions).
 			name:       "reconcile open issue carrying a differently cased ideation label dispatches decompose",
 			event:      issueEvent(EventReconcile),
-			state:      State{ReviewLenses: testLenses, Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{"Ideation"}}},
+			state:      State{ReviewLenses: testLenses, Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{"Ideation"}}, ForestGate: firstObservation()},
 			wantAction: ActionDecompose,
 		},
 		{
@@ -3138,7 +3138,7 @@ func TestDecide_TeardownProtectsTheTrackerThroughTheRootsOwnEdge(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tr := tracker()
 			d := Decide(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: tr.Number},
-				State{ReviewLenses: testLenses, Issue: tr, Blockers: tc.blockers}, nil)
+				State{ReviewLenses: testLenses, Issue: tr, Blockers: tc.blockers, ForestGate: firstObservation()}, nil)
 			if d.Action != tc.wantAction {
 				t.Errorf("action = %q, want %q (%s)", d.Action, tc.wantAction, d.Reason)
 			}
@@ -3195,7 +3195,7 @@ func TestDecide_TeardownLabelRemovalIsTheRootRowResuming(t *testing.T) {
 		{"the sweep row resumes whatever the watermark holds", Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: root.Number}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d := Decide(tc.event, State{ReviewLenses: testLenses, Issue: root, Blocked: standingForest()}, w)
+			d := Decide(tc.event, State{ReviewLenses: testLenses, Issue: root, Blocked: standingForest(), ForestGate: firstObservation()}, w)
 			if d.Action != ActionDecompose {
 				t.Errorf("action = %q, want %q (%s)", d.Action, ActionDecompose, d.Reason)
 			}
@@ -4311,4 +4311,247 @@ func TestDecide_ReassessGainsNoSweepRow(t *testing.T) {
 	if !d.Dispatched || d.Action != ActionImplement {
 		t.Fatalf("decision = %+v, want implement on the sweep's unlabelled-issue row", d)
 	}
+}
+
+// The digest gate fixtures (§forgejo/decisions/actionable-state-digest,
+// s-git/maitred#209): the gate observation carries the forest's current
+// digest and component sub-digests beside the stored ones, and a test
+// names the components it wants to have moved.
+
+func gateParts() map[string]string {
+	return map[string]string{"root": "r1", "member": "m1", "tracker": "t1", "blocker": "b1", "comment": "c1"}
+}
+
+// digestGateObservation is the gate as re-fetch assembly hands it to the
+// decision: stored at the base values, current with the named components
+// moved. With no moved components the two digests agree.
+func digestGateObservation(moved ...string) *ForestDigestGate {
+	current, stored := gateParts(), gateParts()
+	for _, component := range moved {
+		current[component] = "moved-" + component
+	}
+	overall := "stored-digest"
+	if len(moved) > 0 {
+		overall = "current-digest"
+	}
+	return &ForestDigestGate{
+		RootRepo:     "o/r",
+		RootNumber:   3,
+		Current:      overall,
+		CurrentParts: current,
+		Stored:       "stored-digest",
+		StoredParts:  stored,
+	}
+}
+
+// firstObservation is the gate over a forest the store has never seen.
+func firstObservation() *ForestDigestGate {
+	g := digestGateObservation()
+	g.Stored = ""
+	g.StoredParts = nil
+	return g
+}
+
+// commissionedTrackerFixture is the sweep's commissioned tracker: open,
+// carrying the outcome label, still blocked by an open member, its
+// ideation gate closed (§forgejo/reconciliation/watermark-exemptions).
+func commissionedTrackerFixture() State {
+	return State{
+		ReviewLenses: testLenses,
+		Issue:        trackerIssue(),
+		Blockers: []Issue{
+			{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
+			{Number: 4, State: "open", Repository: "o/r"},
+		},
+	}
+}
+
+// TestDecide_DecomposeDigestGate_SweepRoot: the sweep's open-root row
+// dispatches only when the forest's actionable-state digest moved, the
+// reason naming which component moved; an unchanged digest dispatches
+// nothing, and a row arriving with no observation holds off like any
+// missing digest does (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/decisions/actionable-state-digest, s-git/maitred#209).
+func TestDecide_DecomposeDigestGate_SweepRoot(t *testing.T) {
+	t.Run("unchanged digest dispatches nothing", func(t *testing.T) {
+		d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: ideationIssue(), ForestGate: digestGateObservation()}, &Watermark{Action: string(ActionDecompose), Revision: testRev})
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want the hold-off the quiet forest earns", d)
+		}
+		if !strings.Contains(d.Reason, "digest is unchanged") {
+			t.Errorf("reason = %q, want it to name the unchanged digest", d.Reason)
+		}
+	})
+	t.Run("first observation dispatches", func(t *testing.T) {
+		d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: ideationIssue(), ForestGate: firstObservation()}, nil)
+		if d.Action != ActionDecompose {
+			t.Fatalf("decision = %+v, want decompose for a forest never observed", d)
+		}
+		if !strings.Contains(d.Reason, "observed for the first time") {
+			t.Errorf("reason = %q, want it to name the first observation", d.Reason)
+		}
+	})
+	t.Run("a moved blocker dispatches naming the component", func(t *testing.T) {
+		d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: ideationIssue(), ForestGate: digestGateObservation("blocker")}, &Watermark{Action: string(ActionDecompose), Revision: testRev})
+		if d.Action != ActionDecompose {
+			t.Fatalf("decision = %+v, want decompose: a blocker moved", d)
+		}
+		if !strings.Contains(d.Reason, "blocker") || strings.Contains(d.Reason, "comment") {
+			t.Errorf("reason = %q, want it to name the blocker state alone as the component that moved", d.Reason)
+		}
+	})
+	t.Run("several components moved are all named", func(t *testing.T) {
+		d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: ideationIssue(), ForestGate: digestGateObservation("root", "comment")}, nil)
+		if d.Action != ActionDecompose {
+			t.Fatalf("decision = %+v, want decompose", d)
+		}
+		for _, want := range []string{"root", "comment"} {
+			if !strings.Contains(d.Reason, want) {
+				t.Errorf("reason = %q, want it to name the %s component", d.Reason, want)
+			}
+		}
+	})
+	t.Run("a moved tracker dispatches naming the component", func(t *testing.T) {
+		d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: ideationIssue(), ForestGate: digestGateObservation("tracker")}, nil)
+		if d.Action != ActionDecompose {
+			t.Fatalf("decision = %+v, want decompose: a tracker closed", d)
+		}
+		if !strings.Contains(d.Reason, "tracker") {
+			t.Errorf("reason = %q, want it to name the tracker component", d.Reason)
+		}
+	})
+	t.Run("a stored slot with no parts dispatches naming no component", func(t *testing.T) {
+		// The upgrade reading: a slot written by a build predating
+		// the sub-digests (§forgejo/state/forest-digest) says the
+		// digest moved and nothing more.
+		g := digestGateObservation("root")
+		g.StoredParts = nil
+		d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: ideationIssue(), ForestGate: g}, nil)
+		if d.Action != ActionDecompose {
+			t.Fatalf("decision = %+v, want decompose: the stored digest differs", d)
+		}
+		if !strings.Contains(d.Reason, "the digest as a whole") || strings.Contains(d.Reason, "root's state") {
+			t.Errorf("reason = %q, want it to name no component beyond the digest itself", d.Reason)
+		}
+	})
+	t.Run("no observation on a gated row holds off", func(t *testing.T) {
+		// The pipeline always arms the sweep's gated rows; a row
+		// arriving with no observation is a wiring fault, and it
+		// holds off like any missing digest does.
+		d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: ideationIssue()}, nil)
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want the missing-observation hold-off", d)
+		}
+		if !strings.Contains(d.Reason, "no observation") {
+			t.Errorf("reason = %q, want it to name the missing observation", d.Reason)
+		}
+	})
+}
+
+// TestDecide_DecomposeDigestGate_SweepTracker: the commissioned
+// tracker's row consults the same gate — one forest, one answer
+// (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#209).
+func TestDecide_DecomposeDigestGate_SweepTracker(t *testing.T) {
+	t.Run("unchanged digest dispatches nothing", func(t *testing.T) {
+		st := commissionedTrackerFixture()
+		st.ForestGate = digestGateObservation()
+		d := Decide(issueEvent(EventReconcile), st, &Watermark{Action: string(ActionDecompose), Revision: testRev})
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want the hold-off the quiet forest earns", d)
+		}
+		if !strings.Contains(d.Reason, "digest is unchanged") {
+			t.Errorf("reason = %q, want it to name the unchanged digest", d.Reason)
+		}
+	})
+	t.Run("a moved member dispatches naming the component", func(t *testing.T) {
+		st := commissionedTrackerFixture()
+		st.ForestGate = digestGateObservation("member")
+		d := Decide(issueEvent(EventReconcile), st, nil)
+		if d.Action != ActionDecompose {
+			t.Fatalf("decision = %+v, want decompose: a member moved", d)
+		}
+		if !strings.Contains(d.Reason, "member") {
+			t.Errorf("reason = %q, want it to name the member component", d.Reason)
+		}
+	})
+	t.Run("no observation on a gated row holds off", func(t *testing.T) {
+		// The twin of the root row's wiring guard: re-fetch arms this
+		// row too, so a tracker arriving with no observation is a
+		// wiring fault, and it holds off like any missing digest does.
+		d := Decide(issueEvent(EventReconcile), commissionedTrackerFixture(), nil)
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want the missing-observation hold-off", d)
+		}
+		if !strings.Contains(d.Reason, "no observation") {
+			t.Errorf("reason = %q, want it to name the missing observation", d.Reason)
+		}
+	})
+}
+
+// TestDecide_DecomposeDigestGate_EventPath: the event path's decompose
+// row consults the same gate wherever the gate is armed, so both paths
+// give the same answer for this action — and the gate replaces the
+// revision-keyed guard there, because an edge move changes the digest
+// and no revision (§forgejo/reconciliation/watermark-exemptions,
+// s-git/maitred#209). The row's revision guard stands only where the
+// gate is unarmed: an event on a root whose kind labels conflict, an
+// issue the sweep holds off as a conflict before any decompose row.
+func TestDecide_DecomposeDigestGate_EventPath(t *testing.T) {
+	edited := func() *Issue {
+		i := ideationIssue()
+		i.UpdatedAt = testTime2
+		return i
+	}
+	t.Run("an edit at a fresh revision with an unchanged digest holds off", func(t *testing.T) {
+		st := State{ReviewLenses: testLenses, Issue: edited(), ForestGate: digestGateObservation()}
+		d := Decide(issueEvent(EventIssueEdited), st, &Watermark{Action: string(ActionDecompose), Revision: testRev})
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want the gate's hold-off over the revision guard", d)
+		}
+		if strings.Contains(d.Reason, "already dispatched") {
+			t.Errorf("reason = %q, want the digest's answer, not the watermark's", d.Reason)
+		}
+	})
+	t.Run("an edit whose digest moved dispatches naming the root", func(t *testing.T) {
+		st := State{ReviewLenses: testLenses, Issue: edited(), ForestGate: digestGateObservation("root")}
+		d := Decide(issueEvent(EventIssueEdited), st, &Watermark{Action: string(ActionDecompose), Revision: testRev})
+		if d.Action != ActionDecompose {
+			t.Fatalf("decision = %+v, want decompose: the root's intent moved", d)
+		}
+		if !strings.Contains(d.Reason, "root") {
+			t.Errorf("reason = %q, want it to name the root component", d.Reason)
+		}
+	})
+	t.Run("a human comment whose digest moved names the comment", func(t *testing.T) {
+		ev := Event{Type: EventIssueCommented, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"}
+		st := State{ReviewLenses: testLenses, Issue: edited(), DecomposerIdentity: "decomposer", ForestGate: digestGateObservation("comment")}
+		d := Decide(ev, st, &Watermark{Action: string(ActionDecompose), Revision: testRev})
+		if d.Action != ActionDecompose {
+			t.Fatalf("decision = %+v, want decompose: a human comment moved the digest", d)
+		}
+		if !strings.Contains(d.Reason, "a comment by alice") || !strings.Contains(d.Reason, "comment") {
+			t.Errorf("reason = %q, want it to name the comment's author and component", d.Reason)
+		}
+	})
+	t.Run("the decomposer's own comment still holds off on authorship", func(t *testing.T) {
+		ev := Event{Type: EventIssueCommented, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "decomposer"}
+		st := State{ReviewLenses: testLenses, Issue: ideationIssue(), DecomposerIdentity: "decomposer", ForestGate: digestGateObservation("comment")}
+		d := Decide(ev, st, nil)
+		if !d.HoldOff() || !strings.Contains(d.Reason, "the decomposer identity decomposer") {
+			t.Errorf("decision = %+v, want the authorship hold-off kept ahead of the gate", d)
+		}
+	})
+	t.Run("a kind-conflicting root keeps the revision-keyed guard", func(t *testing.T) {
+		// The gate arms only where a gated row is reachable; the
+		// sweep holds this issue off as a conflict before any
+		// decompose row, so the event path's root row keeps its
+		// revision guard — pre-existing routing, unchanged.
+		conflicted := labelledIssue(LabelIdeation, LabelSync)
+		conflicted.Number = 7
+		st := State{ReviewLenses: testLenses, Issue: conflicted}
+		d := Decide(issueEvent(EventIssueEdited), st, nil)
+		if d.Action != ActionDecompose || !strings.Contains(d.Reason, "the label makes the root") {
+			t.Errorf("decision = %+v, want the unarmed row's revision-guarded dispatch", d)
+		}
+	})
 }

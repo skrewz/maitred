@@ -895,3 +895,222 @@ func TestReconcile_ApprovedAutoMergePRRefires(t *testing.T) {
 		})
 	}
 }
+
+// The digest gate's sweep fixtures (§forgejo/decisions/actionable-state-digest,
+// s-git/maitred#209): a quiet forest — an open ideation root #1, its
+// commissioned tracker #2 still blocked by the open root, an open member #4
+// claimed as a human task, and blocker #9 standing open on the member.
+// Nothing in the forest dispatches anything but the root's gated
+// decompose row.
+
+func quietForest(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store) {
+	t.Helper()
+	eng, api, q, store := newTestEngine(t)
+	// The forest stands in an outcomes repository: decompose is
+	// admitted only where the outcomes role stands
+	// (§forgejo/webhook/repository-roles).
+	api.repos = []Repository{{Name: "r", FullName: "o/r", Owner: "o", Topics: []string{"maitred-enabled", maitredOutcomesTopic}, HasPullRequests: true}}
+	root := &Issue{Number: 1, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r", Labels: []string{LabelIdeation}}
+	tracker := &Issue{Number: 2, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r", Labels: []string{LabelOutcome}}
+	member := &Issue{Number: 4, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r", Labels: []string{LabelHumanTask}}
+	blocker := Issue{Number: 9, State: "open", Repository: "o/r"}
+	api.issues[1], api.issues[2], api.issues[4] = root, tracker, member
+	api.blocks[1] = []Issue{*tracker, *member}
+	api.deps[2] = []Issue{*root, *member}
+	api.deps[4] = []Issue{blocker}
+	api.openIssues["r"] = []Issue{*root, *tracker, *member}
+	return eng, api, q, store
+}
+
+// TestReconcile_DecomposeDigestGate_QuietForest: two consecutive sweeps
+// over a quiet forest cost one digest computation each and no second
+// dispatch — the first observation commissions the run, the unchanged
+// second buys silence; and the refresh leaves the forest slot holding
+// the digest and its parts (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/state/forest-digest, s-git/maitred#209).
+func TestReconcile_DecomposeDigestGate_QuietForest(t *testing.T) {
+	eng, api, q, store := quietForest(t)
+
+	eng.Reconcile()
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("first sweep dispatched %d tasks, want the one first-observation decompose", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=decompose") {
+		t.Errorf("prompt = %q, want the decompose action", tasks[0].Prompt)
+	}
+	slot, err := store.Load(ForestKey("o/r", 1))
+	if err != nil {
+		t.Fatalf("load forest slot: %v", err)
+	}
+	if slot == nil || slot.Digest == "" || len(slot.DigestParts) == 0 {
+		t.Fatalf("forest slot = %+v, want the refreshed digest and its parts", slot)
+	}
+	readsAfterOne := api.callCount("IssueBlocks:r/1")
+
+	eng.Reconcile()
+	if got := len(q.all()); got != 1 {
+		t.Fatalf("quiet forest dispatched %d tasks across two sweeps, want 1", got)
+	}
+	if got := api.callCount("IssueBlocks:r/1"); got != readsAfterOne+1 {
+		t.Errorf("second sweep cost %d forest reads, want one digest computation (%d total)", got-readsAfterOne, readsAfterOne+1)
+	}
+}
+
+// TestReconcile_DecomposeDigestGate_CommissionedForest pins the sweep's
+// commissioned-tracker row — the row that carries the curation once a
+// forest's root has closed, which is the steady state the gate exists
+// to make quiet: two sweeps over a commissioned quiet forest cost one
+// digest computation each and no second dispatch, and the slot is
+// keyed by the closed root the tracker's row fetched, not by the
+// tracker whose row armed the gate
+// (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/state/forest-digest, s-git/maitred#209).
+func TestReconcile_DecomposeDigestGate_CommissionedForest(t *testing.T) {
+	eng, api, q, store := quietForest(t)
+	// The forest is commissioned: closing the root removes the root's
+	// own sweep row, so the tracker's gated row is the forest's pulse
+	// (§forgejo/decisions/transition-table).
+	api.mu.Lock()
+	api.issues[1].State = "closed"
+	api.deps[2][0].State = "closed" // the value copy of the root the tracker's dependencies carry
+	api.openIssues["r"] = []Issue{*api.issues[2], *api.issues[4]}
+	api.mu.Unlock()
+
+	eng.Reconcile()
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("first sweep dispatched %d tasks, want the one first-observation decompose from the tracker's row", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=decompose") {
+		t.Errorf("prompt = %q, want the decompose action", tasks[0].Prompt)
+	}
+	// The slot is keyed by the root the row fetched whole, not by the
+	// tracker the sweep walked: the tracker's row and the root's row
+	// must ask the same forest's question
+	// (§forgejo/state/forest-digest).
+	slot, err := store.Load(ForestKey("o/r", 1))
+	if err != nil {
+		t.Fatalf("load forest slot: %v", err)
+	}
+	if slot == nil || slot.Digest == "" || len(slot.DigestParts) == 0 {
+		t.Fatalf("root's forest slot = %+v, want the refreshed digest and its parts", slot)
+	}
+	if byTracker, err := store.Load(ForestKey("o/r", 2)); err != nil {
+		t.Fatalf("load tracker forest slot: %v", err)
+	} else if byTracker != nil {
+		t.Errorf("tracker-keyed forest slot = %+v, want the digest stored under the root only", byTracker)
+	}
+	readsAfterOne := api.callCount("IssueBlocks:r/1")
+
+	eng.Reconcile()
+	if got := len(q.all()); got != 1 {
+		t.Fatalf("commissioned quiet forest dispatched %d tasks across two sweeps, want 1", got)
+	}
+	if got := api.callCount("IssueBlocks:r/1"); got != readsAfterOne+1 {
+		t.Errorf("second sweep cost %d forest reads, want one digest computation (%d total)", got-readsAfterOne, readsAfterOne+1)
+	}
+}
+
+// TestReconcile_DecomposeDigestGate_MovedDigest: an actionable change
+// between sweeps dispatches the decompose again — a blocker of a member
+// closing is exactly the move the gate exists to catch
+// (§forgejo/decisions/actionable-state-digest, s-git/maitred#209).
+func TestReconcile_DecomposeDigestGate_MovedDigest(t *testing.T) {
+	eng, api, q, store := quietForest(t)
+	eng.Reconcile()
+
+	api.mu.Lock()
+	api.deps[4][0].State = "closed"
+	api.mu.Unlock()
+
+	eng.Reconcile()
+	tasks := q.all()
+	if len(tasks) != 2 {
+		t.Fatalf("dispatched %d tasks, want a second decompose once the blocker closed", len(tasks))
+	}
+	if !strings.Contains(tasks[1].Prompt, "action=decompose") {
+		t.Errorf("prompt = %q, want the decompose action", tasks[1].Prompt)
+	}
+	// The successful dispatch refreshes the slot: the next sweep's
+	// comparison runs against what this one observed.
+	slot, err := store.Load(ForestKey("o/r", 1))
+	if err != nil {
+		t.Fatalf("load forest slot: %v", err)
+	}
+	if slot == nil || slot.Digest == "" || len(slot.DigestParts) == 0 {
+		t.Fatalf("forest slot = %+v, want the refreshed digest and its parts", slot)
+	}
+}
+
+// TestReconcile_DecomposeDigestGate_FailedDispatchKeepsTheSlot pins the
+// refresh's failure clause: a dispatch that never landed leaves the
+// stale slot, so the next sweep re-observes the moved digest and
+// retries the run the queue never got — the forest must not go quiet
+// on a run that never reached the queue
+// (§forgejo/state/forest-digest, §forgejo/webhook/the-pipeline,
+// s-git/maitred#209).
+func TestReconcile_DecomposeDigestGate_FailedDispatchKeepsTheSlot(t *testing.T) {
+	eng, api, q, store := quietForest(t)
+	eng.Reconcile()
+	if got := len(q.all()); got != 1 {
+		t.Fatalf("first sweep dispatched %d tasks, want the one first-observation decompose", got)
+	}
+	slot, err := store.Load(ForestKey("o/r", 1))
+	if err != nil {
+		t.Fatalf("load forest slot: %v", err)
+	}
+	if slot == nil || slot.Digest == "" || len(slot.DigestParts) == 0 {
+		t.Fatalf("forest slot = %+v, want the refreshed digest and its parts", slot)
+	}
+
+	// The digest moves while the queue is down: the sweep dispatches
+	// nothing and the slot stays exactly as the landed sweep left it.
+	api.mu.Lock()
+	api.deps[4][0].State = "closed"
+	api.mu.Unlock()
+	q.err = errors.New("queue down")
+	eng.Reconcile()
+	if got := len(q.all()); got != 1 {
+		t.Fatalf("failing sweep landed %d tasks, want the first only", got)
+	}
+	after, err := store.Load(ForestKey("o/r", 1))
+	if err != nil {
+		t.Fatalf("load forest slot: %v", err)
+	}
+	if after.Digest != slot.Digest || len(after.DigestParts) != len(slot.DigestParts) {
+		t.Errorf("failed dispatch moved the forest slot from %+v to %+v, want it byte-identical", slot, after)
+	}
+
+	// With the queue back, the next sweep sees the still-unequal
+	// digests, lands the run the failure owed, and refreshes.
+	q.err = nil
+	eng.Reconcile()
+	tasks := q.all()
+	if len(tasks) != 2 {
+		t.Fatalf("recovery sweep landed %d tasks, want the retried decompose", len(tasks))
+	}
+	if !strings.Contains(tasks[1].Prompt, "action=decompose") {
+		t.Errorf("prompt = %q, want the decompose action", tasks[1].Prompt)
+	}
+	after, err = store.Load(ForestKey("o/r", 1))
+	if err != nil {
+		t.Fatalf("load forest slot: %v", err)
+	}
+	if after.Digest == slot.Digest {
+		t.Errorf("recovery sweep left the stale digest %q, want the refreshed one", after.Digest)
+	}
+}
+
+// TestReconcile_DecomposeDigestGate_FailedReadIsAHoldOff: a failed
+// digest read fails the re-fetch — a loud hold-off the next sweep
+// backstops, never a dispatch from a partial digest
+// (§forgejo/decisions/actionable-state-digest, s-git/maitred#209).
+func TestReconcile_DecomposeDigestGate_FailedReadIsAHoldOff(t *testing.T) {
+	eng, api, q, _ := quietForest(t)
+	api.issueBlocksErr = errors.New("blocks listing down")
+	eng.Reconcile()
+	if got := len(q.all()); got != 0 {
+		t.Fatalf("dispatched %d tasks on a failed digest read, want none", got)
+	}
+}
