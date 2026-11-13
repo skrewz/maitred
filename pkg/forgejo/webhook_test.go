@@ -141,6 +141,12 @@ type fakeAPI struct {
 	// (§forgejo/webhook/re-fetch).
 	issueDepsErr error
 
+	// comments holds issue comments by issue number, and commentsErr,
+	// when set, fails only ListIssueComments — the digest's comment
+	// reads (§forgejo/decisions/actionable-state-digest).
+	comments    map[int][]Comment
+	commentsErr error
+
 	// pullErr, when set, fails only GetPullRequest — so a test can
 	// break the cascade's PR re-fetch without breaking the event's
 	// reads (§forgejo/decisions/unblock-cascade).
@@ -171,6 +177,7 @@ func newFakeAPI() *fakeAPI {
 		reviews:       map[int][]Review{},
 		blocks:        map[int][]Issue{},
 		deps:          map[int][]Issue{},
+		comments:      map[int][]Comment{},
 		openIssues:    map[string][]Issue{},
 		openPulls:     map[string][]PullRequest{},
 		listIssuesErr: map[string]error{},
@@ -343,6 +350,17 @@ func (f *fakeAPI) IssueDependencies(owner, repo string, number int) ([]Issue, er
 		return nil, f.depsErr
 	}
 	return f.deps[number], nil
+}
+
+func (f *fakeAPI) ListIssueComments(owner, repo string, number int) ([]Comment, error) {
+	f.record("Comments:" + repo + "/" + strconv.Itoa(number))
+	if f.commentsErr != nil {
+		return nil, f.commentsErr
+	}
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.comments[number], nil
 }
 
 // fakeQueue is a fake queue provider for the webhook tests.

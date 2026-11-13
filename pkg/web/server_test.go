@@ -65,6 +65,10 @@ func (s *stubForgejoAPI) IssueDependencies(string, string, int) ([]forgejo.Issue
 	return nil, nil
 }
 
+func (s *stubForgejoAPI) ListIssueComments(string, string, int) ([]forgejo.Comment, error) {
+	return nil, nil
+}
+
 func (s *stubForgejoAPI) ListPullRequestReviews(string, string, int) ([]forgejo.Review, error) {
 	return nil, nil
 }

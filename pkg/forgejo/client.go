@@ -141,6 +141,19 @@ type Review struct {
 	SubmittedAt time.Time
 }
 
+// Comment is a comment on an issue or pull request, slimmed to the
+// fields the engine needs: the forest's actionable-state digest counts a comment as its
+// author and its body alone, so nothing else about a comment — its
+// timestamps, reactions, or the object it hangs off — is mapped
+// (§forgejo/decisions/actionable-state-digest).
+type Comment struct {
+	// Author is the login of the user who wrote the comment; a
+	// response without a user object yields an empty author.
+	Author string
+	// Body is the comment's text.
+	Body string
+}
+
 // API is the read-only Forgejo surface the engine depends on
 // (§forgejo/client/operations). It is an interface so the decision
 // function, webhook handler, and reconciliation sweep can be tested
@@ -168,6 +181,12 @@ type API interface {
 	// ListPullRequestReviews lists a pull request's reviews (event,
 	// author, commit).
 	ListPullRequestReviews(owner, repo string, number int) ([]Review, error)
+	// ListIssueComments lists an issue's comments (author, body). The
+	// forest's actionable-state digest uses it to count comments by
+	// anyone other than the engine's own account or the configured
+	// decomposer identity as triggers
+	// (§forgejo/decisions/actionable-state-digest).
+	ListIssueComments(owner, repo string, number int) ([]Comment, error)
 }
 
 // Client is a read-only client for the Forgejo REST API v1.
@@ -365,6 +384,19 @@ func (c *Client) ListPullRequestReviews(owner, repo string, number int) ([]Revie
 	return reviews, nil
 }
 
+// ListIssueComments implements API.
+func (c *Client) ListIssueComments(owner, repo string, number int) ([]Comment, error) {
+	batch, err := listAll[wireComment](c, repoPath(owner, repo)+"/issues/"+strconv.Itoa(number)+"/comments")
+	if err != nil {
+		return nil, err
+	}
+	comments := make([]Comment, len(batch))
+	for i, w := range batch {
+		comments[i] = Comment{Author: w.User.Login, Body: w.Body}
+	}
+	return comments, nil
+}
+
 // repoPath builds the escaped "/repos/{owner}/{repo}" path prefix.
 func repoPath(owner, repo string) string {
 	return "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo)
@@ -506,6 +538,11 @@ type wireReview struct {
 	CommitID    string    `json:"commit_id"`
 	Dismissed   bool      `json:"dismissed"`
 	SubmittedAt time.Time `json:"submitted_at"`
+}
+
+type wireComment struct {
+	Body string   `json:"body"`
+	User wireUser `json:"user"`
 }
 
 func toRepository(w wireRepository) Repository {
