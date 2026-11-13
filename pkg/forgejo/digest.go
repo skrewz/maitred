@@ -30,9 +30,10 @@ var digestMemberLabels = []string{
 // so the same state always yields a byte-identical digest and a change
 // to any folded fact moves it (§forgejo/decisions/actionable-state-digest).
 // The digest is deterministic and order-insensitive — listings are
-// folded as sets of facts, never as a transcript — and it is computed,
-// not yet consulted: persisting a forest's previous digest and gating
-// dispatch on the digest moving are separate work.
+// folded as sets of facts, never as a transcript — and a forest's last
+// observed digest can be stored through the state store's forest slot
+// (§forgejo/state/forest-digest); gating dispatch on the digest moving
+// remains separate work.
 //
 // The forest is named by its ideation root and read through the issues
 // the root blocks: isTracker's reading of those rows — the outcome label

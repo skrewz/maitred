@@ -1032,9 +1032,9 @@ The engine can compute an **actionable-state digest** of one forest: a
 hex-encoded SHA-256 over exactly the facts a `decompose` re-run could act
 on. The digest is deterministic and order-insensitive — the same state
 yields a byte-identical digest whatever order the listings arrive in, and
-a change to any folded fact moves it. The digest is computed, not yet
-consulted: storing a forest's previous digest and gating dispatch on the
-digest moving are separate work.
+a change to any folded fact moves it. A forest's last observed digest
+can be stored (§forgejo/state/forest-digest), but the digest is not yet
+consulted: gating dispatch on the digest moving is separate work.
 
 The forest is named by its `ideation` root and read through the issues
 the root **blocks**: `isTracker`'s reading of those rows — `outcome`

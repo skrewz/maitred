@@ -1,7 +1,8 @@
 # Forgejo state
 
 The engine persists a small **"what have I dispatched" watermark** per
-issue/PR.
+issue/PR, and one digest slot per forest in the same store
+([Forest digest](#forest-digest)).
 
 ## Watermark
 
@@ -26,7 +27,9 @@ record, and the per-key lock stays on the object.
 ## Storage
 
 The watermark is stored as local JSON under the data directory (e.g.
-`/var/lib/maitred/forgejoeng/`), keyed by `repo + kind(issue|pr) + number`.
+`/var/lib/maitred/forgejoeng/`), keyed by
+`repo + kind(issue|pr|forest) + number` (the forest kind is the
+[Forest digest](#forest-digest) slot below).
 Writes are **atomic**: a reader never observes a torn or partially written
 watermark.
 
@@ -34,6 +37,29 @@ watermark.
 
 The watermark must **survive a maitred restart**: a store newly opened on
 the same directory sees the watermarks a previous instance saved.
+
+## Forest digest
+
+A forest has **one slot per forest** in the same store — keyed by
+`repo + kind(forest) + number`, where the repository and number name the
+forest's **ideation root**, so the `decompose` decision made on that root
+finds the slot (§forgejo/decisions/actionable-state-digest). The slot is
+an ordinary watermark record whose **digest** field carries the forest's
+last observed actionable-state digest; `action` and `revision` are unused
+there, and the forest kind keeps the slot's file distinct from the root
+issue's own watermark. Like watermarks, forest slots are written
+**atomically**, serialised through the same **per-key lock**, and
+survive a restart (§forgejo/state/storage, §forgejo/state/persistence,
+§forgejo/state/concurrency). The slot exists so a digest gate can make a
+quiet forest stay quiet across restarts: when it lands it must refresh
+the slot on every evaluation, dispatched or skipped, so the next sweep
+compares against the newest observed state.
+
+The slot is **lossy** like the watermark: a lost slot simply makes the
+next comparison see a digest that moved, and the cost is one redundant
+(decompose) run (§forgejo/state/lossiness). The engine does **not yet**
+write or read the slot: the digest gate that consults it and refreshes
+it on every evaluation is separate work.
 
 ## Lossiness
 

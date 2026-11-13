@@ -14,20 +14,26 @@ import (
 // Kind identifies what a watermark tracks.
 type Kind string
 
-// The two kinds of tracked object (§forgejo/state/storage).
+// The kinds of tracked object (§forgejo/state/storage). A forest is
+// neither an issue nor a pull request, but it shares the store: its
+// digest slot is keyed by the forest's ideation root
+// (§forgejo/state/forest-digest).
 const (
-	KindIssue Kind = "issue"
-	KindPR    Kind = "pr"
+	KindIssue  Kind = "issue"
+	KindPR     Kind = "pr"
+	KindForest Kind = "forest"
 )
 
-// Key identifies a tracked issue or pull request. It is the watermark
-// store's key: repo + kind + number (§forgejo/state/storage).
+// Key identifies a tracked object — an issue, a pull request, or a
+// forest's digest slot. It is the watermark store's key: repo + kind +
+// number (§forgejo/state/storage).
 type Key struct {
 	// Repo is the repository's "owner/repo" full name.
 	Repo string `json:"repo"`
-	// Kind is KindIssue or KindPR.
+	// Kind is KindIssue, KindPR or KindForest.
 	Kind Kind `json:"kind"`
-	// Number is the issue or pull request number.
+	// Number is the issue or pull request number; for a forest slot, the
+	// ideation root's issue number.
 	Number int `json:"number"`
 }
 
@@ -35,6 +41,16 @@ type Key struct {
 // diagnostics.
 func (k Key) String() string {
 	return fmt.Sprintf("%s/%s/%d", k.Repo, k.Kind, k.Number)
+}
+
+// ForestKey returns the store key of the forest named by the ideation
+// root at repo#number: one slot per forest, derived from the root the
+// decompose decision is made on, so the digest comparison finds it
+// (§forgejo/state/forest-digest). The forest kind keeps the slot's
+// file distinct from the root issue's own watermark, so a dispatch
+// write to the root can never clobber the stored digest.
+func ForestKey(repo string, rootNumber int) Key {
+	return Key{Repo: repo, Kind: KindForest, Number: rootNumber}
 }
 
 // fileName returns the JSON file name for this key. The "/" in the repo
@@ -55,7 +71,9 @@ type Slot struct {
 }
 
 // Watermark is the "what have I dispatched" record for a single issue or
-// pull request (§forgejo/state/watermark). The main (Action, Revision)
+// pull request (§forgejo/state/watermark); a forest's slot is the same
+// record carrying an observation instead of a dispatch
+// (§forgejo/state/forest-digest). The main (Action, Revision)
 // slot records the object's own singleton dispatches; Subjects carries
 // one slot per subject of a fan-out dispatch — the review lenses — so
 // two lenses dispatched at the same revision do not hold each other
@@ -74,6 +92,14 @@ type Watermark struct {
 	// objects that have only ever seen singleton dispatches, and for
 	// watermarks written before the lens list (§forgejo/state/watermark).
 	Subjects map[string]Slot `json:"subjects,omitempty"`
+	// Digest is a forest's last observed actionable-state digest,
+	// stored in the forest's slot under ForestKey
+	// (§forgejo/state/forest-digest). It is the one field the forest
+	// slot uses: Action, Revision and Subjects record what has been
+	// dispatched, which says nothing about what was observed, so they
+	// stay empty there. Issue and PR watermarks never carry it, and
+	// omitempty keeps their on-disk files byte-identical to before.
+	Digest string `json:"digest,omitempty"`
 }
 
 // subjectSlot returns the slot recorded for subject, if any.
