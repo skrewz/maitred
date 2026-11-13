@@ -298,6 +298,37 @@ func TestForestDigestOrderInsensitive(t *testing.T) {
 			t.Errorf("blocker order moved the digest: %s vs %s", got, base)
 		}
 	})
+	t.Run("blocker shared by two members folds once", func(t *testing.T) {
+		// The digest folds a blocker's state, not which member's dependency
+		// listing names it, so blocker #4 appearing in member #5's listing
+		// alongside member #3's adds no fact. Folding each dependency as it
+		// comes would double the fact, and blocking-edge churn would then
+		// move the digest with no state having moved — the false re-trigger
+		// this feature exists to remove.
+		shared := digestIssue("o/r", 4, "closed")
+		namedByBoth := digestForest()
+		namedByBoth.deps[5] = append(namedByBoth.deps[5], shared)
+		if got := digest(t, namedByBoth); got != base {
+			t.Errorf("a blocker named by a second member moved the digest: %s vs %s", got, base)
+		}
+		namedByOtherOnly := digestForest()
+		namedByOtherOnly.deps[3] = []Issue{namedByOtherOnly.deps[3][1]}
+		namedByOtherOnly.deps[5] = append(namedByOtherOnly.deps[5], shared)
+		if got := digest(t, namedByOtherOnly); got != base {
+			t.Errorf("which member names a shared blocker moved the digest: %s vs %s", got, base)
+		}
+	})
+	t.Run("shared blocker's listings reordered", func(t *testing.T) {
+		shared := digestIssue("o/r", 4, "closed")
+		f := digestForest()
+		f.deps[5] = append(f.deps[5], shared)
+		d3, d5 := f.deps[3], f.deps[5]
+		f.deps[3] = []Issue{d3[1], d3[0]}
+		f.deps[5] = []Issue{d5[1], d5[0]}
+		if got := digest(t, f); got != base {
+			t.Errorf("order of the listings naming a shared blocker moved the digest: %s vs %s", got, base)
+		}
+	})
 }
 
 // TestForestDigestReadFailures pins that a failed read is an error, not
