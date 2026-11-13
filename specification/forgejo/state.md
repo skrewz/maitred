@@ -1,7 +1,8 @@
 # Forgejo state
 
 The engine persists a small **"what have I dispatched" watermark** per
-issue/PR.
+issue/PR, and one digest slot per forest in the same store
+([Forest digest](#forest-digest)).
 
 ## Watermark
 

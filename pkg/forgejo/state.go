@@ -24,14 +24,16 @@ const (
 	KindForest Kind = "forest"
 )
 
-// Key identifies a tracked issue or pull request. It is the watermark
-// store's key: repo + kind + number (§forgejo/state/storage).
+// Key identifies a tracked object — an issue, a pull request, or a
+// forest's digest slot. It is the watermark store's key: repo + kind +
+// number (§forgejo/state/storage).
 type Key struct {
 	// Repo is the repository's "owner/repo" full name.
 	Repo string `json:"repo"`
-	// Kind is KindIssue or KindPR.
+	// Kind is KindIssue, KindPR or KindForest.
 	Kind Kind `json:"kind"`
-	// Number is the issue or pull request number.
+	// Number is the issue or pull request number; for a forest slot, the
+	// ideation root's issue number.
 	Number int `json:"number"`
 }
 
@@ -69,7 +71,9 @@ type Slot struct {
 }
 
 // Watermark is the "what have I dispatched" record for a single issue or
-// pull request (§forgejo/state/watermark). The main (Action, Revision)
+// pull request (§forgejo/state/watermark); a forest's slot is the same
+// record carrying an observation instead of a dispatch
+// (§forgejo/state/forest-digest). The main (Action, Revision)
 // slot records the object's own singleton dispatches; Subjects carries
 // one slot per subject of a fan-out dispatch — the review lenses — so
 // two lenses dispatched at the same revision do not hold each other
