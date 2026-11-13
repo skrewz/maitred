@@ -253,9 +253,12 @@ func TestReconcile_PullRequests(t *testing.T) {
 // (§forgejo/decisions/transition-table).
 func TestReconcile_PRStandingAtReview(t *testing.T) {
 	cases := []struct {
-		name      string
-		review    Review
-		labels    []string
+		name   string
+		review Review
+		// optIn stands the PR delivered by an issue carrying the
+		// agentic-auto-merge label — the merge opt-in's only seat
+		// (§forgejo/decisions/merge-gate, s-git/maitred#228).
+		optIn     bool
 		watermark *Watermark
 		want      string // empty: no dispatch
 	}{
@@ -267,7 +270,7 @@ func TestReconcile_PRStandingAtReview(t *testing.T) {
 		{
 			name:   "approved against the head dispatches merge-or-wait",
 			review: Review{Event: ReviewApproved, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt},
-			labels: []string{LabelAgenticAutoMerge},
+			optIn:  true,
 			want:   "action=merge-or-wait",
 		},
 		{
@@ -290,9 +293,9 @@ func TestReconcile_PRStandingAtReview(t *testing.T) {
 			// the PR is opted in: the approved labelled PR at a frozen head
 			// is the state that is its own watermark, sweep included
 			// (s-git/maitred#197).
-			name:      "merge-or-wait already dispatched at the revision re-fires while the labelled PR stands approved at head",
+			name:      "merge-or-wait already dispatched at the revision re-fires while the opted-in PR stands approved at head",
 			review:    Review{Event: ReviewApproved, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt},
-			labels:    []string{LabelAgenticAutoMerge},
+			optIn:     true,
 			watermark: &Watermark{Action: string(ActionMergeOrWait), Revision: "sha-1"},
 			want:      "action=merge-or-wait",
 		},
@@ -317,7 +320,14 @@ func TestReconcile_PRStandingAtReview(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			eng, api, q, store := newTestEngine(t)
 			api.repos = []Repository{testRepo("o/r")}
-			pr := PullRequest{Number: 1, State: "open", Mergeable: true, HeadSHA: "sha-1", Labels: tc.labels}
+			pr := PullRequest{Number: 1, State: "open", Mergeable: true, HeadSHA: "sha-1"}
+			if tc.optIn {
+				// The delivery the PR's own body names, opted into
+				// merging — the seat the merge rows read
+				// (§forgejo/decisions/merge-gate, s-git/maitred#228).
+				pr.Body = "Delivers issue 7.\n\nFixes o/r#7"
+				api.issues[7] = testIssue(7, "open")
+			}
 			api.pulls[1] = &pr
 			api.openPulls["r"] = []PullRequest{pr}
 			api.reviews[1] = []Review{tc.review}
@@ -830,11 +840,12 @@ func TestReconcile_ReviewRowsRefireAtUnchangedRevision(t *testing.T) {
 // opted into merging with no connected open blocker — the state is the
 // watermark, so a PR that stalled at a frozen head sha recovers on the
 // next sweep instead of sitting forever at "already dispatched at
-// revision". The opt-in is read from the pull request or from the issue
-// its body names as the one it delivers; without it the merge opt-in is
+// revision". The opt-in is read from the issue the PR's body names as
+// the one it delivers — the pull request's own label is no seat
+// (s-git/maitred#228); without that opt-in the merge gate is
 // the precondition that
-// answers first: an approved PR with no agentic-auto-merge label on
-// either seat waits on a human whatever the watermark records, so the
+// answers first: an approved PR with no opted-in delivery waits on a
+// human whatever the watermark records, so the
 // revision-keyed guard never decides it (§forgejo/decisions/merge-gate,
 // s-git/maitred#179; §forgejo/reconciliation/watermark-exemptions).
 func TestReconcile_ApprovedAutoMergePRRefires(t *testing.T) {
@@ -845,7 +856,15 @@ func TestReconcile_ApprovedAutoMergePRRefires(t *testing.T) {
 		connectedLabel []string
 		want           string
 	}{
-		{"auto-merge PR re-fires merge-or-wait", "", []string{LabelAgenticAutoMerge}, nil, "action=merge-or-wait"},
+		{
+			// The pull request's own label grants nothing: with no
+			// opted-in issue behind it the exempt row does not fire,
+			// and the PR waits on a human whatever the watermark
+			// records (§forgejo/decisions/merge-gate,
+			// s-git/maitred#228).
+			name:   "a PR self-labelled agentic-auto-merge with no opted-in issue waits on a human",
+			labels: []string{LabelAgenticAutoMerge},
+		},
 		{"PR whose delivered issue is opted in re-fires merge-or-wait", "Fixes o/r#4", nil, []string{LabelAgenticAutoMerge}, "action=merge-or-wait"},
 		{"unlabelled PR approved at the head waits on a human", "", nil, nil, ""},
 		{

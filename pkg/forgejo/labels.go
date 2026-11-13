@@ -50,17 +50,18 @@ const (
 	// that implement this issue may auto-merge", and implementing it is
 	// the pull request carrying a closing reference to the issue. It
 	// sits on the work item and
-	// is read from there or from the pull request delivering it — one
-	// seat is enough, and one predicate (mergeOptedIn) asks, so no row
+	// is read from there only — the pull request carries no seat, so a
+	// self-labelled pull request opts nothing in (s-git/maitred#228) —
+	// and one predicate (mergeOptedIn) asks, so no row
 	// holds a narrower copy of the test. The merge-or-wait prompt's
 	// merge policy owns it; the decision function reads it to name the
-	// error state of a landing-set member whose work carries both
-	// opt-ins, which the approval hold-off contains, and — more
+	// error state of a landing-set member carrying both labels, which
+	// the approval hold-off contains, and — more
 	// consequentially — as the precondition of every merge-or-wait
-	// dispatch: an approved, unblocked PR whose work carries it on
-	// neither seat waits on a human on every path, the sweep's
-	// watermark-exempt row included, while a PR whose work carries it
-	// on either seat is re-fired whatever its watermark records on
+	// dispatch: an approved, unblocked PR whose delivered issue lacks
+	// it waits on a human on every path, the sweep's
+	// watermark-exempt row included, while a PR whose delivered issue
+	// carries it is re-fired whatever its watermark records on
 	// every path, the sweep included
 	// (§forgejo/decisions/merge-gate, §forgejo/decisions/sync-set,
 	// §forgejo/reconciliation/watermark-exemptions,

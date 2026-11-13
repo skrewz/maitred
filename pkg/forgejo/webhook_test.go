@@ -66,12 +66,13 @@ func testIssue(number int, state string) *Issue {
 }
 
 // testPR returns a fixture pull request in repo o/r. The engine's
-// fixture PRs are agent-authored deliverables opted into automatic
-// merging, exactly as testIssue's fixture issues are: the
-// agentic-auto-merge label is the precondition every merge-or-wait
-// path reads, so a fixture that stands at an approved head merges
-// unless the test clears the label
-// (§forgejo/decisions/merge-gate, s-git/maitred#179).
+// fixture PRs are agent-authored deliverables, and the merge opt-in is
+// the delivered issue's alone: a fixture stands at an approved head
+// but waits on a human until the test names its opted-in delivery —
+// the pull request's own labels are no seat
+// (§forgejo/decisions/merge-gate, s-git/maitred#179,
+// s-git/maitred#228). optedInDelivery and the shared fixtures supply
+// that delivery where a case reaches the merge row.
 func testPR(number int, state string, mergeable bool) *PullRequest {
 	return &PullRequest{
 		Number:    number,
@@ -80,9 +81,19 @@ func testPR(number int, state string, mergeable bool) *PullRequest {
 		HeadSHA:   "sha-" + strconv.Itoa(number),
 		Mergeable: mergeable,
 		UpdatedAt: testUpdatedAt,
-		Labels:    []string{LabelAgenticAutoMerge},
 		HTMLURL:   "https://forge.example.com/o/r/pulls/" + strconv.Itoa(number),
 	}
+}
+
+// optedInDelivery registers the fixture PR's delivery: an open work
+// item of o/r carrying the agentic-auto-merge label — testIssue's
+// own — named on the PR's body through closesIssues, the closing
+// grammar the merge opt-in's only seat is read from, so the seat's
+// grammar renders in one place and can only drift in one place
+// (§forgejo/decisions/merge-gate, s-git/maitred#228).
+func optedInDelivery(pr *PullRequest, api *fakeAPI, number int) *PullRequest {
+	api.issues[number] = testIssue(number, "open")
+	return closesIssues(pr, "o/r#"+strconv.Itoa(number))
 }
 
 // authoredPR is testPR with the PR's author set — the field the
@@ -748,7 +759,7 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			eventType: "pull_request_review_approved", action: "approved",
 			payload: prPayload("o/r", 9, "approved"),
 			setup: func(api *fakeAPI) {
-				api.pulls[9] = testPR(9, "open", true)
+				api.pulls[9] = optedInDelivery(testPR(9, "open", true), api, 4)
 				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 			},
 			want: ActionMergeOrWait,
@@ -762,6 +773,10 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			payload: prPayload("o/r", 9, "approved"),
 			setup: func(api *fakeAPI) {
 				api.pulls[9] = testPR(9, "open", true)
+				// Opted in through the delivered issue: what holds this
+				// merge off is the gate, not the missing opt-in
+				// (§forgejo/decisions/merge-gate, s-git/maitred#228).
+				api.pulls[9].Body = "Delivers issue 4.\n\nFixes #4"
 				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 				api.blocks[9] = []Issue{*testIssue(4, "open")}
 				ideation := testIssue(1, "open")
@@ -776,6 +791,7 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			payload: prPayload("o/r", 9, "approved"),
 			setup: func(api *fakeAPI) {
 				api.pulls[9] = testPR(9, "open", true)
+				api.pulls[9].Body = "Delivers issue 4.\n\nFixes #4" // the opt-in's seat (§merge-gate, s-git/maitred#228)
 				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 				api.blocks[9] = []Issue{*testIssue(4, "open")}
 				ideation := testIssue(1, "closed")
@@ -848,7 +864,7 @@ func TestHandler_MapsAndDecides(t *testing.T) {
 			eventType: "pull_request_comment", action: "created",
 			payload: prPayload("o/r", 9, "created"),
 			setup: func(api *fakeAPI) {
-				api.pulls[9] = testPR(9, "open", true)
+				api.pulls[9] = optedInDelivery(testPR(9, "open", true), api, 4)
 				api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9", SubmittedAt: testUpdatedAt}}
 			},
 			want: ActionMergeOrWait,
@@ -2621,6 +2637,11 @@ func mergeGateFixtures(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store, *by
 	}
 	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewJSONHandler(&log, nil)))
 	api.pulls[9] = testPR(9, "open", true)
+	// The body names the issue the blocking edge already connects:
+	// the merge opt-in is that delivered issue's label, read through
+	// the body's closing reference
+	// (§forgejo/decisions/merge-gate, s-git/maitred#228).
+	api.pulls[9].Body = "Delivers issue 7.\n\nFixes #7"
 	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 	api.blocks[9] = []Issue{*testIssue(7, "open")}
 	prSelf := testIssue(9, "open")
@@ -2843,6 +2864,10 @@ func cascadePRFixtures(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store, *by
 	prSelf.IsPull = true
 	api.deps[10] = []Issue{*testIssue(7, "closed"), *prSelf}
 	api.pulls[9] = testPR(9, "open", true)
+	// The body names issue 10 — the issue the blocking edge already
+	// connects — so the merge opt-in is read from the delivery, the
+	// only seat (§forgejo/decisions/merge-gate, s-git/maitred#228).
+	api.pulls[9].Body = "Delivers issue 10.\n\nFixes #10"
 	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 	api.blocks[9] = []Issue{*testIssue(10, "open")}
 	return eng, api, q, store, &log
@@ -2901,8 +2926,8 @@ func TestHandler_IssueClosed_CascadePRNotApprovedStaysSilent(t *testing.T) {
 // TestHandler_IssueClosed_CascadePRWithoutOptInHoldsOff:
 // the agentic-auto-merge label is a precondition of the cascade's PR
 // leg too — the PR's own re-fetch decides it, asking the predicate
-// that reads both seats — and an approved PR with no merge opt-in on
-// either seat holds off, the fork recorded in the decision log naming
+// that reads the issue seat alone — and an approved PR whose delivered
+// issue carries no opt-in holds off, the fork recorded in the decision log naming
 // the missing label and the connected issue. Nothing is
 // dispatched, no watermark is recorded, and the hold-off has no
 // backstop of its own: the next sweep is (§forgejo/decisions/unblock-cascade,
@@ -3007,7 +3032,13 @@ func TestHandler_IssueClosed_CascadePRFetchFailure(t *testing.T) {
 // §forgejo/decisions/loop-prevention).
 func TestHandler_IssueClosed_CascadePRWatermarkHolds(t *testing.T) {
 	eng, api, q, store, _ := cascadePRFixtures(t)
-	api.pulls[9].Labels = nil
+	// The no-opt-in shape is empty on the seat the merge rows read:
+	// it is the delivered issue's label that is cleared here, not a
+	// label on the pull request (s-git/maitred#228).
+	noOptIn := testIssue(10, "open")
+	noOptIn.Labels = nil
+	api.issues[10] = noOptIn
+	api.blocks[9] = []Issue{*noOptIn}
 	if err := store.Save(Key{Repo: "o/r", Kind: KindPR, Number: 9},
 		Watermark{Action: string(ActionMergeOrWait), Revision: "sha-9"}); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -3028,9 +3059,7 @@ func TestHandler_IssueClosed_CascadePRWatermarkHolds(t *testing.T) {
 // nowhere would otherwise never recover outside the sweep
 // (s-git/maitred#197, §forgejo/reconciliation/watermark-exemptions).
 func TestHandler_IssueClosed_CascadePRReFiresWithOptIn(t *testing.T) {
-	eng, api, q, store, _ := cascadePRFixtures(t)
-	pr := api.pulls[9]
-	pr.Labels = []string{LabelAgenticAutoMerge}
+	eng, _, q, store, _ := cascadePRFixtures(t)
 	if err := store.Save(Key{Repo: "o/r", Kind: KindPR, Number: 9},
 		Watermark{Action: string(ActionMergeOrWait), Revision: "sha-9"}); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -3060,7 +3089,6 @@ func TestHandler_IssueClosed_CascadePRReFiresWithOptIn(t *testing.T) {
 // §forgejo/decisions/merge-gate).
 func TestHandler_IssueClosed_CascadePROptedInWithBlockedConnectedIssue(t *testing.T) {
 	eng, api, q, store, log := cascadePRFixtures(t)
-	api.pulls[9].Labels = []string{LabelAgenticAutoMerge}
 	api.blocks[9] = append(api.blocks[9], *testIssue(12, "open"))
 	api.deps[12] = []Issue{*testIssue(11, "open")}
 	if err := store.Save(Key{Repo: "o/r", Kind: KindPR, Number: 9},
@@ -3089,8 +3117,7 @@ func TestHandler_PRCommented_MergeReFireBoundedPerInterval(t *testing.T) {
 	var log bytes.Buffer
 	eng, api, q, _ := newTestEngine(t)
 	eng.log = slog.New(slog.NewJSONHandler(&log, nil))
-	pr := testPR(9, "open", true)
-	pr.Labels = []string{LabelAgenticAutoMerge}
+	pr := optedInDelivery(testPR(9, "open", true), api, 4)
 	api.pulls[9] = pr
 	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 
@@ -3118,8 +3145,7 @@ func TestHandler_PRCommented_MergeReFireBoundedPerInterval(t *testing.T) {
 // §forgejo/reconciliation/watermark-exemptions).
 func TestHandler_PRCommented_MergeReFireAllowedAfterInterval(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
-	pr := testPR(9, "open", true)
-	pr.Labels = []string{LabelAgenticAutoMerge}
+	pr := optedInDelivery(testPR(9, "open", true), api, 4)
 	api.pulls[9] = pr
 	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 	key := Key{Repo: "o/r", Kind: KindPR, Number: 9}
@@ -3148,8 +3174,7 @@ func TestHandler_PRCommented_MergeReFireBoundsWithoutTheWatermark(t *testing.T) 
 	var log bytes.Buffer
 	eng, api, q, store := newTestEngine(t)
 	eng.log = slog.New(slog.NewJSONHandler(&log, nil))
-	pr := testPR(9, "open", true)
-	pr.Labels = []string{LabelAgenticAutoMerge}
+	pr := optedInDelivery(testPR(9, "open", true), api, 4)
 	api.pulls[9] = pr
 	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 	key := Key{Repo: "o/r", Kind: KindPR, Number: 9}
@@ -3180,8 +3205,7 @@ func TestHandler_PRCommented_MergeReFireBoundsWithoutTheWatermark(t *testing.T) 
 // §forgejo/reconciliation/watermark-exemptions).
 func TestHandler_PRCommented_MergeReFireIgnoresAStampAtAnotherRevision(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
-	pr := testPR(9, "open", true)
-	pr.Labels = []string{LabelAgenticAutoMerge}
+	pr := optedInDelivery(testPR(9, "open", true), api, 4)
 	api.pulls[9] = pr
 	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 	key := Key{Repo: "o/r", Kind: KindPR, Number: 9}
@@ -3209,7 +3233,7 @@ func TestHandler_PRCommented_LandedRebaseDoesNotBoundTheMergeAtItsHead(t *testin
 	var log bytes.Buffer
 	eng, api, q, _ := newTestEngine(t)
 	eng.log = slog.New(slog.NewJSONHandler(&log, nil))
-	pr := testPR(9, "open", false)
+	pr := optedInDelivery(testPR(9, "open", false), api, 4)
 	api.pulls[9] = pr
 
 	// The sweep finds the PR conflicted and lands a rebase at the head;
@@ -3252,7 +3276,7 @@ func TestHandler_PRCommented_InterleavedRebaseKeepsTheMergeBound(t *testing.T) {
 	var log bytes.Buffer
 	eng, api, q, _ := newTestEngine(t)
 	eng.log = slog.New(slog.NewJSONHandler(&log, nil))
-	api.pulls[9] = testPR(9, "open", true)
+	api.pulls[9] = optedInDelivery(testPR(9, "open", true), api, 4)
 	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 
 	// A first merge-or-wait lands at the head, starting the interval the
@@ -3300,8 +3324,7 @@ func TestHandler_PRCommented_InterleavedRebaseKeepsTheMergeBound(t *testing.T) {
 // (§forgejo/decisions/loop-prevention, s-git/maitred#197).
 func TestHandler_PRCommented_MergeReFireNeverHoldsOffAnUnstampedRevision(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
-	pr := testPR(9, "open", true)
-	pr.Labels = []string{LabelAgenticAutoMerge}
+	pr := optedInDelivery(testPR(9, "open", true), api, 4)
 	api.pulls[9] = pr
 	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 	if err := store.Save(Key{Repo: "o/r", Kind: KindPR, Number: 9},
@@ -3327,8 +3350,7 @@ func TestHandler_Reconcile_MergeReFireBoundedPerInterval(t *testing.T) {
 	var log bytes.Buffer
 	eng, api, q, _ := newTestEngine(t)
 	eng.log = slog.New(slog.NewJSONHandler(&log, nil))
-	pr := testPR(9, "open", true)
-	pr.Labels = []string{LabelAgenticAutoMerge}
+	pr := optedInDelivery(testPR(9, "open", true), api, 4)
 	api.pulls[9] = pr
 	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 
@@ -3352,9 +3374,7 @@ func TestHandler_Reconcile_MergeReFireBoundedPerInterval(t *testing.T) {
 // (§forgejo/decisions/unblock-cascade,
 // §forgejo/decisions/loop-prevention).
 func TestHandler_IssueClosed_CascadePRReFireBoundedPerInterval(t *testing.T) {
-	eng, api, q, store, log := cascadePRFixtures(t)
-	pr := api.pulls[9]
-	pr.Labels = []string{LabelAgenticAutoMerge}
+	eng, _, q, store, log := cascadePRFixtures(t)
 	if err := store.Save(Key{Repo: "o/r", Kind: KindPR, Number: 9},
 		Watermark{Action: string(ActionMergeOrWait), Revision: "sha-9"}); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -4542,6 +4562,12 @@ func TestHandler_IssueClosed_CascadePRLegFindsTheSetThroughTheBody(t *testing.T)
 func TestHandler_IssueClosed_CascadePRLegMergesRetiredSetMember(t *testing.T) {
 	eng, api, q, store, _ := cascadePRSetFixtures(t)
 	delete(api.blocks, 10) // the set was retired: no membership edge left
+	// The delivery opts into merging through its own label — the
+	// stale set label retires with the set, and the issue seat is the
+	// only seat (§forgejo/decisions/sync-set,
+	// §forgejo/decisions/merge-gate, s-git/maitred#228).
+	api.issues[10].Labels = []string{LabelAgenticAutoMerge}
+	api.blocks[9][0].Labels = api.issues[10].Labels
 	h := NewHandler(eng, "s3cret", nil)
 
 	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
@@ -4979,11 +5005,12 @@ func TestHandler_PRReviewed_DirectPRMemberOfRetiredSetMerges(t *testing.T) {
 	api.issues[11].State = "closed"
 	api.blocks[9] = []Issue{*api.issues[11]}
 	// The retirement leaves the delivery's set membership stale, not
-	// gating — but merging on its own is still opt-in, so the human's
-	// lever on the orphaned delivery is the agentic-auto-merge label
+	// gating — but merging on its own is still opt-in, and the
+	// opt-in's only seat is a delivered issue's label: the pull
+	// request's own labels wait on a human
 	// (§forgejo/decisions/sync-set, §forgejo/decisions/merge-gate,
-	// s-git/maitred#179).
-	api.pulls[9].Labels = append(api.pulls[9].Labels, LabelAgenticAutoMerge)
+	// s-git/maitred#179, s-git/maitred#228).
+	optedInDelivery(api.pulls[9], api, 4)
 	h := NewHandler(eng, "s3cret", nil)
 
 	rec := serve(t, h, signedRequest(t, "s3cret", "pull_request_review_approved", "approved", prPayload("o/r", 9, "approved")))
@@ -5310,6 +5337,9 @@ func vipMergeFixtures(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store) {
 	}
 	eng := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	api.pulls[9] = testPR(9, "open", true)
+	// The delivered issue carries the merge opt-in, the only seat
+	// (§forgejo/decisions/merge-gate, s-git/maitred#228).
+	api.pulls[9].Body = "Delivers issue 7.\n\nFixes #7"
 	api.issues[7] = testIssue(7, "open")
 	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
 	api.blocks[9] = []Issue{*testIssue(7, "open")}
