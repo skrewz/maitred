@@ -96,12 +96,14 @@ type Engine struct {
 	// The re-fire bound: the last landed singleton dispatch per key and
 	// action, and the moment it landed, so one unchanged
 	// (action, revision) re-fires at most once per reconcile interval
-	// whichever path reached it. Only state-governed rows consult the
-	// stamp, and only the stamp their own action left; a revision-gated
-	// row consults none (§forgejo/decisions/loop-prevention,
+	// whichever path reached it. A key carries one slot per action, so
+	// the landing of one action never erases another's pacing.
+	// Only state-governed rows consult the stamp, and only the stamp
+	// their own action left; a revision-gated row consults none
+	// (§forgejo/decisions/loop-prevention,
 	// §forgejo/reconciliation/the-state-is-the-watermark).
 	reFireMu sync.Mutex
-	reFires  map[Key]reFireStamp
+	reFires  map[reFireSlot]reFireStamp
 }
 
 // NewEngine creates the event path over the given Forgejo API, watermark
@@ -117,7 +119,7 @@ func NewEngine(api API, store *Store, cfg *Config, q queue.TaskQueueProvider, lo
 		queue:     q,
 		log:       logger,
 		decisions: make(map[Key]DecisionRecord),
-		reFires:   make(map[Key]reFireStamp),
+		reFires:   make(map[reFireSlot]reFireStamp),
 	}
 }
 
@@ -1069,15 +1071,25 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	return nil
 }
 
+// reFireSlot names the pair a re-fire stamp occupies. The bound paces
+// one unchanged `(action, revision)`, so a key holds one slot per
+// action: where two state-governed actions coexist at one revision — a
+// conflicted approved head holds `merge-or-wait` and the sweep's
+// `rebase` — each landing paces its own re-fire and erases no
+// sibling's (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/the-state-is-the-watermark).
+type reFireSlot struct {
+	key    Key
+	action Action
+}
+
 // reFireStamp is one landed dispatch the engine remembers for the
-// re-fire bound: the action that landed, the revision it landed at, and
-// when. The action is part of the stamp because the bound has always
-// paced one unchanged `(action, revision)`: a dispatch of one action
-// must not hold a different action's state-governed row off, and a
-// hold-off naming a re-fire that never happened would be a lie
+// re-fire bound: the revision it landed at and the moment it landed.
+// The slot names the action, so a dispatch of one action never holds a
+// different action's state-governed row off, and a hold-off naming a
+// re-fire that never happened would be a lie
 // (§forgejo/decisions/loop-prevention).
 type reFireStamp struct {
-	action   Action
 	revision string
 	at       time.Time
 }
@@ -1105,17 +1117,16 @@ func (e *Engine) boundReFire(key Key, ev Event, st State, d Decision) Decision {
 	return d
 }
 
-// reFiredRecently reports whether the stamp for key still bounds a
-// re-fire of action at revision: another action's dispatch at the same
-// revision, an interval spent, or a revision the object has moved past
-// bounds nothing, so the bound is a rate on one `(action, revision)` and
-// never a hold-off on a dispatch the engine has not made
-// (§forgejo/decisions/loop-prevention).
+// reFiredRecently reports whether this action's own stamp for key still
+// bounds a re-fire at revision: an interval spent, or a revision the
+// object has moved past, bounds nothing, so the bound is a rate on one
+// `(action, revision)` and never a hold-off on a dispatch the engine has
+// not made (§forgejo/decisions/loop-prevention).
 func (e *Engine) reFiredRecently(key Key, action Action, revision string) bool {
 	e.reFireMu.Lock()
 	defer e.reFireMu.Unlock()
-	last, ok := e.reFires[key]
-	return ok && last.action == action && last.revision == revision && time.Since(last.at) < e.cfg.ReconcileInterval
+	last, ok := e.reFires[reFireSlot{key: key, action: action}]
+	return ok && last.revision == revision && time.Since(last.at) < e.cfg.ReconcileInterval
 }
 
 // stampReFire records a landed singleton dispatch for the bound. A
@@ -1132,7 +1143,7 @@ func (e *Engine) stampReFire(key Key, action Action, revision string) {
 func (e *Engine) stampReFireAt(key Key, action Action, revision string, at time.Time) {
 	e.reFireMu.Lock()
 	defer e.reFireMu.Unlock()
-	e.reFires[key] = reFireStamp{action: action, revision: revision, at: at}
+	e.reFires[reFireSlot{key: key, action: action}] = reFireStamp{revision: revision, at: at}
 }
 
 // dispatchPrompt is the one dispatch pipeline: it fills the canned
