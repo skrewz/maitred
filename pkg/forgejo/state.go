@@ -94,12 +94,20 @@ type Watermark struct {
 	Subjects map[string]Slot `json:"subjects,omitempty"`
 	// Digest is a forest's last observed actionable-state digest,
 	// stored in the forest's slot under ForestKey
-	// (§forgejo/state/forest-digest). It is the one field the forest
-	// slot uses: Action, Revision and Subjects record what has been
-	// dispatched, which says nothing about what was observed, so they
-	// stay empty there. Issue and PR watermarks never carry it, and
-	// omitempty keeps their on-disk files byte-identical to before.
+	// (§forgejo/state/forest-digest). Action, Revision and Subjects
+	// record what has been dispatched, which says nothing about what was
+	// observed, so they stay empty in the forest slot. Issue and PR
+	// watermarks never carry it, and omitempty keeps their on-disk files
+	// byte-identical to before.
 	Digest string `json:"digest,omitempty"`
+	// DigestParts carries the same fold's per-component sub-digests
+	// alongside Digest, so the digest gate's next observation can name
+	// which component of the forest's actionable state moved when it
+	// dispatches (§forgejo/decisions/actionable-state-digest,
+	// s-git/maitred#209). Like Digest it belongs to the forest slot
+	// alone; issue and PR watermarks never carry it, and omitempty
+	// keeps their on-disk files byte-identical to before.
+	DigestParts map[string]string `json:"digest_parts,omitempty"`
 }
 
 // subjectSlot returns the slot recorded for subject, if any.

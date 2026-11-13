@@ -16,6 +16,13 @@ decomposer_identity: decomposer
 # unset, the ownership gate is inert (§forgejo/config/implementer-identity,
 # s-git/maitred#143).
 implementer_identity: implementer
+# Required: the login of the engine's own account. The forest digest
+# excludes this account's comments, which is what lets the digest gate
+# hold quiet forests quiet; without it the digest would fold the
+# engine's own reports and move every sweep, so the engine refuses to
+# start with the key unset (§forgejo/config/engine-account,
+# s-git/maitred#209).
+engine_account: maitred
 
 # Every prompt invokes the runner-side Pi canned prompt of the identity
 # the task runs as: Pi expands a prompt template only when the

@@ -199,6 +199,12 @@ func (e *Engine) HandleEvent(ev Event) {
 				if err := e.store.saveLocked(key, watermarkAt(w, string(d.Action), revisionFor(ev, st))); err != nil {
 					e.log.Error("save watermark", "key", key.String(), "error", err)
 				}
+				// The gate compared against the stored digest; a
+				// successful dispatch leaves the slot holding what this
+				// observation saw, so the next one asks the same
+				// question of up-to-date values
+				// (§forgejo/state/forest-digest, s-git/maitred#209).
+				e.refreshForestDigest(st)
 			}
 		}
 		e.emitCascade(d, key, ev.Sender)
@@ -317,6 +323,16 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 				}
 				st.SyncMembers = members
 			}
+			// The digest gate's observation, assembled where the
+			// gated decompose rows can reach it — the root's own rows
+			// on every path, the sweep's commissioned-tracker row
+			// (§forgejo/reconciliation/watermark-exemptions,
+			// s-git/maitred#209).
+			gate, err := e.forestGate(ev, issue, blockers)
+			if err != nil {
+				return ev, State{}, err
+			}
+			st.ForestGate = gate
 		case EventIssueClosed:
 			root, err := e.graphNode(issue)
 			if err != nil {
@@ -385,6 +401,108 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		return ev, st, nil
 	}
 	return ev, State{}, fmt.Errorf("unknown kind %q", ev.Kind)
+}
+
+// forestGate assembles the digest gate's observation for one issue
+// re-fetch — and only where a digest-gated decompose row can reach it
+// (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#209):
+//
+//   - an open `ideation` issue not under a teardown order and not
+//     claiming the sync kind, whose root row consults the gate on every
+//     path — the forest is the issue itself;
+//   - the sweep's view of an open tracker still blocked, whose ideation
+//     gate is closed — the forest is that closed root, fetched whole
+//     because the digest folds the root's body and labels and the
+//     dependency row is not trusted to carry them.
+//
+// A root under a teardown order, a kind-conflicting issue and every
+// other issue leave the gate unarmed: on the sweep those rows are
+// untouched by the gate — a kind-conflicting root is held off as a
+// conflict before any decompose row — while the event path's root row
+// for such an issue still runs under its revision guard. Arming the
+// gate for a row that never consults it would spend forest reads for
+// nothing. A failed digest read is a re-fetch failure — a hold-off the
+// next sweep backstops, never a decision from a partial digest. The
+// stored side of the observation is the forest slot
+// (§forgejo/state/forest-digest); a slot that fails to parse reads as
+// unobserved, which dispatches once and re-saves — the same lossiness
+// reading watermarks make.
+func (e *Engine) forestGate(ev Event, issue *Issue, blockers []Issue) (*ForestDigestGate, error) {
+	if issue.State != "open" {
+		return nil, nil
+	}
+	var root *Issue
+	switch {
+	case hasLabel(issue, LabelIdeation) && !hasLabel(issue, LabelTeardownForest) && !hasLabel(issue, LabelSync):
+		root = issue
+	case ev.Type == EventReconcile && isTracker(issue) && !hasLabel(issue, LabelSync) && len(openBlockers(blockers)) > 0:
+		gate := ideationGate(blockers)
+		if gate == nil || gate.State != "closed" {
+			return nil, nil
+		}
+		repo := gate.Repository
+		if repo == "" {
+			repo = ev.Repo
+		}
+		owner, name := splitRepo(repo)
+		fetched, err := e.api.GetIssue(owner, name, gate.Number)
+		if err != nil {
+			return nil, fmt.Errorf("forgejo: forest gate: fetch the root %d gating tracker %d: %w", gate.Number, issue.Number, err)
+		}
+		if fetched.Repository == "" {
+			// The single-issue endpoint may carry no repository
+			// object; the resolved reference does, and the slot key
+			// must match the root row's (§forgejo/webhook/re-fetch).
+			fetched.Repository = repo
+		}
+		root = fetched
+	default:
+		return nil, nil
+	}
+	current, parts, err := ForestDigest(e.api, root, e.cfg.EngineAccount, e.cfg.DecomposerIdentity)
+	if err != nil {
+		return nil, err
+	}
+	key := ForestKey(root.Repository, root.Number)
+	stored, err := e.store.Load(key)
+	if err != nil {
+		e.log.Warn("load forest digest (treating the forest as unobserved)", "forest", key.String(), "error", err)
+		stored = nil
+	}
+	g := &ForestDigestGate{
+		RootRepo:     root.Repository,
+		RootNumber:   root.Number,
+		Current:      current,
+		CurrentParts: parts,
+	}
+	if stored != nil {
+		g.Stored = stored.Digest
+		g.StoredParts = stored.DigestParts
+	}
+	return g, nil
+}
+
+// refreshForestDigest refreshes the forest's stored digest after a
+// successful dispatch whose row consulted the gate: the slot must hold
+// what this observation saw, or the next sweep would ask the same
+// question of stale values and dispatch a run the quiet forest has
+// already paid for (§forgejo/state/forest-digest,
+// §forgejo/reconciliation/watermark-exemptions, s-git/maitred#209).
+// Nothing is written when the gate was unarmed, when the digests
+// already agreed (the stored value is current — re-writing it would be
+// a no-op with a disk touch), or when the dispatch never landed — a
+// failure returns before reaching here and an inadmissible action
+// never dispatches, leaving the stale slot so the next sweep retries
+// the run the queue never got.
+func (e *Engine) refreshForestDigest(st State) {
+	g := st.ForestGate
+	if g == nil || g.Current == "" || g.Current == g.Stored {
+		return
+	}
+	key := ForestKey(g.RootRepo, g.RootNumber)
+	if err := e.store.Save(key, Watermark{Digest: g.Current, DigestParts: g.CurrentParts}); err != nil {
+		e.log.Error("save forest digest", "forest", key.String(), "error", err)
+	}
 }
 
 // connectedIssues fetches the one hop the merge gate and the landing-set

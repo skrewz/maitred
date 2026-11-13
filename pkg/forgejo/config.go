@@ -106,6 +106,16 @@ type Config struct {
 	// (§forgejo/decisions/loop-prevention, s-git/maitred#143). Unset is
 	// never a load error.
 	ImplementerIdentity string `yaml:"implementer_identity"`
+	// EngineAccount names the Forgejo login of the engine's own account
+	// — the identity its reads and direct writes are authored as
+	// (§forgejo/config/engine-account). Required: the digest gate needs
+	// it to tell the engine's own comments from a human's, and an unset
+	// one would fold the engine's own report comments, move the digest
+	// every sweep and re-trigger the run that wrote them — so the
+	// digest refuses to read a forest without it
+	// (§forgejo/decisions/actionable-state-digest, s-git/maitred#209).
+	// Unset is a load error, never a silently inert gate.
+	EngineAccount string `yaml:"engine_account"`
 	// Actions maps each action the decision function references to its
 	// canned prompt.
 	Actions map[string]PromptConfig `yaml:"actions"`
@@ -167,6 +177,9 @@ func (c *Config) PromptFor(a Action) (*PromptConfig, error) {
 func (c *Config) Validate() error {
 	if c.Org == "" {
 		return fmt.Errorf("org is required")
+	}
+	if c.EngineAccount == "" {
+		return fmt.Errorf("engine_account is required: the digest gate cannot tell the engine's own comments from a human's without it (§forgejo/config/engine-account)")
 	}
 	if c.ReconcileInterval <= 0 {
 		return fmt.Errorf("reconcile_interval must be positive")
@@ -417,6 +430,12 @@ func loadConfigDir(dir string) (*Config, error) {
 		}
 		if cfg.ImplementerIdentity != "" {
 			merged.ImplementerIdentity = cfg.ImplementerIdentity
+		}
+		if cfg.EngineAccount != "" && merged.EngineAccount != "" && cfg.EngineAccount != merged.EngineAccount {
+			return nil, fmt.Errorf("config %q: engine_account %q conflicts with %q", name, cfg.EngineAccount, merged.EngineAccount)
+		}
+		if cfg.EngineAccount != "" {
+			merged.EngineAccount = cfg.EngineAccount
 		}
 		if merged.Actions == nil {
 			merged.Actions = make(map[string]PromptConfig)

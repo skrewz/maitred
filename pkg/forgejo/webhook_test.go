@@ -26,7 +26,7 @@ import (
 // testConfig returns a config with a canned prompt for every action,
 // rendering the placeholders so tests can assert on the rendered prompt.
 func testConfig() *Config {
-	cfg := &Config{Org: "o", ReconcileInterval: 15 * time.Minute, DecomposerIdentity: "decomposer"}
+	cfg := &Config{Org: "o", ReconcileInterval: 15 * time.Minute, DecomposerIdentity: "decomposer", EngineAccount: "maitred-engine"}
 	cfg.Actions = make(map[string]PromptConfig, len(AllActions))
 	for _, a := range AllActions {
 		cfg.Actions[string(a)] = PromptConfig{
@@ -5231,10 +5231,12 @@ func TestHandler_TeardownStillDispatchesBesideTheTracker(t *testing.T) {
 	}
 }
 
-// TestHandler_RootPerformsNoForestHop pins the cost boundary: the forest
-// hop belongs to teardown alone. A root without the label decides from
-// its own state and blockers as before, so the emptiness test adds no
-// fetch to the curation path (§forgejo/webhook/re-fetch).
+// TestHandler_RootPerformsNoForestHop pins the cost boundary: the
+// forest hop belongs to the teardown emptiness test and the digest
+// gate alone. A root without the teardown label pays exactly one
+// digest computation — the gate's enumeration of the forest — and no
+// other hop, so the emptiness test adds no fetch to the curation path
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/actionable-state-digest).
 func TestHandler_RootPerformsNoForestHop(t *testing.T) {
 	eng, api, q, _ := newOutcomesEngine(t)
 	api.issues[7] = &Issue{
@@ -5248,8 +5250,8 @@ func TestHandler_RootPerformsNoForestHop(t *testing.T) {
 	if tasks := q.all(); len(tasks) != 1 || !strings.Contains(tasks[0].Prompt, "action="+string(ActionDecompose)) {
 		t.Fatalf("want the one decompose dispatch, got %+v", tasks)
 	}
-	if n := api.callCount("IssueBlocks:out/7"); n != 0 {
-		t.Errorf("IssueBlocks on the root called %d time(s), want none for a root under no teardown order", n)
+	if n := api.callCount("IssueBlocks:out/7"); n != 1 {
+		t.Errorf("IssueBlocks on the root called %d time(s), want the gate's one digest computation and no teardown emptiness test", n)
 	}
 }
 
@@ -5647,5 +5649,29 @@ func TestHandler_IssueClosed_CascadeVIPDeliveredIssueDispatchesAtTeacher(t *test
 				t.Errorf("priority = %q, want %q", tasks[0].Priority, tc.want)
 			}
 		})
+	}
+}
+
+// TestHandleEvent_DecomposeDigestGate_ArmsOnTheEventPath: the event
+// path's decompose row consults the same gate the sweep assembled —
+// here, an edit at a fresh revision whose digest is unchanged dispatches
+// nothing, and the forest slot the sweep refreshed is what the gate read
+// (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#209).
+func TestHandleEvent_DecomposeDigestGate_ArmsOnTheEventPath(t *testing.T) {
+	eng, api, q, _ := quietForest(t)
+	eng.Reconcile()
+	quiet := len(q.all())
+	if quiet != 1 {
+		t.Fatalf("first sweep dispatched %d tasks, want the one first-observation decompose", quiet)
+	}
+
+	// An edit at a new revision that moves no folded fact: the gate
+	// answers before the watermark can.
+	api.mu.Lock()
+	api.issues[1].UpdatedAt = testUpdatedAt.Add(time.Hour)
+	api.mu.Unlock()
+	eng.HandleEvent(Event{Type: EventIssueEdited, Repo: "o/r", Kind: KindIssue, Number: 1, Sender: "alice"})
+	if got := len(q.all()); got != quiet {
+		t.Fatalf("dispatched %d tasks after an edit that moved nothing, want silence", got)
 	}
 }

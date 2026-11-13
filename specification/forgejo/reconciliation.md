@@ -136,11 +136,17 @@ correct-and-silent when it needs to be correct-and-loud.
 
 For a set of **watermark-exempt** actions, the watermark is the
 **state**, not the revision: the sweep re-fires them whenever the
-state calls for the action, revision notwithstanding. For `decompose`,
-`wrap-up`, `review`, `teardown-forest` and `fix-feedback` the
-exemption is a property of the **sweep's rows** — the idempotency
-guard stays revision-keyed on every other path for those actions
-(§forgejo/decisions/loop-prevention). For `merge-or-wait` the
+state calls for the action, revision notwithstanding. For `wrap-up`,
+`review`, `teardown-forest` and `fix-feedback` the exemption is a
+property of the **sweep's rows** — the idempotency guard stays
+revision-keyed on every other path for those actions
+(§forgejo/decisions/loop-prevention). `decompose` is not in the exempt
+set: its rows on every path consult the forest's **actionable-state
+digest gate**, dispatching only when the digest has moved since the
+store last observed it
+(§forgejo/decisions/actionable-state-digest, s-git/maitred#209); the
+engine account the gate folds its comments against is a required key
+(§forgejo/config/engine-account), so no sweep runs without the gate. For `merge-or-wait` the
 exemption is a property of **that action's rows on every path** — the
 review event, a PR comment, the unblock cascade's pull-request leg and
 the sweep alike — because the state it tests, every lens approving at
@@ -162,7 +168,7 @@ re-fire bound keeps one unchanged head to one dispatch per
 
 | Exempt action | The state that calls for it (on reconcile) |
 |---|---|
-| `decompose` | the issue is open and carries the `ideation` label, or it is open, carries the `outcome` label, has an open blocker, and the `ideation` issue it is blocked by is closed |
+| `decompose` | not exempt: the rows an open `ideation` root or an open `outcome` tracker still blocked by a closed `ideation` blocker would have fired every interval now dispatch only when the forest's actionable-state digest moved (§forgejo/decisions/actionable-state-digest, s-git/maitred#209) |
 | `wrap-up` | the issue is open, carries the `outcome` label, and has no open blockers |
 | `teardown-forest` | the issue is open, carries the `ideation` label, carries the `teardown-forest` label **and blocks at least one issue that is not an `outcome` tracker** — a member the order would delete is the state that calls for the deletion, so a teardown that died half way through re-fires until nothing but a spared tracker remains, and stops the sweep the moment it does (§forgejo/decisions/forest-teardown) |
 | `merge-or-wait` | the PR is open, **every configured review lens holds an undismissed approval at head**, no reviewer's latest undismissed review at head is a non-approval (§forgejo/decisions/review-lenses), no connected issue has an open blocker (the merge gate, §forgejo/decisions/merge-gate), and the work it delivers is opted into merging: the issue its body closes carries the `agentic-auto-merge` label (§forgejo/decisions/merge-gate) — the label is the whole point and a precondition of the dispatch on every path, not just this row: an approved PR whose delivered issue carries no opt-in waits on a human whatever the watermark records (§forgejo/decisions/merge-gate, s-git/maitred#179, s-git/maitred#228). And unlike the other exemptions this one is not the sweep's row alone: an approved, unblocked PR whose work is opted in re-fires on every path, its frozen head being the reason the revision cannot be the watermark (§forgejo/decisions/loop-prevention). |
@@ -181,13 +187,21 @@ For the issue-side actions the exemption is scoped to the sweep
 (`merge-or-wait` being the exception above). An issue carrying either reserved
 label dispatches neither `implement` nor `reassess` on any path — a
 protected issue is therefore never handed to the implementer, however
-the label arrived. For `decompose` the event path has rows of its own:
-opening, editing, or changing the labels of an open `ideation` issue
-dispatches `decompose` like the sweep row does, but under the ordinary
-revision-keyed watermark guard — the exemption, not the action, is what
+the label arrived. For `decompose` the event path has rows of its own,
+and wherever the digest gate is armed they answer with the gate — the
+same comparison the sweep's rows make, in place of the revision-keyed
+guard, because an edge move changes the digest and no revision, so a
+guard on the revision beside the gate would suppress the re-curation
+the gate exists to allow (§forgejo/decisions/actionable-state-digest,
+s-git/maitred#209). The gate is unarmed only for a kind-conflicting
+root: its event-path row keeps the ordinary revision-keyed watermark
+guard while the sweep holds that issue off as a conflict before any
+decompose row — the exemption, not the action,
 belongs to the sweep (§forgejo/decisions/transition-table). A comment
-on an open root takes the same event-path row under the same guard,
-held off only when its author is the configured decomposer identity
+on an open root takes the same row under the same gate: a comment a
+human authored moves the digest, since a human comment is a folded fact,
+while a comment by the configured decomposer identity folds nowhere and
+holds off naming its authorship
 (§forgejo/decisions/loop-prevention, s-git/maitred#147). For
 `wrap-up` the sweep stays the only exempt firing row: an `outcome`
 tracker's activity on the event path is a hold-off naming the label.
@@ -291,9 +305,9 @@ the following tick, the sweep's own tick paying the bound too
 
 What it costs is steady-state noise, and the bound on that is stated
 plainly: an exempt action re-fires on **every sweep while the state
-holds** — an open `ideation` root, or an `outcome` tracker still
-waiting to be closed, enqueues a task on each sweep for as long as the
-label applies. Nothing in the engine bounds it further —
+holds** — an `outcome` tracker still waiting to be closed enqueues a
+wrap-up on each sweep for as long as the state applies. Nothing in the
+engine bounds it further —
 `merge-or-wait` excepted, whose re-fires the engine's re-fire bound
 spaces at one per `reconcile_interval`
 (§forgejo/decisions/loop-prevention) — the queue's deduplication
@@ -302,6 +316,33 @@ and the agent's silence-on-noop carries the rest. That
 is the design — the state *is* the watermark, and the engine's job is
 only to stop suppressing these actions — so an operator weighing the
 cost should read the re-firing as the mechanism working, not as a fault.
+
+`decompose` is where that trade was revised (s-git/maitred#209). Its
+rows ask first whether anything a decomposition run could act on has
+moved: the forest's actionable-state digest at re-fetch time against
+the digest the store last observed for that forest
+(§forgejo/decisions/actionable-state-digest, §forgejo/state/forest-digest).
+Unchanged, the row holds off, and a quiet forest pays the fold — graph
+and comment reads, no task. The fold is computed once per gated row,
+not once per forest: a quiet forest with an open root pays one digest
+computation per sweep, and one whose root has closed pays one per
+still-blocked tracker whose row the sweep reaches; moved, the
+row dispatches, naming the component that moved (a blocker's state, a
+member's, the root's, a human comment); never observed, the first run
+is commissioned and the observation is stored. The slot is refreshed
+with the digest and its sub-digests once the dispatch lands, so the
+next sweep asks its question of current values; a dispatch that failed
+leaves the stale slot, and the following sweep retries. The gate is
+armed wherever a `decompose` row is reachable — the root's row on
+every path, the sweep's tracker row — and an issue that reaches no
+such row pays no digest reads: a root under a teardown order, a
+kind-conflicting issue and everything that is not a root or a
+commissioned tracker costs nothing extra. This trades recall for cost:
+a digest that misses something a run could have acted on is recovered
+only by a change to a folded fact or by a manually triggered sweep
+(§forgejo/observability/triggering-a-sweep). The `wrap-up` and
+`teardown-forest` exemptions are untouched — generalising the gate is
+separate work, deliberately not smuggled into this one.
 
 The two rows are not symmetric, and not by oversight: `wrap-up` waits
 for the tracker's blockers to close, because wrapping up means

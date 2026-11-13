@@ -54,21 +54,29 @@ A forest has **one slot per forest** in the same store — keyed by
 forest's **ideation root**, so the `decompose` decision made on that root
 finds the slot (§forgejo/decisions/actionable-state-digest). The slot is
 an ordinary watermark record whose **digest** field carries the forest's
-last observed actionable-state digest; `action` and `revision` are unused
+last observed actionable-state digest and whose **digest_parts** field
+carries the same fold's sub-digest per component — root, member, tracker,
+blocker and comment — so the gate that finds a moved digest can name
+which component moved (§forgejo/decisions/actionable-state-digest,
+s-git/maitred#209). `action` and `revision` are unused
 there, and the forest kind keeps the slot's file distinct from the root
 issue's own watermark. Like watermarks, forest slots are written
 **atomically**, serialised through the same **per-key lock**, and
 survive a restart (§forgejo/state/storage, §forgejo/state/persistence,
-§forgejo/state/concurrency). The slot exists so a digest gate can make a
-quiet forest stay quiet across restarts: when it lands it must refresh
-the slot on every evaluation, dispatched or skipped, so the next sweep
-compares against the newest observed state.
+§forgejo/state/concurrency). The gate reads the slot on the paths whose
+rows dispatch `decompose`; a newer observation is written to the slot
+once the dispatch it justified has landed, a digest that has not moved
+writes nothing — the stored slot already holds it — and a dispatch that
+failed or was refused leaves the stale slot so the next sweep retries
+(s-git/maitred#209).
 
 The slot is **lossy** like the watermark: a lost slot simply makes the
 next comparison see a digest that moved, and the cost is one redundant
-(decompose) run (§forgejo/state/lossiness). The engine does **not yet**
-write or read the slot: the digest gate that consults it and refreshes
-it on every evaluation is separate work.
+(decompose) run (§forgejo/state/lossiness). A slot whose parts are
+absent — written by a build predating them, say — reads as a forest
+whose digest moved but whose components cannot be localised, so the
+gate dispatches with its reason naming no component beyond the digest
+itself.
 
 ## Lossiness
 

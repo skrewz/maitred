@@ -71,7 +71,7 @@ func digest(t *testing.T, f *fakeAPI) string {
 
 func digestOf(t *testing.T, f *fakeAPI, root *Issue) string {
 	t.Helper()
-	got, err := ForestDigest(f, root, digestEngine, digestDecomposer)
+	got, _, err := ForestDigest(f, root, digestEngine, digestDecomposer)
 	if err != nil {
 		t.Fatalf("ForestDigest: %v", err)
 	}
@@ -337,28 +337,28 @@ func TestForestDigestOrderInsensitive(t *testing.T) {
 func TestForestDigestReadFailures(t *testing.T) {
 	root := digestRoot()
 	t.Run("no root", func(t *testing.T) {
-		if _, err := ForestDigest(digestForest(), nil, digestEngine, digestDecomposer); err == nil {
+		if _, _, err := ForestDigest(digestForest(), nil, digestEngine, digestDecomposer); err == nil {
 			t.Fatal("a forest with no root digested without error")
 		}
 	})
 	t.Run("blocks listing fails", func(t *testing.T) {
 		f := digestForest()
 		f.issueBlocksErr = errors.New("boom")
-		if _, err := ForestDigest(f, &root, digestEngine, digestDecomposer); err == nil {
+		if _, _, err := ForestDigest(f, &root, digestEngine, digestDecomposer); err == nil {
 			t.Fatal("a failed blocks read digested without error")
 		}
 	})
 	t.Run("dependencies fail", func(t *testing.T) {
 		f := digestForest()
 		f.depsErr = errors.New("boom")
-		if _, err := ForestDigest(f, &root, digestEngine, digestDecomposer); err == nil {
+		if _, _, err := ForestDigest(f, &root, digestEngine, digestDecomposer); err == nil {
 			t.Fatal("a failed dependencies read digested without error")
 		}
 	})
 	t.Run("comments fail", func(t *testing.T) {
 		f := digestForest()
 		f.commentsErr = errors.New("boom")
-		if _, err := ForestDigest(f, &root, digestEngine, digestDecomposer); err == nil {
+		if _, _, err := ForestDigest(f, &root, digestEngine, digestDecomposer); err == nil {
 			t.Fatal("a failed comments read digested without error")
 		}
 	})
@@ -374,18 +374,18 @@ func TestForestDigestReadFailures(t *testing.T) {
 func TestForestDigestIdentities(t *testing.T) {
 	root := digestRoot()
 	f := digestForest()
-	withDecomposer, err := ForestDigest(f, &root, digestEngine, digestDecomposer)
+	withDecomposer, _, err := ForestDigest(f, &root, digestEngine, digestDecomposer)
 	if err != nil {
 		t.Fatalf("ForestDigest: %v", err)
 	}
-	withoutDecomposer, err := ForestDigest(f, &root, digestEngine, "")
+	withoutDecomposer, _, err := ForestDigest(f, &root, digestEngine, "")
 	if err != nil {
 		t.Fatalf("ForestDigest: %v", err)
 	}
 	if withDecomposer == withoutDecomposer {
 		t.Error("an unset decomposer identity still excluded the decomposer's comments")
 	}
-	if _, err := ForestDigest(f, &root, "", digestDecomposer); err == nil {
+	if _, _, err := ForestDigest(f, &root, "", digestDecomposer); err == nil {
 		t.Error("an unset engine account digested without error")
 	}
 }
@@ -438,4 +438,90 @@ func TestForestDigestRowsWithoutRepository(t *testing.T) {
 			t.Errorf("a blocker listing no repository digested differently: %s vs %s", got, base)
 		}
 	})
+}
+
+// digestPartsOf folds the fixture forest's digest with its component
+// sub-digests (§forgejo/decisions/actionable-state-digest).
+func digestPartsOf(t *testing.T, f *fakeAPI, root *Issue) (string, map[string]string) {
+	t.Helper()
+	overall, parts, err := ForestDigest(f, root, digestEngine, digestDecomposer)
+	if err != nil {
+		t.Fatalf("ForestDigest: %v", err)
+	}
+	if len(overall) != 64 || strings.TrimLeft(overall, "0123456789abcdef") != "" {
+		t.Fatalf("overall digest = %q, want a 64-hex-character SHA-256", overall)
+	}
+	return overall, parts
+}
+
+// TestForestDigestPartsCoverTheFixtureComponents pins the fixture's
+// component set: root, tracker, member, blocker and comment facts all
+// stand in the fixture, and each names a component the gate can report
+// (§forgejo/decisions/actionable-state-digest).
+func TestForestDigestPartsCoverTheFixtureComponents(t *testing.T) {
+	root := digestRoot()
+	_, parts := digestPartsOf(t, digestForest(), &root)
+	for _, component := range digestComponents {
+		if parts[component.key] == "" {
+			t.Errorf("component %q has no sub-digest in the fixture fold (parts: %v)", component, parts)
+		}
+	}
+	if len(parts) != len(digestComponents) {
+		t.Errorf("parts carry %d components, want %d (%v)", len(parts), len(digestComponents), parts)
+	}
+}
+
+// TestForestDigestPartsLocaliseMoves is the gate's diagnostic
+// foundation: each single actionable change moves exactly its own
+// component's sub-digest and no other, so a dispatch reason can name
+// what moved (§forgejo/decisions/actionable-state-digest).
+func TestForestDigestPartsLocaliseMoves(t *testing.T) {
+	root := digestRoot()
+	_, base := digestPartsOf(t, digestForest(), &root)
+	cases := []struct {
+		name   string
+		mutate func(f *fakeAPI, root *Issue)
+		want   string
+	}{
+		{"blocker opens", func(f *fakeAPI, _ *Issue) { f.deps[3][0].State = "open" }, "blocker"},
+		{"member closes", func(f *fakeAPI, _ *Issue) { f.blocks[1][1].State = "closed" }, "member"},
+		{"member landing label moves", func(f *fakeAPI, _ *Issue) {
+			f.blocks[1][1].Labels = []string{LabelAgenticSyncMerge}
+		}, "member"},
+		{"tracker closes", func(f *fakeAPI, _ *Issue) { f.blocks[1][0].State = "closed" }, "tracker"},
+		{"root body edited", func(_ *fakeAPI, root *Issue) { root.Body = "restated intent" }, "root"},
+		{"root label added", func(_ *fakeAPI, root *Issue) { root.Labels = append(root.Labels, LabelVIP) }, "root"},
+		{"human comment added", func(f *fakeAPI, _ *Issue) {
+			f.comments[1] = append(f.comments[1], Comment{Author: "operator", Body: "wake up"})
+		}, "comment"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := digestForest()
+			mutated := digestRoot()
+			c.mutate(f, &mutated)
+			_, parts := digestPartsOf(t, f, &mutated)
+			for _, component := range digestComponents {
+				moved := parts[component.key] != base[component.key]
+				if moved != (component.key == c.want) {
+					t.Errorf("component %q moved = %v, want %v (base %v, got %v)",
+						component.key, moved, component.key == c.want, base, parts)
+				}
+			}
+		})
+	}
+}
+
+// TestForestDigestPartsDeterministic pins the sub-digests' determinism:
+// identical folds agree component by component, whatever the listing
+// order (§forgejo/decisions/actionable-state-digest).
+func TestForestDigestPartsDeterministic(t *testing.T) {
+	root := digestRoot()
+	_, first := digestPartsOf(t, digestForest(), &root)
+	_, second := digestPartsOf(t, digestForest(), &root)
+	for component, want := range first {
+		if second[component] != want {
+			t.Errorf("component %q moved across identical folds: %s vs %s", component, want, second[component])
+		}
+	}
 }
