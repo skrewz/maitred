@@ -175,7 +175,7 @@ func TestEngineStatusConstructionPaths(t *testing.T) {
 
 	t.Run("config omits an action the binary knows", func(t *testing.T) {
 		yaml := strings.Replace(validConfigYAML,
-			"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    persona: s-autonomics-implementer\n    timeout: 30m\n",
+			"  rebase:\n    prompt: \"/pr-rebase {{.PRURL}}\"\n    identity: implementer\n    timeout: 30m\n",
 			"", 1)
 		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", yaml)
 		cause, category := EngineStatus(path, mapEnv(completeEnv()))
@@ -191,13 +191,31 @@ func TestEngineStatusConstructionPaths(t *testing.T) {
 	})
 
 	t.Run("config names an action the binary does not know", func(t *testing.T) {
-		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", strings.Replace(validConfigYAML, "actions:", "actions:\n  bogus:\n    prompt: x\n    persona: p\n    timeout: 1h", 1))
+		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", strings.Replace(validConfigYAML, "actions:", "actions:\n  bogus:\n    prompt: x\n    identity: p\n    timeout: 1h", 1))
 		cause, category := EngineStatus(path, mapEnv(completeEnv()))
 		if !errors.Is(cause, ErrActionSetMismatch) {
 			t.Fatalf("cause = %v, want ErrActionSetMismatch", cause)
 		}
 		if category != CategoryConfigBinaryMismatch {
 			t.Errorf("category = %s, want %s", category, CategoryConfigBinaryMismatch)
+		}
+	})
+
+	// A key the binary does not declare is the same class of failure —
+	// half a config-and-binary change landed — and a surface must be
+	// able to say so (§forgejo/config/identity-collapse,
+	// §forgejo/observability/why-the-engine-is-off).
+	t.Run("config carries a key the binary does not declare", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "forgejoeng.yaml", strings.Replace(validConfigYAML, "org: example-org\n", "org: example-org\npersona: implementer\n", 1))
+		cause, category := EngineStatus(path, mapEnv(completeEnv()))
+		if !errors.Is(cause, ErrActionSetMismatch) {
+			t.Fatalf("cause = %v, want ErrActionSetMismatch", cause)
+		}
+		if category != CategoryConfigBinaryMismatch {
+			t.Errorf("category = %s, want %s", category, CategoryConfigBinaryMismatch)
+		}
+		if !strings.Contains(cause.Error(), "persona") {
+			t.Errorf("cause %q must name the key it refused", cause)
 		}
 	})
 

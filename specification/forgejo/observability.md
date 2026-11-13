@@ -145,7 +145,7 @@ one **category**, whose printed name is the same on every surface:
 |---|---|---|
 | not configured | nothing is configured at the configured location (§forgejo/config/loading) | no |
 | config unreadable | something is there, but it cannot be stat-ed, read, or parsed (§forgejo/config/loading) | yes |
-| config or binary mismatch | the config and the binary disagree about the action set, in either direction (§forgejo/config/validation) | yes |
+| config or binary mismatch | the config and the binary disagree about the config's key set, in either direction — a missing or unknown action, or a key the binary does not declare (§forgejo/config/validation, §forgejo/config/identity-collapse) | yes |
 | credentials missing | the config enables the engine, the environment cannot serve it (§forgejo/webhook/configuration) | yes |
 | other fault | any failure the named causes do not describe | yes |
 

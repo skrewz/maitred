@@ -98,27 +98,29 @@ On each `POST`:
    over the event.
 6. **Dispatch.** A dispatch fills the action's canned prompt
    (§forgejo/config/placeholders) and enqueues the task through the queue
-   provider, with the persona and timeout from the config
-   (§forgejo/config/canned-prompts). The task carries a **dedup key** — the
-   dispatch identity: the key's repo, kind, and number, the action, the
-   **subject** for a fan-out dispatch (the lens identity
-   §forgejo/decisions/review-lenses), and the revision — so a queue system
-   with de-duplication (hotelier's `dedup_key`) squelches a re-dispatch of
-   the same `(action, subject, revision)` while the first task is still
-   pending. The subject is what keeps one lens's review task from squelching
-   another's at the same revision; singletons carry no subject slot. A
-   different revision (a new commit, an edited issue) is a different key and
-   dispatches freely. The key carries
-   the repo verbatim (slash retained — it is opaque to the queue system), so
-   two distinct repos never produce the same key. A prompt that references a
+   provider, with the timeout and the declared identity from the config
+   (§forgejo/config/canned-prompts, §forgejo/config/identity-collapse):
+   the identity is what the queue payload carries as the task's persona,
+   so the actor named on the work is the forge login itself. The task
+   carries a **dedup key** — the dispatch identity: the key's repo, kind,
+   and number, the action, the **subject** for a fan-out dispatch (the lens
+   identity §forgejo/decisions/review-lenses), and the revision — so a queue
+   system with de-duplication (hotelier's `dedup_key`) squelches a
+   re-dispatch of the same `(action, subject, revision)` while the first
+   task is still pending. The subject is what keeps one lens's review task
+   from squelching another's at the same revision; singletons carry no
+   subject slot. A different revision (a new commit, an edited issue) is a
+   different key and dispatches freely. The key carries the repo verbatim
+   (slash retained — it is opaque to the queue system), so two distinct repos
+   never produce the same key. A prompt that references a
    URL the re-fetched state cannot fill fails the dispatch instead of
    enqueueing an invocation that names no object
    (§forgejo/config/canned-prompts); the failure is logged and nothing is
    watermarked, so a later sweep or event tries again. A review fan-out
    (the decision naming several lenses, §forgejo/decisions/review-lenses)
    is one dispatch per lens in config order, each filling that lens's
-   canned prompt under that lens's persona and timeout, and each writing
-   its own subject slot in the watermark.
+   canned prompt under that lens's declared login and timeout, and each
+   writing its own subject slot in the watermark.
    The task also **names its work**: its `title` is composed by one helper
    for both event kinds — the action's verb, the title of the object the
    state carries (the pull request where one is present, the issue

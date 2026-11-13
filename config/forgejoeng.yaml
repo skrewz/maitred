@@ -17,36 +17,41 @@ decomposer_identity: decomposer
 # s-git/maitred#143).
 implementer_identity: implementer
 
-# Every prompt invokes the persona's Pi canned prompt: Pi expands a
-# prompt template only when the dispatched message starts with
-# "/<template-name>", so a prompt without the leading slash travels to
-# the agent verbatim — the canned prompt never runs and its parameter
-# value (the issue or pull request URL) never arrives. Each prompt
-# therefore begins with the slash invocation and passes the URL the
-# dispatch kind fills (§forgejo/config/canned-prompts). The command names
-# are the convention §forgejo/config/canned-prompts pins: the persona's Pi
-# prompt directory must hold a template of that name, or Pi passes the
-# message verbatim and nothing expands.
+# Every prompt invokes the runner-side Pi canned prompt of the identity
+# the task runs as: Pi expands a prompt template only when the
+# dispatched message starts with "/<template-name>", so a prompt without
+# the leading slash travels to the agent verbatim — the canned prompt
+# never runs and its parameter value (the issue or pull request URL)
+# never arrives. Each prompt therefore begins with the slash invocation
+# and passes the URL the dispatch kind fills
+# (§forgejo/config/canned-prompts). The command names are the convention
+# that section pins: the identity's Pi prompt directory must hold a
+# template of that name, or Pi passes the message verbatim and nothing
+# expands. Each entry declares exactly one `identity` — the forge login
+# the task runs as, the same name a decision would compare against were
+# it reviewing — and no other name: `persona` is not part of this
+# config's schema, and a config carrying it is refused as the schema
+# mismatch it is (§forgejo/config/identity-collapse).
 actions:
   implement:
     prompt: "/issue-implementer {{.IssueURL}}"
-    persona: ui-test
+    identity: implementer
     timeout: 1h
   reassess:
     prompt: "/issue-reassess {{.IssueURL}}"
-    persona: ui-test
+    identity: implementer
     timeout: 1h
   fix-feedback:
     prompt: "/pr-feedback-fixer {{.PRURL}}"
-    persona: ui-test
+    identity: implementer
     timeout: 1h
   merge-or-wait:
     prompt: "/pr-merger {{.PRURL}}"
-    persona: ui-test
+    identity: reviewer
     timeout: 1h
   rebase:
     prompt: "/pr-rebase {{.PRURL}}"
-    persona: ui-test
+    identity: implementer
     timeout: 1h
   decompose:
     # The spec holds this template to naming the fan-out cap and
@@ -56,19 +61,19 @@ actions:
     # arrives as a dozen positional arguments a template reading only
     # $1 never renders.
     prompt: '/issue-decomposer {{.IssueURL}} "the fan-out cap is 20 tickets per forest — cite this cap when refusing"'
-    persona: ui-test
+    identity: decomposer
     timeout: 1h
   wrap-up:
     prompt: "/issue-wrapper {{.IssueURL}}"
-    persona: ui-test
+    identity: implementer
     timeout: 1h
   teardown-forest:
     prompt: "/forest-teardown {{.IssueURL}}"
-    persona: ui-test
+    identity: decomposer
     timeout: 1h
   sync:
     prompt: "/set-lander {{.IssueURL}}"
-    persona: ui-test
+    identity: implementer
     timeout: 1h
 
 # The review chain, in order: the three lenses every pull request
@@ -81,13 +86,10 @@ actions:
 reviews:
   - identity: reviewer-minimalism
     prompt: '/pr-minimalism-reviewer {{.PRURL}}'
-    persona: ui-test
     timeout: 30m
   - identity: reviewer-maintainability
     prompt: '/pr-maintainability-reviewer {{.PRURL}}'
-    persona: ui-test
     timeout: 30m
   - identity: reviewer-security
     prompt: '/pr-security-reviewer {{.PRURL}}'
-    persona: ui-test
     timeout: 30m

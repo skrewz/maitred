@@ -30,19 +30,20 @@ func testConfig() *Config {
 	cfg.Actions = make(map[string]PromptConfig, len(AllActions))
 	for _, a := range AllActions {
 		cfg.Actions[string(a)] = PromptConfig{
-			Prompt:  "action={{.Action}} repo={{.Repo}} kind={{.Kind}} number={{.Number}} issue={{.IssueURL}} pr={{.PRURL}} sender={{.Sender}}",
-			Persona: "persona-" + string(a),
-			Timeout: 2 * time.Hour,
+			Prompt:   "action={{.Action}} repo={{.Repo}} kind={{.Kind}} number={{.Number}} issue={{.IssueURL}} pr={{.PRURL}} sender={{.Sender}}",
+			Identity: "implementer",
+			Timeout:  2 * time.Hour,
 		}
 	}
 	cfg.Reviews = []ReviewLens{{
 		// One lens, bob — the reviewing author of the fixtures'
 		// reviews — so engine-level fixtures keep the standing the
-		// retired single-reviewer rows gave them
-		// (§forgejo/config/review-lenses).
+		// retired single-reviewer rows gave them. Its declared identity
+		// is also the name its task runs as
+		// (§forgejo/config/review-lenses,
+		// §forgejo/config/identity-collapse).
 		Identity: "bob",
 		Prompt:   "action={{.Action}} repo={{.Repo}} kind={{.Kind}} number={{.Number}} issue={{.IssueURL}} pr={{.PRURL}} sender={{.Sender}}",
-		Persona:  "persona-review",
 		Timeout:  1 * time.Hour,
 	}}
 	return cfg
@@ -1339,8 +1340,8 @@ func TestHandler_TaskFields(t *testing.T) {
 	if task.Prompt != wantPrompt {
 		t.Errorf("prompt = %q, want %q", task.Prompt, wantPrompt)
 	}
-	if task.Persona != "persona-implement" {
-		t.Errorf("persona = %q, want persona-implement", task.Persona)
+	if task.Persona != "implementer" {
+		t.Errorf("persona = %q, want the action's declared identity", task.Persona)
 	}
 	if task.Timeout != int((2 * time.Hour).Seconds()) {
 		t.Errorf("timeout = %d, want %d", task.Timeout, int((2 * time.Hour).Seconds()))
@@ -1449,9 +1450,9 @@ func TestDispatch_DedupKeyPR(t *testing.T) {
 func TestDispatch_LensDedupKeysDistinct(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
 	eng.cfg.Reviews = []ReviewLens{
-		{Identity: "lens-a", Prompt: "/pr-review-a {{.PRURL}}", Persona: "p", Timeout: time.Hour},
-		{Identity: "lens-b", Prompt: "/pr-review-b {{.PRURL}}", Persona: "p", Timeout: time.Hour},
-		{Identity: "lens-c", Prompt: "/pr-review-c {{.PRURL}}", Persona: "p", Timeout: time.Hour},
+		{Identity: "lens-a", Prompt: "/pr-review-a {{.PRURL}}", Timeout: time.Hour},
+		{Identity: "lens-b", Prompt: "/pr-review-b {{.PRURL}}", Timeout: time.Hour},
+		{Identity: "lens-c", Prompt: "/pr-review-c {{.PRURL}}", Timeout: time.Hour},
 	}
 	api.pulls[9] = testPR(9, "open", true)
 	ev := Event{Type: EventPROpened, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "alice"}
@@ -1550,7 +1551,7 @@ func TestDispatch_TitleAndRefURL(t *testing.T) {
 			// prompt naming no URL placeholder keeps dispatching
 			// (§forgejo/config/canned-prompts).
 			name:   "state with no object",
-			prompt: &PromptConfig{Prompt: "/housekeeping {{.Repo}}", Persona: "sweeper", Timeout: time.Hour},
+			prompt: &PromptConfig{Prompt: "/housekeeping {{.Repo}}", Identity: "sweeper", Timeout: time.Hour},
 			ev:     Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"},
 			st:     State{},
 			action: ActionWrapUp,
@@ -1610,8 +1611,8 @@ func TestDispatch_TitleAndRefURL(t *testing.T) {
 // instead and enqueues nothing (§forgejo/config/canned-prompts,
 // §forgejo/webhook/the-pipeline).
 func TestDispatch_WithoutURLArgument(t *testing.T) {
-	issuePrompt := PromptConfig{Prompt: "/issue-implementer {{.IssueURL}}", Persona: "implementer", Timeout: time.Hour}
-	prPrompt := PromptConfig{Prompt: "/pr-reviewer {{.PRURL}}", Persona: "reviewer", Timeout: time.Hour}
+	issuePrompt := PromptConfig{Prompt: "/issue-implementer {{.IssueURL}}", Identity: "implementer", Timeout: time.Hour}
+	prPrompt := PromptConfig{Prompt: "/pr-reviewer {{.PRURL}}", Identity: "reviewer", Timeout: time.Hour}
 
 	cases := []struct {
 		name       string
@@ -1656,7 +1657,7 @@ func TestDispatch_WithoutURLArgument(t *testing.T) {
 			// A prompt that asks for no URL is the deployment's choice;
 			// the guard only refuses prompts that ask and get nothing.
 			name:   "prompt naming no URL",
-			prompt: PromptConfig{Prompt: "/housekeeping {{.Repo}}", Persona: "sweeper", Timeout: time.Hour},
+			prompt: PromptConfig{Prompt: "/housekeeping {{.Repo}}", Identity: "sweeper", Timeout: time.Hour},
 			ev:     Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"},
 			st:     State{},
 			action: ActionImplement,
@@ -5101,16 +5102,17 @@ func TestHandler_RootPerformsNoForestHop(t *testing.T) {
 }
 
 // TestHandler_ReviewFanOut_EndToEnd: a PR opened dispatches one task
-// per configured lens — distinct dedup keys, the lens persona and
-// timeout — and records one subject slot per lens while leaving the
-// main slot alone; the following fix-feedback dispatch writes the
-// main slot and keeps the slots (§forgejo/decisions/review-lenses,
+// per configured lens — distinct dedup keys, each task named by the
+// lens's declared login, and the lens timeout — and records one
+// subject slot per lens while leaving the main slot alone; the
+// following fix-feedback dispatch writes the main slot and keeps the
+// slots (§forgejo/decisions/review-lenses,
 // §forgejo/state/watermark, §forgejo/webhook/the-pipeline).
 func TestHandler_ReviewFanOut_EndToEnd(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
 	eng.cfg.Reviews = []ReviewLens{
-		{Identity: "lens-a", Prompt: "/pr-review-a {{.PRURL}}", Persona: "persona-a", Timeout: 30 * time.Minute},
-		{Identity: "lens-b", Prompt: "/pr-review-b {{.PRURL}}", Persona: "persona-b", Timeout: 30 * time.Minute},
+		{Identity: "lens-a", Prompt: "/pr-review-a {{.PRURL}}", Timeout: 30 * time.Minute},
+		{Identity: "lens-b", Prompt: "/pr-review-b {{.PRURL}}", Timeout: 30 * time.Minute},
 	}
 	h := NewHandler(eng, "s3cret", nil)
 	api.pulls[9] = testPR(9, "open", true)
@@ -5123,8 +5125,8 @@ func TestHandler_ReviewFanOut_EndToEnd(t *testing.T) {
 	}
 	for i, lens := range eng.cfg.Reviews {
 		task := tasks[i]
-		if task.Persona != "persona-"+string(lens.Identity[len(lens.Identity)-1:]) {
-			t.Errorf("task %d persona = %q, want the lens persona", i, task.Persona)
+		if task.Persona != lens.Identity {
+			t.Errorf("task %d persona = %q, want the lens's declared login %q", i, task.Persona, lens.Identity)
 		}
 		if task.Timeout != 1800 {
 			t.Errorf("task %d timeout = %d, want the lens timeout in seconds", i, task.Timeout)

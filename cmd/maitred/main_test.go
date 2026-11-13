@@ -139,11 +139,11 @@ func writeForgejoConfig(t *testing.T, dir string) {
 	var b strings.Builder
 	b.WriteString("org: example-org\nreconcile_interval: 15m\nactions:\n")
 	for _, a := range forgejo.AllActions {
-		fmt.Fprintf(&b, "  %s:\n    prompt: \"do {{.IssueURL}}\"\n    persona: persona\n    timeout: 1h\n", a)
+		fmt.Fprintf(&b, "  %s:\n    prompt: \"do {{.IssueURL}}\"\n    identity: actor\n    timeout: 1h\n", a)
 	}
 	// The lens list joins the action map as the other half of what
 	// the binary needs to start (§forgejo/config/review-lenses).
-	b.WriteString("reviews:\n  - identity: lens\n    prompt: \"do {{.PRURL}}\"\n    persona: persona\n    timeout: 1h\n")
+	b.WriteString("reviews:\n  - identity: lens\n    prompt: \"do {{.PRURL}}\"\n    timeout: 1h\n")
 	if err := os.WriteFile(filepath.Join(dir, "forgejoeng.yaml"), []byte(b.String()), 0o644); err != nil {
 		t.Fatalf("write engine config: %v", err)
 	}
@@ -284,10 +284,10 @@ func writeForgejoConfigVariant(t *testing.T, dir, omit, extra string) {
 		if string(a) == omit {
 			continue
 		}
-		fmt.Fprintf(&b, "  %s:\n    prompt: \"do {{.IssueURL}}\"\n    persona: persona\n    timeout: 1h\n", a)
+		fmt.Fprintf(&b, "  %s:\n    prompt: \"do {{.IssueURL}}\"\n    identity: actor\n    timeout: 1h\n", a)
 	}
 	b.WriteString(extra)
-	b.WriteString("reviews:\n  - identity: lens\n    prompt: \"do {{.PRURL}}\"\n    persona: persona\n    timeout: 1h\n")
+	b.WriteString("reviews:\n  - identity: lens\n    prompt: \"do {{.PRURL}}\"\n    timeout: 1h\n")
 	if err := os.WriteFile(filepath.Join(dir, "forgejoeng.yaml"), []byte(b.String()), 0o644); err != nil {
 		t.Fatalf("write engine config: %v", err)
 	}
@@ -363,7 +363,7 @@ func TestHealthCheckForgejoEngine(t *testing.T) {
 
 	t.Run("config names an action the binary does not know is unhealthy naming the category", func(t *testing.T) {
 		dir := t.TempDir()
-		writeForgejoConfigVariant(t, dir, "", "  bogus:\n    prompt: x\n    persona: p\n    timeout: 1h\n")
+		writeForgejoConfigVariant(t, dir, "", "  bogus:\n    prompt: x\n    identity: p\n    timeout: 1h\n")
 		setForgejoEnv(t, dir, true)
 		triggerDir, dataDir := healthTriggerDirs(t)
 		err := healthCheck(triggerDir, dataDir)

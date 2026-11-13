@@ -18,12 +18,13 @@ The config maps each action — `implement`, `reassess`,
 - a **prompt template** — the canned prompt: the hotelier task invocation
   (e.g. the `/issue-implementer`, `/pr-merger`, `/pr-feedback-fixer`
   invocations) plus their pre-flight checks,
-- a **persona** — the persona the task runs as,
+- an **identity** — the single declared Forgejo login the task runs as
+  (§forgejo/config/identity-collapse),
 - a **timeout** — how long the task may run.
 
 Pi expands a prompt template only when the dispatched message **starts
 with `/<template-name>`** — the first byte must be the slash. A prompt
-that opens with bare words travels to the agent verbatim: the persona's
+that opens with bare words travels to the agent verbatim: the identity's
 canned prompt is never invoked and its parameter values are never
 filled, which is how a `decompose` dispatch once reached the decomposer
 with no issue URL at all. Every prompt template therefore begins with
@@ -38,7 +39,7 @@ that reads `$1` for the URL never renders — the extra text would vanish
 as quietly as a missing slash does. One pair of double quotes makes the
 sentence one argument.
 
-The template name is part of the contract. The persona's Pi prompt
+The template name is part of the contract. The identity's Pi prompt
 directory must hold a template of that name, because Pi falls back to
 passing the message verbatim when no template matches: a typo or a
 missing command reproduces the silent no-expansion failure above, with no
@@ -90,21 +91,18 @@ carries the ordered **review lens list** (§forgejo/config/review-lenses).
 
 Reviews are not one action with one prompt: the config declares an
 ordered list of **review lenses**, each with its own identity, canned
-prompt, persona, and timeout:
+prompt, and timeout:
 
 ```yaml
 reviews:
   - identity: reviewer-minimalism
     prompt: '/pr-minimalism-reviewer {{.PRURL}}'
-    persona: reviewer-minimalism
     timeout: 30m
   - identity: reviewer-maintainability
     prompt: '/pr-maintainability-reviewer {{.PRURL}}'
-    persona: reviewer-maintainability
     timeout: 30m
   - identity: reviewer-security
     prompt: '/pr-security-reviewer {{.PRURL}}'
-    persona: reviewer-security
     timeout: 30m
 ```
 
@@ -118,18 +116,96 @@ lens comes back through the earlier ones (§forgejo/decisions/review-lenses).
 standing as `implementer_identity` and `decomposer_identity`: the
 decision function compares it against review authors by exact,
 case-sensitive equality to decide which lenses owe a verdict, and the
-engine never infers the roster from the reviews it reads. Like the
-other identity keys it grants no privilege — a lens's rights live on
-the forge, and its task runs under the persona the entry names.
+engine never infers the roster from the reviews it reads. It grants no
+privilege **on the forge** — a lens's rights live there, not in this
+key. It is not privilege-free in the deployment, though: this key is
+also the persona name the queue resolves, so it decides whose
+environment variables and file copies land in the task's working
+directory, and the login it names must not be an actor's
+(§forgejo/config/identity-collapse). An audit of which config keys name
+credentials therefore reads every `identity` in the file, not just the
+ones spelled `persona` elsewhere.
 
-Per lens: `identity`, `prompt`, and `persona` are required, `timeout`
-must be positive, and the prompt is held to the same canned-prompt
+Per lens: `identity` and `prompt` are required, `timeout` must be
+positive, and the prompt is held to the same canned-prompt
 contract as an action's. A lens identity appears at most once; in a
 directory merge the lists concatenate in sorted file order and a
-repeated identity is a conflict, exactly as with the scalar keys.
+repeated identity is a conflict, exactly as with the scalar keys. A lens
+identity must also be **no actor's login**: it may not equal
+`implementer_identity`, `decomposer_identity`, or the `identity` of any
+action entry, because one declared name is both what the decisions
+compare a review author against and the persona the task runs as — a
+lens naming an actor would let that account satisfy its own gate
+(§forgejo/config/identity-collapse). Repeated and colliding identities
+are plain validation failures, not the config-or-binary mismatch: the
+binary and the config agree about the schema; the deployment wrote a
+config that contradicts itself.
 At least one lens is required (§forgejo/config/validation): with no
 lenses nothing reviews, and a chain of zero would silently pass every
 gate that reads the chain.
+
+## Identity collapse
+
+Every entry that declares a prompt — each action and each review lens —
+declares **exactly one** name: `identity`, whose value is the Forgejo
+login. There is no second key.
+
+Before the collapse an entry could carry two: `identity`, the login the
+decisions compare, and `persona`, the name handed to the queue system
+and thence to hotelier. Two keys holding one string by convention alone
+are a fact about the deployment rather than about the schema — they can
+disagree while nothing anywhere reports anything wrong — so the pair is
+collapsed into the one field the login belongs in. What the engine
+enqueues as the task's persona name is now the entry's declared login,
+verbatim, and downstream consumers key on that login and on nothing
+else: never a derived value such as an email hash, which moves when an
+email is regenerated while the login stands still.
+
+The collapse is a **schema change validated as an exact set of keys in
+both directions**, the same stance the action set already takes: an entry
+with no `identity` fails the load as a missing required field — the field
+is never defaulted — and a key the binary does not declare fails it,
+naming that key. The full list of load-time failures, and the category a
+key the binary does not declare classifies into, belong to
+§forgejo/config/validation.
+
+One rule the collapse itself puts on the load: **the login whose verdict
+a gate counts must not be a login the config declares as an actor**; the
+enumeration of those logins, and the refusal of a lens identity equal to
+one, belong to §forgejo/config/review-lenses. Before the collapse that
+collision needed two coincidences to matter; with one name that is
+simultaneously what the decisions compare review authors against and the
+persona the task is materialised with, one mistyped lens entry would hand the
+implementing account a gate whose whole job is to be somebody else's verdict.
+
+**The name travels, so the pairing downstream must fail closed.** The
+persona name the queue system receives is read off a key the operator
+thinks of as a login, so renaming or recreating that account silently
+re-points every task in the role at a different persona — a different set
+of environment variables and file copies on the runner. The engine cannot
+ask whether a persona of that name exists. What makes the coupling safe
+is one deployment-side property: a task whose persona name resolves to
+nothing must be refused, never run under the runner's own identity. That
+property belongs to the deployment, not to this binary; it is stated here
+so the failure mode has a home in the specification.
+
+**The deployed config must land in the same window as the binary.** A
+deployment that ships this binary over a config that still carries
+`persona:` does not start — loudly, with the mismatch named — and a
+config written for this binary run by the older one does not start
+either, but as *other fault* for want of a persona: only the newer binary
+has the key-set check that names the mismatch. The engine-side half lives
+here; the deployment half is s-puppet's, and the two land together as the
+landing set named on the forest's tracker. In the meantime the in-repo
+sample (`config/forgejoeng.yaml`) carries the new shape, so anything
+built from this repository is already speaking it.
+
+What the collapse does **not** touch: the queue payload's `persona`
+field, which is the queue system's name for the actor and now simply
+carries the login; the trigger config's `persona`, which belongs to the
+trigger subsystem and never named a forge account
+(`specification/overview.md`); and the decision comparisons, which read the
+same declared logins they always did.
 
 ## Decomposer identity
 
@@ -151,7 +227,7 @@ s-git/maitred#147). The guard compares the delivery's `sender.login`
 against the declared key by **exact, case-sensitive equality** — the
 same rule the `fix-feedback` ownership gate applies to
 `implementer_identity` below. A declaration that does not match the
-account that actually posts (a stale key, a renamed persona) leaves
+account that actually posts (a stale key, a renamed account) leaves
 the guard silently fail-open, so it is the operator's responsibility
 to keep the declared login current; the dispatch reason on the comment
 row names the comment's author, so such a mis-declaration is legible
@@ -224,7 +300,11 @@ Loading **fails at load time** — mirroring the trigger `Validate()` — when:
 
 - an action the decision function references has no entry (a missing prompt
   is a load error, never a runtime surprise),
-- an entry's prompt, persona, or timeout is missing or not positive,
+- an entry's identity or prompt is missing, or its timeout is not positive
+  (§forgejo/config/identity-collapse),
+- the config carries a key the binary does not declare at that depth — the
+  retired `persona` among them, refused by name
+  (§forgejo/config/identity-collapse),
 - `reconcile_interval` is missing or not positive,
 - a prompt template does not parse, or references a placeholder that is not
   in the placeholder table above,
@@ -235,9 +315,10 @@ Loading **fails at load time** — mirroring the trigger `Validate()` — when:
 - a directory's files define the same action twice.
 
 The lens list is validated with the actions: it must hold at least one
-lens, every lens must carry an identity, prompt, and persona with a
-positive timeout, identities must be unique, and a lens prompt is
-parsed like an action's (§forgejo/config/review-lenses). A config that
+lens, every lens must carry its one declared identity and a prompt with a
+positive timeout, identities must be unique and none may be a login an
+actor already declares (§forgejo/config/review-lenses), and a lens prompt
+is parsed like an action's (§forgejo/config/review-lenses). A config that
 still names the retired `review` or `re-review` action entry fails the
 unknown-action check, and a config with no `reviews:` list fails the
 empty-list check: either way the failure is the config-or-binary
