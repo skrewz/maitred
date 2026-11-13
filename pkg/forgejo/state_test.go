@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +27,7 @@ func TestKey_FileName(t *testing.T) {
 	}{
 		{Key{Repo: "acme/maitred", Kind: KindIssue, Number: 49}, "acme__maitred.issue.49.json"},
 		{Key{Repo: "acme/maitred", Kind: KindPR, Number: 12}, "acme__maitred.pr.12.json"},
+		{Key{Repo: "acme/maitred", Kind: KindForest, Number: 49}, "acme__maitred.forest.49.json"},
 		{Key{Repo: "other", Kind: KindIssue, Number: 1}, "other.issue.1.json"},
 	}
 	for _, tt := range tests {
@@ -514,5 +516,228 @@ func TestWatermark_SubjectSlots(t *testing.T) {
 	}
 	if got.Action != "review" || got.Revision != "sha-1" || len(got.Subjects) != 0 {
 		t.Errorf("legacy watermark = %+v, want the main slot only", *got)
+	}
+}
+
+// TestForestKey: the forest slot is keyed off the ideation root under
+// the forest kind, so the decompose comparison finds it and it never
+// shares a file with the root's own watermark
+// (§forgejo/state/forest-digest).
+func TestForestKey(t *testing.T) {
+	root := Key{Repo: "acme/maitred", Kind: KindIssue, Number: 49}
+	forest := ForestKey("acme/maitred", 49)
+	if forest.Repo != root.Repo || forest.Number != root.Number || forest.Kind != KindForest {
+		t.Errorf("ForestKey = %+v, want the root's repo and number under kind %q", forest, KindForest)
+	}
+	if got, want := forest.String(), "acme/maitred/forest/49"; got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+	if forest.fileName() == root.fileName() {
+		t.Error("forest slot shares a file with the root issue's watermark")
+	}
+}
+
+// TestStore_ForestDigest_RoundTrip: a digest saved into the forest's
+// slot and reloaded is byte-identical, and the on-disk record carries
+// it in the digest field (§forgejo/state/forest-digest).
+func TestStore_ForestDigest_RoundTrip(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	k := ForestKey("acme/maitred", 49)
+	digest := "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+	if err := s.Save(k, Watermark{Digest: digest}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := s.Load(k)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got == nil || got.Digest != digest {
+		t.Errorf("loaded digest = %q, want %q (byte-identical)", got, digest)
+	}
+
+	data, err := os.ReadFile(filepath.Join(s.dir, k.fileName()))
+	if err != nil {
+		t.Fatalf("read on-disk file: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("on-disk file is not JSON: %v", err)
+	}
+	if fields["digest"] != digest {
+		t.Errorf("on-disk JSON = %v, want digest=%s", fields, digest)
+	}
+}
+
+// TestStore_ForestDigest_RestartSurvival: a store newly opened on the
+// same directory sees the forest digests a previous instance saved — a
+// quiet forest stays quiet across restarts
+// (§forgejo/state/forest-digest, §forgejo/state/persistence).
+func TestStore_ForestDigest_RestartSurvival(t *testing.T) {
+	dir := t.TempDir()
+	s1, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore(1): %v", err)
+	}
+	digests := map[string]string{
+		"acme/maitred#49": "aaaa2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266",
+		"acme/other#7":    "bbbb2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266",
+	}
+	for ref, digest := range digests {
+		repo, numberStr, ok := strings.Cut(ref, "#")
+		if !ok {
+			t.Fatalf("bad ref %q", ref)
+		}
+		number, err := strconv.Atoi(numberStr)
+		if err != nil {
+			t.Fatalf("bad number in %q: %v", ref, err)
+		}
+		if err := s1.Save(ForestKey(repo, number), Watermark{Digest: digest}); err != nil {
+			t.Fatalf("Save(%s): %v", ref, err)
+		}
+	}
+	s1 = nil // simulate the maitred process exiting
+
+	s2, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore(2): %v", err)
+	}
+	for ref, digest := range digests {
+		repo, numberStr, _ := strings.Cut(ref, "#")
+		number, err := strconv.Atoi(numberStr)
+		if err != nil {
+			t.Fatalf("bad number in %q: %v", ref, err)
+		}
+		got, err := s2.Load(ForestKey(repo, number))
+		if err != nil {
+			t.Fatalf("Load(%s): %v", ref, err)
+		}
+		if got == nil || got.Digest != digest {
+			t.Errorf("after restart %s digest = %+v, want %q intact", ref, got, digest)
+		}
+	}
+}
+
+// TestStore_ForestDigest_ConcurrentEvaluations: concurrent evaluations
+// for one forest serialise through the key lock — a
+// load-compare-refresh under WithKeyLock never interleaves, and exactly
+// one digest stands at the end (§forgejo/state/forest-digest,
+// §forgejo/state/concurrency).
+func TestStore_ForestDigest_ConcurrentEvaluations(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	k := ForestKey("acme/maitred", 49)
+
+	const n = 10
+	var mu sync.Mutex
+	cur, maxConc := 0, 0
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			s.WithKeyLock(k, func() {
+				mu.Lock()
+				cur++
+				if cur > maxConc {
+					maxConc = cur
+				}
+				mu.Unlock()
+
+				// The evaluation's critical section: read the stored
+				// digest, then refresh it. Under the lock the value
+				// must not move between the two reads — no other
+				// evaluation's refresh may interleave them.
+				w, err := s.loadLocked(k)
+				if err != nil {
+					t.Errorf("loadLocked: %v", err)
+				}
+				var before string
+				if w != nil {
+					before = w.Digest
+				}
+				time.Sleep(time.Millisecond)
+				w2, err := s.loadLocked(k)
+				if err != nil {
+					t.Errorf("loadLocked: %v", err)
+				}
+				var during string
+				if w2 != nil {
+					during = w2.Digest
+				}
+				if before != during {
+					t.Errorf("stored digest moved mid-evaluation from %q to %q: evaluations interleaved", before, during)
+				}
+				if err := s.saveLocked(k, Watermark{Digest: strconv.Itoa(i)}); err != nil {
+					t.Errorf("saveLocked: %v", err)
+				}
+
+				mu.Lock()
+				cur--
+				mu.Unlock()
+			})
+		}(i)
+	}
+	wg.Wait()
+	if maxConc != 1 {
+		t.Errorf("max concurrency = %d, want 1 (same forest serialised)", maxConc)
+	}
+	got, err := s.Load(k)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got == nil || got.Digest == "" {
+		t.Fatalf("final digest = %+v, want one evaluation's refresh", got)
+	}
+}
+
+// TestStore_ForestDigest_DistinctFromIssueSlot: writing a forest's
+// digest leaves the root issue's own watermark untouched and vice
+// versa — the forest kind is a separate slot, not a second field the
+// dispatch writers would clobber (§forgejo/state/forest-digest).
+func TestStore_ForestDigest_DistinctFromIssueSlot(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	root := Key{Repo: "acme/maitred", Kind: KindIssue, Number: 49}
+	forest := ForestKey("acme/maitred", 49)
+
+	if err := s.Save(root, Watermark{Action: "wrap-up", Revision: "2026-09-16T13:25:18Z"}); err != nil {
+		t.Fatalf("Save(root): %v", err)
+	}
+	if err := s.Save(forest, Watermark{Digest: "cafe"}); err != nil {
+		t.Fatalf("Save(forest): %v", err)
+	}
+	w, err := s.Load(root)
+	if err != nil {
+		t.Fatalf("Load(root): %v", err)
+	}
+	if w.Digest != "" {
+		t.Errorf("issue watermark gained a digest field %q", w.Digest)
+	}
+	f, err := s.Load(forest)
+	if err != nil {
+		t.Fatalf("Load(forest): %v", err)
+	}
+	if f.Action != "" || f.Revision != "" || f.Digest != "cafe" {
+		t.Errorf("forest slot = %+v, want the digest only", *f)
+	}
+
+	// A later dispatch-style write to the issue slot cannot clobber
+	// the forest's digest, because the slots are separate files.
+	if err := s.Save(root, Watermark{Action: "decompose", Revision: "sha-2"}); err != nil {
+		t.Fatalf("Save(root again): %v", err)
+	}
+	f, err = s.Load(forest)
+	if err != nil {
+		t.Fatalf("Load(forest): %v", err)
+	}
+	if f.Digest != "cafe" {
+		t.Errorf("forest digest = %q after an issue-slot write, want %q intact", f.Digest, "cafe")
 	}
 }
