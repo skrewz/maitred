@@ -911,12 +911,18 @@ Five mechanisms, in this order:
    re-fire rather than lifting the bound; the stamp is in memory, so a
    restart admits one re-fire per key before the bound reasserts itself.
    The bound is the engine's general guard for state-governed re-fires,
-   not a property of any one action: every dispatch that reaches a
-   state-governed row stamps its key and revision, and a re-fire of that
-   unchanged revision inside one interval becomes a hold-off naming the
-   bound (§forgejo/reconciliation/the-state-is-the-watermark). A row
-   still revision-gated consults no stamp, so generalising the mechanism
-   changes no behaviour there. The queue's
+   not a property of any one action: every landed singleton dispatch
+   stamps its key, action and revision, and a re-fire of that unchanged
+   `(action, revision)` by a state-governed row inside one interval
+   becomes a hold-off naming the bound
+   (§forgejo/reconciliation/the-state-is-the-watermark). The action is
+   part of the stamp because the bound was always a rate on one
+   unchanged `(action, revision)`: a dispatch may pace the same action's
+   re-fire and never another action's, so an event that landed one action
+   at a revision cannot hold a different action's row there off. Only a
+   state-governed row consults a stamp; a row still revision-gated
+   consults none, so generalising the mechanism changes no behaviour
+   there. The queue's
    `(action, revision)` dedup key is not that bound: it squelches a
    submission whose match is still pending, so it bounds the overlap of
    two tasks at one head and not their spacing

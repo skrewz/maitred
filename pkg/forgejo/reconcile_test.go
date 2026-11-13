@@ -107,7 +107,7 @@ func TestReconcile_FreshWatermarkImplementRefiresOnce(t *testing.T) {
 	// The interval the bound waits out is spent: the same unchanged
 	// state dispatches again — the recovery pace a stranded attempt
 	// was denied under the revision-keyed guard.
-	eng.stampReFireAt(key, issueRevision(issue), time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+	eng.stampReFireAt(key, ActionImplement, issueRevision(issue), time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
 	eng.Reconcile()
 	if tasks := q.all(); len(tasks) != 2 {
 		t.Fatalf("got %d tasks after the interval is spent, want 2; all = %+v", len(tasks), tasks)
@@ -146,7 +146,7 @@ func TestReconcile_RebaseRefiresAtUnmovedHeadBounded(t *testing.T) {
 		t.Fatalf("got %d tasks after the second sweep, want 1 (the re-fire is bounded); all = %+v", len(tasks), tasks)
 	}
 
-	eng.stampReFireAt(key, "sha-1", time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+	eng.stampReFireAt(key, ActionRebase, "sha-1", time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
 	eng.Reconcile()
 	if tasks := q.all(); len(tasks) != 2 {
 		t.Fatalf("got %d tasks after the interval is spent, want 2; all = %+v", len(tasks), tasks)
@@ -168,7 +168,7 @@ func TestReconcile_RevisionGatedRowConsultsNoStamp(t *testing.T) {
 	key := Key{Repo: "o/r", Kind: KindIssue, Number: 7}
 	// A stamp taken moments ago at this revision — the shape a
 	// state-governed row leaves behind. The gated row must ignore it.
-	eng.stampReFireAt(key, issueRevision(issue), time.Now())
+	eng.stampReFireAt(key, ActionImplement, issueRevision(issue), time.Now())
 
 	eng.HandleEvent(Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
 
