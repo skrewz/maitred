@@ -125,9 +125,6 @@ to the branch. What stops those loops is the state changing — a human
 labelling the issue (`human-task`, §forgejo/decisions/actions) or
 closing it — and nothing in the engine: the bound is a rate on one
 unchanged `(action, revision)`, never a cap on the number of attempts.
-Whether a state-governed row should also give up after a fixed number of
-re-fires at an unchanged revision, and say so loudly rather than go
-quiet, is a deployment decision the bound does not make for it.
 
 ## Watermark exemptions
 

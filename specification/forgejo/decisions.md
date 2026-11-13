@@ -916,10 +916,11 @@ Five mechanisms, in this order:
    `(action, revision)` by a state-governed row inside one interval
    becomes a hold-off naming the bound
    (§forgejo/reconciliation/the-state-is-the-watermark). The action is
-   part of the stamp because the bound was always a rate on one
+   part of the stamp because the bound is a rate on one
    unchanged `(action, revision)`: a dispatch may pace the same action's
    re-fire and never another action's, so an event that landed one action
-   at a revision cannot hold a different action's row there off. Only a
+   at a revision cannot hold a different action's row there off, and one
+   action's landing erases no sibling's pacing. Only a
    state-governed row consults a stamp; a row still revision-gated
    consults none, so generalising the mechanism changes no behaviour
    there. The queue's
