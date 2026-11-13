@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -520,9 +519,10 @@ func TestWatermark_SubjectSlots(t *testing.T) {
 }
 
 // TestForestKey: the forest slot is keyed off the ideation root under
-// the forest kind, so the decompose comparison finds it and it never
-// shares a file with the root's own watermark
-// (§forgejo/state/forest-digest).
+// the forest kind, so the decompose comparison finds it
+// (§forgejo/state/forest-digest). That the slot lands in its own file is
+// asserted by TestKey_FileName's forest row and, behaviourally, by
+// TestStore_ForestDigest_DistinctFromIssueSlot.
 func TestForestKey(t *testing.T) {
 	root := Key{Repo: "acme/maitred", Kind: KindIssue, Number: 49}
 	forest := ForestKey("acme/maitred", 49)
@@ -531,9 +531,6 @@ func TestForestKey(t *testing.T) {
 	}
 	if got, want := forest.String(), "acme/maitred/forest/49"; got != want {
 		t.Errorf("String() = %q, want %q", got, want)
-	}
-	if forest.fileName() == root.fileName() {
-		t.Error("forest slot shares a file with the root issue's watermark")
 	}
 }
 
@@ -581,21 +578,16 @@ func TestStore_ForestDigest_RestartSurvival(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore(1): %v", err)
 	}
-	digests := map[string]string{
-		"acme/maitred#49": "aaaa2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266",
-		"acme/other#7":    "bbbb2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266",
+	digests := []struct {
+		key    Key
+		digest string
+	}{
+		{ForestKey("acme/maitred", 49), "aaaa2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266"},
+		{ForestKey("acme/other", 7), "bbbb2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266"},
 	}
-	for ref, digest := range digests {
-		repo, numberStr, ok := strings.Cut(ref, "#")
-		if !ok {
-			t.Fatalf("bad ref %q", ref)
-		}
-		number, err := strconv.Atoi(numberStr)
-		if err != nil {
-			t.Fatalf("bad number in %q: %v", ref, err)
-		}
-		if err := s1.Save(ForestKey(repo, number), Watermark{Digest: digest}); err != nil {
-			t.Fatalf("Save(%s): %v", ref, err)
+	for _, f := range digests {
+		if err := s1.Save(f.key, Watermark{Digest: f.digest}); err != nil {
+			t.Fatalf("Save(%s): %v", f.key, err)
 		}
 	}
 	s1 = nil // simulate the maitred process exiting
@@ -604,18 +596,13 @@ func TestStore_ForestDigest_RestartSurvival(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore(2): %v", err)
 	}
-	for ref, digest := range digests {
-		repo, numberStr, _ := strings.Cut(ref, "#")
-		number, err := strconv.Atoi(numberStr)
+	for _, f := range digests {
+		got, err := s2.Load(f.key)
 		if err != nil {
-			t.Fatalf("bad number in %q: %v", ref, err)
+			t.Fatalf("Load(%s): %v", f.key, err)
 		}
-		got, err := s2.Load(ForestKey(repo, number))
-		if err != nil {
-			t.Fatalf("Load(%s): %v", ref, err)
-		}
-		if got == nil || got.Digest != digest {
-			t.Errorf("after restart %s digest = %+v, want %q intact", ref, got, digest)
+		if got == nil || got.Digest != f.digest {
+			t.Errorf("after restart %s digest = %+v, want %q intact", f.key, got, f.digest)
 		}
 	}
 }
@@ -719,6 +706,21 @@ func TestStore_ForestDigest_DistinctFromIssueSlot(t *testing.T) {
 	}
 	if w.Digest != "" {
 		t.Errorf("issue watermark gained a digest field %q", w.Digest)
+	}
+	// And not one field of it: the omitempty tag on Digest is what keeps
+	// an issue or PR file byte-identical to the pre-digest shape, so the
+	// key must be absent from the JSON, not merely empty
+	// (§forgejo/state/storage).
+	data, err := os.ReadFile(filepath.Join(s.dir, root.fileName()))
+	if err != nil {
+		t.Fatalf("read on-disk file: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("on-disk file is not JSON: %v", err)
+	}
+	if _, ok := fields["digest"]; ok {
+		t.Errorf("issue watermark file carries a digest key: %v", fields)
 	}
 	f, err := s.Load(forest)
 	if err != nil {
