@@ -521,7 +521,8 @@ func otherKindLabel(issue *Issue) string {
 // if the re-fetched issue is open, unblocked, and has no connected PR. The
 // eligibility is the same on both paths; only the suppression differs — the
 // event path guards on the revision, the sweep decides on the state bounded by
-// the re-fire bound (§forgejo/reconciliation/the-state-is-the-watermark).
+// the re-fire bound, so an attempt that left no connected PR recovers within
+// one interval (§forgejo/reconciliation/the-state-is-the-watermark).
 // Authorship is not a gate: what gates a forest member is the
 // forest-seeding hold-off, and once the label is gone the member is
 // an ordinary work item on every path — the sweep included, which is
@@ -554,14 +555,6 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 		return holdOff(fmt.Sprintf("issue %d has %d connected open PR(s)", issue.Number, len(s.ConnectedPRs)))
 	}
 	rev := issueRevision(issue)
-	// Eligibility is the same predicate on both paths; only the
-	// suppression differs: the event path guards on the revision as a
-	// cursor over events, the sweep decides on the state and is spaced
-	// by the re-fire bound, so an attempt that died before opening a
-	// connected PR recovers within one interval instead of stranding at
-	// a revision it cannot move
-	// (§forgejo/reconciliation/the-state-is-the-watermark,
-	// §forgejo/decisions/loop-prevention).
 	if !onSweep(e) && alreadyDispatched(w, ActionImplement, rev) {
 		return holdOff(fmt.Sprintf("implement already dispatched at revision %s", rev))
 	}
@@ -789,12 +782,6 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 		return holdOff(fmt.Sprintf("PR %d is not open", pr.Number))
 	}
 	if !pr.Mergeable {
-		// The rebase row is path-aware like the implement row: the event
-		// path guards on the head, the sweep decides on the state — an
-		// open PR that is not mergeable — and is spaced by the re-fire
-		// bound, so a rebase that died at an unmoved head recovers
-		// within one interval (§forgejo/reconciliation/the-state-is-the-watermark,
-		// §forgejo/decisions/loop-prevention).
 		if !onSweep(e) && alreadyDispatched(w, ActionRebase, pr.HeadSHA) {
 			return holdOff(fmt.Sprintf("rebase already dispatched at revision %s", pr.HeadSHA))
 		}

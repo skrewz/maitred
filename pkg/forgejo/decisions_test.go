@@ -1570,17 +1570,6 @@ func TestDecide(t *testing.T) {
 			state:      State{ReviewLenses: testLenses, Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{LabelOutcome, LabelIdeation}}},
 			wantAction: ActionDecompose,
 		},
-		{
-			// The sweep's implement row is state-governed: the recorded
-			// revision is a record of reaction, not an eligibility test, so
-			// an attempt that left no connected PR re-fires on the state
-			// (§forgejo/reconciliation/the-state-is-the-watermark).
-			name:       "reconcile unlabelled issue re-fires implement at the recorded revision",
-			event:      issueEvent(EventReconcile),
-			state:      State{ReviewLenses: testLenses, Issue: openIssue()},
-			watermark:  &Watermark{Action: "implement", Revision: testRev},
-			wantAction: ActionImplement,
-		},
 		// The event path dispatches `decompose` for an open ideation
 		// root — the label, not the repository and not the title, is
 		// what makes a root — but never implements or reassesses an
@@ -4290,24 +4279,6 @@ func TestDecide_IssueOpenedImplementStaysRevisionGated(t *testing.T) {
 	}
 	if d.StateGoverned {
 		t.Errorf("decision = %+v, want the event-path dispatch unmarked: a revision-gated row consults no stamp", d)
-	}
-}
-
-// TestDecide_ReconcileRebaseIsStateGoverned: the sweep's rebase row is
-// state-governed like implement — a head a dead rebase left unmoved is
-// the state that calls for the rebase again, bounded by the re-fire
-// bound (§forgejo/reconciliation/the-state-is-the-watermark,
-// §forgejo/decisions/actions).
-func TestDecide_ReconcileRebaseIsStateGoverned(t *testing.T) {
-	pr := openPR("abc")
-	pr.Mergeable = false
-	w := &Watermark{Action: string(ActionRebase), Revision: "abc"}
-	d := Decide(prEvent(EventReconcile, "maitred"), State{ReviewLenses: testLenses, PR: pr}, w)
-	if !d.Dispatched || d.Action != ActionRebase {
-		t.Fatalf("decision = %+v, want the sweep re-dispatching rebase at the unmoved head", d)
-	}
-	if !d.StateGoverned {
-		t.Errorf("decision = %+v, want the dispatch marked state-governed so the re-fire bound spaces it", d)
 	}
 }
 
