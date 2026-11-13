@@ -3241,6 +3241,58 @@ func TestHandler_PRCommented_LandedRebaseDoesNotBoundTheMergeAtItsHead(t *testin
 	}
 }
 
+// TestHandler_PRCommented_InterleavedRebaseKeepsTheMergeBound: the bound
+// keeps one stamp per key and action, so a rebase landed at a head the
+// merge row already dispatched at erases none of that row's pacing —
+// when that head turns mergeable again inside the interval the merge
+// stamped, merge-or-wait is a re-fire the bound holds rather than a
+// second dispatch (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/the-state-is-the-watermark).
+func TestHandler_PRCommented_InterleavedRebaseKeepsTheMergeBound(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, q, _ := newTestEngine(t)
+	eng.log = slog.New(slog.NewJSONHandler(&log, nil))
+	api.pulls[9] = testPR(9, "open", true)
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
+
+	// A first merge-or-wait lands at the head, starting the interval the
+	// merge row is paced by.
+	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (the first merge-or-wait); all = %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=merge-or-wait") {
+		t.Fatalf("prompt = %q, want merge-or-wait for o/r PR 9", tasks[0].Prompt)
+	}
+
+	// The base moves under an unchanged head: the sweep finds the PR
+	// conflicted and lands a rebase at that same head.
+	api.pulls[9].Mergeable = false
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	tasks = q.all()
+	if len(tasks) != 2 {
+		t.Fatalf("got %d tasks after the sweep, want 2 (the rebase); all = %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[1].Prompt, "action=rebase") {
+		t.Fatalf("prompt = %q, want the rebase the sweep landed", tasks[1].Prompt)
+	}
+
+	// The head stands mergeable and approved again inside the interval
+	// the merge stamped: its own stamp bounds the re-fire, whatever the
+	// rebase stamped alongside it.
+	api.pulls[9].Mergeable = true
+	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "dave"})
+
+	tasks = q.all()
+	if len(tasks) != 2 {
+		t.Fatalf("got %d tasks, want 2 (one action's landing must not knock another's bound out); all = %+v", len(tasks), tasks)
+	}
+	if reason := lastReasonFor(t, &log, "o/r/pr/9"); !strings.Contains(reason, "reconcile interval") {
+		t.Errorf("decision reason %q does not name the re-fire bound", reason)
+	}
+}
+
 // TestHandler_PRCommented_MergeReFireNeverHoldsOffAnUnstampedRevision:
 // the bound is a rate, never a hold-off on a revision the engine has
 // not dispatched at — a watermark that records the dispatch while no
