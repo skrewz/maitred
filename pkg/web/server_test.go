@@ -713,3 +713,24 @@ func TestForgejoOutcomesEndpoint_Method(t *testing.T) {
 		t.Fatalf("status = %d, want 405", rec.Code)
 	}
 }
+
+// TestForgejoOutcomesEndpoint_RecordedEmpty: an engine whose sweep
+// enumerated no forests answers 200 with an empty list. This is the
+// honest empty the view reserves for a read that succeeded and found
+// nothing, which the no-engine case cannot stand in for because that
+// one holds no engine at all (§forgejo/observability/the-outcomes-view).
+func TestForgejoOutcomesEndpoint_RecordedEmpty(t *testing.T) {
+	api := outcomesStubAPI()
+	api.openIssues["out"] = nil
+	fjEng := newForgejoEngine(t, api)
+	fjEng.Reconcile() // the sweep tick records an empty set
+	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
+	rec := getOutcomes(t, srv)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"forests":[]`) {
+		t.Errorf("body %s, want an empty forests list, never null", rec.Body.String())
+	}
+}

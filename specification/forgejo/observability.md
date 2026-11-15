@@ -135,8 +135,9 @@ the tracker itself lives in, so a tracker blocked across a repository
 boundary says where it lives rather than inheriting the root's address
 (§forgejo/client/operations) — or the honest absence of one, spelled as
 a `null` tracker so the field is always present. Without the engine, or
-with no forests, the list is empty — never `null`. A view the engine
-cannot vouch for — no sweep's enumeration has landed yet, the most
+with no forests, the list is empty — never `null`: an enumeration that
+found nothing is an honest empty, not a view that never read. A view
+the engine cannot vouch for — no sweep's enumeration has landed yet, the most
 recent one failed (the organisation listing, an issue listing, or a
 blocks read), or the set it holds has aged past one `reconcile_interval`
 without a sweep having recorded a newer one — answers `500` rather than
@@ -147,8 +148,8 @@ if fresh: the same rule the scope cache applies to stale snapshots
 as the set is read, so a sweep that never reached the step that records
 the set — its own organisation listing having failed — ages the view out
 rather than leaving it serving what it recorded before the outage. Only
-the honest empty answers
-`200` with an empty list. The `500` carries a fixed
+the honest empty answers `200` with an empty list. The `500` carries a
+fixed
 sentence and the read's detail goes to the log: raw forge error text
 carries repository names and forge response bodies a caller need not be
 entitled to, and this port authenticates nothing

@@ -509,3 +509,32 @@ func TestForests_SnapshotAgesOutFailsClosed(t *testing.T) {
 		t.Errorf("Forests = %+v, %v, want a successful sweep to recover the view", forests, err)
 	}
 }
+
+// TestForests_RecordedEmptyIsHonest: an engine whose enumeration found
+// no forests answers the empty set, not the "not yet enumerated"
+// failure. Whether anything was recorded is carried by the moment it
+// was recorded, not by whether the set came back non-empty, so an
+// engine whose forests have all finished — or whose repositories do not
+// yet hold the outcomes role — is never mistaken for one whose reads
+// have not landed (§forgejo/observability/the-outcomes-view).
+func TestForests_RecordedEmptyIsHonest(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	api.openIssues["out"] = []Issue{outcomesTracker(71, "tracker no root blocks")}
+
+	if _, err := eng.Forests(); !errors.Is(err, errForestsUnavailable) {
+		t.Fatalf("Forests before the first enumeration = %v, want errForestsUnavailable", err)
+	}
+
+	eng.recordForests()
+	forests, err := eng.Forests()
+	if err != nil {
+		t.Fatalf("Forests after an empty enumeration = %v, want the honest empty rather than a failure", err)
+	}
+	if forests == nil {
+		t.Error("forests = nil, want an empty non-nil list: the view answers [] and never null")
+	}
+	if len(forests) != 0 {
+		t.Errorf("forests = %+v, want none", forests)
+	}
+}

@@ -168,7 +168,10 @@ func (e *Engine) Forests() ([]Forest, error) {
 	if e.forestsErr != nil {
 		return nil, e.forestsErr
 	}
-	if e.forestsSnap == nil {
+	// The moment of the last recording is the sentinel, not the slice:
+	// an enumeration of zero forests recorded at least something, so an
+	// honest empty stays distinguishable from a view that never read.
+	if e.forestsAt.IsZero() {
 		return nil, errForestsUnavailable
 	}
 	if time.Since(e.forestsAt) > e.cfg.ReconcileInterval {
@@ -182,13 +185,13 @@ func (e *Engine) Forests() ([]Forest, error) {
 // the view's cost is per interval rather than per request
 // (§forgejo/observability/the-outcomes-view). A successful enumeration
 // replaces the snapshot whole, stamps the moment it landed and clears
-// any earlier failure; a failed one keeps the last set but records the
-// error, so the view answers that error — not a stale set served as if
-// fresh — until a later sweep enumerates again. A set no sweep refreshed
-// goes stale on its own, in Forests, without anything here having to
-// notice it. The scope cache is refreshed by the sweep itself just
-// before, so the walk rides the listing the sweep already made fresh
-// and costs no organisation listing of its own
+// any earlier failure; a failed one keeps the last set but
+// records the error, so the view answers that error — not a stale set
+// served as if fresh — until a later sweep enumerates again. A set no
+// sweep refreshed goes stale on its own, in Forests, without anything
+// here having to notice it. The scope cache is refreshed by the sweep
+// itself just before, so the walk rides the listing the sweep already
+// made fresh and costs no organisation listing of its own
 // (§forgejo/webhook/the-scope-cache).
 func (e *Engine) recordForests() {
 	forests, err := e.enumerateForests()
