@@ -2,6 +2,7 @@ package forgejo
 
 import (
 	"errors"
+	"sort"
 	"strings"
 	"time"
 )
@@ -111,6 +112,28 @@ func (e *Engine) tryRefreshScopeCache() error {
 	return nil
 }
 
+// ensureScopeFresh refreshes the scope cache when it is older than one
+// reconcile interval — the preamble every scope-cache reader shares, so
+// the event path's role lookup and the outcomes view's enumeration can
+// never disagree about freshness
+// (§forgejo/webhook/the-scope-cache). Concurrent readers single-flight
+// on refreshMu and re-check staleness under it, so a burst costs one
+// listing rather than one each. A non-nil error means the listing
+// failed; the caller acts only on the error, never on the stale
+// snapshot.
+func (e *Engine) ensureScopeFresh() error {
+	if e.scopeNeedsRefresh() {
+		e.refreshMu.Lock()
+		defer e.refreshMu.Unlock()
+		if e.scopeNeedsRefresh() {
+			if err := e.tryRefreshScopeCache(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // repoRoles reports the roles the repository holds
 // (§forgejo/webhook/repository-roles), according to the scope cache
 // (§forgejo/webhook/the-scope-cache). The name is matched
@@ -126,14 +149,8 @@ func (e *Engine) tryRefreshScopeCache() error {
 // stale — and the caller must hold off naming the failure instead of
 // acting on the roles.
 func (e *Engine) repoRoles(repo string) (roles, error) {
-	if e.scopeNeedsRefresh() {
-		e.refreshMu.Lock()
-		defer e.refreshMu.Unlock()
-		if e.scopeNeedsRefresh() {
-			if err := e.tryRefreshScopeCache(); err != nil {
-				return roles{}, err
-			}
-		}
+	if err := e.ensureScopeFresh(); err != nil {
+		return roles{}, err
 	}
 	e.scopeMu.Lock()
 	r := e.scope[strings.ToLower(repo)]
@@ -145,4 +162,34 @@ func (e *Engine) repoRoles(repo string) (roles, error) {
 		return roles{}, errScopeUnavailable
 	}
 	return r, nil
+}
+
+// outcomesRepositories reports the full names of the repositories the
+// scope cache classifies as outcomes repositories
+// (§forgejo/webhook/repository-roles, §forgejo/observability/the-outcomes-view),
+// sorted so a reader's order is deterministic across calls. Like
+// repoRoles it fails closed: a non-nil error means scope is unknown —
+// the listing failed, or a failure is waiting out the retry backoff
+// with the snapshot gone stale — and the caller must not read an empty
+// list as "no outcomes repositories".
+func (e *Engine) outcomesRepositories() ([]string, error) {
+	if err := e.ensureScopeFresh(); err != nil {
+		return nil, err
+	}
+	e.scopeMu.Lock()
+	names := make([]string, 0, len(e.scope))
+	for name, r := range e.scope {
+		if r.outcomes {
+			names = append(names, name)
+		}
+	}
+	stale := time.Since(e.scopeAt) > e.cfg.ReconcileInterval
+	e.scopeMu.Unlock()
+	if stale {
+		// Only reachable inside the failure backoff window, as in
+		// repoRoles: a refresh was needed but is not yet due.
+		return nil, errScopeUnavailable
+	}
+	sort.Strings(names)
+	return names, nil
 }

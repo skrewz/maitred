@@ -203,6 +203,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleWebhooks(w, r)
 	case path == "forgejo":
 		s.handleForgejo(w, r)
+	case path == "forgejo/outcomes":
+		s.handleForgejoOutcomes(w, r)
 	case strings.HasPrefix(path, "forgejo/sweeps/"):
 		s.handleForgejoSweep(w, r, strings.TrimPrefix(path, "forgejo/sweeps/"))
 	case strings.HasPrefix(path, "triggers/"):
@@ -303,6 +305,41 @@ func (s *Server) handleForgejo(w http.ResponseWriter, r *http.Request) {
 		EngineStatus: s.forgejoStatus,
 		Items:        tracked,
 		Sweeps:       sweeps,
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleForgejoOutcomes serves the outcomes view: the current forests —
+// each open ideation root in an outcomes repository paired with the
+// outcome tracker it blocks, or the honest absence of one
+// (§forgejo/observability/the-outcomes-view). The response is an object
+// carrying the forest list alongside the one engine-status field, the
+// same shape discipline as handleForgejo, so a configured-but-broken
+// engine never reads as a healthy one with nothing to show
+// (§forgejo/observability/the-dashboard-view). Without the engine, or
+// with no forests, the list is empty — never null. A read that fails
+// answers 500 rather than an empty list: a failed read must not read as
+// "no forests". Any method other than GET answers 405.
+func (s *Server) handleForgejoOutcomes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	forests := []forgejo.Forest{}
+	if s.forgejoEng != nil {
+		f, err := s.forgejoEng.Forests()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		forests = f
+	}
+	response := struct {
+		EngineStatus string           `json:"engine_status"`
+		Forests      []forgejo.Forest `json:"forests"`
+	}{
+		EngineStatus: s.forgejoStatus,
+		Forests:      forests,
 	}
 	json.NewEncoder(w).Encode(response)
 }

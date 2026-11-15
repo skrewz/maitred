@@ -88,6 +88,42 @@ decisions: the tracked list is empty when the engine is disabled or
 has made no decisions yet, and it is cleared on restart (the
 watermark store is unaffected, §forgejo/state/persistence).
 
+## The outcomes view
+
+The forest is the unit of work this engine stewards: an ideation root and
+the outcome tracker it blocks (§forgejo/decisions/commissioning). The
+engine therefore offers an **outcomes view**: the **current forests** of
+the organisation — every open `ideation` issue in the repositories holding
+the outcomes role (§forgejo/webhook/repository-roles), paired with the
+`outcome` issue it blocks. The view introduces no new label vocabulary:
+it reads only the reserved `ideation` and `outcome` names
+(§forgejo/decisions/actions).
+
+The pairing is found the way the cascade finds connected issues: for each
+open ideation issue the engine asks which issues it blocks
+(§forgejo/client/operations) and takes the first blocked issue carrying
+the `outcome` label. A root whose tracker is missing — it blocks no
+`outcome` issue — is listed anyway, **with the tracker stated as
+absent**: a forest without its gate is exactly the situation a human
+needs to see, so the view never papers over it by dropping the row. An
+`outcome` issue that no open ideation root blocks is not a forest and is
+not listed.
+
+The dashboard API serves the view at `GET /api/forgejo/outcomes`. The
+response is an object carrying two things: the **forest list** and **one
+engine-status field** rendering the engine's state as the forgejo view
+does (§forgejo/observability/the-dashboard-view), so a
+configured-but-broken engine never reads as a healthy one with nothing
+to show. Each forest names its **repository**, its **root** — number,
+title, state, and HTML URL — and its **tracker** — number, title, state,
+and HTML URL — or the honest absence of one, spelled as a `null` tracker
+so the field is always present. Without the engine, or with no forests,
+the list is empty — never `null`. A read that fails — the organisation
+listing, an issue listing, or a blocks read — answers `500`, because a
+failed read must not read as an empty set of forests; only the honest
+empty answers `200` with an empty list. A method other than GET answers
+`405`.
+
 ## Triggering a sweep
 
 The sweeps are the backstop for deliveries the event path missed, and a
