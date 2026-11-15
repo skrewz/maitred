@@ -148,7 +148,9 @@ applies to stale snapshots (§forgejo/webhook/the-scope-cache). The bound
 is the view's own, applied as the set is read, so a sweep that never
 reached the step that records the set — its own organisation listing
 having failed — ages the view out rather than leaving it serving what it
-recorded before the outage. Only the honest empty answers `200` with an
+recorded before the outage. The sweep records the set at its head, as
+its step 2, so the age counts the sweep's own reads rather than its
+pipeline's. Only the honest empty answers `200` with an
 empty list. The `500` carries a fixed sentence and the read's detail
 goes to the log: raw forge error text
 carries repository names and forge response bodies a caller need not be
@@ -163,7 +165,7 @@ issue listing per outcomes repository and one blocks read per open
 ideation root, on top of the sweep's own walk; the sweep's own
 organisation listing keeps the scope cache fresh, so the walk adds no
 listing of its own (§forgejo/webhook/the-scope-cache). That walk is the
-view's own reader rather than a pairing folded into the sweep's third
+view's own reader rather than a pairing folded into the sweep's fourth
 step: the sweep's listings cover every repository holding either role,
 and the blocks reads the digest makes happen inside the pipeline, where
 their rows are summed into a digest and discarded, so folding the

@@ -39,6 +39,12 @@ func (e *Engine) Reconcile() {
 	// The listing is the scope cache: the event path consults it instead
 	// of fetching per delivery (§forgejo/webhook/the-scope-cache).
 	e.refreshScopeCache(repos)
+	// The tick records the forest set the outcomes view is served from
+	// at its head, before the walk below dispatches any event, so the
+	// walk's length never enters the age of the set the view vouches
+	// for (§forgejo/observability/the-outcomes-view,
+	// §forgejo/reconciliation/the-sweep).
+	e.recordForests()
 	for i := range repos {
 		repo := &repos[i]
 		// The sweep visits the union of both role sets, so a missed
@@ -78,18 +84,6 @@ func (e *Engine) Reconcile() {
 			}
 		}
 	}
-	// The sweep tick also records the forest set the outcomes view is
-	// served from, so the view's cost is per interval rather than per
-	// request (§forgejo/observability/the-outcomes-view). The walk is
-	// the view's own reader rather than a pairing folded into step 3:
-	// step 2 lists every repository holding either role and the digest
-	// makes its own blocks read inside the pipeline, where the rows are
-	// summed into a digest and discarded — so reusing them would thread
-	// forest rows through the decision path to save the one listing per
-	// outcomes repository and one blocks read per open root this adds.
-	// The view stays a reader the sweep calls, with its fail-closed
-	// rule in one file (§forgejo/observability/the-outcomes-view).
-	e.recordForests()
 }
 
 // Start begins the reconciliation sweep: it runs once immediately, then
@@ -139,11 +133,16 @@ func (e *Engine) Stop() {
 // (§forgejo/observability/triggering-a-sweep) leaves the dashboard and
 // the endpoint alone but must give startCh an id to carry and dispatch
 // on it here.
+// The ticker is created before the first sweep so that every tick
+// belongs to the interval as counted from the engine's start: a first
+// sweep that keeps busy would otherwise push the whole schedule out by
+// its own length, and with it the moment the outcomes view's set is
+// next refreshed (§forgejo/observability/the-outcomes-view).
 func (e *Engine) sweepLoop() {
 	defer close(e.doneCh)
-	e.Reconcile()
 	t := time.NewTicker(e.cfg.ReconcileInterval)
 	defer t.Stop()
+	e.Reconcile()
 	for {
 		select {
 		case <-t.C:

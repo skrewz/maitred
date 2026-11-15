@@ -502,11 +502,95 @@ func TestForests_SnapshotAgesOutFailsClosed(t *testing.T) {
 		t.Errorf("forests = %+v, want nil alongside the stale error", forests)
 	}
 
-	// A sweep that reaches its fourth step again refreshes the stamp.
+	// A sweep that reaches the step that records the set again
+	// refreshes the stamp.
 	api.listReposErr = nil
 	eng.Reconcile()
 	if forests, err := eng.Forests(); err != nil || len(forests) != 1 {
 		t.Errorf("Forests = %+v, %v, want a successful sweep to recover the view", forests, err)
+	}
+}
+
+// TestForests_RecordLandsBeforeTheWalk: the tick records the forest
+// set at its head, before the walk dispatches any event, so the
+// pipeline's pace can never delay the recording the view ages itself
+// against (§forgejo/reconciliation/the-sweep,
+// §forgejo/observability/the-outcomes-view).
+func TestForests_RecordLandsBeforeTheWalk(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	root := outcomesRoot(51, "root")
+	tracker := outcomesTracker(71, "tracker")
+	api.openIssues["out"] = []Issue{root, tracker}
+	api.blocks[51] = []Issue{tracker}
+	api.issues[51] = &root
+	api.issues[71] = &tracker
+
+	eng.Reconcile()
+
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	blocks, walk := -1, -1
+	for i, c := range api.calls {
+		if blocks < 0 && strings.HasPrefix(c, "IssueBlocks:") {
+			blocks = i
+		}
+		if walk < 0 && strings.HasPrefix(c, "GetIssue:") {
+			walk = i
+		}
+		if blocks >= 0 && walk >= 0 {
+			break
+		}
+	}
+	if blocks < 0 {
+		t.Fatal("the sweep made no blocks read: the tick never enumerated the forests")
+	}
+	if walk >= 0 && blocks > walk {
+		t.Errorf("the tick's blocks read (%d) came after the walk's first pipeline read (%d): the recording lands after the walk it must not age against", blocks, walk)
+	}
+}
+
+// TestForests_ViewServesBeforeTheFirstWalkFinishes: at process start
+// the view must not wait for the first sweep's walk — the pipeline's
+// re-fetches — before it has a set to serve. The recording lands at
+// the tick's head, and every tick belongs to the interval as counted
+// from the engine's start, so neither the first sweep's length nor a
+// later one's can push a refresh past the moment the earlier set's
+// vouch runs out (§forgejo/observability/the-outcomes-view,
+// §forgejo/reconciliation/the-sweep, §forgejo/reconciliation/scheduling).
+func TestForests_ViewServesBeforeTheFirstWalkFinishes(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out"), testRepo("o/r")}
+	root := outcomesRoot(51, "root")
+	tracker := outcomesTracker(71, "tracker")
+	api.openIssues["out"] = []Issue{root, tracker}
+	api.blocks[51] = []Issue{tracker}
+	api.issues[51] = &root
+	api.issues[71] = &tracker
+	work := Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r", HTMLURL: "https://forge.example.com/o/r/issues/7"}
+	api.openIssues["r"] = []Issue{work}
+	api.issues[7] = &work
+
+	const interval = 100 * time.Millisecond
+	eng.cfg.ReconcileInterval = interval
+	api.delayGetIssue = 20 * time.Millisecond // the walk costs at least three re-fetches, 60ms of it
+
+	started := time.Now()
+	eng.Start()
+	defer eng.Stop()
+
+	// The sweep's walk alone costs at least 60ms, so a recording that
+	// lands at the tick's head is served well before the walk can be
+	// over — one that waits for the walk misses this deadline.
+	deadline := started.Add(interval / 4)
+	for {
+		if _, err := eng.Forests(); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the view had still recorded nothing %s after the engine started, though the first sweep's walk costs at least %s: the recording must land at the tick's head, not after the walk", interval/4, 3*api.delayGetIssue)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
