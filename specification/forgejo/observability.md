@@ -154,7 +154,6 @@ pipeline's. Only the honest empty answers `200` with an
 empty list. The `500` carries a fixed sentence and the read's detail
 goes to the log: raw forge error text
 carries repository names and forge response bodies a caller need not be
-carries repository names and forge response bodies a caller need not be
 entitled to, and this port authenticates nothing
 (§forgejo/observability/why-the-engine-is-off). A method other than GET
 answers `405`.
