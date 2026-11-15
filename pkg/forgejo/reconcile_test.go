@@ -971,8 +971,11 @@ func TestReconcile_DecomposeDigestGate_QuietForest(t *testing.T) {
 	if got := len(q.all()); got != 1 {
 		t.Fatalf("quiet forest dispatched %d tasks across two sweeps, want 1", got)
 	}
-	if got := api.callCount("IssueBlocks:r/1"); got != readsAfterOne+1 {
-		t.Errorf("second sweep cost %d forest reads, want one digest computation (%d total)", got-readsAfterOne, readsAfterOne+1)
+	// Each sweep reads the root's blocks twice: the digest
+	// computation and the outcomes view's walk (recordForests) each
+	// make one read (§forgejo/observability/the-outcomes-view).
+	if got := api.callCount("IssueBlocks:r/1"); got != readsAfterOne+2 {
+		t.Errorf("second sweep cost %d forest reads, want one digest computation plus one outcomes walk (%d total)", got-readsAfterOne, readsAfterOne+2)
 	}
 }
 
@@ -1026,6 +1029,9 @@ func TestReconcile_DecomposeDigestGate_CommissionedForest(t *testing.T) {
 	if got := len(q.all()); got != 1 {
 		t.Fatalf("commissioned quiet forest dispatched %d tasks across two sweeps, want 1", got)
 	}
+	// The root has closed, so it is not among the current forests:
+	// the outcomes walk pairs no root and costs no blocks read —
+	// only the digest computation reads (§forgejo/observability/the-outcomes-view).
 	if got := api.callCount("IssueBlocks:r/1"); got != readsAfterOne+1 {
 		t.Errorf("second sweep cost %d forest reads, want one digest computation (%d total)", got-readsAfterOne, readsAfterOne+1)
 	}

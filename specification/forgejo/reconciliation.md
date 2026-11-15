@@ -42,6 +42,14 @@ created while the engine was down.
    re-fetch, decide, dispatch, watermark — serialised on the watermark
    store's per-key lock (§forgejo/state/concurrency). The sweep shares
    the decision function and the event path; no logic is duplicated.
+4. **Record the forest set.** Enumerate the **current forests** — the
+   open `ideation` issues of the outcomes repositories paired with the
+   trackers their roots block — and record the set the **outcomes
+   view** is served from
+   (§forgejo/observability/the-outcomes-view). This is why the sweep,
+   not an API request, pays the view's reads; a failed enumeration
+   leaves the view saying so rather than serving a set it can no
+   longer vouch for (§forgejo/webhook/the-scope-cache).
 
 The synthetic event carries no sender.
 

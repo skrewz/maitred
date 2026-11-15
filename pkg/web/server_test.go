@@ -39,6 +39,11 @@ type stubForgejoAPI struct {
 	// can break the outcomes view's scope listing without breaking
 	// anything else it reads.
 	reposErr error
+
+	// issuesErr, when set, fails every ListOpenIssues — so a test can
+	// make a sweep's forest enumeration fail while its own listing
+	// lands (§forgejo/observability/the-outcomes-view).
+	issuesErr error
 }
 
 // The stub's organisation holds the one maitred-enabled repository the
@@ -62,6 +67,9 @@ func (s *stubForgejoAPI) ListOrgRepositories(string) ([]forgejo.Repository, erro
 }
 
 func (s *stubForgejoAPI) ListOpenIssues(_, repo string) ([]forgejo.Issue, error) {
+	if s.issuesErr != nil {
+		return nil, s.issuesErr
+	}
 	return s.openIssues[repo], nil
 }
 
@@ -557,12 +565,14 @@ func getOutcomes(t *testing.T, srv *Server) *httptest.ResponseRecorder {
 }
 
 // TestForgejoOutcomesEndpoint: the endpoint serves the forests the
-// engine enumerates — a root and its tracker listed together, a root
+// sweep tick recorded — a root and its tracker listed together, a root
 // whose tracker is missing listed with the absence stated — alongside
-// the engine-status field (§forgejo/observability/the-outcomes-view).
+// the engine-status field; serving the request itself reads no forge
+// (§forgejo/observability/the-outcomes-view).
 func TestForgejoOutcomesEndpoint(t *testing.T) {
 	api := outcomesStubAPI()
 	fjEng := newForgejoEngine(t, api)
+	fjEng.Reconcile() // the sweep tick records the set the view serves
 	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
 	rec := getOutcomes(t, srv)
 
@@ -650,25 +660,45 @@ func TestForgejoOutcomesEndpoint_Disabled(t *testing.T) {
 	}
 }
 
-// TestForgejoOutcomesEndpoint_ReadFailure: a view whose reads fail
-// answers 500, not an empty list a caller could read as "no forests" —
-// and the 500 carries a fixed sentence, not the client's raw error
-// text: this port authenticates nothing, and the raw text names
-// repositories and forge response bodies a stranger should not read
-// (§forgejo/observability/the-outcomes-view,
+// TestForgejoOutcomesEndpoint_ReadFailure: a sweep whose forest
+// enumeration fails takes the view down with it — 500, not an empty
+// list a caller could read as "no forests", and not the earlier set
+// served as if fresh — and the 500 carries a fixed sentence, not the
+// read's raw error text: this port authenticates nothing, and the raw
+// text names repositories and forge response bodies a stranger should
+// not read (§forgejo/observability/the-outcomes-view,
 // §forgejo/observability/why-the-engine-is-off).
 func TestForgejoOutcomesEndpoint_ReadFailure(t *testing.T) {
 	api := outcomesStubAPI()
-	api.reposErr = fmt.Errorf("org listing down")
 	fjEng := newForgejoEngine(t, api)
+	fjEng.Reconcile() // a set the view stood on, until the reads broke
+	api.issuesErr = fmt.Errorf("issue listing down")
+	fjEng.Reconcile() // the sweep's enumeration fails; the view says so
 	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
 	rec := getOutcomes(t, srv)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rec.Code)
 	}
-	if body := rec.Body.String(); strings.Contains(body, "org listing down") || !strings.Contains(body, "outcomes read failed") {
+	if body := rec.Body.String(); strings.Contains(body, "issue listing down") || strings.Contains(body, "o/out") || !strings.Contains(body, "outcomes read failed") {
 		t.Errorf("body %q, want the fixed sentence and no raw forge error text", body)
+	}
+}
+
+// TestForgejoOutcomesEndpoint_NotYetEnumerated: an engine whose first
+// sweep has not yet recorded a forest set answers 500, not an empty
+// list — the honest empty is reserved for a view that read fine and
+// found nothing (§forgejo/observability/the-outcomes-view).
+func TestForgejoOutcomesEndpoint_NotYetEnumerated(t *testing.T) {
+	fjEng := newForgejoEngine(t, outcomesStubAPI())
+	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
+	rec := getOutcomes(t, srv)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "outcomes read failed") {
+		t.Errorf("body %q, want the fixed sentence", rec.Body.String())
 	}
 }
 

@@ -67,9 +67,9 @@ func TestForests_PairsRootWithTracker(t *testing.T) {
 	api.openIssues["out"] = []Issue{root, tracker}
 	api.blocks[51] = []Issue{tracker}
 
-	forests, err := eng.Forests()
+	forests, err := eng.enumerateForests()
 	if err != nil {
-		t.Fatalf("Forests: %v", err)
+		t.Fatalf("enumerateForests: %v", err)
 	}
 	if len(forests) != 1 {
 		t.Fatalf("forests = %d, want 1 (the tracker is no forest of its own)", len(forests))
@@ -107,9 +107,9 @@ func TestForests_MissingTrackerStated(t *testing.T) {
 	api.openIssues["out"] = []Issue{rootNoEdges, rootWrongEdge, plain}
 	api.blocks[2] = []Issue{plain}
 
-	forests, err := eng.Forests()
+	forests, err := eng.enumerateForests()
 	if err != nil {
-		t.Fatalf("Forests: %v", err)
+		t.Fatalf("enumerateForests: %v", err)
 	}
 	if len(forests) != 2 {
 		t.Fatalf("forests = %d, want both roots listed", len(forests))
@@ -129,9 +129,9 @@ func TestForests_UnpairedOutcomeNotListed(t *testing.T) {
 	api.repos = []Repository{outcomesRepo("o/out")}
 	api.openIssues["out"] = []Issue{outcomesTracker(71, "orphan tracker")}
 
-	forests, err := eng.Forests()
+	forests, err := eng.enumerateForests()
 	if err != nil {
-		t.Fatalf("Forests: %v", err)
+		t.Fatalf("enumerateForests: %v", err)
 	}
 	if len(forests) != 0 {
 		t.Errorf("forests = %d, want none: no open root blocks the tracker", len(forests))
@@ -160,9 +160,9 @@ func TestForests_OnlyOutcomesReposEnumerated(t *testing.T) {
 	api.blocks[90] = []Issue{outcomesTracker(92, "not walked")}
 	api.blocks[91] = []Issue{outcomesTracker(93, "not walked")}
 
-	forests, err := eng.Forests()
+	forests, err := eng.enumerateForests()
 	if err != nil {
-		t.Fatalf("Forests: %v", err)
+		t.Fatalf("enumerateForests: %v", err)
 	}
 	if len(forests) != 1 {
 		t.Fatalf("forests = %d, want only the outcomes repository's forest: %+v", len(forests), forests)
@@ -184,9 +184,9 @@ func TestForests_OrderIsDeterministic(t *testing.T) {
 	api.openIssues["zeta"] = []Issue{outcomesRoot(9, "zeta root")}
 	api.openIssues["alpha"] = []Issue{outcomesRoot(3, "alpha root")}
 
-	forests, err := eng.Forests()
+	forests, err := eng.enumerateForests()
 	if err != nil {
-		t.Fatalf("Forests: %v", err)
+		t.Fatalf("enumerateForests: %v", err)
 	}
 	if len(forests) != 2 || forests[0].Repository != "o/alpha" || forests[1].Repository != "o/zeta" {
 		t.Fatalf("forests = %+v, want o/alpha then o/zeta", forests)
@@ -219,9 +219,9 @@ func TestForests_ReadFailureIsError(t *testing.T) {
 			api.blocks[51] = []Issue{tracker}
 			tc.mutate(api)
 
-			forests, err := eng.Forests()
+			forests, err := eng.enumerateForests()
 			if err == nil {
-				t.Fatalf("Forests = %+v, want an error: a failed read is not an empty forest set", forests)
+				t.Fatalf("enumerateForests = %+v, want an error: a failed read is not an empty forest set", forests)
 			}
 			if forests != nil {
 				t.Errorf("forests = %+v, want nil alongside the error", forests)
@@ -237,9 +237,10 @@ func TestForests_ReadFailureIsError(t *testing.T) {
 // listing waiting out the retry backoff is an error, never the empty
 // list a caller could read as "no outcomes repositories". The event
 // path asserts this fail-closed tail through repoRoles; the outcomes
-// view asserts the same guarantee through its own reader, so a future
-// edit that drops the check fails instead of silently serving an empty
-// forest list (§forgejo/webhook/the-scope-cache,
+// view asserts the same guarantee through the sweep tick's reader —
+// the walk the view is built from — and through the view itself, so a
+// future edit that drops the check fails instead of silently serving an
+// empty forest list (§forgejo/webhook/the-scope-cache,
 // §forgejo/observability/the-outcomes-view).
 func TestForests_ScopeBackoffFailsClosed(t *testing.T) {
 	eng, api, _, _ := newTestEngine(t)
@@ -254,15 +255,23 @@ func TestForests_ScopeBackoffFailsClosed(t *testing.T) {
 	eng.scopeFailedAt = time.Now()
 	eng.scopeMu.Unlock()
 
-	forests, err := eng.Forests()
+	forests, err := eng.enumerateForests()
 	if !errors.Is(err, errScopeUnavailable) {
-		t.Fatalf("Forests err = %v, want errScopeUnavailable: a stale snapshot must not be read", err)
+		t.Fatalf("enumerateForests err = %v, want errScopeUnavailable: a stale snapshot must not be read", err)
 	}
 	if forests != nil {
 		t.Errorf("forests = %+v, want nil alongside the error", forests)
 	}
 	if n := api.callCount("ListOpenIssues:out"); n != 0 {
 		t.Errorf("the stale snapshot was acted on: %d issue listing(s) ran during the backoff", n)
+	}
+
+	// The same guarantee through the view: recording this failed walk
+	// leaves the view answering the failure, not a set it cannot vouch
+	// for.
+	eng.recordForests()
+	if _, err := eng.Forests(); !errors.Is(err, errScopeUnavailable) {
+		t.Errorf("enumerateForests err = %v, want errScopeUnavailable: the view must speak for the failed enumeration", err)
 	}
 }
 
@@ -283,9 +292,9 @@ func TestForests_TrackerReadIsTheEngines(t *testing.T) {
 	api.openIssues["out"] = []Issue{root, tracker}
 	api.blocks[51] = []Issue{both, tracker}
 
-	forests, err := eng.Forests()
+	forests, err := eng.enumerateForests()
 	if err != nil {
-		t.Fatalf("Forests: %v", err)
+		t.Fatalf("enumerateForests: %v", err)
 	}
 	if len(forests) != 1 {
 		t.Fatalf("forests = %d, want 1", len(forests))
@@ -310,9 +319,9 @@ func TestForests_CrossRepoTrackerStatesRepository(t *testing.T) {
 	api.openIssues["out"] = []Issue{root}
 	api.blocks[51] = []Issue{tracker}
 
-	forests, err := eng.Forests()
+	forests, err := eng.enumerateForests()
 	if err != nil {
-		t.Fatalf("Forests: %v", err)
+		t.Fatalf("enumerateForests: %v", err)
 	}
 	if len(forests) != 1 || forests[0].Tracker == nil {
 		t.Fatalf("forests = %+v, want root 51 paired with its tracker", forests)
@@ -340,9 +349,9 @@ func TestForests_RepositorySpellingFollowsTheListing(t *testing.T) {
 	api.openIssues["out"] = []Issue{root, tracker}
 	api.blocks[51] = []Issue{tracker}
 
-	forests, err := eng.Forests()
+	forests, err := eng.enumerateForests()
 	if err != nil {
-		t.Fatalf("Forests: %v", err)
+		t.Fatalf("enumerateForests: %v", err)
 	}
 	if len(forests) != 1 {
 		t.Fatalf("forests = %d, want 1", len(forests))
@@ -352,5 +361,98 @@ func TestForests_RepositorySpellingFollowsTheListing(t *testing.T) {
 	}
 	if forests[0].Tracker == nil || forests[0].Tracker.Repository != "o/Out" {
 		t.Errorf("tracker = %+v, want its repository spelled o/Out", forests[0].Tracker)
+	}
+}
+
+// TestForests_ViewIsTheLastSweepsSet: the view is served from the
+// snapshot the last sweep tick recorded, not from live reads — a
+// request costs no forge call, and before any sweep has enumerated,
+// the view speaks of its unread state rather than answering an empty
+// list (§forgejo/observability/the-outcomes-view).
+func TestForests_ViewIsTheLastSweepsSet(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	root := outcomesRoot(51, "root")
+	tracker := outcomesTracker(71, "tracker")
+	api.openIssues["out"] = []Issue{root, tracker}
+	api.blocks[51] = []Issue{tracker}
+
+	if forests, err := eng.Forests(); !errors.Is(err, errForestsUnavailable) || forests != nil {
+		t.Fatalf("Forests = %+v, %v, want errForestsUnavailable and nil before the first enumeration", forests, err)
+	}
+
+	eng.recordForests()
+	readsBefore := api.callCount("")
+	forests, err := eng.Forests()
+	if err != nil {
+		t.Fatalf("Forests after the sweep tick: %v", err)
+	}
+	if len(forests) != 1 || forests[0].Root.Number != 51 || forests[0].Tracker == nil || forests[0].Tracker.Number != 71 {
+		t.Errorf("forests = %+v, want the recorded forest", forests)
+	}
+	if _, err := eng.Forests(); err != nil {
+		t.Fatalf("Forests (second read): %v", err)
+	}
+	if n := api.callCount("") - readsBefore; n != 0 {
+		t.Errorf("serving the view made %d API call(s), want 0: the request path reads no forge", n)
+	}
+}
+
+// TestForests_FailedEnumerationSilencesTheView: when a sweep's
+// enumeration fails, the view answers that failure — never the earlier
+// set served as if fresh, and never an empty list — until a later sweep
+// enumerates again. This is the scope cache's rule, applied to the
+// forest snapshot (§forgejo/webhook/the-scope-cache,
+// §forgejo/observability/the-outcomes-view).
+func TestForests_FailedEnumerationSilencesTheView(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	root := outcomesRoot(51, "root")
+	tracker := outcomesTracker(71, "tracker")
+	api.openIssues["out"] = []Issue{root, tracker}
+	api.blocks[51] = []Issue{tracker}
+
+	eng.recordForests()
+	if _, err := eng.Forests(); err != nil {
+		t.Fatalf("Forests after the first sweep: %v", err)
+	}
+
+	api.listIssuesErr = map[string]error{"out": errors.New("listing down")}
+	eng.recordForests()
+	if forests, err := eng.Forests(); err == nil || forests != nil {
+		t.Errorf("Forests = %+v, %v, want the failed enumeration's error and nil, not the last set", forests, err)
+	} else if !strings.Contains(err.Error(), "list open issues of o/out") {
+		t.Errorf("error %q, want it to name the read that broke", err)
+	}
+
+	delete(api.listIssuesErr, "out")
+	eng.recordForests()
+	if forests, err := eng.Forests(); err != nil || len(forests) != 1 {
+		t.Errorf("Forests = %+v, %v, want the view recovered by the next successful sweep", forests, err)
+	}
+}
+
+// TestForests_SweepTickRecordsTheView: Reconcile records the forest
+// set on its tick, so the endpoint's data is the sweep's — no API
+// request enumerates anything itself (§forgejo/reconciliation/the-sweep,
+// §forgejo/observability/the-outcomes-view).
+func TestForests_SweepTickRecordsTheView(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	root := outcomesRoot(51, "root")
+	tracker := outcomesTracker(71, "tracker")
+	api.openIssues["out"] = []Issue{root, tracker}
+	api.blocks[51] = []Issue{tracker}
+	api.issues[51] = &root
+	api.issues[71] = &tracker
+
+	eng.Reconcile()
+
+	forests, err := eng.Forests()
+	if err != nil {
+		t.Fatalf("Forests after Reconcile: %v", err)
+	}
+	if len(forests) != 1 || forests[0].Root.Number != 51 || forests[0].Tracker == nil || forests[0].Tracker.Number != 71 {
+		t.Errorf("forests = %+v, want the sweep to have recorded the paired forest", forests)
 	}
 }

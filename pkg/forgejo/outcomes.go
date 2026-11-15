@@ -1,6 +1,9 @@
 package forgejo
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // The outcomes view: the current forests of the organisation, enumerated
 // from the outcomes repositories for the dashboard
@@ -58,7 +61,7 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 	}
 }
 
-// Forests enumerates the current forests
+// enumerateForests walks the current forests
 // (§forgejo/observability/the-outcomes-view): it walks the
 // repositories the scope cache classifies as outcomes repositories
 // (§forgejo/webhook/repository-roles), lists each one's open issues,
@@ -74,8 +77,11 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 // wrapped with the repository or issue it concerned, and the partial
 // result is dropped: a failed read must not read as an empty set of
 // forests, the same fail-closed discipline as the scope test
-// (§forgejo/webhook/the-scope-cache).
-func (e *Engine) Forests() ([]Forest, error) {
+// (§forgejo/webhook/the-scope-cache). It is the sweep tick's reader,
+// called by recordForests; the request path answers from the snapshot
+// the last enumeration recorded (Forests), so serving the view costs
+// no forge read (§forgejo/observability/the-outcomes-view).
+func (e *Engine) enumerateForests() ([]Forest, error) {
 	repos, err := e.outcomesRepositories()
 	if err != nil {
 		return nil, fmt.Errorf("forgejo: outcomes: scope of the outcomes repositories: %w", err)
@@ -114,4 +120,64 @@ func (e *Engine) Forests() ([]Forest, error) {
 		}
 	}
 	return forests, nil
+}
+
+// errForestsUnavailable reports that the outcomes view has nothing to
+// stand on: no sweep has yet enumerated the forests, so the engine
+// cannot tell forests from a read that never landed. The view answers
+// as unavailable rather than with an empty list, so a deployment whose
+// reads have not yet succeeded never reads as "no forests"
+// (§forgejo/observability/the-outcomes-view).
+var errForestsUnavailable = errors.New("forests not yet enumerated")
+
+// Forests returns the outcomes view as the last sweep tick recorded it:
+// the dashboard's picture of the current forests, served from memory
+// the way Tracked serves the decisions the engine holds
+// (§forgejo/observability/the-outcomes-view, the-dashboard-view) — an
+// API request costs no forge read. The returned slice is the snapshot
+// itself: recordForests replaces it whole and never mutates a published
+// snapshot in place, so it stays safe to read after the lock is
+// released, and the caller must not modify it. A non-nil error means
+// the view cannot be vouched for — the most recent sweep's enumeration
+// failed (that error, so the caller can log which read broke), or no
+// enumeration has landed yet (errForestsUnavailable). Either way the
+// result is nil: like the scope cache, the view never acts on a set it
+// can no longer stand behind
+// (§forgejo/webhook/the-scope-cache).
+func (e *Engine) Forests() ([]Forest, error) {
+	e.forestsMu.Lock()
+	defer e.forestsMu.Unlock()
+	if e.forestsErr != nil {
+		return nil, e.forestsErr
+	}
+	if e.forestsSnap == nil {
+		return nil, errForestsUnavailable
+	}
+	return e.forestsSnap, nil
+}
+
+// recordForests enumerates the forests and records the set for the
+// outcomes view; Reconcile calls it on every tick and manual start, so
+// the view's cost is per interval rather than per request
+// (§forgejo/observability/the-outcomes-view). A successful enumeration
+// replaces the snapshot whole and clears any earlier failure; a failed
+// one keeps the last set but records the error, so the view answers
+// that error — not a stale set served as if fresh — until a later sweep
+// enumerates again. The scope cache is refreshed by the sweep itself
+// just before, so the walk rides the listing the sweep already made
+// fresh and costs no organisation listing of its own
+// (§forgejo/webhook/the-scope-cache).
+func (e *Engine) recordForests() {
+	forests, err := e.enumerateForests()
+	if err != nil {
+		e.log.Error("reconciliation: forest enumeration failed; the outcomes view will say so until a sweep succeeds",
+			"error", err)
+	}
+	e.forestsMu.Lock()
+	if err != nil {
+		e.forestsErr = err
+	} else {
+		e.forestsSnap, e.forestsErr = forests, nil
+	}
+	e.forestsMu.Unlock()
 }

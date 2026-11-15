@@ -21,7 +21,9 @@ const maitredOutcomesTopic = "maitred-outcomes-repo"
 // through the same pipeline as the event path — re-fetch, decide,
 // dispatch, watermark, serialised on the watermark store's per-key lock.
 // A sweep that starts while another is in flight is skipped
-// (§forgejo/reconciliation/scheduling).
+// (§forgejo/reconciliation/scheduling). The tick also records the
+// forest set the outcomes view is served from
+// (§forgejo/observability/the-outcomes-view).
 func (e *Engine) Reconcile() {
 	if !e.sweeping.CompareAndSwap(false, true) {
 		e.log.Info("reconciliation already in flight; skipping")
@@ -76,6 +78,10 @@ func (e *Engine) Reconcile() {
 			}
 		}
 	}
+	// The sweep tick also records the forest set the outcomes view is
+	// served from, so the view's cost is per interval rather than per
+	// request (§forgejo/observability/the-outcomes-view).
+	e.recordForests()
 }
 
 // Start begins the reconciliation sweep: it runs once immediately, then

@@ -119,41 +119,53 @@ current forests, whatever the decompose gate makes of the same row
 (§forgejo/decisions/forest-teardown, §forgejo/decisions/sync-set).
 
 The dashboard API serves the view at `GET /api/forgejo/outcomes`. The
+set it serves is the one the last sweep tick recorded: like the tracked
+view it answers from memory, and a request costs no forge read
+(§forgejo/observability/the-dashboard-view). The
 response is an object carrying two things: the **forest list** and **one
 engine-status field** rendering the engine's state as the forgejo view
 does (§forgejo/observability/the-dashboard-view), so a
 configured-but-broken engine never reads as a healthy one with nothing
 to show. Each forest names its **repository** — spelled as the forge's
-listing spells it — its **root** — number, title, state, repository, and
-HTML URL — and its **tracker** — the same fields, naming the repository
+listing spells it, falling back to the scope cache's lowercased key
+where a listing row omits it — its **root** — number, title, state,
+repository, and HTML URL — and its **tracker** — the same fields,
+naming the repository
 the tracker itself lives in, so a tracker blocked across a repository
 boundary says where it lives rather than inheriting the root's address
 (§forgejo/client/operations) — or the honest absence of one, spelled as
 a `null` tracker so the field is always present. Without the engine, or
-with no forests, the list is empty — never `null`. A read that fails — the organisation
-listing, an issue listing, or a blocks read — answers `500`, because a
-failed read must not read as an empty set of forests; only the honest
-empty answers `200` with an empty list. The `500` carries a fixed
+with no forests, the list is empty — never `null`. A view the engine
+cannot vouch for — no sweep's enumeration has landed yet, or the most
+recent one failed (the organisation listing, an issue listing, or a
+blocks read) — answers `500` rather than an empty list or a stale set,
+because a failed read must not read as an empty set of forests and a
+set no longer vouched for is never served as if fresh: the same rule
+the scope cache applies to stale snapshots
+(§forgejo/webhook/the-scope-cache). Only the honest empty answers
+`200` with an empty list. The `500` carries a fixed
 sentence and the read's detail goes to the log: raw forge error text
 carries repository names and forge response bodies a caller need not be
 entitled to, and this port authenticates nothing
 (§forgejo/observability/why-the-engine-is-off). A method other than GET
 answers `405`.
 
-Serving the view costs live reads: one organisation listing when the
-scope cache is stale, one issue listing per outcomes repository, and
-one blocks read per open ideation root — the first dashboard read that
-spends the engine's forge token on the request path instead of
-answering from memory. It therefore rides the dashboard's standing
-trust model — an endpoint reachable by anyone who can reach the port,
+The enumeration happens on the reconciliation sweep's tick, not on the
+request path (§forgejo/reconciliation/the-sweep): per tick it costs one
+issue listing per outcomes repository and one blocks read per open
+ideation root, on top of the sweep's own walk; the sweep's own
+organisation listing keeps the scope cache fresh, so the walk adds no
+listing of its own (§forgejo/webhook/the-scope-cache). A manual sweep
+start refreshes the set too (§forgejo/observability/triggering-a-sweep).
+What the endpoint answers is therefore always the set the last sweep
+tick enumerated, and a request to it — however often a later
+`/outcomes` page polls on a timer — costs no forge read at all: the
+poll interval becomes a freshness choice, not a cost one. The payload
+still enumerates the organisation's ideation roots and trackers to an
+unauthenticated port, so the view rides the dashboard's standing trust
+model — an endpoint reachable by anyone who can reach the port,
 which is meant to reach only its operator's network
 (§forgejo/observability/triggering-a-sweep, README Web Dashboard).
-Whoever wires the next surface on this payload — the `/outcomes` page,
-which would re-read it on a timer — picks its poll interval knowing
-this cost, or moves the enumeration onto the sweep tick and serves the
-last snapshot the way the tracked view does
-(§forgejo/observability/the-dashboard-view); that is a decision for
-that change, not an accident of this one.
 
 ## Triggering a sweep
 
