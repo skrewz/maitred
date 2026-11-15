@@ -134,61 +134,69 @@ func (e *Engine) ensureScopeFresh() error {
 	return nil
 }
 
+// freshScope returns the scope snapshot, refreshing the cache first
+// when it is older than one reconcile interval: the whole fresh-scope
+// read every scope-cache reader shares, so no reader can act on a stale
+// snapshot and the failure-backoff rule lives in exactly one place
+// (§forgejo/webhook/the-scope-cache). Concurrent readers finding the
+// cache stale share one listing — they wait on refreshMu and re-check
+// staleness under it, in ensureScopeFresh. The returned map is the
+// snapshot itself: refreshScopeCache replaces it whole and never
+// mutates a published snapshot in place, so it stays safe to read after
+// the lock is released. A non-nil error means scope is unknown — the
+// listing failed, or a failure is waiting out the retry backoff with
+// the snapshot gone stale — the latter answering errScopeUnavailable;
+// the caller acts only on the error, never on an empty result misread
+// as "no repositories".
+func (e *Engine) freshScope() (map[string]roles, error) {
+	if err := e.ensureScopeFresh(); err != nil {
+		return nil, err
+	}
+	e.scopeMu.Lock()
+	defer e.scopeMu.Unlock()
+	if time.Since(e.scopeAt) > e.cfg.ReconcileInterval {
+		// Only reachable inside the failure backoff window: a refresh
+		// was needed but is not yet due to be re-attempted.
+		return nil, errScopeUnavailable
+	}
+	return e.scope, nil
+}
+
 // repoRoles reports the roles the repository holds
 // (§forgejo/webhook/repository-roles), according to the scope cache
 // (§forgejo/webhook/the-scope-cache). The name is matched
 // case-insensitively: the cache is keyed on lowercased full names, so a
 // caller holding a reference's spelling, a listing's or any other
-// casing of the same repository gets the same answer. The cache is
-// refreshed when it has never been taken or is older than one reconcile
-// interval; concurrent deliveries finding it stale share one listing —
-// they wait on refreshMu and re-check staleness under it. A repository
-// absent from a fresh snapshot holds no role: the test fails closed. A
-// non-nil error means scope is unknown — the listing failed, or a
-// failure is waiting out the retry backoff with the snapshot gone
-// stale — and the caller must hold off naming the failure instead of
-// acting on the roles.
+// casing of the same repository gets the same answer. Freshness and the
+// fail-closed rule are freshScope's. A repository absent from a fresh
+// snapshot holds no role: the test fails closed. A non-nil error means
+// scope is unknown, and the caller must hold off naming the failure
+// instead of acting on the roles.
 func (e *Engine) repoRoles(repo string) (roles, error) {
-	if err := e.ensureScopeFresh(); err != nil {
+	scope, err := e.freshScope()
+	if err != nil {
 		return roles{}, err
 	}
-	e.scopeMu.Lock()
-	r := e.scope[strings.ToLower(repo)]
-	stale := time.Since(e.scopeAt) > e.cfg.ReconcileInterval
-	e.scopeMu.Unlock()
-	if stale {
-		// Only reachable inside the failure backoff window: a refresh
-		// was needed but is not yet due to be re-attempted.
-		return roles{}, errScopeUnavailable
-	}
-	return r, nil
+	return scope[strings.ToLower(repo)], nil
 }
 
 // outcomesRepositories reports the full names of the repositories the
 // scope cache classifies as outcomes repositories
 // (§forgejo/webhook/repository-roles, §forgejo/observability/the-outcomes-view),
 // sorted so a reader's order is deterministic across calls. Like
-// repoRoles it fails closed: a non-nil error means scope is unknown —
-// the listing failed, or a failure is waiting out the retry backoff
-// with the snapshot gone stale — and the caller must not read an empty
-// list as "no outcomes repositories".
+// repoRoles it goes through freshScope, so a non-nil error means scope
+// is unknown and the caller must not read an empty list as "no
+// outcomes repositories".
 func (e *Engine) outcomesRepositories() ([]string, error) {
-	if err := e.ensureScopeFresh(); err != nil {
+	scope, err := e.freshScope()
+	if err != nil {
 		return nil, err
 	}
-	e.scopeMu.Lock()
-	names := make([]string, 0, len(e.scope))
-	for name, r := range e.scope {
+	names := make([]string, 0, len(scope))
+	for name, r := range scope {
 		if r.outcomes {
 			names = append(names, name)
 		}
-	}
-	stale := time.Since(e.scopeAt) > e.cfg.ReconcileInterval
-	e.scopeMu.Unlock()
-	if stale {
-		// Only reachable inside the failure backoff window, as in
-		// repoRoles: a refresh was needed but is not yet due.
-		return nil, errScopeUnavailable
 	}
 	sort.Strings(names)
 	return names, nil

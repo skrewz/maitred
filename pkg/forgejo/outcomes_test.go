@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // issueURL is the html_url the real API carries on every issue row;
@@ -223,5 +224,38 @@ func TestForests_ReadFailureIsError(t *testing.T) {
 				t.Errorf("forests = %+v, want nil alongside the error", forests)
 			}
 		})
+	}
+}
+
+// TestForests_ScopeBackoffFailsClosed: a stale snapshot with a failed
+// listing waiting out the retry backoff is an error, never the empty
+// list a caller could read as "no outcomes repositories". The event
+// path asserts this fail-closed tail through repoRoles; the outcomes
+// view asserts the same guarantee through its own reader, so a future
+// edit that drops the check fails instead of silently serving an empty
+// forest list (§forgejo/webhook/the-scope-cache,
+// §forgejo/observability/the-outcomes-view).
+func TestForests_ScopeBackoffFailsClosed(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	api.openIssues["out"] = []Issue{outcomesRoot(51, "root")}
+
+	// A snapshot aged past one interval with a listing failure still
+	// inside its retry backoff: a refresh is needed but not yet due,
+	// so the snapshot on hand must not be acted on.
+	eng.scopeMu.Lock()
+	eng.scopeAt = time.Time{}
+	eng.scopeFailedAt = time.Now()
+	eng.scopeMu.Unlock()
+
+	forests, err := eng.Forests()
+	if !errors.Is(err, errScopeUnavailable) {
+		t.Fatalf("Forests err = %v, want errScopeUnavailable: a stale snapshot must not be read", err)
+	}
+	if forests != nil {
+		t.Errorf("forests = %+v, want nil alongside the error", forests)
+	}
+	if n := api.callCount("ListOpenIssues:out"); n != 0 {
+		t.Errorf("the stale snapshot was acted on: %d issue listing(s) ran during the backoff", n)
 	}
 }
