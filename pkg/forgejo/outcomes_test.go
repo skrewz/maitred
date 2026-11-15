@@ -480,8 +480,8 @@ func TestForests_SnapshotAgesOutFailsClosed(t *testing.T) {
 	}
 
 	// The forge becomes unreachable: every later sweep fails at the
-	// organisation listing and never reaches step 4, so nothing
-	// records a set and nothing marks the view failed.
+	// organisation listing, so nothing records a set and nothing marks
+	// the view failed.
 	api.listReposErr = errors.New("forge unreachable")
 	eng.Reconcile()
 	if _, err := eng.Forests(); err != nil {
@@ -545,18 +545,24 @@ func TestForests_RecordLandsBeforeTheWalk(t *testing.T) {
 	if blocks < 0 {
 		t.Fatal("the sweep made no blocks read: the tick never enumerated the forests")
 	}
-	if walk >= 0 && blocks > walk {
+	if walk < 0 {
+		t.Fatal("the sweep made no pipeline re-fetch: the walk never ran, so the order of the two says nothing")
+	}
+	if blocks > walk {
 		t.Errorf("the tick's blocks read (%d) came after the walk's first pipeline read (%d): the recording lands after the walk it must not age against", blocks, walk)
 	}
 }
 
 // TestForests_ViewServesBeforeTheFirstWalkFinishes: at process start
 // the view must not wait for the first sweep's walk — the pipeline's
-// re-fetches — before it has a set to serve. The recording lands at
-// the tick's head, and every tick belongs to the interval as counted
-// from the engine's start, so neither the first sweep's length nor a
-// later one's can push a refresh past the moment the earlier set's
-// vouch runs out (§forgejo/observability/the-outcomes-view,
+// re-fetches — before it has a set to serve. The recording lands at the
+// tick's head, so holding the walk inside its first re-fetch and
+// reading the view there says the same thing a clock cannot: a set is
+// served while the sweep's slowest part is still running. The ticks
+// belong to the interval as counted from the engine's start, so neither
+// the first sweep's length nor a later one's can push a refresh past
+// the moment the earlier set's vouch runs out
+// (§forgejo/observability/the-outcomes-view,
 // §forgejo/reconciliation/the-sweep, §forgejo/reconciliation/scheduling).
 func TestForests_ViewServesBeforeTheFirstWalkFinishes(t *testing.T) {
 	eng, api, _, _ := newTestEngine(t)
@@ -570,27 +576,30 @@ func TestForests_ViewServesBeforeTheFirstWalkFinishes(t *testing.T) {
 	work := Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r", HTMLURL: "https://forge.example.com/o/r/issues/7"}
 	api.openIssues["r"] = []Issue{work}
 	api.issues[7] = &work
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	api.blockGetIssue = release
+	api.getIssueEntered = entered
 
-	const interval = 100 * time.Millisecond
-	eng.cfg.ReconcileInterval = interval
-	api.delayGetIssue = 20 * time.Millisecond // the walk costs at least three re-fetches, 60ms of it
-
-	started := time.Now()
 	eng.Start()
+	// Stop waits the in-flight sweep out, so the walk is released first
+	// — the deferred calls run last-declared first.
 	defer eng.Stop()
+	defer close(release)
 
-	// The sweep's walk alone costs at least 60ms, so a recording that
-	// lands at the tick's head is served well before the walk can be
-	// over — one that waits for the walk misses this deadline.
-	deadline := started.Add(interval / 4)
-	for {
-		if _, err := eng.Forests(); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the view had still recorded nothing %s after the engine started, though the first sweep's walk costs at least %s: the recording must land at the tick's head, not after the walk", interval/4, 3*api.delayGetIssue)
-		}
-		time.Sleep(time.Millisecond)
+	// Once the walk is inside a re-fetch, the tick's head has been paid
+	// for: the recording landed before the event was dispatched.
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first sweep never reached a pipeline re-fetch")
+	}
+	forests, err := eng.Forests()
+	if err != nil {
+		t.Fatalf("Forests while the first sweep's walk is held in its re-fetch = %v, want the set the tick's head recorded before the walk dispatched anything: %+v", err, forests)
+	}
+	if len(forests) != 1 || forests[0].Root.Number != 51 {
+		t.Errorf("forests = %+v, want the forest the tick recorded", forests)
 	}
 }
 

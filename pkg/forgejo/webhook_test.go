@@ -175,12 +175,6 @@ type fakeAPI struct {
 	blockGetIssue   chan struct{}
 	getIssueEntered chan struct{}
 
-	// delayGetIssue, when set, sleeps that long in every GetIssue, so
-	// a test can make the sweep's walk — the pipeline's re-fetches —
-	// take measurable time without blocking it
-	// (§forgejo/reconciliation/the-sweep).
-	delayGetIssue time.Duration
-
 	// ListOrgRepositories blocking hooks, mirroring the GetIssue ones,
 	// for the scope-cache single-flight test.
 	blockListRepos   chan struct{}
@@ -254,9 +248,6 @@ func (f *fakeAPI) GetIssue(owner, repo string, number int) (*Issue, error) {
 	}
 	if f.blockGetIssue != nil {
 		<-f.blockGetIssue
-	}
-	if f.delayGetIssue > 0 {
-		time.Sleep(f.delayGetIssue)
 	}
 	if f.getIssueErr != nil {
 		return nil, f.getIssueErr
