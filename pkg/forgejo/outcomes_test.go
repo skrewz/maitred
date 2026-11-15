@@ -558,10 +558,7 @@ func TestForests_RecordLandsBeforeTheWalk(t *testing.T) {
 // re-fetches — before it has a set to serve. The recording lands at the
 // tick's head, so holding the walk inside its first re-fetch and
 // reading the view there says the same thing a clock cannot: a set is
-// served while the sweep's slowest part is still running. The ticks
-// belong to the interval as counted from the engine's start, so neither
-// the first sweep's length nor a later one's can push a refresh past
-// the moment the earlier set's vouch runs out
+// served while the sweep's slowest part is still running
 // (§forgejo/observability/the-outcomes-view,
 // §forgejo/reconciliation/the-sweep, §forgejo/reconciliation/scheduling).
 func TestForests_ViewServesBeforeTheFirstWalkFinishes(t *testing.T) {

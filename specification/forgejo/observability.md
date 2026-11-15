@@ -121,40 +121,38 @@ current forests, whatever the decompose gate makes of the same row
 The dashboard API serves the view at `GET /api/forgejo/outcomes`. The
 set it serves is the one the last sweep tick recorded: like the tracked
 view it answers from memory, and a request costs no forge read
-(§forgejo/observability/the-dashboard-view). The
-response is an object carrying two things: the **forest list** and **one
-engine-status field** rendering the engine's state as the forgejo view
-does (§forgejo/observability/the-dashboard-view), so a
-configured-but-broken engine never reads as a healthy one with nothing
-to show. Each forest names its **repository** — spelled as the forge's
-listing spells it, falling back to the scope cache's lowercased key
-where a listing row omits it — its **root** — number, title, state,
-repository, and HTML URL — and its **tracker** — the same fields,
-naming the repository
-the tracker itself lives in, so a tracker blocked across a repository
+(§forgejo/observability/the-dashboard-view). The response is an object
+carrying two things: the **forest list** and **one engine-status field**
+rendering the engine's state as the forgejo view does
+(§forgejo/observability/the-dashboard-view), so a configured-but-broken
+engine never reads as a healthy one with nothing to show. Each forest
+names its **repository** — spelled as the forge's listing spells it,
+falling back to the scope cache's lowercased key where a listing row
+omits it — its **root** — number, title, state, repository, and HTML URL
+— and its **tracker** — the same fields, naming the repository the
+tracker itself lives in, so a tracker blocked across a repository
 boundary says where it lives rather than inheriting the root's address
 (§forgejo/client/operations) — or the honest absence of one, spelled as
 a `null` tracker so the field is always present. Without the engine, or
 with no forests, the list is empty — never `null`: an enumeration that
-found nothing is an honest empty, not a view that never read. A view
-the engine cannot vouch for — no sweep's enumeration has landed yet, the
-most recent one failed (the organisation listing, an issue listing, or
-a blocks read), or the set it holds has aged past one
-`reconcile_interval` without a sweep having recorded a newer one —
-answers `500` rather than an empty list or a stale set, because a failed
-read must not read as an empty set of forests and a set no longer
-vouched for is never served as if fresh: the same rule the scope cache
-applies to stale snapshots (§forgejo/webhook/the-scope-cache). The bound
-is the view's own, applied as the set is read, so a sweep that never
-reached the step that records the set — its own organisation listing
-having failed — ages the view out rather than leaving it serving what it
-recorded before the outage. The sweep records the set at its head, as
-its step 2 (§forgejo/reconciliation/the-sweep). Only the honest empty
-answers `200` with an
-empty list. The `500` carries a fixed sentence and the read's detail
-goes to the log: raw forge error text
-carries repository names and forge response bodies a caller need not be
-entitled to, and this port authenticates nothing
+found nothing is an honest empty, not a view that never read. A view the
+engine cannot vouch for — no sweep's enumeration has landed yet, the
+most recent one failed (the organisation listing, an issue listing, or a
+blocks read), or the set it holds has aged past one `reconcile_interval`
+without a sweep having recorded a newer one — answers `500` rather than
+an empty list or a stale set, because a failed read must not read as an
+empty set of forests and a set no longer vouched for is never served as
+if fresh: the same rule the scope cache applies to stale snapshots
+(§forgejo/webhook/the-scope-cache). The bound is the view's own, applied
+as the set is read, so a sweep that never reached the step that records
+the set — its own organisation listing having failed — ages the view out
+rather than leaving it serving what it recorded before the outage. The
+sweep records the set at its head, as its step 2
+(§forgejo/reconciliation/the-sweep). Only the honest empty answers `200`
+with an empty list. The `500` carries a fixed sentence and the read's
+detail goes to the log: raw forge error text carries repository names
+and forge response bodies a caller need not be entitled to, and this
+port authenticates nothing
 (§forgejo/observability/why-the-engine-is-off). A method other than GET
 answers `405`.
 
