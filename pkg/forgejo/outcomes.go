@@ -33,12 +33,11 @@ type ForestIssue struct {
 // dropped (§forgejo/observability/the-outcomes-view).
 type Forest struct {
 	// Repository is the full name of the outcomes repository the root
-	// was found in, spelled as the forge's listing spells it. It is the
-	// root's own row resolved once (forestIssue), so the two can never
-	// disagree. It is spelled at this level because the brief names a
-	// forest by where it grew; the root's row keeps its own because
-	// ForestIssue is the tracker's shape too, and there the repository
-	// genuinely varies (§forgejo/observability/the-outcomes-view).
+	// was found in — the root's own row resolved once (forestIssue),
+	// so the two can never disagree. The root's row keeps its own
+	// repository because ForestIssue is the tracker's shape too, where
+	// the repository genuinely varies
+	// (§forgejo/observability/the-outcomes-view).
 	Repository string `json:"repository"`
 	// Root is the open ideation issue the forest grew from.
 	Root ForestIssue `json:"root"`
