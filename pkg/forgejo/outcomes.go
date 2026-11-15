@@ -183,9 +183,8 @@ func (e *Engine) Forests() ([]Forest, error) {
 
 // recordForests enumerates the forests and records the set for the
 // outcomes view; Reconcile calls it on every tick and manual start, at
-// the tick's head and before the walk dispatches any event, so the
-// view's cost is per interval rather than per request and the walk's
-// length stays out of the age of the set
+// the tick's head (§forgejo/reconciliation/the-sweep), so the view's
+// cost is per interval rather than per request
 // (§forgejo/observability/the-outcomes-view). A successful enumeration
 // replaces the snapshot whole, stamps the moment it landed and clears
 // any earlier failure; a failed one keeps the last set but

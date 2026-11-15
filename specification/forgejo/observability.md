@@ -149,8 +149,8 @@ is the view's own, applied as the set is read, so a sweep that never
 reached the step that records the set — its own organisation listing
 having failed — ages the view out rather than leaving it serving what it
 recorded before the outage. The sweep records the set at its head, as
-its step 2, so the age counts the sweep's own reads rather than its
-pipeline's. Only the honest empty answers `200` with an
+its step 2 (§forgejo/reconciliation/the-sweep). Only the honest empty
+answers `200` with an
 empty list. The `500` carries a fixed sentence and the read's detail
 goes to the log: raw forge error text
 carries repository names and forge response bodies a caller need not be

@@ -36,8 +36,12 @@ created while the engine was down.
    organisation listing of step 1 having failed — ages the view out
    instead of leaving it serving the set recorded before the outage.
    It is step 2 rather than a tail to the walk so that the walk, with
-   the pipeline's re-fetches in it, keeps the sweep's slow work and
-   cannot delay the recording the view ages itself against.
+   the pipeline's re-fetches in it, keeps the sweep's slow work: a walk
+   delays the next recording only by overrunning a whole reconcile
+   interval — the ticks themselves belong to the interval as counted
+   from the engine's start. Where a walk does overrun one, the set ages
+   out while that walk runs, which is the one-interval bound holding
+   rather than a hole in it.
 3. **Enumerate the objects.** For each such repository, list **all**
    open issues and all open pull requests
    (§forgejo/client/operations). The issue list includes pull requests

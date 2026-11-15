@@ -39,11 +39,9 @@ func (e *Engine) Reconcile() {
 	// The listing is the scope cache: the event path consults it instead
 	// of fetching per delivery (§forgejo/webhook/the-scope-cache).
 	e.refreshScopeCache(repos)
-	// The tick records the forest set the outcomes view is served from
-	// at its head, before the walk below dispatches any event, so the
-	// walk's length never enters the age of the set the view vouches
-	// for (§forgejo/observability/the-outcomes-view,
-	// §forgejo/reconciliation/the-sweep).
+	// The tick records the forest set before the walk below dispatches
+	// any event (§forgejo/reconciliation/the-sweep,
+	// §forgejo/observability/the-outcomes-view).
 	e.recordForests()
 	for i := range repos {
 		repo := &repos[i]
