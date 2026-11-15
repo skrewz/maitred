@@ -146,9 +146,10 @@ var errForestsStale = errors.New("forest enumeration is stale")
 // Forests returns the outcomes view as the last sweep tick recorded it:
 // the dashboard's picture of the current forests, served from memory
 // the way Tracked serves the decisions the engine holds
-// (§forgejo/observability/the-outcomes-view, the-dashboard-view) — an
-// API request costs no forge read. The returned slice is the snapshot
-// itself: recordForests replaces it whole and never mutates a published
+// (§forgejo/observability/the-outcomes-view,
+// §forgejo/observability/the-dashboard-view) — an API request costs no
+// forge read. The returned slice is the snapshot itself:
+// recordForests replaces it whole and never mutates a published
 // snapshot in place, so it stays safe to read after the lock is
 // released, and the caller must not modify it. A non-nil error means
 // the view cannot be vouched for — the most recent sweep's enumeration

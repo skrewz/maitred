@@ -80,7 +80,15 @@ func (e *Engine) Reconcile() {
 	}
 	// The sweep tick also records the forest set the outcomes view is
 	// served from, so the view's cost is per interval rather than per
-	// request (§forgejo/observability/the-outcomes-view).
+	// request (§forgejo/observability/the-outcomes-view). The walk is
+	// the view's own reader rather than a pairing folded into step 3:
+	// step 2 lists every repository holding either role and the digest
+	// makes its own blocks read inside the pipeline, where the rows are
+	// summed into a digest and discarded — so reusing them would thread
+	// forest rows through the decision path to save the one listing per
+	// outcomes repository and one blocks read per open root this adds.
+	// The view stays a reader the sweep calls, with its fail-closed
+	// rule in one file (§forgejo/observability/the-outcomes-view).
 	e.recordForests()
 }
 
