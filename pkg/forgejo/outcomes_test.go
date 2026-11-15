@@ -195,16 +195,19 @@ func TestForests_OrderIsDeterministic(t *testing.T) {
 
 // TestForests_ReadFailureIsError: a failed read is an error, never a
 // silently short or empty list — the view fails closed the way the scope
-// test does (§forgejo/webhook/the-scope-cache,
+// test does — and the error names the repository or issue whose read
+// broke, so the record of a failed enumeration is not a bare status
+// code (§forgejo/webhook/the-scope-cache,
 // §forgejo/observability/the-outcomes-view).
 func TestForests_ReadFailureIsError(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(api *fakeAPI)
+		want   string
 	}{
-		{"org listing fails", func(api *fakeAPI) { api.listReposErr = errors.New("org listing down") }},
-		{"issue listing fails", func(api *fakeAPI) { api.listIssuesErr = map[string]error{"out": errors.New("listing down")} }},
-		{"blocks read fails", func(api *fakeAPI) { api.issueBlocksErr = errors.New("blocks read down") }},
+		{"org listing fails", func(api *fakeAPI) { api.listReposErr = errors.New("org listing down") }, "org listing down"},
+		{"issue listing fails", func(api *fakeAPI) { api.listIssuesErr = map[string]error{"out": errors.New("listing down")} }, "list open issues of o/out"},
+		{"blocks read fails", func(api *fakeAPI) { api.issueBlocksErr = errors.New("blocks read down") }, "issues o/out#51 blocks"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -222,6 +225,9 @@ func TestForests_ReadFailureIsError(t *testing.T) {
 			}
 			if forests != nil {
 				t.Errorf("forests = %+v, want nil alongside the error", forests)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q, want it to name the failed read (%s)", err.Error(), tc.want)
 			}
 		})
 	}
@@ -257,5 +263,94 @@ func TestForests_ScopeBackoffFailsClosed(t *testing.T) {
 	}
 	if n := api.callCount("ListOpenIssues:out"); n != 0 {
 		t.Errorf("the stale snapshot was acted on: %d issue listing(s) ran during the backoff", n)
+	}
+}
+
+// TestForests_TrackerReadIsTheEngines: a blocked row carrying both
+// ideation and outcome is another forest's root, not this one's
+// tracker — isTracker's one reading, decompose winning over wrap-up
+// here as in the cascade and the teardown. Pairing takes the first
+// blocked row that reads as a tracker, skipping the root
+// (§forgejo/decisions/unblock-cascade, §forgejo/decisions/forest-teardown,
+// §forgejo/observability/the-outcomes-view).
+func TestForests_TrackerReadIsTheEngines(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	root := outcomesRoot(51, "root")
+	both := outcomesRoot(9, "a forest's own root, mislabelled")
+	both.Labels = []string{LabelIdeation, LabelOutcome}
+	tracker := outcomesTracker(71, "forest tracker")
+	api.openIssues["out"] = []Issue{root, tracker}
+	api.blocks[51] = []Issue{both, tracker}
+
+	forests, err := eng.Forests()
+	if err != nil {
+		t.Fatalf("Forests: %v", err)
+	}
+	if len(forests) != 1 {
+		t.Fatalf("forests = %d, want 1", len(forests))
+	}
+	if forests[0].Tracker == nil || forests[0].Tracker.Number != 71 {
+		t.Errorf("tracker = %+v, want issue 71: the row carrying ideation too is no tracker", forests[0].Tracker)
+	}
+}
+
+// TestForests_CrossRepoTrackerStatesRepository: a tracker in another
+// repository — cross-repo blockers are a standing case of the blocks
+// read — states the repository it lives in, so the row is honest about
+// a cross-repo gate instead of pointing the dashboard at the root's
+// repository (§forgejo/client/operations,
+// §forgejo/observability/the-outcomes-view).
+func TestForests_CrossRepoTrackerStatesRepository(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	root := outcomesRoot(51, "root")
+	tracker := outcomesTracker(71, "cross-repo tracker")
+	tracker.Repository = "o/elsewhere"
+	api.openIssues["out"] = []Issue{root}
+	api.blocks[51] = []Issue{tracker}
+
+	forests, err := eng.Forests()
+	if err != nil {
+		t.Fatalf("Forests: %v", err)
+	}
+	if len(forests) != 1 || forests[0].Tracker == nil {
+		t.Fatalf("forests = %+v, want root 51 paired with its tracker", forests)
+	}
+	if forests[0].Repository != "o/out" {
+		t.Errorf("repository = %q, want the forest to name the repository it grew in", forests[0].Repository)
+	}
+	if forests[0].Tracker.Repository != "o/elsewhere" {
+		t.Errorf("tracker repository = %q, want o/elsewhere: the tracker states where it lives", forests[0].Tracker.Repository)
+	}
+}
+
+// TestForests_RepositorySpellingFollowsTheListing: the scope cache is
+// keyed on lowercased full names, but the view names a repository as
+// the forge's listing spells it, the way every other engine read names
+// it (§forgejo/client/operations, §forgejo/webhook/the-scope-cache,
+// §forgejo/observability/the-outcomes-view).
+func TestForests_RepositorySpellingFollowsTheListing(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/Out")}
+	root := outcomesRoot(51, "root")
+	root.Repository = "o/Out"
+	tracker := outcomesTracker(71, "tracker")
+	tracker.Repository = "o/Out"
+	api.openIssues["out"] = []Issue{root, tracker}
+	api.blocks[51] = []Issue{tracker}
+
+	forests, err := eng.Forests()
+	if err != nil {
+		t.Fatalf("Forests: %v", err)
+	}
+	if len(forests) != 1 {
+		t.Fatalf("forests = %d, want 1", len(forests))
+	}
+	if forests[0].Repository != "o/Out" || forests[0].Root.Repository != "o/Out" {
+		t.Errorf("repository = %q root.repository = %q, want the listing's spelling o/Out, not the scope cache's lowercase", forests[0].Repository, forests[0].Root.Repository)
+	}
+	if forests[0].Tracker == nil || forests[0].Tracker.Repository != "o/Out" {
+		t.Errorf("tracker = %+v, want its repository spelled o/Out", forests[0].Tracker)
 	}
 }

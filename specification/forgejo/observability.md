@@ -101,24 +101,36 @@ it reads only the reserved `ideation` and `outcome` names
 
 The pairing is found the way the cascade finds connected issues: for each
 open ideation issue the engine asks which issues it blocks
-(§forgejo/client/operations) and takes the first blocked issue carrying
-the `outcome` label. A root whose tracker is missing — it blocks no
-`outcome` issue — is listed anyway, **with the tracker stated as
+(§forgejo/client/operations) and takes the first blocked issue the
+engine reads as a **tracker** — one carrying `outcome` and not
+`ideation`, the one reading the cascade and the teardown apply
+(§forgejo/decisions/unblock-cascade, §forgejo/decisions/forest-teardown).
+A blocked row carrying both kinds is another forest's root, not this
+one's tracker: decompose wins over wrap-up wherever both apply, here as
+everywhere else in the engine. A root whose tracker is missing — it
+blocks no tracker — is listed anyway, **with the tracker stated as
 absent**: a forest without its gate is exactly the situation a human
 needs to see, so the view never papers over it by dropping the row. An
 `outcome` issue that no open ideation root blocks is not a forest and is
-not listed.
+not listed. The view is a picture of what exists, not of what an order
+is about to do: an `ideation` root already carrying `teardown-forest` or
+`sync` — a forest under teardown or mid-sync — is still among the
+current forests, whatever the decompose gate makes of the same row
+(§forgejo/decisions/forest-teardown, §forgejo/decisions/sync-set).
 
 The dashboard API serves the view at `GET /api/forgejo/outcomes`. The
 response is an object carrying two things: the **forest list** and **one
 engine-status field** rendering the engine's state as the forgejo view
 does (§forgejo/observability/the-dashboard-view), so a
 configured-but-broken engine never reads as a healthy one with nothing
-to show. Each forest names its **repository**, its **root** — number,
-title, state, and HTML URL — and its **tracker** — number, title, state,
-and HTML URL — or the honest absence of one, spelled as a `null` tracker
-so the field is always present. Without the engine, or with no forests,
-the list is empty — never `null`. A read that fails — the organisation
+to show. Each forest names its **repository** — spelled as the forge's
+listing spells it — its **root** — number, title, state, repository, and
+HTML URL — and its **tracker** — the same fields, naming the repository
+the tracker itself lives in, so a tracker blocked across a repository
+boundary says where it lives rather than inheriting the root's address
+(§forgejo/client/operations) — or the honest absence of one, spelled as
+a `null` tracker so the field is always present. Without the engine, or
+with no forests, the list is empty — never `null`. A read that fails — the organisation
 listing, an issue listing, or a blocks read — answers `500`, because a
 failed read must not read as an empty set of forests; only the honest
 empty answers `200` with an empty list. A method other than GET answers
