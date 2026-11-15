@@ -112,45 +112,31 @@ func (e *Engine) tryRefreshScopeCache() error {
 	return nil
 }
 
-// ensureScopeFresh refreshes the scope cache when it is older than one
-// reconcile interval — the preamble every scope-cache reader shares, so
-// the event path's role lookup and the outcomes view's enumeration can
-// never disagree about freshness
-// (§forgejo/webhook/the-scope-cache). Concurrent readers single-flight
-// on refreshMu and re-check staleness under it, so a burst costs one
-// listing rather than one each. A non-nil error means the listing
-// failed; the caller acts only on the error, never on the stale
-// snapshot.
-func (e *Engine) ensureScopeFresh() error {
+// freshScope returns the scope snapshot, refreshing the cache first
+// when it is older than one reconcile interval: the whole fresh-scope
+// read every scope-cache reader shares, so the event path's role lookup
+// and the outcomes view's enumeration can never disagree about
+// freshness, no reader can act on a stale snapshot, and the
+// failure-backoff rule lives in exactly one place
+// (§forgejo/webhook/the-scope-cache). Concurrent readers finding the
+// cache stale single-flight on refreshMu and re-check staleness under
+// it, so a burst costs one listing rather than one each. The returned
+// map is the snapshot itself: refreshScopeCache replaces it whole and
+// never mutates a published snapshot in place, so it stays safe to read
+// after the lock is released. A non-nil error means scope is unknown —
+// the listing failed, or a failure is waiting out the retry backoff
+// with the snapshot gone stale — the latter answering
+// errScopeUnavailable; the caller acts only on the error, never on an
+// empty result misread as "no repositories".
+func (e *Engine) freshScope() (map[string]roles, error) {
 	if e.scopeNeedsRefresh() {
 		e.refreshMu.Lock()
 		defer e.refreshMu.Unlock()
 		if e.scopeNeedsRefresh() {
 			if err := e.tryRefreshScopeCache(); err != nil {
-				return err
+				return nil, err
 			}
 		}
-	}
-	return nil
-}
-
-// freshScope returns the scope snapshot, refreshing the cache first
-// when it is older than one reconcile interval: the whole fresh-scope
-// read every scope-cache reader shares, so no reader can act on a stale
-// snapshot and the failure-backoff rule lives in exactly one place
-// (§forgejo/webhook/the-scope-cache). Concurrent readers finding the
-// cache stale share one listing — they wait on refreshMu and re-check
-// staleness under it, in ensureScopeFresh. The returned map is the
-// snapshot itself: refreshScopeCache replaces it whole and never
-// mutates a published snapshot in place, so it stays safe to read after
-// the lock is released. A non-nil error means scope is unknown — the
-// listing failed, or a failure is waiting out the retry backoff with
-// the snapshot gone stale — the latter answering errScopeUnavailable;
-// the caller acts only on the error, never on an empty result misread
-// as "no repositories".
-func (e *Engine) freshScope() (map[string]roles, error) {
-	if err := e.ensureScopeFresh(); err != nil {
-		return nil, err
 	}
 	e.scopeMu.Lock()
 	defer e.scopeMu.Unlock()
