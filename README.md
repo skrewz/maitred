@@ -219,12 +219,15 @@ templates via `.ID`.
 
 The Forgejo engine sets a dedup key on every dispatch — the dispatch
 identity: the issue/PR, the action, and the revision — so a re-dispatch of
-the same `(action, revision)` (for example, after a failed watermark save) is
-squelched by hotelier while the first task is still pending. Each dispatch
-also names its work: the title reads as the action's verb, the issue or PR
-title and the `repo#number` reference (for example, `Review: Make everything
-awesome and pink (org/repo#1337)`), and the URL points at the pull request
-where the dispatch carries one and the issue otherwise. Trigger-based
+the same `(action, revision)` is squelched by hotelier while the first task is
+still pending. On the watermark-exempt `merge-or-wait` row that pending-task
+dedup — not the watermark, which the row ignores — is what keeps one ready pull
+request to one merge task in flight, the engine's own re-fire bound spacing that
+head to at most one dispatch per `reconcile_interval` on every path. Each
+dispatch also names its work: the title reads as the action's verb, the issue
+or PR title and the `repo#number` reference (for example, `Review: Make
+everything awesome and pink (org/repo#1337)`), and the URL points at the pull
+request where the dispatch carries one and the issue otherwise. Trigger-based
 dispatches leave the key empty, which disables de-duplication, and set no
 title or URL.
 
