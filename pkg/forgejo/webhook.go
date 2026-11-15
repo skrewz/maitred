@@ -94,13 +94,17 @@ type Engine struct {
 	refreshMu sync.Mutex
 
 	// The forest snapshot: the current forests as the last sweep tick
-	// enumerated them, and the error the most recent enumeration
-	// failed with — nil alongside a set only for as long as that set
-	// is what the engine can vouch for. The outcomes view is served
-	// from here, never from the request path
+	// enumerated them, the moment that enumeration landed, and the
+	// error the most recent enumeration failed with — nil alongside a
+	// set only for as long as that set is what the engine can vouch
+	// for. The age of the stamp is what bounds how long a set is served
+	// as fresh, so that bound lives in the view rather than depending
+	// on every sweep path reaching the step that records the set. The
+	// outcomes view is served from here, never from the request path
 	// (§forgejo/observability/the-outcomes-view).
 	forestsMu   sync.Mutex
 	forestsSnap []Forest
+	forestsAt   time.Time
 	forestsErr  error
 
 	// The re-fire bound: the last landed singleton dispatch per key and

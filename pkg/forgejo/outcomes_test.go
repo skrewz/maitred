@@ -456,3 +456,56 @@ func TestForests_SweepTickRecordsTheView(t *testing.T) {
 		t.Errorf("forests = %+v, want the sweep to have recorded the paired forest", forests)
 	}
 }
+
+// TestForests_SnapshotAgesOutFailsClosed: a forge that becomes
+// unreachable makes the sweep return at its first step, so no
+// enumeration is recorded at all — and the set recorded before the
+// outage must stop being served as fresh once it is older than one
+// reconcile interval. The bound is the view's own, applied when the set
+// is read, exactly as the scope cache bounds its snapshot
+// (§forgejo/webhook/the-scope-cache,
+// §forgejo/observability/the-outcomes-view,
+// §forgejo/reconciliation/the-sweep).
+func TestForests_SnapshotAgesOutFailsClosed(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	root := outcomesRoot(51, "root")
+	tracker := outcomesTracker(71, "tracker")
+	api.openIssues["out"] = []Issue{root, tracker}
+	api.blocks[51] = []Issue{tracker}
+
+	eng.Reconcile()
+	if _, err := eng.Forests(); err != nil {
+		t.Fatalf("Forests after the first sweep: %v", err)
+	}
+
+	// The forge becomes unreachable: every later sweep fails at the
+	// organisation listing and never reaches step 4, so nothing
+	// records a set and nothing marks the view failed.
+	api.listReposErr = errors.New("forge unreachable")
+	eng.Reconcile()
+	if _, err := eng.Forests(); err != nil {
+		t.Errorf("Forests during the outage = %v, want the set still served while it is younger than one interval", err)
+	}
+
+	// Past one interval with nothing recorded, the engine can no
+	// longer vouch for the set it holds.
+	eng.forestsMu.Lock()
+	eng.forestsAt = time.Now().Add(-eng.cfg.ReconcileInterval - time.Minute)
+	eng.forestsMu.Unlock()
+
+	forests, err := eng.Forests()
+	if !errors.Is(err, errForestsStale) {
+		t.Errorf("Forests err = %v, want errForestsStale: an aged set is never served as fresh", err)
+	}
+	if forests != nil {
+		t.Errorf("forests = %+v, want nil alongside the stale error", forests)
+	}
+
+	// A sweep that reaches its fourth step again refreshes the stamp.
+	api.listReposErr = nil
+	eng.Reconcile()
+	if forests, err := eng.Forests(); err != nil || len(forests) != 1 {
+		t.Errorf("Forests = %+v, %v, want a successful sweep to recover the view", forests, err)
+	}
+}

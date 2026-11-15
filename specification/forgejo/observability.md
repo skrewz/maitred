@@ -136,13 +136,18 @@ boundary says where it lives rather than inheriting the root's address
 (§forgejo/client/operations) — or the honest absence of one, spelled as
 a `null` tracker so the field is always present. Without the engine, or
 with no forests, the list is empty — never `null`. A view the engine
-cannot vouch for — no sweep's enumeration has landed yet, or the most
+cannot vouch for — no sweep's enumeration has landed yet, the most
 recent one failed (the organisation listing, an issue listing, or a
-blocks read) — answers `500` rather than an empty list or a stale set,
-because a failed read must not read as an empty set of forests and a
-set no longer vouched for is never served as if fresh: the same rule
-the scope cache applies to stale snapshots
-(§forgejo/webhook/the-scope-cache). Only the honest empty answers
+blocks read), or the set it holds has aged past one `reconcile_interval`
+without a sweep having recorded a newer one — answers `500` rather than
+an empty list or a stale set, because a failed read must not read as an
+empty set of forests and a set no longer vouched for is never served as
+if fresh: the same rule the scope cache applies to stale snapshots
+(§forgejo/webhook/the-scope-cache). The bound is the view's own, applied
+as the set is read, so a sweep that never reached the step that records
+the set — its own organisation listing having failed — ages the view out
+rather than leaving it serving what it recorded before the outage. Only
+the honest empty answers
 `200` with an empty list. The `500` carries a fixed
 sentence and the read's detail goes to the log: raw forge error text
 carries repository names and forge response bodies a caller need not be

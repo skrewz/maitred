@@ -3,6 +3,7 @@ package forgejo
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 // The outcomes view: the current forests of the organisation, enumerated
@@ -130,6 +131,18 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 // (§forgejo/observability/the-outcomes-view).
 var errForestsUnavailable = errors.New("forests not yet enumerated")
 
+// errForestsStale reports that the recorded forest set has aged past
+// one reconcile interval without a sweep having recorded a newer one —
+// typically because the sweep returned at the organisation listing it
+// starts with and never reached the step that records the set
+// (§forgejo/reconciliation/the-sweep). Serving the set then would hand
+// out as fresh what the engine has not re-read since the forge went
+// unreachable, so the view answers stale instead: the same bound the
+// scope cache puts on its own snapshot
+// (§forgejo/webhook/the-scope-cache,
+// §forgejo/observability/the-outcomes-view).
+var errForestsStale = errors.New("forest enumeration is stale")
+
 // Forests returns the outcomes view as the last sweep tick recorded it:
 // the dashboard's picture of the current forests, served from memory
 // the way Tracked serves the decisions the engine holds
@@ -139,11 +152,16 @@ var errForestsUnavailable = errors.New("forests not yet enumerated")
 // snapshot in place, so it stays safe to read after the lock is
 // released, and the caller must not modify it. A non-nil error means
 // the view cannot be vouched for — the most recent sweep's enumeration
-// failed (that error, so the caller can log which read broke), or no
-// enumeration has landed yet (errForestsUnavailable). Either way the
-// result is nil: like the scope cache, the view never acts on a set it
-// can no longer stand behind
-// (§forgejo/webhook/the-scope-cache).
+// failed (that error, so the caller can log which read broke), no
+// enumeration has landed yet (errForestsUnavailable), or the recorded
+// set has aged past one reconcile interval without being refreshed
+// (errForestsStale). Either way the result is nil: like the scope
+// cache, the view never acts on a set it can no longer stand behind
+// (§forgejo/webhook/the-scope-cache). The bound is applied as the set
+// is read rather than left to every sweep path to mark it, so a sweep
+// that returns before the step that records the set — a forge too
+// unreachable to list the organisation — leaves the view saying it is
+// stale rather than serving the pre-outage set as if fresh.
 func (e *Engine) Forests() ([]Forest, error) {
 	e.forestsMu.Lock()
 	defer e.forestsMu.Unlock()
@@ -153,6 +171,9 @@ func (e *Engine) Forests() ([]Forest, error) {
 	if e.forestsSnap == nil {
 		return nil, errForestsUnavailable
 	}
+	if time.Since(e.forestsAt) > e.cfg.ReconcileInterval {
+		return nil, errForestsStale
+	}
 	return e.forestsSnap, nil
 }
 
@@ -160,12 +181,14 @@ func (e *Engine) Forests() ([]Forest, error) {
 // outcomes view; Reconcile calls it on every tick and manual start, so
 // the view's cost is per interval rather than per request
 // (§forgejo/observability/the-outcomes-view). A successful enumeration
-// replaces the snapshot whole and clears any earlier failure; a failed
-// one keeps the last set but records the error, so the view answers
-// that error — not a stale set served as if fresh — until a later sweep
-// enumerates again. The scope cache is refreshed by the sweep itself
-// just before, so the walk rides the listing the sweep already made
-// fresh and costs no organisation listing of its own
+// replaces the snapshot whole, stamps the moment it landed and clears
+// any earlier failure; a failed one keeps the last set but records the
+// error, so the view answers that error — not a stale set served as if
+// fresh — until a later sweep enumerates again. A set no sweep refreshed
+// goes stale on its own, in Forests, without anything here having to
+// notice it. The scope cache is refreshed by the sweep itself just
+// before, so the walk rides the listing the sweep already made fresh
+// and costs no organisation listing of its own
 // (§forgejo/webhook/the-scope-cache).
 func (e *Engine) recordForests() {
 	forests, err := e.enumerateForests()
@@ -177,7 +200,7 @@ func (e *Engine) recordForests() {
 	if err != nil {
 		e.forestsErr = err
 	} else {
-		e.forestsSnap, e.forestsErr = forests, nil
+		e.forestsSnap, e.forestsAt, e.forestsErr = forests, time.Now(), nil
 	}
 	e.forestsMu.Unlock()
 }

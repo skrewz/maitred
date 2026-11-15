@@ -322,8 +322,10 @@ func (s *Server) handleForgejo(w http.ResponseWriter, r *http.Request) {
 // nothing to show (§forgejo/observability/the-dashboard-view). Without
 // the engine, or with no forests, the list is empty — never null. A
 // view the engine cannot vouch for — no sweep has enumerated it yet,
-// or the last enumeration failed — answers 500 rather than an empty
-// list or a stale set: a failed read must not read as "no forests".
+// the last enumeration failed, or the recorded set has aged past one
+// reconcile interval without a sweep refreshing it — answers 500 rather
+// than an empty list or a stale set: a failed read must not read as
+// "no forests".
 // The 500 carries a fixed sentence and the read's detail goes to the
 // log — this port authenticates nothing, and raw forge error text
 // names repositories a stranger should not enumerate

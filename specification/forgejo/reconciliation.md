@@ -49,7 +49,11 @@ created while the engine was down.
    (§forgejo/observability/the-outcomes-view). This is why the sweep,
    not an API request, pays the view's reads; a failed enumeration
    leaves the view saying so rather than serving a set it can no
-   longer vouch for (§forgejo/webhook/the-scope-cache).
+   longer vouch for (§forgejo/webhook/the-scope-cache). The set carries
+   the moment it was recorded, and the view serves it for at most one
+   reconcile interval, so a sweep that returns before this step — the
+   organisation listing of step 1 having failed — ages the view out
+   instead of leaving it serving the set recorded before the outage.
 
 The synthetic event carries no sender.
 
