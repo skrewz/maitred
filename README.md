@@ -407,8 +407,9 @@ How a change lands: a pull request lands only when all three review lenses
 hold an undismissed approval at the same head, as specified in
 [§forgejo/decisions/review-lenses](specification/forgejo/decisions.md#review-lenses).
 That is necessary but not sufficient: the merge gate also refuses a connected
-issue with an open blocker, and an approved pull request without the
-`agentic-auto-merge` opt-in waits on a human
+issue with an open blocker, and an approved pull request whose work carries no
+`agentic-auto-merge` opt-in — on the pull request or on the issue it delivers —
+waits on a human
 ([§forgejo/decisions/merge-gate](specification/forgejo/decisions.md#merge-gate)).
 As a second line of defence behind the engine's gate, the forge requires three
 approving reviews on `main` through branch protection.
