@@ -33,7 +33,12 @@ type ForestIssue struct {
 // dropped (§forgejo/observability/the-outcomes-view).
 type Forest struct {
 	// Repository is the full name of the outcomes repository the root
-	// was found in, spelled as the forge's listing spells it.
+	// was found in, spelled as the forge's listing spells it. It is the
+	// root's own row resolved once (forestIssue), so the two can never
+	// disagree. It is spelled at this level because the brief names a
+	// forest by where it grew; the root's row keeps its own because
+	// ForestIssue is the tracker's shape too, and there the repository
+	// genuinely varies (§forgejo/observability/the-outcomes-view).
 	Repository string `json:"repository"`
 	// Root is the open ideation issue the forest grew from.
 	Root ForestIssue `json:"root"`
@@ -99,21 +104,18 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 			if issue.IsPull || !hasLabel(issue, LabelIdeation) {
 				continue
 			}
-			full := issue.Repository
-			if full == "" {
-				full = entered
-			}
-			forest := Forest{Repository: full, Root: forestIssue(*issue, full)}
+			root := forestIssue(*issue, entered)
+			forest := Forest{Repository: root.Repository, Root: root}
 			blocked, err := e.api.IssueBlocks(owner, name, issue.Number)
 			if err != nil {
-				return nil, fmt.Errorf("forgejo: outcomes: issues %s#%d blocks: %w", full, issue.Number, err)
+				return nil, fmt.Errorf("forgejo: outcomes: issues %s#%d blocks: %w", root.Repository, issue.Number, err)
 			}
 			for k := range blocked {
 				b := &blocked[k]
 				if b.IsPull || !isTracker(b) {
 					continue
 				}
-				tracker := forestIssue(*b, full)
+				tracker := forestIssue(*b, entered)
 				forest.Tracker = &tracker
 				break
 			}
