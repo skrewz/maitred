@@ -130,8 +130,9 @@ names its **repository** — spelled as the forge's listing spells it,
 falling back to the scope cache's lowercased key where a listing row
 omits it — its **root** — number, title, state, repository, and HTML URL
 — and its **tracker** — the same fields, naming the repository the
-tracker itself lives in, so a tracker blocked across a repository
-boundary says where it lives rather than inheriting the root's address
+tracker itself lives in, a blocks row listing none living where the
+root does, so a tracker blocked across a repository boundary says where
+it lives rather than inheriting the root's address
 (§forgejo/client/operations) — or the honest absence of one, spelled as
 a `null` tracker so the field is always present. Without the engine, or
 with no forests, the list is empty — never `null`: an enumeration that

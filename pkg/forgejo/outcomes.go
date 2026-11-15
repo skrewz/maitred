@@ -50,9 +50,11 @@ type Forest struct {
 
 // forestIssue slims an issue to its row in the view. The row names the
 // repository the issue's own read carries — the forge's listing
-// spelling — falling back to the repository the walk entered, whose
-// scope-cache key is lowercased; the fallback keeps rows honest when a
-// listing omits the field (§forgejo/client/operations).
+// spelling — and falls back to the address the caller supplies when a
+// listing omits the field: the repository the walk entered for a root
+// row, and where the root lives for a row read from the root's blocks
+// — the same rule the digest applies to that row
+// (§forgejo/client/operations, §forgejo/decisions/actionable-state-digest).
 func forestIssue(i Issue, fallback string) ForestIssue {
 	repo := i.Repository
 	if repo == "" {
@@ -115,7 +117,7 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 				if b.IsPull || !isTracker(b) {
 					continue
 				}
-				tracker := forestIssue(*b, entered)
+				tracker := forestIssue(*b, root.Repository)
 				forest.Tracker = &tracker
 				break
 			}

@@ -337,7 +337,10 @@ func TestForests_CrossRepoTrackerStatesRepository(t *testing.T) {
 // TestForests_RepositorySpellingFollowsTheListing: the scope cache is
 // keyed on lowercased full names, but the view names a repository as
 // the forge's listing spells it, the way every other engine read names
-// it (§forgejo/client/operations, §forgejo/webhook/the-scope-cache,
+// it — and a tracker row that lists no repository lives where the root
+// does, the digest's rule for the same row, so one forest never spells
+// one repository two ways
+// (§forgejo/client/operations, §forgejo/webhook/the-scope-cache,
 // §forgejo/observability/the-outcomes-view).
 func TestForests_RepositorySpellingFollowsTheListing(t *testing.T) {
 	eng, api, _, _ := newTestEngine(t)
@@ -347,7 +350,9 @@ func TestForests_RepositorySpellingFollowsTheListing(t *testing.T) {
 	tracker := outcomesTracker(71, "tracker")
 	tracker.Repository = "o/Out"
 	api.openIssues["out"] = []Issue{root, tracker}
-	api.blocks[51] = []Issue{tracker}
+	blocksRow := tracker
+	blocksRow.Repository = "" // the blocks listing may omit the field
+	api.blocks[51] = []Issue{blocksRow}
 
 	forests, err := eng.enumerateForests()
 	if err != nil {
@@ -360,7 +365,7 @@ func TestForests_RepositorySpellingFollowsTheListing(t *testing.T) {
 		t.Errorf("repository = %q root.repository = %q, want the listing's spelling o/Out, not the scope cache's lowercase", forests[0].Repository, forests[0].Root.Repository)
 	}
 	if forests[0].Tracker == nil || forests[0].Tracker.Repository != "o/Out" {
-		t.Errorf("tracker = %+v, want its repository spelled o/Out", forests[0].Tracker)
+		t.Errorf("tracker = %+v, want its repository spelled o/Out: a blocks row listing none lives where the root does, not at the scope cache's lowercased key", forests[0].Tracker)
 	}
 }
 
