@@ -319,7 +319,11 @@ func (s *Server) handleForgejo(w http.ResponseWriter, r *http.Request) {
 // (§forgejo/observability/the-dashboard-view). Without the engine, or
 // with no forests, the list is empty — never null. A read that fails
 // answers 500 rather than an empty list: a failed read must not read as
-// "no forests". Any method other than GET answers 405.
+// "no forests". The 500 carries a fixed sentence and the read's detail
+// goes to the log — this port authenticates nothing, and raw forge
+// error text names repositories a stranger should not enumerate
+// (§forgejo/observability/why-the-engine-is-off). Any method other
+// than GET answers 405.
 func (s *Server) handleForgejoOutcomes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -329,7 +333,8 @@ func (s *Server) handleForgejoOutcomes(w http.ResponseWriter, r *http.Request) {
 	if s.forgejoEng != nil {
 		f, err := s.forgejoEng.Forests()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.log.Printf("outcomes view: forest enumeration failed: %v", err)
+			http.Error(w, "outcomes read failed", http.StatusInternalServerError)
 			return
 		}
 		forests = f

@@ -133,8 +133,12 @@ a `null` tracker so the field is always present. Without the engine, or
 with no forests, the list is empty — never `null`. A read that fails — the organisation
 listing, an issue listing, or a blocks read — answers `500`, because a
 failed read must not read as an empty set of forests; only the honest
-empty answers `200` with an empty list. A method other than GET answers
-`405`.
+empty answers `200` with an empty list. The `500` carries a fixed
+sentence and the read's detail goes to the log: raw forge error text
+carries repository names and forge response bodies a caller need not be
+entitled to, and this port authenticates nothing
+(§forgejo/observability/why-the-engine-is-off). A method other than GET
+answers `405`.
 
 ## Triggering a sweep
 

@@ -520,12 +520,15 @@ func outcomesStubAPI() *stubForgejoAPI {
 }
 
 // forestIssueJSON mirrors one issue row of a forest in the outcomes
-// view (§forgejo/observability/the-outcomes-view).
+// view: number, title, state, HTML URL, and the repository the issue
+// lives in — stated per row, because a tracker may sit outside the
+// repository the forest grew in (§forgejo/observability/the-outcomes-view).
 type forestIssueJSON struct {
-	Number  int    `json:"number"`
-	Title   string `json:"title"`
-	State   string `json:"state"`
-	HTMLURL string `json:"html_url"`
+	Number     int    `json:"number"`
+	Repository string `json:"repository"`
+	Title      string `json:"title"`
+	State      string `json:"state"`
+	HTMLURL    string `json:"html_url"`
 }
 
 // forestJSON mirrors one forest of the outcomes view: the repository,
@@ -596,6 +599,9 @@ func TestForgejoOutcomesEndpoint(t *testing.T) {
 	if paired.Root.Title != "UI for human review" || paired.Root.State != "open" || paired.Root.HTMLURL == "" {
 		t.Errorf("root = %+v, want ideation issue 51 with its fields", paired.Root)
 	}
+	if paired.Root.Repository != "o/out" || (paired.Tracker != nil && paired.Tracker.Repository != "o/out") {
+		t.Errorf("rows = %+v, want each row to state the repository the issue lives in", paired)
+	}
 	if paired.Tracker == nil {
 		t.Fatal("tracker = nil, want the outcome issue the root blocks")
 	}
@@ -605,41 +611,17 @@ func TestForgejoOutcomesEndpoint(t *testing.T) {
 	if lone.Tracker != nil {
 		t.Errorf("root 52 tracker = %+v, want the absence stated", lone.Tracker)
 	}
+	// The stated absence is spelled as a null in the body, not omitted:
+	// one check inside the shape test, since root 52 already stands
+	// here for the case (§forgejo/observability/the-outcomes-view).
+	if !strings.Contains(rec.Body.String(), `"tracker":null`) {
+		t.Errorf("body %s, want the absent tracker spelled as null", rec.Body.String())
+	}
 	// The open tracker is no forest of its own: only roots are listed.
 	for _, f := range view.Forests {
 		if f.Root.Number == 71 {
 			t.Error("the tracker stands as a forest of its own")
 		}
-	}
-}
-
-// TestForgejoOutcomesEndpoint_MissingTrackerStated: a root whose tracker
-// is absent is listed with the tracker spelled as a null — the absence
-// stated, not papered over (§forgejo/observability/the-outcomes-view).
-func TestForgejoOutcomesEndpoint_MissingTrackerStated(t *testing.T) {
-	api := outcomesStubAPI()
-	api.blocks = nil
-	fjEng := newForgejoEngine(t, api)
-	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
-	rec := getOutcomes(t, srv)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	var view outcomesViewJSON
-	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(view.Forests) != 2 {
-		t.Fatalf("forests = %d, want both roots listed", len(view.Forests))
-	}
-	for _, f := range view.Forests {
-		if f.Tracker != nil {
-			t.Errorf("root %d tracker = %+v, want the absence stated", f.Root.Number, f.Tracker)
-		}
-	}
-	if !strings.Contains(rec.Body.String(), `"tracker":null`) {
-		t.Errorf("body %s, want the absent tracker spelled as null", rec.Body.String())
 	}
 }
 
@@ -669,8 +651,12 @@ func TestForgejoOutcomesEndpoint_Disabled(t *testing.T) {
 }
 
 // TestForgejoOutcomesEndpoint_ReadFailure: a view whose reads fail
-// answers 500, not an empty list a caller could read as "no forests"
-// (§forgejo/observability/the-outcomes-view).
+// answers 500, not an empty list a caller could read as "no forests" —
+// and the 500 carries a fixed sentence, not the client's raw error
+// text: this port authenticates nothing, and the raw text names
+// repositories and forge response bodies a stranger should not read
+// (§forgejo/observability/the-outcomes-view,
+// §forgejo/observability/why-the-engine-is-off).
 func TestForgejoOutcomesEndpoint_ReadFailure(t *testing.T) {
 	api := outcomesStubAPI()
 	api.reposErr = fmt.Errorf("org listing down")
@@ -680,6 +666,9 @@ func TestForgejoOutcomesEndpoint_ReadFailure(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if body := rec.Body.String(); strings.Contains(body, "org listing down") || !strings.Contains(body, "outcomes read failed") {
+		t.Errorf("body %q, want the fixed sentence and no raw forge error text", body)
 	}
 }
 
