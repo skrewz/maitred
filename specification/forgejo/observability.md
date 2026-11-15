@@ -140,6 +140,21 @@ entitled to, and this port authenticates nothing
 (§forgejo/observability/why-the-engine-is-off). A method other than GET
 answers `405`.
 
+Serving the view costs live reads: one organisation listing when the
+scope cache is stale, one issue listing per outcomes repository, and
+one blocks read per open ideation root — the first dashboard read that
+spends the engine's forge token on the request path instead of
+answering from memory. It therefore rides the dashboard's standing
+trust model — an endpoint reachable by anyone who can reach the port,
+which is meant to reach only its operator's network
+(§forgejo/observability/triggering-a-sweep, README Web Dashboard).
+Whoever wires the next surface on this payload — the `/outcomes` page,
+which would re-read it on a timer — picks its poll interval knowing
+this cost, or moves the enumeration onto the sweep tick and serves the
+last snapshot the way the tracked view does
+(§forgejo/observability/the-dashboard-view); that is a decision for
+that change, not an accident of this one.
+
 ## Triggering a sweep
 
 The sweeps are the backstop for deliveries the event path missed, and a
