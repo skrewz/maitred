@@ -95,6 +95,7 @@ func TestRenderGoldens(t *testing.T) {
 	collapsed := Graph{
 		Root: Node{Ref: ref("example/forest", 1), Summary: "ideation", HTMLURL: "https://example.com/forest/issues/1"},
 		Members: []Node{
+			{Ref: ref("example/outcomes", 30), Role: RoleTracker, Summary: "outcomes tracker", HTMLURL: "https://example.com/outcomes/issues/30"},
 			{Ref: ref("example/outcomes", 21), Summary: "later outcomes work", HTMLURL: "https://example.com/outcomes/issues/21"},
 			{Ref: ref("example/tasks", 12), Summary: "third tasks work", HTMLURL: "https://example.com/tasks/issues/12"},
 			{Ref: ref("example/outcomes", 20), Summary: "first outcomes work", HTMLURL: "https://example.com/outcomes/issues/20"},
@@ -102,6 +103,7 @@ func TestRenderGoldens(t *testing.T) {
 			{Ref: ref("example/tasks", 11), Summary: "second tasks work", HTMLURL: "https://example.com/tasks/issues/11"},
 		},
 		Edges: []Edge{
+			{From: ref("example/forest", 1), To: ref("example/outcomes", 30)},
 			{From: ref("example/forest", 1), To: ref("example/tasks", 10)},
 			{From: ref("example/forest", 1), To: ref("example/tasks", 11)},
 			{From: ref("example/forest", 1), To: ref("example/tasks", 12)},
@@ -192,6 +194,41 @@ func TestRenderIsDeterministic(t *testing.T) {
 	if shuffled != first {
 		t.Errorf("the order the rows were gathered in moved the source:\n%s\n---\n%s", first, shuffled)
 	}
+
+	// Two work-order edges out of one issue are the joint the tie-break holds:
+	// they come out of a map, so their order is the sorting's, not the graph's.
+	// Rendering one such graph with its edges gathered each way round must give
+	// one source, run after run (§forgejo/renderer/determinism).
+	forked := simpleForest()
+	forked.Members = append(forked.Members, Node{
+		Ref:     ref("example/tasks", 185),
+		Summary: "fifth tasks work",
+		HTMLURL: url("tasks", 185),
+	})
+	forked.Edges = append(forked.Edges,
+		Edge{From: ref("example/outcomes", 63), To: ref("example/tasks", 185)},
+		Edge{From: ref("example/tasks", 182), To: ref("example/tasks", 185)},
+	)
+	forkedSource := ""
+	for i := range 10 {
+		graph := forked
+		if i%2 == 1 {
+			for a, b := 0, len(graph.Edges)-1; a < b; a, b = a+1, b-1 {
+				graph.Edges[a], graph.Edges[b] = graph.Edges[b], graph.Edges[a]
+			}
+		}
+		got, err := Render(graph, cfg)
+		if err != nil {
+			t.Fatalf("Render with two edges from one source: %v", err)
+		}
+		if !strings.Contains(got, "i_tasks_182 ==> i_tasks_183") || !strings.Contains(got, "i_tasks_182 ==> i_tasks_185") {
+			t.Fatalf("both work-order edges out of tasks#182 were not drawn:\n%s", got)
+		}
+		if forkedSource != "" && got != forkedSource {
+			t.Fatalf("two work-order edges from one source came out in another order:\n%s\n---\n%s", forkedSource, got)
+		}
+		forkedSource = got
+	}
 }
 
 // TestNodeID folds the repository's non-alphanumerics to underscores and keeps
@@ -202,10 +239,10 @@ func TestNodeID(t *testing.T) {
 		repo string
 		want string
 	}{
-		{"s-git/s-outcomes", "i_s_outcomes_182"},
-		{"s-git/maitred", "i_maitred_182"},
-		{"S-Git/Mai.Tred", "i_mai_tred_182"},
-		{"maitred", "i_maitred_182"},
+		{"example/out-comes", "i_out_comes_182"},
+		{"example/nothing", "i_nothing_182"},
+		{"Ex-Am/No.Things", "i_no_things_182"},
+		{"nothing", "i_nothing_182"},
 	} {
 		graph := Graph{
 			Root:    Node{Ref: ref(tt.repo, 182), HTMLURL: "https://example.com/x/issues/182"},
@@ -387,6 +424,36 @@ func TestSyncCarriesItsMembers(t *testing.T) {
 	}
 }
 
+// TestSelfEdgeStatesNothing: an issue blocking itself is drawn nowhere, and the
+// reduction never reads that edge as a cycle (§forgejo/renderer/edge-classes).
+func TestSelfEdgeStatesNothing(t *testing.T) {
+	t.Parallel()
+	graph := Graph{
+		Root: Node{Ref: ref("example/forest", 1), Summary: "ideation", HTMLURL: "https://example.com/forest/issues/1"},
+		Members: []Node{
+			{Ref: ref("example/forest", 2), Summary: "second", HTMLURL: "https://example.com/forest/issues/2"},
+			{Ref: ref("example/forest", 3), Summary: "third", HTMLURL: "https://example.com/forest/issues/3"},
+		},
+		Edges: []Edge{
+			{From: ref("example/forest", 1), To: ref("example/forest", 2)},
+			{From: ref("example/forest", 1), To: ref("example/forest", 3)},
+			{From: ref("example/forest", 2), To: ref("example/forest", 2)},
+			{From: ref("example/forest", 2), To: ref("example/forest", 3)},
+		},
+		Strokes: strokes(),
+	}
+	got, err := Render(graph, wideCeiling())
+	if err != nil {
+		t.Fatalf("Render with a self edge: %v", err)
+	}
+	if strings.Contains(got, "i_forest_2 ==> i_forest_2") {
+		t.Errorf("an issue's edge to itself was drawn:\n%s", got)
+	}
+	if !strings.Contains(got, "i_forest_2 ==> i_forest_3") {
+		t.Errorf("the self edge displaced the edge that states something:\n%s", got)
+	}
+}
+
 // TestNoTransitiveEdge drops the direct edge a path already states
 // (§forgejo/renderer/edge-classes).
 func TestNoTransitiveEdge(t *testing.T) {
@@ -531,7 +598,7 @@ func TestLabelEscapesFreeText(t *testing.T) {
 		`>fo&lt;re&quot;st#2 · here</a>`,
 	} {
 		if !strings.Contains(got, want) {
-			t.Errorf("want %q, got:\n%s", want, got)
+			t.Errorf("want %q in the source, got:\n%s", want, got)
 		}
 	}
 	if strings.Contains(got, "<tests>") || strings.Contains(got, `fo<re"st`) {
@@ -716,6 +783,24 @@ func TestRenderErrors(t *testing.T) {
 			graph: Graph{Root: one, Edges: []Edge{{From: one.Ref, To: ref("example/forest", 99)}}, Strokes: strokes()},
 			cfg:   cfg,
 			want:  "forest#99",
+		},
+		{
+			name:  "edge from an issue the graph holds no node for",
+			graph: Graph{Root: one, Edges: []Edge{{From: ref("example/forest", 99), To: one.Ref}}, Strokes: strokes()},
+			cfg:   cfg,
+			want:  "forest#99",
+		},
+		{
+			name:  "a node naming no issue by number",
+			graph: Graph{Root: Node{Ref: ref("example/forest", 0), HTMLURL: one.HTMLURL}, Strokes: strokes()},
+			cfg:   cfg,
+			want:  "names no issue",
+		},
+		{
+			name:  "a node naming no repository",
+			graph: Graph{Root: Node{Ref: ref("", 1), HTMLURL: one.HTMLURL}, Strokes: strokes()},
+			cfg:   cfg,
+			want:  "names no issue",
 		},
 		{
 			name:  "a repository name carrying a control character",
