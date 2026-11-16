@@ -77,7 +77,6 @@ func checkStrokes(s Strokes) error {
 		{"tracker", s.Tracker},
 		{"member", s.Member},
 		{"closed", s.Closed},
-		{"closed fill", s.ClosedFill},
 	} {
 		if !isHex(stroke.hex) {
 			return fmt.Errorf("renderer: the %s stroke %q is not a #rrggbb read from a label", stroke.class, stroke.hex)

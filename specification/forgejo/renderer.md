@@ -133,6 +133,10 @@ classDef member stroke:#<hex>
 classDef closed stroke:#<hex>,stroke-dasharray:4 3,fill:#<hex>,fill-opacity:0.25
 ```
 
+Four classes, four hexes: the `closed` dim's `fill` carries the same hex as
+its own `stroke`, so no fifth hex — which no role label could have supplied
+— travels in with the graph.
+
 A node carries exactly one class: `root` for the root, `tracker` for a
 tracker, `member` for every other member — a human task included, whose role
 the `⚑` prefix carries — and `closed` for a closed member.

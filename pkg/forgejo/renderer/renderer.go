@@ -64,22 +64,6 @@ const (
 	RoleHumanTask
 )
 
-// String names the role for an error message.
-func (r Role) String() string {
-	switch r {
-	case RoleWork:
-		return "work item"
-	case RoleTracker:
-		return "tracker"
-	case RoleSync:
-		return "sync issue"
-	case RoleHumanTask:
-		return "human task"
-	default:
-		return fmt.Sprintf("role %d", uint8(r))
-	}
-}
-
 // Ref names an issue by its repository — "owner/repo" as the forge spells it, or
 // a bare repository name — and its number. The chart names an issue by the
 // repository's bare name (§forgejo/renderer/labels) and folds that name into the
@@ -126,11 +110,10 @@ type Edge struct {
 // issue; the renderer invents none and caches none
 // (§forgejo/renderer/classes-and-strokes).
 type Strokes struct {
-	Root       string
-	Tracker    string
-	Member     string
-	Closed     string
-	ClosedFill string
+	Root    string
+	Tracker string
+	Member  string
+	Closed  string
 }
 
 // Graph is the forest: the ideation root, the rows the root reaches — trackers
@@ -224,7 +207,7 @@ func prepare(g Graph) (*forest, error) {
 
 	gate := map[string]edge{}
 	work := map[string]edge{}
-	fanPeers := map[string]map[string]bool{}
+	fanPeers := map[*node]map[string]bool{}
 	for _, row := range g.Edges {
 		from, err := lookup(byKey, row.From)
 		if err != nil {
@@ -255,10 +238,11 @@ func prepare(g Graph) (*forest, error) {
 				if tracker.role != RoleTracker || peer.id == tracker.id {
 					continue
 				}
-				if fanPeers[tracker.id] == nil {
-					fanPeers[tracker.id] = map[string]bool{}
+				if fanPeers[tracker] == nil {
+					fanPeers[tracker] = map[string]bool{}
 				}
-				fanPeers[tracker.id][peer.id] = true
+				fanPeers[tracker][peer.id] = true
+				tracker.fan = len(fanPeers[tracker])
 			}
 			continue
 		}
@@ -270,11 +254,6 @@ func prepare(g Graph) (*forest, error) {
 		return nil, err
 	}
 	position := positions(nodes)
-	for id, peers := range fanPeers {
-		if n := findNode(nodes, id); n != nil {
-			n.fan = len(peers)
-		}
-	}
 
 	// A sync issue carries the numbers of the members that block it, which is
 	// a fact of the graph's work order before any drawing economy is applied:
@@ -501,14 +480,4 @@ func values(set map[string]edge) []edge {
 		out = append(out, e)
 	}
 	return out
-}
-
-// findNode returns the node an identifier names.
-func findNode(nodes []*node, id string) *node {
-	for _, n := range nodes {
-		if n.id == id {
-			return n
-		}
-	}
-	return nil
 }

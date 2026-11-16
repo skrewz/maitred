@@ -19,11 +19,10 @@ func aedt() *time.Location { return time.FixedZone("AEDT", 11*3600) }
 
 func strokes() Strokes {
 	return Strokes{
-		Root:       "#5319e7",
-		Tracker:    "#1d76db",
-		Member:     "#6b7a8c",
-		Closed:     "#3fb950",
-		ClosedFill: "#2ea043",
+		Root:    "#5319e7",
+		Tracker: "#1d76db",
+		Member:  "#6b7a8c",
+		Closed:  "#3fb950",
 	}
 }
 
@@ -571,26 +570,6 @@ func TestCollapseNamesItself(t *testing.T) {
 	}
 }
 
-// TestRoleNames: the stringer is what a caller's reason and the renderer's
-// errors name a row with.
-func TestRoleNames(t *testing.T) {
-	t.Parallel()
-	for _, tt := range []struct {
-		role Role
-		want string
-	}{
-		{RoleWork, "work item"},
-		{RoleTracker, "tracker"},
-		{RoleSync, "sync issue"},
-		{RoleHumanTask, "human task"},
-		{Role(9), "role 9"},
-	} {
-		if got := tt.role.String(); got != tt.want {
-			t.Errorf("role %d names itself %q, want %q", uint8(tt.role), got, tt.want)
-		}
-	}
-}
-
 // TestNoZoneIsUTC: with no location configured a close stamp is rendered in UTC
 // rather than the machine's zone (§forgejo/renderer/closed-members).
 func TestNoZoneIsUTC(t *testing.T) {
@@ -687,7 +666,7 @@ func TestRenderErrors(t *testing.T) {
 		},
 		{
 			name:  "an invented colour",
-			graph: Graph{Root: one, Strokes: Strokes{Root: "#fff", Tracker: "#1d76db", Member: "#6b7a8c", Closed: "#3fb950", ClosedFill: "#2ea043"}},
+			graph: Graph{Root: one, Strokes: Strokes{Root: "#fff", Tracker: "#1d76db", Member: "#6b7a8c", Closed: "#3fb950"}},
 			cfg:   cfg,
 			want:  "stroke",
 		},

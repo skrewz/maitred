@@ -15,7 +15,7 @@ flowchart TD
   classDef root stroke:#5319e7,stroke-width:2px
   classDef tracker stroke:#1d76db,stroke-width:2px
   classDef member stroke:#6b7a8c
-  classDef closed stroke:#3fb950,stroke-dasharray:4 3,fill:#2ea043,fill-opacity:0.25
+  classDef closed stroke:#3fb950,stroke-dasharray:4 3,fill:#3fb950,fill-opacity:0.25
   class i_s_outcomes_63 root
   class i_s_outcomes_66 tracker
   class i_maitred_182,i_maitred_184 member

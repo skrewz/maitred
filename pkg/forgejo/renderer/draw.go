@@ -45,17 +45,9 @@ func draw(f *forest, strokes Strokes, cfg Config, collapsed bool) string {
 // §forgejo/renderer/classes-and-strokes).
 func drawNodes(b *strings.Builder, f *forest, cfg Config, classes map[string][]string) {
 	for _, n := range f.nodes {
-		opening, closing := shapeOf(n)
+		opening, closing := shapeOf(n.kind)
 		fmt.Fprintf(b, "  %s%s\"%s\"%s\n", n.id, opening, n.label(cfg), closing)
-		class := "member"
-		switch {
-		case n.kind == 0:
-			class = "root"
-		case n.kind == 1:
-			class = "tracker"
-		case n.closed:
-			class = "closed"
-		}
+		class := classOf(n.kind, n.closed)
 		classes[class] = append(classes[class], n.id)
 	}
 }
@@ -101,16 +93,18 @@ func drawCollapsed(b *strings.Builder, f *forest, classes map[string][]string) {
 	for i, key := range order {
 		repo := repos[key]
 		repo.declaration = i
-		opening, closing := `[`, `]`
-		class := "member"
+		// A collapsed node's shape and class follow the roles it holds, so
+		// they ride the one shape table and the one class ladder
+		// (§forgejo/renderer/collapsing).
+		kind := 2
 		switch {
 		case repo.hasRoot:
-			opening, closing, class = `{{`, `}}`, "root"
+			kind = 0
 		case repo.hasTracker:
-			opening, closing, class = `([`, `"])`, "tracker"
-		case repo.allClosed:
-			class = "closed"
+			kind = 1
 		}
+		opening, closing := shapeOf(kind)
+		class := classOf(kind, repo.allClosed)
 		prefix := ""
 		if repo.allClosed {
 			prefix = "✅ "
@@ -179,7 +173,7 @@ func drawClasses(b *strings.Builder, strokes Strokes, classes map[string][]strin
 	fmt.Fprintf(b, "  classDef tracker stroke:%s,stroke-width:2px\n", strokes.Tracker)
 	fmt.Fprintf(b, "  classDef member stroke:%s\n", strokes.Member)
 	fmt.Fprintf(b, "  classDef closed stroke:%s,stroke-dasharray:4 3,fill:%s,fill-opacity:0.25\n",
-		strokes.Closed, strokes.ClosedFill)
+		strokes.Closed, strokes.Closed)
 	for _, class := range classOrder {
 		if members := classes[class]; len(members) > 0 {
 			fmt.Fprintf(b, "  class %s %s\n", strings.Join(members, ","), class)
@@ -187,16 +181,31 @@ func drawClasses(b *strings.Builder, strokes Strokes, classes map[string][]strin
 	}
 }
 
-// shapeOf is the shape that carries a node's role
-// (§forgejo/renderer/identifiers-and-shapes).
-func shapeOf(n *node) (opening, closing string) {
-	switch n.kind {
+// shapeOf is the shape that carries a role (§forgejo/renderer/identifiers-and-shapes).
+func shapeOf(kind int) (opening, closing string) {
+	switch kind {
 	case 0:
 		return `{{`, `}}`
 	case 1:
 		return `([`, `"])`
 	default:
 		return `[`, `]`
+	}
+}
+
+// classOf is the ladder both views take a class from: the root's, a
+// tracker's, the dim of a closed member, and member for every other role
+// (§forgejo/renderer/classes-and-strokes).
+func classOf(kind int, closed bool) string {
+	switch {
+	case kind == 0:
+		return "root"
+	case kind == 1:
+		return "tracker"
+	case closed:
+		return "closed"
+	default:
+		return "member"
 	}
 }
 
