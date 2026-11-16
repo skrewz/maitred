@@ -55,6 +55,12 @@ title and never invented: an issue's two spellings share one identifier, and a
 graph that names an issue twice — or names two issues whose identifiers fold
 together — is an error rather than a silent overwrite.
 
+The drawing's identity for a repository is its bare name read case-insensitively,
+the owner never reaching the drawing (§forgejo/renderer/labels). Two
+repositories whose bare names match — a fork or a mirror under a second owner —
+therefore could not be drawn apart by either view, and guaranteeing a forest
+holds none is the caller's work, like the graph's other facts.
+
 The shape carries the role:
 
 | Role | Shape |
@@ -217,7 +223,10 @@ it.
 And because a collapsed node stands for a whole repository, two repositories
 whose names fold to one identifier make the collapsed view an error too —
 declared under one identifier they would draw as one node, stating that one
-repository blocks itself (§forgejo/renderer/identifiers-and-shapes).
+repository blocks itself (§forgejo/renderer/identifiers-and-shapes). Two
+spellings of one repository name are no such pair: the fold equates names
+case-insensitively here, exactly as it equates an issue's two spellings there,
+so `Tasks` and `tasks` are one repository declared and one repository collapsed.
 
 ## Determinism
 
@@ -237,5 +246,5 @@ work-order cycle, a closed node with no close time, a URL that cannot be quoted
 or whose scheme is neither http nor https, a stroke hex that is not a six-digit
 `#rrggbb`, a ceiling of zero or less which
 no graph can fit, a graph whose collapsed form still exceeds that ceiling, or
-two repositories whose names fold to one identifier the collapsed view would
-have to share.
+two repositories that are not two spellings of one name yet fold to an
+identifier the collapsed view would have to share.

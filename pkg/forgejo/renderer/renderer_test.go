@@ -397,11 +397,9 @@ func TestSyncCarriesItsMembers(t *testing.T) {
 		t.Errorf("the transitive edge into the sync issue was drawn:\n%s", got)
 	}
 
-	// A tracker's blocking edges are counted into its fan and drawn nowhere, so
-	// a tracker that blocks a sync issue reaches its label too — the exception
-	// §forgejo/renderer/labels carves. Whether a tracker can block a sync issue
-	// in a real forest is a question for whoever owns the forest; if it can, this
-	// is the assertion that changes.
+	// The carve-out §forgejo/renderer/labels states. Whether a tracker can block
+	// a sync issue in a real forest is the forest owner's to answer; if it can,
+	// this is the assertion that changes.
 	tracked := Graph{
 		Root: Node{Ref: ref("example/forest", 1), Summary: "ideation", HTMLURL: "https://example.com/forest/issues/1"},
 		Members: []Node{
@@ -699,6 +697,52 @@ func TestCollapseNamesItself(t *testing.T) {
 	}
 	if strings.Contains(small, "tasks (2)</a>") || strings.Contains(small, "forest (2)</a>") {
 		t.Errorf("a collapsed node carried an anchor:\n%s", small)
+	}
+}
+
+// TestSpellingsOfOneRepositoryCollapseTogether: the fold equates names as it
+// reads them, so `Tasks` and `tasks` is one repository collapsed to one node —
+// the allowance that keeps `a-b` and `a_b`, which are two repositories, an error
+// (§forgejo/renderer/collapsing, §forgejo/renderer/identifiers-and-shapes).
+func TestSpellingsOfOneRepositoryCollapseTogether(t *testing.T) {
+	t.Parallel()
+	graph := Graph{
+		Root: Node{Ref: ref("example/forest", 1), Summary: "ideation", HTMLURL: "https://example.com/forest/issues/1"},
+		Members: []Node{
+			{Ref: ref("example/Tasks", 2), Summary: "upper spelling", HTMLURL: "https://example.com/Tasks/issues/2"},
+			{Ref: ref("example/tasks", 3), Summary: "lower spelling", HTMLURL: "https://example.com/tasks/issues/3"},
+		},
+		Edges: []Edge{
+			{From: ref("example/forest", 1), To: ref("example/Tasks", 2)},
+			{From: ref("example/forest", 1), To: ref("example/tasks", 3)},
+			{From: ref("example/Tasks", 2), To: ref("example/tasks", 3)},
+		},
+		Strokes: strokes(),
+	}
+
+	full, err := Render(graph, wideCeiling())
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(full, "i_tasks_2 ==> i_tasks_3") {
+		t.Errorf("two spellings of one repository name drew as one issue, want the work order in:\n%s", full)
+	}
+
+	// One node per repository: the two spellings share it, and the edge between
+	// their issues is an edge inside one repository, drawn nowhere
+	// (§forgejo/renderer/collapsing).
+	collapsed, err := Render(graph, Config{MaxSourceCharacters: len([]rune(full)) - 1, Location: aedt()})
+	if err != nil {
+		t.Fatalf("Render collapsed: %v", err)
+	}
+	if n := strings.Count(collapsed, "\n  i_tasks["); n != 1 {
+		t.Errorf("a repository was declared %d times, want once:\n%s", n, collapsed)
+	}
+	if !strings.Contains(collapsed, "Tasks (2)") {
+		t.Errorf("the collapsed node does not count both issues:\n%s", collapsed)
+	}
+	if strings.Contains(collapsed, "i_tasks -.-> ") || strings.Contains(collapsed, "i_tasks ==> ") {
+		t.Errorf("the collapsed view drew an edge from one repository to itself:\n%s", collapsed)
 	}
 }
 
