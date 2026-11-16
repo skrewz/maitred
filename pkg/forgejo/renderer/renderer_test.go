@@ -132,7 +132,7 @@ func TestRenderGoldens(t *testing.T) {
 		{"simple", simpleForest(), wideCeiling()},
 		{"closed-member", closed, wideCeiling()},
 		{"sync-set", syncSet, wideCeiling()},
-		{"collapsed", collapsed, Config{MaxSourceCharacters: 500, Location: aedt()}},
+		{"collapsed", collapsed, Config{MaxSourceCharacters: 600, Location: aedt()}},
 		{"tracker-fan", fanOut, wideCeiling()},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -560,14 +560,14 @@ func TestCollapseNamesItself(t *testing.T) {
 		t.Errorf("a source under the ceiling was collapsed:\n%s", full)
 	}
 
-	small, err := Render(graph, Config{MaxSourceCharacters: 400, Location: aedt()})
+	small, err := Render(graph, Config{MaxSourceCharacters: 500, Location: aedt()})
 	if err != nil {
 		t.Fatalf("Render under the ceiling: %v", err)
 	}
 	for _, want := range []string{
 		`i_forest{{"forest (2)"}}`,
 		`i_tasks["✅ tasks (2)"]`,
-		"%% collapsed to one node per repository: the source exceeds 400 characters",
+		"%% collapsed to one node per repository: the source exceeds 500 characters",
 		"  i_forest -.-> i_tasks\n",
 		"  class i_tasks closed\n",
 	} {
@@ -601,6 +601,23 @@ func TestNoZoneIsUTC(t *testing.T) {
 	if !strings.Contains(got, "closed 2026-11-14 12:11 UTC") {
 		t.Errorf("want the stamp in UTC, got:\n%s", got)
 	}
+}
+
+// manyRepos is a forest of rows in that many repositories, the shortest drawing
+// of them one node per repository: a graph whose collapsed form still runs past
+// a small ceiling (§forgejo/renderer/collapsing).
+func manyRepos(count int) Graph {
+	graph := Graph{
+		Root:    Node{Ref: ref("example/forest", 1), Summary: "ideation", HTMLURL: "https://example.com/forest/issues/1"},
+		Strokes: strokes(),
+	}
+	for i := range count {
+		repo := "example/r" + strconv.Itoa(i+2)
+		row := Node{Ref: ref(repo, i+2), Summary: "work", HTMLURL: "https://example.com/" + repo + "/issues/" + strconv.Itoa(i+2)}
+		graph.Members = append(graph.Members, row)
+		graph.Edges = append(graph.Edges, Edge{From: graph.Root.Ref, To: row.Ref})
+	}
+	return graph
 }
 
 func TestRenderErrors(t *testing.T) {
@@ -691,6 +708,12 @@ func TestRenderErrors(t *testing.T) {
 			graph: Graph{Root: Node{Ref: ref("example/fo\nrest", 1), HTMLURL: "https://example.com/forest/issues/1"}, Strokes: strokes()},
 			cfg:   cfg,
 			want:  "cannot be drawn",
+		},
+		{
+			name:  "too long even collapsed to one node per repository",
+			graph: manyRepos(60),
+			cfg:   Config{MaxSourceCharacters: 400, Location: aedt()},
+			want:  "even collapsed",
 		},
 		{
 			name:  "an invented colour",

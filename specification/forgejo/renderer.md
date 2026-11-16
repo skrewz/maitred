@@ -201,6 +201,11 @@ the graph's, not the drawing's.
 Raising the ceiling is a config decision; inventing a second, shorter drawing
 for large forests is not — one graph has one drawing at a given ceiling.
 
+Collapsing is the remedy, not a second and unbounded drawing: where even one
+node per repository exceeds the ceiling, that is an error, so a caller that
+reads the ceiling as the limit on what it may write is never handed source past
+it.
+
 ## Determinism
 
 The renderer's output depends on the graph, the ceiling and the timezone, and
@@ -216,5 +221,5 @@ graph with no root, a node that names no issue, a repository name carrying
 whitespace, two issues folding to one identifier, an edge naming an issue the
 graph holds no node for, a work-order cycle, a closed node with no close time,
 a URL that cannot be quoted or whose scheme is neither http nor https, a
-stroke hex that is not a six-digit `#rrggbb`, or a ceiling of zero or less,
-which no graph can fit.
+stroke hex that is not a six-digit `#rrggbb`, a ceiling of zero or less which
+no graph can fit, or a graph whose collapsed form still exceeds that ceiling.

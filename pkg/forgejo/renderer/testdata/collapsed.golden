@@ -1,6 +1,6 @@
 flowchart TD
 %% forest forest#1 rendered by maitred
-%% collapsed to one node per repository: the source exceeds 500 characters
+%% collapsed to one node per repository: the source exceeds 600 characters
   i_forest{{"forest (1)"}}
   i_outcomes["outcomes (2)"]
   i_tasks["tasks (3)"]

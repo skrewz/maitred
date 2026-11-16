@@ -192,7 +192,16 @@ func Render(g Graph, cfg Config) (string, error) {
 	if len([]rune(full)) <= cfg.MaxSourceCharacters {
 		return full, nil
 	}
-	return draw(f, g.Strokes, cfg, true), nil
+	// Collapsing is the remedy for a source past the ceiling, not a second and
+	// unbounded drawing: where even one node per repository will not fit, the
+	// ceiling says so rather than the caller writing past it
+	// (§forgejo/renderer/collapsing).
+	collapsed := draw(f, g.Strokes, cfg, true)
+	if len([]rune(collapsed)) > cfg.MaxSourceCharacters {
+		return "", fmt.Errorf("renderer: %d characters exceeds the ceiling of %d even collapsed to one node per repository",
+			len([]rune(collapsed)), cfg.MaxSourceCharacters)
+	}
+	return collapsed, nil
 }
 
 // prepare folds the graph into ordered nodes and drawn edges. It is where the
