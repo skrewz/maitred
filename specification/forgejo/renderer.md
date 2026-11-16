@@ -112,12 +112,14 @@ picks its class, and one edge is one class:
 | the root | a **gate** edge `-.->`, declared before every work-order edge |
 | a member | a **work-order** edge `==>`, declared after the gate edges |
 
-The one exception is the tracker: a blocking edge with a tracker at either end
-is **never drawn**, and the fan it would have drawn is stated in a note line
-instead (§forgejo/renderer/note-lines). So the forest hangs visibly from its
-root, its work order reads as a chain, and a tracker — which every member
-waits on and which waits on nothing it must order — stays a single node rather
-than a hub spraying lines across the chart.
+The one exception is the tracker. The root's membership edge into a tracker
+is drawn — as a gate edge, like every other edge from the root, because the
+forest hangs from its root — and every other blocking edge with a tracker at
+either end is **never drawn**, the fan it would have drawn being stated in a
+note line instead (§forgejo/renderer/note-lines). So the forest hangs visibly
+from its root, its work order reads as a chain, and a tracker — which every
+member waits on and which waits on nothing it must order — stays a single
+node rather than a hub spraying lines across the chart.
 
 Work-order edges carry no transitive edge: where a path of at least two
 work-order edges already reaches the target, the direct edge is redundant and
