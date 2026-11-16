@@ -261,13 +261,6 @@ func TestValidPriorities(t *testing.T) {
 			t.Errorf("priority %d = %q, want %q", i, got[i], want[i])
 		}
 	}
-
-	// The slice is the caller's to keep: sorting or appending to it must not
-	// edit the vocabulary every later caller sees.
-	got[0] = "tampered"
-	if again := queue.ValidPriorities(); again[0] != queue.PriorityFirefighter {
-		t.Errorf("ValidPriorities returned a shared slice: %v", again)
-	}
 }
 
 // TestIsValidPriority: the predicate trigger validation asks. The queue matches

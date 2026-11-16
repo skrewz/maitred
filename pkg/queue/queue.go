@@ -60,9 +60,11 @@ type Task struct {
 
 // The queue's priority tiers, highest first. The vocabulary is the queue's
 // own and maitred forwards it verbatim (§overview/scope); it is named here so
-// the one place that asks "is this a tier the queue will accept?" — trigger
-// validation — has an authority to ask. hotelier recognises these three and
-// serves a task whose priority is absent at the lowest of them (see
+// every site that names or checks a tier names the same word — trigger
+// validation asks "is this a tier the queue will accept?", and forgejoeng's
+// vip tier (§forgejo/webhook/vip-priority) is one of these constants.
+// hotelier recognises these three and serves a task whose priority is absent
+// at the lowest of them (see
 // https://github.com/skrewz/hotelier/blob/main/README.md and
 // https://github.com/skrewz/hotelier/blob/main/pkg/queue/queue.go).
 const (
@@ -71,14 +73,11 @@ const (
 	PriorityOrangutan   = "orangutan"
 )
 
-// validPriorities lists the tiers in descending order, the order the queue
-// serves them in.
-var validPriorities = []string{PriorityFirefighter, PriorityTeacher, PriorityOrangutan}
-
-// ValidPriorities returns the tiers the queue recognises, highest first. The
-// slice is a copy, so a caller may sort or format it freely.
+// ValidPriorities returns the tiers the queue recognises, highest first — the
+// order the queue serves them in. The slice is built fresh per call, so a
+// caller may format it freely.
 func ValidPriorities() []string {
-	return append([]string(nil), validPriorities...)
+	return []string{PriorityFirefighter, PriorityTeacher, PriorityOrangutan}
 }
 
 // IsValidPriority reports whether priority names a tier the queue recognises.
@@ -88,7 +87,7 @@ func ValidPriorities() []string {
 // "say nothing" is the caller's business; Task.Priority and the trigger schema
 // both treat it that way (§overview/scope).
 func IsValidPriority(priority string) bool {
-	for _, p := range validPriorities {
+	for _, p := range ValidPriorities() {
 		if p == priority {
 			return true
 		}
