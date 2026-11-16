@@ -80,7 +80,13 @@ A label is the issue's reference and a summary of it:
 cut to its first five words and collapsed to single spaces, so a caller that
 passes a whole title still gets a bounded label. A sync issue carries the
 numbers of the members that block it after the summary, in ascending order, as
-` (#<m1> #<m2> …)`.
+` (#<m1> #<m2> …)` — every member with a work-order edge into it, including one
+the transitive reduction drops from the drawing. A tracker is not among them: a
+tracker's blocking edges are counted into its fan and drawn nowhere
+(§forgejo/renderer/edge-classes), so a tracker sharing a blocking edge with a
+sync issue is stated neither in its label nor in the drawing. Whether a tracker
+can block a sync issue in a real forest is the forest owner's to answer, and
+this is where the answer lands.
 
 The summary and the repository half of the reference are the graph's text, so
 they are escaped: `&`, `<`, `>` and `"` become their HTML entity references,

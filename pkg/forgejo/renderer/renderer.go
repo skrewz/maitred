@@ -285,11 +285,14 @@ func prepare(g Graph) (*forest, error) {
 	}
 	position := positions(nodes)
 
-	// A sync issue carries the numbers of the members that block it, which is
-	// a fact of the graph's work order before any drawing economy is applied:
-	// a blocker that also reaches the sync by a longer path still blocks it,
-	// so the label reads the unreduced edges and only the drawing reduces
-	// (§forgejo/renderer/labels, §forgejo/renderer/edge-classes).
+	// A sync issue carries the numbers of the members that block it through the
+	// work order — which edges the graph states, not which survive the drawing:
+	// a blocker that also reaches the sync by a longer path still blocks it, so
+	// the label reads the unreduced edges and only the drawing reduces
+	// (§forgejo/renderer/labels, §forgejo/renderer/edge-classes). A tracker's
+	// blocking edges are the exception: they were counted into its fan above and
+	// reach neither the drawing nor this label, so a tracker sharing a blocking
+	// edge with a sync issue is stated nowhere in the source.
 	for _, n := range nodes {
 		if n.role != RoleSync {
 			continue

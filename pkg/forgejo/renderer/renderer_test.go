@@ -359,6 +359,32 @@ func TestSyncCarriesItsMembers(t *testing.T) {
 	if strings.Contains(got, "i_forest_3 ==> i_forest_9") {
 		t.Errorf("the transitive edge into the sync issue was drawn:\n%s", got)
 	}
+
+	// A tracker's blocking edges are counted into its fan and drawn nowhere, so
+	// a tracker that blocks a sync issue reaches its label too — the exception
+	// §forgejo/renderer/labels carves. Whether a tracker can block a sync issue
+	// in a real forest is a question for whoever owns the forest; if it can, this
+	// is the assertion that changes.
+	tracked := Graph{
+		Root: Node{Ref: ref("example/forest", 1), Summary: "ideation", HTMLURL: "https://example.com/forest/issues/1"},
+		Members: []Node{
+			{Ref: ref("example/forest", 2), Role: RoleTracker, Summary: "tracker", HTMLURL: "https://example.com/forest/issues/2"},
+			{Ref: ref("example/forest", 9), Role: RoleSync, Summary: "land together", HTMLURL: "https://example.com/forest/issues/9"},
+		},
+		Edges: []Edge{
+			{From: ref("example/forest", 1), To: ref("example/forest", 2)},
+			{From: ref("example/forest", 1), To: ref("example/forest", 9)},
+			{From: ref("example/forest", 2), To: ref("example/forest", 9)},
+		},
+		Strokes: strokes(),
+	}
+	got, err = Render(tracked, wideCeiling())
+	if err != nil {
+		t.Fatalf("Render with a tracker blocking a sync issue: %v", err)
+	}
+	if strings.Contains(got, "land together (") {
+		t.Errorf("a tracker's blocking edge reached the sync label, which the carve-out says it must not:\n%s", got)
+	}
 }
 
 // TestNoTransitiveEdge drops the direct edge a path already states
