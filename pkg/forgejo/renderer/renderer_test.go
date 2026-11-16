@@ -716,6 +716,23 @@ func TestRenderErrors(t *testing.T) {
 			want:  "even collapsed",
 		},
 		{
+			name: "two repositories the collapsed view cannot tell apart",
+			graph: Graph{
+				Root: Node{Ref: ref("example/a-b", 1), Summary: "ideation", HTMLURL: "https://example.com/a-b/issues/1"},
+				Members: []Node{
+					{Ref: ref("other/a_b", 2), Summary: "work", HTMLURL: "https://example.com/a_b/issues/2"},
+					{Ref: ref("other/zz", 3), Summary: "work", HTMLURL: "https://example.com/zz/issues/3"},
+				},
+				Edges: []Edge{
+					{From: ref("example/a-b", 1), To: ref("other/a_b", 2)},
+					{From: ref("other/a_b", 2), To: ref("other/zz", 3)},
+				},
+				Strokes: strokes(),
+			},
+			cfg:  Config{MaxSourceCharacters: 400, Location: aedt()},
+			want: "fold to one identifier",
+		},
+		{
 			name:  "an invented colour",
 			graph: Graph{Root: one, Strokes: Strokes{Root: "#fff", Tracker: "#1d76db", Member: "#6b7a8c", Closed: "#3fb950"}},
 			cfg:   cfg,

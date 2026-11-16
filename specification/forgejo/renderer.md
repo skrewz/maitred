@@ -206,6 +206,11 @@ node per repository exceeds the ceiling, that is an error, so a caller that
 reads the ceiling as the limit on what it may write is never handed source past
 it.
 
+And because a collapsed node stands for a whole repository, two repositories
+whose names fold to one identifier make the collapsed view an error too —
+declared under one identifier they would draw as one node, stating that one
+repository blocks itself (§forgejo/renderer/identifiers-and-shapes).
+
 ## Determinism
 
 The renderer's output depends on the graph, the ceiling and the timezone, and
@@ -222,4 +227,6 @@ whitespace, two issues folding to one identifier, an edge naming an issue the
 graph holds no node for, a work-order cycle, a closed node with no close time,
 a URL that cannot be quoted or whose scheme is neither http nor https, a
 stroke hex that is not a six-digit `#rrggbb`, a ceiling of zero or less which
-no graph can fit, or a graph whose collapsed form still exceeds that ceiling.
+no graph can fit, a graph whose collapsed form still exceeds that ceiling, or
+two repositories whose names fold to one identifier the collapsed view would
+have to share.

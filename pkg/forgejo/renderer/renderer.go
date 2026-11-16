@@ -196,12 +196,33 @@ func Render(g Graph, cfg Config) (string, error) {
 	// unbounded drawing: where even one node per repository will not fit, the
 	// ceiling says so rather than the caller writing past it
 	// (§forgejo/renderer/collapsing).
+	if err := checkCollapsible(f.nodes); err != nil {
+		return "", err
+	}
 	collapsed := draw(f, g.Strokes, cfg, true)
 	if len([]rune(collapsed)) > cfg.MaxSourceCharacters {
 		return "", fmt.Errorf("renderer: %d characters exceeds the ceiling of %d even collapsed to one node per repository",
 			len([]rune(collapsed)), cfg.MaxSourceCharacters)
 	}
 	return collapsed, nil
+}
+
+// checkCollapsible refuses a graph the collapsed view could not draw apart:
+// collapsed nodes are keyed by repository, so two repositories whose names fold
+// to one identifier would be declared under one identifier and drawn as one
+// node — a chart claiming one repository blocks itself
+// (§forgejo/renderer/collapsing).
+func checkCollapsible(nodes []*node) error {
+	folded := map[string]string{}
+	for _, n := range nodes {
+		key := foldName(n.repo())
+		if seen, ok := folded[key]; ok && strings.ToLower(seen) != strings.ToLower(n.repo()) {
+			return fmt.Errorf("renderer: repositories %q and %q fold to one identifier %q, which the collapsed view cannot tell apart",
+				seen, n.repo(), repoID(n.repo()))
+		}
+		folded[key] = n.repo()
+	}
+	return nil
 }
 
 // prepare folds the graph into ordered nodes and drawn edges. It is where the
