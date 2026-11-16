@@ -3,7 +3,6 @@ package forgejo
 import (
 	"errors"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -654,64 +653,6 @@ func TestEngine_StartStop_Sweeps(t *testing.T) {
 func TestEngine_StopWithoutStart(t *testing.T) {
 	eng, _, _, _ := newTestEngine(t)
 	eng.Stop() // must not panic
-}
-
-// TestSweepLoop_TickBelongsToTheIntervalFromTheStart: the tick anchor
-// §the-sweep states as part of the outcomes view's guarantee — the
-// ticks belong to the interval as counted from the engine's start, so
-// a first sweep that keeps busy does not push the whole schedule out
-// by its own length — is witnessed here by its observable
-// consequence. While the first sweep's walk is held past the first
-// tick's due, the loop is inside that sweep and the tick waits
-// unread in the ticker's buffer; once the walk releases, the waiting
-// tick fires at once, so the next sweep starts without having waited
-// an interval since the first one finished. Were the ticker instead
-// created after the first sweep, its first tick would fall due only
-// a whole interval after that finish, and the bound below would
-// expire first (§forgejo/reconciliation/the-sweep,
-// §forgejo/reconciliation/scheduling,
-// §forgejo/observability/the-outcomes-view).
-func TestSweepLoop_TickBelongsToTheIntervalFromTheStart(t *testing.T) {
-	eng, api, _, _ := newTestEngine(t)
-	eng.cfg.ReconcileInterval = 2 * time.Second
-	api.repos = []Repository{testRepo("o/r")}
-	work := Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r"}
-	api.openIssues["r"] = []Issue{work}
-	api.issues[7] = &work
-	release := make(chan struct{})
-	entered := make(chan struct{})
-	api.blockGetIssue = release
-	api.getIssueEntered = entered
-	releaseOnce := sync.OnceFunc(func() { close(release) })
-
-	eng.Start()
-	// Stop waits the in-flight sweep out, so the walk is released
-	// first — the deferred calls run last-declared first.
-	defer eng.Stop()
-	defer releaseOnce()
-
-	select {
-	case <-entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the first sweep never reached a pipeline re-fetch")
-	}
-
-	// Hold the walk past the first tick's due, so the tick falls due
-	// while the loop is still inside the first sweep, then let it run.
-	time.Sleep(eng.cfg.ReconcileInterval + eng.cfg.ReconcileInterval/2)
-	releaseOnce()
-
-	// The assertion is a generous bound on an event, as the suite
-	// conventions ask: with the anchor the second sweep's organisation
-	// listing arrives moments after the release; without it, only a
-	// full interval after the first sweep's finish.
-	deadline := time.Now().Add(eng.cfg.ReconcileInterval / 4)
-	for api.callCount("ListOrgRepositories:") < 2 {
-		if time.Now().After(deadline) {
-			t.Fatal("the second sweep waited a whole interval after the first one finished: the ticks do not belong to the interval as counted from the engine's start (§forgejo/reconciliation/the-sweep)")
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
 }
 
 // TestReconcile_VisitsOutcomesOnlyRepo: the sweep enumerates the union

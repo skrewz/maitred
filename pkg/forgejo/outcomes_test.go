@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -560,14 +561,17 @@ func TestForests_RecordLandsBeforeTheWalk(t *testing.T) {
 
 // TestForests_ViewServesBeforeTheFirstWalkFinishes: at process start
 // the view must not wait for the first sweep's walk — the pipeline's
-// re-fetches — before it has a set to serve. The recording lands at the
-// tick's head, so holding the walk inside its first re-fetch and
-// reading the view there says the same thing a clock cannot: a set is
-// served while the sweep's slowest part is still running
+// re-fetches — before it has a set to serve, and a walk that runs past
+// a tick's due must not delay that tick either. Holding the walk inside
+// its first re-fetch witnesses both without a clock standing in for
+// either: the set the tick's head recorded is served while the sweep's
+// slowest part is still running, and the tick that fell due during the
+// hold fires on release, as §the-sweep states
 // (§forgejo/observability/the-outcomes-view,
 // §forgejo/reconciliation/the-sweep, §forgejo/reconciliation/scheduling).
 func TestForests_ViewServesBeforeTheFirstWalkFinishes(t *testing.T) {
 	eng, api, _, _ := newTestEngine(t)
+	eng.cfg.ReconcileInterval = 500 * time.Millisecond
 	api.repos = []Repository{outcomesRepo("o/out"), testRepo("o/r")}
 	root := outcomesRoot(51, "root")
 	tracker := outcomesTracker(71, "tracker")
@@ -582,12 +586,13 @@ func TestForests_ViewServesBeforeTheFirstWalkFinishes(t *testing.T) {
 	entered := make(chan struct{})
 	api.blockGetIssue = release
 	api.getIssueEntered = entered
+	releaseOnce := sync.OnceFunc(func() { close(release) })
 
 	eng.Start()
 	// Stop waits the in-flight sweep out, so the walk is released first
 	// — the deferred calls run last-declared first.
 	defer eng.Stop()
-	defer close(release)
+	defer releaseOnce()
 
 	// Once the walk is inside a re-fetch, the tick's head has been paid
 	// for: the recording landed before the event was dispatched.
@@ -602,6 +607,26 @@ func TestForests_ViewServesBeforeTheFirstWalkFinishes(t *testing.T) {
 	}
 	if len(forests) != 1 || forests[0].Root.Number != 51 {
 		t.Errorf("forests = %+v, want the forest the tick recorded", forests)
+	}
+
+	// The walk is now held past the first tick's due, so the tick waits
+	// unread in the ticker's buffer while the loop is inside the sweep.
+	// Releasing it must start the second sweep at once. The witness is
+	// the work issue's second re-fetch: a sweep re-fetches each object
+	// once, so only a second sweep turns that count into two — unlike
+	// the organisation listing, which the event path's own scope refresh
+	// can spend while a walk overruns an interval. The bound is half an
+	// interval, where the schedule this rules out waits a whole interval
+	// on the walk's finish (§forgejo/reconciliation/the-sweep).
+	time.Sleep(eng.cfg.ReconcileInterval + eng.cfg.ReconcileInterval/2)
+	released := time.Now()
+	releaseOnce()
+	deadline := released.Add(eng.cfg.ReconcileInterval / 2)
+	for api.callCount("GetIssue:r/7") < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("the second sweep waited a whole interval after the first one finished rather than starting on the tick that fell due during its walk (§forgejo/reconciliation/the-sweep)")
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 }
 
