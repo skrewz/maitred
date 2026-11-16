@@ -1,7 +1,6 @@
 package trigger_test
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1532,39 +1531,36 @@ func TestTriggerDefinition_Validate_InvalidTitle(t *testing.T) {
 
 // TestLoadTriggerDefinition_Priority: a trigger that names a tier keeps it, so
 // the task the trigger dispatches is served there rather than at the queue's
-// default (§overview/scope). The tiers are spelled the way a trigger file spells
-// them — that spelling is what reaches the wire, and a tier the queue does not
-// know would be refused there, not here.
+// default (§overview/scope). The tier is spelled the way a trigger file spells
+// it — that spelling is what reaches the wire, and a tier the queue would
+// refuse is caught here at load rather than costing a dispatch later. The
+// other tiers need no case here: TestPriorityVocabulary owns the spellings.
 func TestLoadTriggerDefinition_Priority(t *testing.T) {
-	for _, tier := range []string{"firefighter", "teacher", "orangutan"} {
-		t.Run(tier, func(t *testing.T) {
-			dir := t.TempDir()
+	dir := t.TempDir()
 
-			configYAML := fmt.Sprintf(`
+	configYAML := `
 triggers:
   - id: "ranked-trigger"
     type: periodic
     schedule: "@every 1h"
-    priority: %s
+    priority: teacher
     prompt: "Research the news"
-`, tier)
-			if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
-				t.Fatal(err)
-			}
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-			defs, err := trigger.LoadTriggerDefinitions(dir)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-			if len(defs) != 1 {
-				t.Fatalf("expected 1 trigger, got %d", len(defs))
-			}
+	if len(defs) != 1 {
+		t.Fatalf("expected 1 trigger, got %d", len(defs))
+	}
 
-			if defs[0].Priority != tier {
-				t.Errorf("expected priority %q, got %q", tier, defs[0].Priority)
-			}
-		})
+	if defs[0].Priority != "teacher" {
+		t.Errorf("expected priority %q, got %q", "teacher", defs[0].Priority)
 	}
 }
 

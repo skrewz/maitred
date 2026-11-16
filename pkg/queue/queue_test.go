@@ -250,8 +250,8 @@ func TestTask_Priority_JSON(t *testing.T) {
 // validation asks.
 //
 // The vocabulary is a deliberate copy of hotelier's rather than an import, so
-// this is the only alarm that fires when the copy drifts from the source: the
-// tiers are spelled as literals, not through the constants above, and hotelier
+// this is the one place the copy is compared against the source — elsewhere
+// the tiers appear only as inputs to maitred's own behaviour. Hotelier
 // validates the field against exactly these — highest first, serving a task
 // whose priority is absent at the lowest of them (see
 // https://github.com/skrewz/hotelier/blob/main/pkg/queue/queue.go).
