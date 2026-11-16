@@ -276,13 +276,16 @@ func prepare(g Graph) (*forest, error) {
 		}
 	}
 
-	// A sync issue carries the rows that block it, which the reduced work order
-	// states (§forgejo/renderer/labels).
+	// A sync issue carries the numbers of the members that block it, which is
+	// a fact of the graph's work order before any drawing economy is applied:
+	// a blocker that also reaches the sync by a longer path still blocks it,
+	// so the label reads the unreduced edges and only the drawing reduces
+	// (§forgejo/renderer/labels, §forgejo/renderer/edge-classes).
 	for _, n := range nodes {
 		if n.role != RoleSync {
 			continue
 		}
-		for _, e := range reduced {
+		for _, e := range work {
 			if e.to.id == n.id {
 				n.syncNumbers = append(n.syncNumbers, e.from.ref.Number)
 			}

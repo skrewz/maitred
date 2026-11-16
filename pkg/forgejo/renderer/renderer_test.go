@@ -304,7 +304,10 @@ func TestLabelWrapsPastThirtyCharacters(t *testing.T) {
 }
 
 // TestSyncCarriesItsMembers lists the numbers of the issues that block the
-// grouping issue, ascending, whatever order the graph named them in.
+// grouping issue, ascending, whatever order the graph named them in — and
+// including a blocker the transitive reduction drops from the drawing: the
+// label states the graph's blocker list, the reduction is an edge economy
+// (§forgejo/renderer/labels, §forgejo/renderer/edge-classes).
 func TestSyncCarriesItsMembers(t *testing.T) {
 	t.Parallel()
 	graph := Graph{
@@ -327,6 +330,33 @@ func TestSyncCarriesItsMembers(t *testing.T) {
 	want := "forest#9 ·<br/>land together (#3 #7)"
 	if !strings.Contains(got, want) {
 		t.Errorf("want %q in the source, got:\n%s", want, got)
+	}
+
+	// #3 blocks #9 directly and also reaches it through #7, so the drawing
+	// drops the direct edge — but #9's label must still carry #3.
+	transitive := Graph{
+		Root: Node{Ref: ref("example/forest", 1), Summary: "ideation", HTMLURL: "https://example.com/forest/issues/1"},
+		Members: []Node{
+			{Ref: ref("example/forest", 9), Role: RoleSync, Summary: "land together", HTMLURL: "https://example.com/forest/issues/9"},
+			{Ref: ref("example/forest", 3), Summary: "second", HTMLURL: "https://example.com/forest/issues/3"},
+			{Ref: ref("example/forest", 7), Summary: "third", HTMLURL: "https://example.com/forest/issues/7"},
+		},
+		Edges: []Edge{
+			{From: ref("example/forest", 7), To: ref("example/forest", 9)},
+			{From: ref("example/forest", 3), To: ref("example/forest", 9)},
+			{From: ref("example/forest", 3), To: ref("example/forest", 7)},
+		},
+		Strokes: strokes(),
+	}
+	got, err = Render(transitive, wideCeiling())
+	if err != nil {
+		t.Fatalf("Render transitive: %v", err)
+	}
+	if !strings.Contains(got, "forest#9 ·<br/>land together (#3 #7)") {
+		t.Errorf("a blocker the reduction dropped vanished from the sync label, want it in:\n%s", got)
+	}
+	if strings.Contains(got, "i_forest_3 ==> i_forest_9") {
+		t.Errorf("the transitive edge into the sync issue was drawn:\n%s", got)
 	}
 }
 
