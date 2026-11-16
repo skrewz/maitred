@@ -207,19 +207,19 @@ func Render(g Graph, cfg Config) (string, error) {
 }
 
 // checkCollapsible refuses a graph the collapsed view could not draw apart:
-// collapsed nodes are keyed by repository, so two repositories whose names fold
-// to one identifier would be declared under one identifier and drawn as one
-// node — a chart claiming one repository blocks itself
-// (§forgejo/renderer/collapsing).
+// collapsed nodes are keyed by the repository's bare name, so two repositories
+// whose names fold to one identifier would be declared under one identifier and
+// drawn as one node — a chart claiming one repository blocks itself, or
+// exchanging two repositories' edges (§forgejo/renderer/collapsing).
 func checkCollapsible(nodes []*node) error {
 	folded := map[string]string{}
 	for _, n := range nodes {
 		key := foldName(n.repo())
-		if seen, ok := folded[key]; ok && strings.ToLower(seen) != strings.ToLower(n.repo()) {
+		if seen, ok := folded[key]; ok && !sameRepository(seen, n.ref.Repository) {
 			return fmt.Errorf("renderer: repositories %q and %q fold to one identifier %q, which the collapsed view cannot tell apart",
-				seen, n.repo(), repoID(n.repo()))
+				seen, n.ref.Repository, repoID(n.ref.Repository))
 		}
-		folded[key] = n.repo()
+		folded[key] = n.ref.Repository
 	}
 	return nil
 }

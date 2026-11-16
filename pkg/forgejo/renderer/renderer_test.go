@@ -700,10 +700,12 @@ func TestCollapseNamesItself(t *testing.T) {
 	}
 }
 
-// TestSpellingsOfOneRepositoryCollapseTogether: the fold equates names as it
-// reads them, so `Tasks` and `tasks` is one repository collapsed to one node —
-// the allowance that keeps `a-b` and `a_b`, which are two repositories, an error
-// (§forgejo/renderer/collapsing, §forgejo/renderer/identifiers-and-shapes).
+// TestSpellingsOfOneRepositoryCollapseTogether: the two spellings of one
+// owner/repo share a collapsed node, the drawing's identity for a repository
+// being its name read case-insensitively — the allowance that keeps
+// `alice/maitred` and `bob/Maitred`, two repositories whose bare names fold
+// together, an error (§forgejo/renderer/collapsing,
+// §forgejo/renderer/identifiers-and-shapes).
 func TestSpellingsOfOneRepositoryCollapseTogether(t *testing.T) {
 	t.Parallel()
 	graph := Graph{
@@ -725,7 +727,7 @@ func TestSpellingsOfOneRepositoryCollapseTogether(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if !strings.Contains(full, "i_tasks_2 ==> i_tasks_3") {
-		t.Errorf("two spellings of one repository name drew as one issue, want the work order in:\n%s", full)
+		t.Errorf("two issues of one repository drew as one, want the edge between them in:\n%s", full)
 	}
 
 	// One node per repository: the two spellings share it, and the edge between
@@ -921,6 +923,23 @@ func TestRenderErrors(t *testing.T) {
 			},
 			cfg:  Config{MaxSourceCharacters: 400, Location: aedt()},
 			want: "fold to one identifier",
+		},
+		{
+			name: "two repositories sharing a name across owners, the case aside",
+			graph: Graph{
+				Root: Node{Ref: ref("alice/maitred", 1), Summary: "ideation", HTMLURL: "https://example.com/alice/maitred/issues/1"},
+				Members: []Node{
+					{Ref: ref("bob/Maitred", 2), Summary: "the same name elsewhere", HTMLURL: "https://example.com/bob/Maitred/issues/2"},
+					{Ref: ref("example/zz", 3), Summary: "work", HTMLURL: "https://example.com/example/zz/issues/3"},
+				},
+				Edges: []Edge{
+					{From: ref("alice/maitred", 1), To: ref("bob/Maitred", 2)},
+					{From: ref("bob/Maitred", 2), To: ref("example/zz", 3)},
+				},
+				Strokes: strokes(),
+			},
+			cfg:  Config{MaxSourceCharacters: 400, Location: aedt()},
+			want: "cannot tell apart",
 		},
 		{
 			name:  "an invented colour",

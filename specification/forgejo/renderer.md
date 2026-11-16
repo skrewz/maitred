@@ -224,9 +224,11 @@ And because a collapsed node stands for a whole repository, two repositories
 whose names fold to one identifier make the collapsed view an error too —
 declared under one identifier they would draw as one node, stating that one
 repository blocks itself (§forgejo/renderer/identifiers-and-shapes). Two
-spellings of one repository name are no such pair: the fold equates names
-case-insensitively here, exactly as it equates an issue's two spellings there,
-so `Tasks` and `tasks` are one repository declared and one repository collapsed.
+spellings of one repository are no such pair — and one repository means one
+`owner/repo`, the case aside, the owner being the half the drawing leaves out:
+`example/Tasks` and `example/tasks` share the node the fold already gives their
+issues, while `alice/maitred` and `bob/Maitred` are two repositories the
+collapsed view refuses rather than merges.
 
 ## Determinism
 
@@ -246,5 +248,5 @@ work-order cycle, a closed node with no close time, a URL that cannot be quoted
 or whose scheme is neither http nor https, a stroke hex that is not a six-digit
 `#rrggbb`, a ceiling of zero or less which
 no graph can fit, a graph whose collapsed form still exceeds that ceiling, or
-two repositories that are not two spellings of one name yet fold to an
+two repositories that are not two spellings of one `owner/repo` yet fold to an
 identifier the collapsed view would have to share.

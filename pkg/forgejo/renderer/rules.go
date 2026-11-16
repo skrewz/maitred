@@ -17,6 +17,15 @@ func bareName(repository string) string {
 	return trimmed
 }
 
+// sameRepository reports whether two spellings name one repository. The drawing
+// keeps only the bare name, but the forge addresses a repository by owner and
+// name case-insensitively, so two spellings of one owner/repo are one repository
+// while two repositories that share a name under different owners are not
+// (§forgejo/renderer/identifiers-and-shapes).
+func sameRepository(a, b string) bool {
+	return strings.EqualFold(strings.TrimRight(a, "/"), strings.TrimRight(b, "/"))
+}
+
 // foldName is a repository name as an identifier carries it: lowercased, with
 // every non-alphanumeric character folded to an underscore
 // (§forgejo/renderer/identifiers-and-shapes).
