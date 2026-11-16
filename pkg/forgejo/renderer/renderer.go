@@ -150,7 +150,6 @@ type node struct {
 	ref         Ref
 	role        Role
 	kind        int
-	isRoot      bool
 	closed      bool
 	closedAt    time.Time
 	url         string
