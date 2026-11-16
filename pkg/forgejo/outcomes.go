@@ -192,9 +192,9 @@ func (e *Engine) Forests() ([]Forest, error) {
 // replaces the snapshot whole, stamps the moment it landed and clears
 // any earlier failure; a failed one keeps the last set but
 // records the error, so the view answers that error — not a stale set
-// served as if fresh — until a later sweep enumerates again. A set no
-// sweep refreshed goes stale on its own, in Forests, without anything
-// here having to notice it. The scope cache is refreshed by the sweep
+// served as if fresh — until a later sweep enumerates again. How long
+// a recorded set stays servable is Forests' concern, not this
+// function's. The scope cache is refreshed by the sweep
 // itself just before, so the walk rides the listing the sweep already
 // made fresh and costs no organisation listing of its own
 // (§forgejo/webhook/the-scope-cache).
