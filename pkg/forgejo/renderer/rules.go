@@ -104,13 +104,17 @@ func isHex(s string) bool {
 	return true
 }
 
+// control is the character class no printer should act on: the ones below the
+// space, line breaks included, and delete (§forgejo/renderer/labels).
+func control(r rune) bool { return r < 0x20 || r == 0x7f }
+
 // printable reports whether a repository name could stand on a source line: no
-// character below the space, no delete, and no space at all — a line break would
-// end the line it is drawn on and any other control byte would reach whatever
-// prints the source unrendered (§forgejo/renderer/labels).
+// control character, and no space at all — a line break would end the line it is
+// drawn on and any other control byte would reach whatever prints the source
+// unrendered (§forgejo/renderer/labels).
 func printable(name string) bool {
 	for _, r := range name {
-		if r < 0x20 || r == 0x7f || unicode.IsSpace(r) {
+		if control(r) || unicode.IsSpace(r) {
 			return false
 		}
 	}
@@ -123,7 +127,7 @@ func printable(name string) bool {
 // (§forgejo/renderer/labels).
 func escapeText(text string) string {
 	text = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		if control(r) {
 			return -1
 		}
 		return r
