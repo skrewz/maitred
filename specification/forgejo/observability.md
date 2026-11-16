@@ -134,21 +134,25 @@ tracker itself lives in, a blocks row listing none living where the
 root does, so a tracker blocked across a repository boundary says where
 it lives rather than inheriting the root's address
 (§forgejo/client/operations) — or the honest absence of one, spelled as
-a `null` tracker so the field is always present. Without the engine, or
-with no forests, the list is empty — never `null`: an enumeration that
-found nothing is an honest empty, not a view that never read. A view the
-engine cannot vouch for — no sweep's enumeration has landed yet, the
-most recent one failed (the organisation listing, an issue listing, or a
-blocks read), or the set it holds has aged past one `reconcile_interval`
-without a sweep having recorded a newer one — answers `500` rather than
-an empty list or a stale set, because a failed read must not read as an
-empty set of forests and a set no longer vouched for is never served as
-if fresh: the same rule the scope cache applies to stale snapshots
-(§forgejo/webhook/the-scope-cache). The bound is the view's own, applied
-as the set is read, so a sweep that never reached the step that records
-the set — its own organisation listing having failed — ages the view out
-rather than leaving it serving what it recorded before the outage. The
-sweep records the set at its head, as its step 2
+a `null` tracker so the field is always present. Each forest alongside
+its rows carries the **picture of the forest** as two further fields,
+always present: **`chart`**, the Mermaid source of the tracker's
+current-state block, and **`chart_revisited`**, that block's recency
+stamp, both scraped as described below. Without the engine, or with no
+forests, the list is empty — never `null`: an enumeration that found
+nothing is an honest empty, not a view that never read. A view the engine
+cannot vouch for — no sweep's enumeration has landed yet, the most recent
+one failed (the organisation listing, an issue listing, a blocks read, or
+a tracker's body read), or the set it holds has aged past one
+`reconcile_interval` without a sweep having recorded a newer one —
+answers `500` rather than an empty list or a stale set, because a failed
+read must not read as an empty set of forests and a set no longer vouched
+for is never served as if fresh: the same rule the scope cache applies to
+stale snapshots (§forgejo/webhook/the-scope-cache). The bound is the
+view's own, applied as the set is read, so a sweep that never reached the
+step that records the set — its own organisation listing having failed —
+ages the view out rather than leaving it serving what it recorded before
+the outage. The sweep records the set at its head, as its step 2
 (§forgejo/reconciliation/the-sweep). Only the honest empty answers `200`
 with an empty list. The `500` carries a fixed sentence and the read's
 detail goes to the log: raw forge error text carries repository names
@@ -157,10 +161,42 @@ port authenticates nothing
 (§forgejo/observability/why-the-engine-is-off). A method other than GET
 answers `405`.
 
+**Scraping the current-state block.** The picture is not composed by the
+engine: it is read out of the tracker's own description, which is where
+the forest's picture already lives. The region scraped is the one the
+curating agent delimits with the HTML-comment fence pair
+`<!-- maitred:forest:begin -->` and `<!-- maitred:forest:end -->` — the
+view reads that pair and writes nothing: the client it reads through
+carries no mutation at all, so the tracker's description is left
+byte-for-byte as found (§forgejo/client/operations). Within the
+region the view carries two things and nothing else: the fenced `mermaid`
+block between its fences, **verbatim** — never re-indented, repaired, or
+completed in code — and the `Last revisited: <YYYY-MM-DD HH:MM> <TZ>`
+line, whose value is carried **as written**, so a UI states how recent
+the picture is without parsing prose and an abbreviation of `CET` reads
+exactly as the agent wrote it. Neither field is parsed further: the
+stamp is a string the view does not interpret.
+
+What scraping promises is exactly one well-formed region, and every
+ragged edge publishes **nothing** rather than a guess: no fence pair, two
+or more fence pairs (which region belongs to whom is not guessable), a
+region holding no fenced Mermaid block or more than one, a Mermaid fence
+never closed, and a region carrying no stamp line or more than one each
+leave `chart` empty, `chart_revisited` empty, or both. An empty field is
+therefore a statement about the tracker's description, never about a
+read that broke: the tracker's body is read through the tracker's own
+issue read — the read carrying the full text, the blocks listing's row
+not being trusted with it — and a tracker whose read fails fails the
+enumeration the way every other failed read does, answering `500` rather
+than publishing the empty chart a stranger would read as a forest with
+no picture. A forest whose tracker is absent publishes both fields empty
+and reads no description at all.
+
 The enumeration happens on the reconciliation sweep's tick, not on the
 request path (§forgejo/reconciliation/the-sweep): per tick it costs one
-issue listing per outcomes repository and one blocks read per open
-ideation root, on top of the sweep's own walk; the sweep's own
+issue listing per outcomes repository, one blocks read per open
+ideation root and one issue read per tracker (whose body the picture is
+scraped from), on top of the sweep's own walk; the sweep's own
 organisation listing keeps the scope cache fresh, so the walk adds no
 listing of its own (§forgejo/webhook/the-scope-cache). That walk is the
 view's own reader rather than a pairing folded into the sweep's fourth

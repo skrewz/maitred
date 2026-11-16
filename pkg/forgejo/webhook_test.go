@@ -171,9 +171,13 @@ type fakeAPI struct {
 
 	// GetIssue blocking hooks for the concurrency tests: GetIssue
 	// closes getIssueEntered (once) on entry, then waits on
-	// blockGetIssue when it is set.
-	blockGetIssue   chan struct{}
-	getIssueEntered chan struct{}
+	// blockGetIssue when it is set. blockGetIssueFor narrows the pair
+	// to one "repo/number", so a test can hold one re-fetch without
+	// holding every read a sweep tick makes — the outcomes walk reads
+	// trackers too (§forgejo/observability/the-outcomes-view).
+	blockGetIssue    chan struct{}
+	getIssueEntered  chan struct{}
+	blockGetIssueFor string
 
 	// ListOrgRepositories blocking hooks, mirroring the GetIssue ones,
 	// for the scope-cache single-flight test.
@@ -239,14 +243,15 @@ func withPullURL(owner, repo string, pr PullRequest) PullRequest {
 
 func (f *fakeAPI) GetIssue(owner, repo string, number int) (*Issue, error) {
 	f.record("GetIssue:" + repo + "/" + strconv.Itoa(number))
-	if f.getIssueEntered != nil {
+	held := f.blockGetIssueFor == "" || repo+"/"+strconv.Itoa(number) == f.blockGetIssueFor
+	if f.getIssueEntered != nil && held {
 		select {
 		case <-f.getIssueEntered:
 		default:
 			close(f.getIssueEntered)
 		}
 	}
-	if f.blockGetIssue != nil {
+	if f.blockGetIssue != nil && held {
 		<-f.blockGetIssue
 	}
 	if f.getIssueErr != nil {

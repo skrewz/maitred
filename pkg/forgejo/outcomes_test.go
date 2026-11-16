@@ -67,6 +67,7 @@ func TestForests_PairsRootWithTracker(t *testing.T) {
 	// forest, never stand as a forest of its own.
 	api.openIssues["out"] = []Issue{root, tracker}
 	api.blocks[51] = []Issue{tracker}
+	api.issues[71] = &tracker // the scrape reads the tracker's own body
 
 	forests, err := eng.enumerateForests()
 	if err != nil {
@@ -151,6 +152,7 @@ func TestForests_OnlyOutcomesReposEnumerated(t *testing.T) {
 	tracker := outcomesTracker(71, "outcomes tracker")
 	api.openIssues["out"] = []Issue{root, tracker}
 	api.blocks[51] = []Issue{tracker}
+	api.issues[71] = &tracker // the scrape reads the tracker's own body
 	// A work-item repository is never walked, even when it holds rows
 	// that look like forests, and a pull request carrying the labels is
 	// no root.
@@ -218,6 +220,7 @@ func TestForests_ReadFailureIsError(t *testing.T) {
 			tracker := outcomesTracker(71, "tracker")
 			api.openIssues["out"] = []Issue{root, tracker}
 			api.blocks[51] = []Issue{tracker}
+			api.issues[71] = &tracker // the scrape reads the tracker's own body
 			tc.mutate(api)
 
 			forests, err := eng.enumerateForests()
@@ -292,6 +295,7 @@ func TestForests_TrackerReadIsTheEngines(t *testing.T) {
 	tracker := outcomesTracker(71, "forest tracker")
 	api.openIssues["out"] = []Issue{root, tracker}
 	api.blocks[51] = []Issue{both, tracker}
+	api.issues[71] = &tracker // the scrape reads the tracker's own body
 
 	forests, err := eng.enumerateForests()
 	if err != nil {
@@ -319,6 +323,7 @@ func TestForests_CrossRepoTrackerStatesRepository(t *testing.T) {
 	tracker.Repository = "o/elsewhere"
 	api.openIssues["out"] = []Issue{root}
 	api.blocks[51] = []Issue{tracker}
+	api.issues[71] = &tracker // the scrape reads the tracker's own body
 
 	forests, err := eng.enumerateForests()
 	if err != nil {
@@ -354,6 +359,7 @@ func TestForests_RepositorySpellingFollowsTheListing(t *testing.T) {
 	blocksRow := tracker
 	blocksRow.Repository = "" // the blocks listing may omit the field
 	api.blocks[51] = []Issue{blocksRow}
+	api.issues[71] = &tracker // the scrape reads the tracker's own body
 
 	forests, err := eng.enumerateForests()
 	if err != nil {
@@ -382,6 +388,7 @@ func TestForests_ViewIsTheLastSweepsSet(t *testing.T) {
 	tracker := outcomesTracker(71, "tracker")
 	api.openIssues["out"] = []Issue{root, tracker}
 	api.blocks[51] = []Issue{tracker}
+	api.issues[71] = &tracker // the scrape reads the tracker's own body
 
 	if forests, err := eng.Forests(); !errors.Is(err, errForestsUnavailable) || forests != nil {
 		t.Fatalf("Forests = %+v, %v, want errForestsUnavailable and nil before the first enumeration", forests, err)
@@ -417,6 +424,7 @@ func TestForests_FailedEnumerationSilencesTheView(t *testing.T) {
 	tracker := outcomesTracker(71, "tracker")
 	api.openIssues["out"] = []Issue{root, tracker}
 	api.blocks[51] = []Issue{tracker}
+	api.issues[71] = &tracker // the scrape reads the tracker's own body
 
 	eng.recordForests()
 	if _, err := eng.Forests(); err != nil {
@@ -479,6 +487,7 @@ func TestForests_SnapshotAgesOutFailsClosed(t *testing.T) {
 	tracker := outcomesTracker(71, "tracker")
 	api.openIssues["out"] = []Issue{root, tracker}
 	api.blocks[51] = []Issue{tracker}
+	api.issues[71] = &tracker // the scrape reads the tracker's own body
 
 	eng.Reconcile()
 	if _, err := eng.Forests(); err != nil {
@@ -586,6 +595,11 @@ func TestForests_ViewServesBeforeTheFirstWalkFinishes(t *testing.T) {
 	entered := make(chan struct{})
 	api.blockGetIssue = release
 	api.getIssueEntered = entered
+	// The hold belongs to the walk's re-fetch of the work issue alone:
+	// the tick's head now reads a tracker's body too, and holding every
+	// read would hold the recording the test is watching for
+	// (§forgejo/observability/the-outcomes-view).
+	api.blockGetIssueFor = "r/7"
 	releaseOnce := sync.OnceFunc(func() { close(release) })
 
 	eng.Start()
@@ -656,5 +670,227 @@ func TestForests_RecordedEmptyIsHonest(t *testing.T) {
 	}
 	if len(forests) != 0 {
 		t.Errorf("forests = %+v, want none", forests)
+	}
+}
+
+// The current-state block's scrape: the view reads the picture out of the
+// tracker's own description and publishes it alongside the rows, saying
+// "nothing" wherever the region says nothing
+// (§forgejo/observability/the-outcomes-view).
+
+// forestChartSource is the Mermaid source a tracker's current-state block
+// carries between its fences.
+const forestChartSource = "flowchart TD\n\tr51[root #51] --> t71[tracker #71]"
+
+// mermaidBlock is that source as a fenced Mermaid block.
+func mermaidBlock() string {
+	return "```mermaid\n" + forestChartSource + "\n```"
+}
+
+// currentStatedBlock builds a tracker body whose current-state region is
+// delimited by the fence pair the curating agent writes, holding the stamp
+// line and the given fenced block, with prose outside the pair
+// (§forgejo/observability/the-outcomes-view).
+func currentStatedBlock(stamp, block string) string {
+	region := forestFenceBegin + "\n\n## Current state\n\nLast revisited: " + stamp + "\n\n" + block + "\n\n" + forestFenceEnd
+	return "## Outcome\n\nThe prose a human wrote.\n\n" + region + "\n\nA footnote outside the pair.\n"
+}
+
+// stageForest stages one forest in the outcomes fixtures: the root and its
+// tracker in the listing, the pairing in the root's blocks read, and both
+// rows fetchable by their own reads. The blocks row carries no body — the
+// picture is scraped from the tracker's own read, not from a listing
+// (§forgejo/observability/the-outcomes-view, §forgejo/client/operations).
+func stageForest(api *fakeAPI, root, tracker Issue) {
+	api.openIssues["out"] = []Issue{root, tracker}
+	api.blocks[root.Number] = []Issue{tracker}
+	api.issues[root.Number] = &root
+	api.issues[tracker.Number] = &tracker
+}
+
+// TestForests_ChartIsScrapedFromTheTrackersBody: the forest carries the
+// Mermaid source of its tracker's current-state block and that block's
+// recency stamp as separate fields, and every ragged edge publishes
+// nothing rather than a guessed picture
+// (§forgejo/observability/the-outcomes-view).
+func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
+	const stamp = "2026-11-16 09:12 AEDT"
+	cases := []struct {
+		name      string
+		body      string
+		wantChart string
+		wantStamp string
+	}{
+		{
+			name:      "one pair, block and stamp",
+			body:      currentStatedBlock(stamp, mermaidBlock()),
+			wantChart: forestChartSource,
+			wantStamp: stamp,
+		},
+		{
+			name:      "no fence pair at all",
+			body:      "## Outcome\n\nNothing was ever delimited here.\n",
+			wantChart: "",
+			wantStamp: "",
+		},
+		{
+			name: "two fence pairs are ambiguous",
+			body: currentStatedBlock(stamp, mermaidBlock()) + "\n" +
+				currentStatedBlock("2025-01-01 00:00 AEDT", mermaidBlock()),
+			wantChart: "",
+			wantStamp: "",
+		},
+		{
+			name:      "the end marker precedes the begin marker",
+			body:      forestFenceEnd + "\n```mermaid\n" + forestChartSource + "\n```\n" + forestFenceBegin,
+			wantChart: "",
+			wantStamp: "",
+		},
+		{
+			name:      "the pair holds prose but no Mermaid fence",
+			body:      currentStatedBlock(stamp, "The graph would go here, but none was written."),
+			wantChart: "",
+			wantStamp: stamp,
+		},
+		{
+			name:      "the block carries no stamp",
+			body:      forestFenceBegin + "\n\n" + mermaidBlock() + "\n\n" + forestFenceEnd,
+			wantChart: forestChartSource,
+			wantStamp: "",
+		},
+		{
+			name:      "the Mermaid fence is never closed",
+			body:      forestFenceBegin + "\n```mermaid\n" + forestChartSource + "\n" + forestFenceEnd,
+			wantChart: "",
+			wantStamp: "",
+		},
+		{
+			name:      "the pair holds two Mermaid blocks",
+			body:      currentStatedBlock(stamp, mermaidBlock()+"\n\n"+mermaidBlock()),
+			wantChart: "",
+			wantStamp: stamp,
+		},
+		{
+			name:      "a second opener appears before the first block closes",
+			body:      currentStatedBlock(stamp, "```mermaid\n"+forestChartSource+"\n```mermaid\n\tmore\n```"),
+			wantChart: "",
+			wantStamp: stamp,
+		},
+		{
+			name:      "the pair holds two stamp lines",
+			body:      currentStatedBlock(stamp+"\n\nLast revisited: 2025-01-01 00:00 AEDT", mermaidBlock()),
+			wantChart: forestChartSource,
+			wantStamp: "",
+		},
+		{
+			name:      "a CET stamp is carried as written",
+			body:      currentStatedBlock("2026-11-16 09:12 CET", mermaidBlock()),
+			wantChart: forestChartSource,
+			wantStamp: "2026-11-16 09:12 CET",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, _, _ := newTestEngine(t)
+			api.repos = []Repository{outcomesRepo("o/out")}
+			root := outcomesRoot(51, "root")
+			tracker := outcomesTracker(71, "tracker")
+			tracker.Body = tc.body
+			stageForest(api, root, tracker)
+
+			forests, err := eng.enumerateForests()
+			if err != nil {
+				t.Fatalf("enumerateForests: %v", err)
+			}
+			if len(forests) != 1 {
+				t.Fatalf("forests = %+v, want the one forest listed", forests)
+			}
+			if forests[0].Chart != tc.wantChart {
+				t.Errorf("chart = %q, want %q", forests[0].Chart, tc.wantChart)
+			}
+			if forests[0].ChartRevisited != tc.wantStamp {
+				t.Errorf("chart_revisited = %q, want %q", forests[0].ChartRevisited, tc.wantStamp)
+			}
+		})
+	}
+}
+
+// TestForests_AbsentTrackerPublishesNoPictureAndIsNotRead: a forest whose
+// tracker is absent publishes both picture fields empty and reads no
+// description of an issue that is not there
+// (§forgejo/observability/the-outcomes-view).
+func TestForests_AbsentTrackerPublishesNoPictureAndIsNotRead(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	root := outcomesRoot(51, "root blocks nothing")
+	api.openIssues["out"] = []Issue{root}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests) != 1 || forests[0].Tracker != nil {
+		t.Fatalf("forests = %+v, want the root listed with its tracker absent", forests)
+	}
+	if forests[0].Chart != "" || forests[0].ChartRevisited != "" {
+		t.Errorf("chart = %q chart_revisited = %q, want both empty with no tracker to read", forests[0].Chart, forests[0].ChartRevisited)
+	}
+	if n := api.callCount("GetIssue:"); n != 0 {
+		t.Errorf("the walk made %d issue read(s), want none: a forest with no tracker reads no body", n)
+	}
+}
+
+// TestForests_TrackerBodyReadFailsClosed: a tracker whose read fails fails
+// the enumeration, naming the tracker — an empty chart must never be what
+// a broken read looks like (§forgejo/observability/the-outcomes-view,
+// §forgejo/webhook/the-scope-cache).
+func TestForests_TrackerBodyReadFailsClosed(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	root := outcomesRoot(51, "root")
+	tracker := outcomesTracker(71, "tracker")
+	tracker.Body = currentStatedBlock("2026-11-16 09:12 AEDT", mermaidBlock())
+	stageForest(api, root, tracker)
+	api.getIssueErr = errors.New("issue read down")
+
+	forests, err := eng.enumerateForests()
+	if err == nil {
+		t.Fatalf("enumerateForests = %+v, want an error: a tracker read that broke is not a forest with no chart", forests)
+	}
+	if forests != nil {
+		t.Errorf("forests = %+v, want nil alongside the error", forests)
+	}
+	if !strings.Contains(err.Error(), "tracker o/out#71") {
+		t.Errorf("error %q, want it to name the tracker whose read broke", err)
+	}
+}
+
+// TestForests_ChartReadUsesTheTrackersRepository: a tracker living in
+// another repository has its body read from where it lives, not from the
+// repository the forest grew in (§forgejo/client/operations,
+// §forgejo/observability/the-outcomes-view).
+func TestForests_ChartReadUsesTheTrackersRepository(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	root := outcomesRoot(51, "root")
+	tracker := outcomesTracker(71, "cross-repo tracker")
+	tracker.Repository = "o/elsewhere"
+	tracker.Body = currentStatedBlock("2026-11-16 09:12 AEDT", mermaidBlock())
+	api.openIssues["out"] = []Issue{root}
+	api.blocks[51] = []Issue{tracker}
+	api.issues[71] = &tracker
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests) != 1 || forests[0].Chart != forestChartSource {
+		t.Fatalf("forests = %+v, want the cross-repo tracker's chart", forests)
+	}
+	if n := api.callCount("GetIssue:elsewhere/71"); n != 1 {
+		t.Errorf("the tracker's body was read %d time(s) from o/elsewhere, want exactly once: the read follows where the tracker lives", n)
+	}
+	if n := api.callCount("GetIssue:out/71"); n != 0 {
+		t.Errorf("the tracker's body was read from the root's repository %d time(s), want never", n)
 	}
 }
