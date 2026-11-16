@@ -76,7 +76,7 @@ triggers:
 | `hold-off-conditions` | | List of Go template conditions, each evaluated one at a time; if any evaluates to `true` the trigger is held off and the matching conditions are logged |
 | `tags` | | Agent capability tags for routing |
 | `timeout` | | Task timeout in seconds (0 = unlimited) |
-| `priority` | | Tier the queue serves the trigger's task at: `firefighter`, `teacher` or `orangutan` — the three tiers hotelier recognises, compiled into `pkg/queue` and forwarded verbatim (point maitred at a queue whose tiers are named otherwise and those names are what must change). Unset leaves the field off the task so the queue's default tier applies; an unrecognised tier fails at load, naming the trigger and the value, rather than costing a dispatch the queue refuses |
+| `priority` | | Tier the queue serves the trigger's task at: `firefighter`, `teacher` or `orangutan`. Unset leaves the task at the queue's default tier; an unrecognised tier fails at load, naming the trigger and the value ([§overview/scope](specification/overview.md#scope)) |
 
 ### Prompt Template Variables
 

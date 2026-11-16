@@ -65,7 +65,7 @@ HTTP queue system.
   the issue a pull request delivers, or on its forest's tracker — per
   §forgejo/webhook/vip-priority; a trigger's task carries the tier its
   definition declares, checked against the tiers the queue recognises when the
-  trigger is loaded (§overview/scope).
+  trigger is loaded.
 - **Persistent state.** Each trigger's last run time and extra state is
   persisted as a JSON file per trigger under the data directory and survives
   restarts. Per-trigger execution history is recorded.
