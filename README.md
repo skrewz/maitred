@@ -76,7 +76,7 @@ triggers:
 | `hold-off-conditions` | | List of Go template conditions, each evaluated one at a time; if any evaluates to `true` the trigger is held off and the matching conditions are logged |
 | `tags` | | Agent capability tags for routing |
 | `timeout` | | Task timeout in seconds (0 = unlimited) |
-| `priority` | | Tier the queue serves the trigger's task at: `firefighter`, `teacher` or `orangutan` — the queue's own vocabulary, forwarded verbatim. Unset leaves the field off the task so the queue's default tier applies; an unrecognised tier fails at load, naming the trigger and the value, rather than costing a dispatch the queue refuses |
+| `priority` | | Tier the queue serves the trigger's task at: `firefighter`, `teacher` or `orangutan` — the three tiers hotelier recognises, compiled into `pkg/queue` and forwarded verbatim (point maitred at a queue whose tiers are named otherwise and those names are what must change). Unset leaves the field off the task so the queue's default tier applies; an unrecognised tier fails at load, naming the trigger and the value, rather than costing a dispatch the queue refuses |
 
 ### Prompt Template Variables
 
@@ -279,8 +279,14 @@ template variable works with nested JSON — you can access deeply nested fields
 via dot notation (e.g. `{{ .Payload.sender.login }}`).
 
 The webhook API runs on a separate port from the web dashboard (default `9091`,
-configurable via `MAITRED_API_PORT`). TLS termination is expected to be
-handled by a reverse proxy in front of the API port.
+configurable via `MAITRED_API_PORT`). TLS termination is expected to be handled
+by a reverse proxy in front of the API port, which is also where authentication
+would sit: the handler itself checks no signature, token or identity header, so
+anyone who can reach the port can get an endpoint's trigger dispatched. That is
+worth remembering when writing `priority`: the tier a trigger declares decides
+where the queue serves that work, so a trigger reachable from this port should
+declare no tier — leaving the queue's default to apply — unless the proxy in
+front authenticates.
 
 ## Web Dashboard
 

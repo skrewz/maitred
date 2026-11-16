@@ -38,7 +38,13 @@ HTTP queue system.
 - **Webhook ingestion.** Named webhook endpoints (YAML files in the webhook
   directory) expose `POST /v1/{provider}/{endpoint}` on the API port. A
   received payload is mapped to a trigger and made available to its prompt
-  and title templates as `.Payload`.
+  and title templates as `.Payload`. The API port checks no signature, token or
+  identity of its own, so anyone who can reach it can dispatch an endpoint's
+  trigger — the trust model the dashboard's controls already ride
+  (§forgejo/observability/triggering-a-sweep). That constrains `priority`: a
+  trigger reachable from this port should declare no tier, leaving the queue's
+  default to apply, unless a proxy in front of the port authenticates — the
+  tier decides where the queue serves work an unauthenticated request started.
 - **Queue dispatch.** Tasks are dispatched through the `TaskQueueProvider`
   interface: an HTTP queue adapter (optional mTLS, optional custom task
   template, optional response logging; the prompt is passed through
@@ -50,11 +56,13 @@ HTTP queue system.
   Forgejo engine sets one per dispatch
   identity, and names each task with a title and a reference URL, per
   §forgejo/webhook/the-pipeline). A priority is the queue's own vocabulary,
-  forwarded verbatim; a task that declares none omits the field from the wire
-  body entirely, so the queue's default tier applies and the body is the one
-  maitred produced before the field existed. The Forgejo engine sets one
-  wherever the `vip` label stands behind the dispatch — on the object, on the
-  issue a pull request delivers, or on its forest's tracker — per
+  forwarded verbatim; the tiers maitred will pass are the three hotelier
+  recognises, named in `pkg/queue`, so a queue whose tiers are named otherwise
+  needs those names changed there. A task that declares none omits the field
+  from the wire body entirely, so the queue's default tier applies and the body
+  is the one maitred produced before the field existed. The Forgejo engine sets
+  one wherever the `vip` label stands behind the dispatch — on the object, on
+  the issue a pull request delivers, or on its forest's tracker — per
   §forgejo/webhook/vip-priority; a trigger's task carries the tier its
   definition declares, checked against the tiers the queue recognises when the
   trigger is loaded (§overview/scope).
