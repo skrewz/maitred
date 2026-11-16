@@ -29,19 +29,21 @@ func strokes() Strokes {
 func ref(repo string, number int) Ref { return Ref{Repository: repo, Number: number} }
 
 func url(repo string, number int) string {
-	return "https://example.com/s-git/" + repo + "/issues/" + strconv.Itoa(number)
+	return "https://example.com/" + repo + "/issues/" + strconv.Itoa(number)
 }
 
 // simpleForest is the forest a tracker's current-state block draws: a root
 // whose membership edges reach a tracker and three members, a work order that
 // chains the members, and the members' blocking edges into the tracker — the
 // fan the source states rather than draws (§forgejo/renderer/note-lines).
+// The issues are fictional: a golden demonstrates rules, never live tracker
+// state a renaming could invite anyone to "refresh".
 func simpleForest() Graph {
-	root := Node{Ref: ref("s-git/s-outcomes", 63), Summary: "ideation", HTMLURL: url("s-outcomes", 63)}
-	tracker := Node{Ref: ref("s-git/s-outcomes", 66), Role: RoleTracker, Summary: "tracker", HTMLURL: url("s-outcomes", 66)}
-	render := Node{Ref: ref("s-git/maitred", 182), Summary: "deterministic forest renderer", HTMLURL: url("maitred", 182)}
-	write := Node{Ref: ref("s-git/maitred", 183), Summary: "engine writes tracker block", HTMLURL: url("maitred", 183)}
-	retire := Node{Ref: ref("s-git/maitred", 184), Role: RoleHumanTask, Summary: "retire prompt chart authoring", HTMLURL: url("maitred", 184)}
+	root := Node{Ref: ref("example/outcomes", 63), Summary: "ideation", HTMLURL: url("outcomes", 63)}
+	tracker := Node{Ref: ref("example/outcomes", 66), Role: RoleTracker, Summary: "tracker", HTMLURL: url("outcomes", 66)}
+	render := Node{Ref: ref("example/tasks", 182), Summary: "deterministic forest renderer", HTMLURL: url("tasks", 182)}
+	write := Node{Ref: ref("example/tasks", 183), Summary: "engine writes tracker block", HTMLURL: url("tasks", 183)}
+	retire := Node{Ref: ref("example/tasks", 184), Role: RoleHumanTask, Summary: "retire prompt chart authoring", HTMLURL: url("tasks", 184)}
 	return Graph{
 		Root:    root,
 		Members: []Node{tracker, retire, render, write},
@@ -74,18 +76,18 @@ func TestRenderGoldens(t *testing.T) {
 	}
 
 	syncSet := Graph{
-		Root: Node{Ref: ref("s-git/s-outcomes", 1), Summary: "ideation", HTMLURL: url("s-outcomes", 1)},
+		Root: Node{Ref: ref("example/outcomes", 1), Summary: "ideation", HTMLURL: url("outcomes", 1)},
 		Members: []Node{
-			{Ref: ref("s-git/maitred", 200), Role: RoleSync, Summary: "land together", HTMLURL: url("maitred", 200)},
-			{Ref: ref("s-git/maitred", 201), Summary: "first of the set", HTMLURL: url("maitred", 201)},
-			{Ref: ref("s-git/maitred", 202), Summary: "second of the set", HTMLURL: url("maitred", 202)},
+			{Ref: ref("example/tasks", 200), Role: RoleSync, Summary: "land together", HTMLURL: url("tasks", 200)},
+			{Ref: ref("example/tasks", 201), Summary: "first of the set", HTMLURL: url("tasks", 201)},
+			{Ref: ref("example/tasks", 202), Summary: "second of the set", HTMLURL: url("tasks", 202)},
 		},
 		Edges: []Edge{
-			{From: ref("s-git/s-outcomes", 1), To: ref("s-git/maitred", 200)},
-			{From: ref("s-git/s-outcomes", 1), To: ref("s-git/maitred", 201)},
-			{From: ref("s-git/s-outcomes", 1), To: ref("s-git/maitred", 202)},
-			{From: ref("s-git/maitred", 201), To: ref("s-git/maitred", 200)},
-			{From: ref("s-git/maitred", 202), To: ref("s-git/maitred", 200)},
+			{From: ref("example/outcomes", 1), To: ref("example/tasks", 200)},
+			{From: ref("example/outcomes", 1), To: ref("example/tasks", 201)},
+			{From: ref("example/outcomes", 1), To: ref("example/tasks", 202)},
+			{From: ref("example/tasks", 201), To: ref("example/tasks", 200)},
+			{From: ref("example/tasks", 202), To: ref("example/tasks", 200)},
 		},
 		Strokes: strokes(),
 	}
@@ -93,33 +95,33 @@ func TestRenderGoldens(t *testing.T) {
 	collapsed := Graph{
 		Root: Node{Ref: ref("example/forest", 1), Summary: "ideation", HTMLURL: "https://example.com/forest/issues/1"},
 		Members: []Node{
-			{Ref: ref("s-git/s-outcomes", 21), Summary: "later outcomes work", HTMLURL: "https://example.com/s-outcomes/issues/21"},
-			{Ref: ref("s-git/maitred", 12), Summary: "third maitred work", HTMLURL: "https://example.com/maitred/issues/12"},
-			{Ref: ref("s-git/s-outcomes", 20), Summary: "first outcomes work", HTMLURL: "https://example.com/s-outcomes/issues/20"},
-			{Ref: ref("s-git/maitred", 10), Summary: "first maitred work", HTMLURL: "https://example.com/maitred/issues/10"},
-			{Ref: ref("s-git/maitred", 11), Summary: "second maitred work", HTMLURL: "https://example.com/maitred/issues/11"},
+			{Ref: ref("example/outcomes", 21), Summary: "later outcomes work", HTMLURL: "https://example.com/outcomes/issues/21"},
+			{Ref: ref("example/tasks", 12), Summary: "third tasks work", HTMLURL: "https://example.com/tasks/issues/12"},
+			{Ref: ref("example/outcomes", 20), Summary: "first outcomes work", HTMLURL: "https://example.com/outcomes/issues/20"},
+			{Ref: ref("example/tasks", 10), Summary: "first tasks work", HTMLURL: "https://example.com/tasks/issues/10"},
+			{Ref: ref("example/tasks", 11), Summary: "second tasks work", HTMLURL: "https://example.com/tasks/issues/11"},
 		},
 		Edges: []Edge{
-			{From: ref("example/forest", 1), To: ref("s-git/maitred", 10)},
-			{From: ref("example/forest", 1), To: ref("s-git/maitred", 11)},
-			{From: ref("example/forest", 1), To: ref("s-git/maitred", 12)},
-			{From: ref("example/forest", 1), To: ref("s-git/s-outcomes", 20)},
-			{From: ref("example/forest", 1), To: ref("s-git/s-outcomes", 21)},
-			{From: ref("s-git/maitred", 12), To: ref("s-git/s-outcomes", 20)},
+			{From: ref("example/forest", 1), To: ref("example/tasks", 10)},
+			{From: ref("example/forest", 1), To: ref("example/tasks", 11)},
+			{From: ref("example/forest", 1), To: ref("example/tasks", 12)},
+			{From: ref("example/forest", 1), To: ref("example/outcomes", 20)},
+			{From: ref("example/forest", 1), To: ref("example/outcomes", 21)},
+			{From: ref("example/tasks", 12), To: ref("example/outcomes", 20)},
 		},
 		Strokes: strokes(),
 	}
 
 	fanOut := simpleForest()
 	fanOut.Members = append(fanOut.Members, Node{
-		Ref:     ref("s-git/s-outcomes", 90),
+		Ref:     ref("example/outcomes", 90),
 		Role:    RoleTracker,
 		Summary: "second tracker",
-		HTMLURL: url("s-outcomes", 90),
+		HTMLURL: url("outcomes", 90),
 	})
 	fanOut.Edges = append(fanOut.Edges,
-		Edge{From: ref("s-git/s-outcomes", 63), To: ref("s-git/s-outcomes", 90)},
-		Edge{From: ref("s-git/maitred", 182), To: ref("s-git/s-outcomes", 90)},
+		Edge{From: ref("example/outcomes", 63), To: ref("example/outcomes", 90)},
+		Edge{From: ref("example/tasks", 182), To: ref("example/outcomes", 90)},
 	)
 
 	for _, tt := range []struct {
@@ -537,15 +539,15 @@ func TestCollapseNamesItself(t *testing.T) {
 		Root: Node{Ref: ref("example/forest", 1), Summary: "ideation", HTMLURL: "https://example.com/forest/issues/1"},
 		Members: []Node{
 			{Ref: ref("example/forest", 2), Summary: "here", HTMLURL: "https://example.com/forest/issues/2"},
-			{Ref: ref("s-git/maitred", 3), Summary: "there", HTMLURL: "https://example.com/maitred/issues/3", Closed: true, ClosedAt: time.Date(2026, 1, 2, 3, 4, 0, 0, time.UTC)},
-			{Ref: ref("s-git/maitred", 4), Summary: "also there", HTMLURL: "https://example.com/maitred/issues/4", Closed: true, ClosedAt: time.Date(2026, 1, 2, 3, 5, 0, 0, time.UTC)},
+			{Ref: ref("example/tasks", 3), Summary: "there", HTMLURL: "https://example.com/tasks/issues/3", Closed: true, ClosedAt: time.Date(2026, 1, 2, 3, 4, 0, 0, time.UTC)},
+			{Ref: ref("example/tasks", 4), Summary: "also there", HTMLURL: "https://example.com/tasks/issues/4", Closed: true, ClosedAt: time.Date(2026, 1, 2, 3, 5, 0, 0, time.UTC)},
 		},
 		Edges: []Edge{
 			{From: ref("example/forest", 1), To: ref("example/forest", 2)},
-			{From: ref("example/forest", 1), To: ref("s-git/maitred", 3)},
-			{From: ref("example/forest", 1), To: ref("s-git/maitred", 4)},
-			{From: ref("s-git/maitred", 3), To: ref("example/forest", 2)},
-			{From: ref("s-git/maitred", 4), To: ref("example/forest", 2)},
+			{From: ref("example/forest", 1), To: ref("example/tasks", 3)},
+			{From: ref("example/forest", 1), To: ref("example/tasks", 4)},
+			{From: ref("example/tasks", 3), To: ref("example/forest", 2)},
+			{From: ref("example/tasks", 4), To: ref("example/forest", 2)},
 		},
 		Strokes: strokes(),
 	}
@@ -554,7 +556,7 @@ func TestCollapseNamesItself(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if strings.Contains(full, "collapsed") || strings.Contains(full, "maitred (2)") {
+	if strings.Contains(full, "collapsed") || strings.Contains(full, "tasks (2)") {
 		t.Errorf("a source under the ceiling was collapsed:\n%s", full)
 	}
 
@@ -564,16 +566,16 @@ func TestCollapseNamesItself(t *testing.T) {
 	}
 	for _, want := range []string{
 		`i_forest{{"forest (2)"}}`,
-		`i_maitred["✅ maitred (2)"]`,
+		`i_tasks["✅ tasks (2)"]`,
 		"%% collapsed to one node per repository: the source exceeds 400 characters",
-		"  i_forest -.-> i_maitred\n",
-		"  class i_maitred closed\n",
+		"  i_forest -.-> i_tasks\n",
+		"  class i_tasks closed\n",
 	} {
 		if !strings.Contains(small, want) {
 			t.Errorf("want %q in the collapsed source, got:\n%s", want, small)
 		}
 	}
-	if strings.Contains(small, "maitred (2)</a>") || strings.Contains(small, "forest (2)</a>") {
+	if strings.Contains(small, "tasks (2)</a>") || strings.Contains(small, "forest (2)</a>") {
 		t.Errorf("a collapsed node carried an anchor:\n%s", small)
 	}
 }

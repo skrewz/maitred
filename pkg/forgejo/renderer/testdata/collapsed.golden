@@ -2,14 +2,14 @@ flowchart TD
 %% forest forest#1 rendered by maitred
 %% collapsed to one node per repository: the source exceeds 500 characters
   i_forest{{"forest (1)"}}
-  i_maitred["maitred (3)"]
-  i_s_outcomes["s-outcomes (2)"]
-  i_forest -.-> i_maitred
-  i_forest -.-> i_s_outcomes
-  i_maitred ==> i_s_outcomes
+  i_outcomes["outcomes (2)"]
+  i_tasks["tasks (3)"]
+  i_forest -.-> i_outcomes
+  i_forest -.-> i_tasks
+  i_tasks ==> i_outcomes
   classDef root stroke:#5319e7,stroke-width:2px
   classDef tracker stroke:#1d76db,stroke-width:2px
   classDef member stroke:#6b7a8c
   classDef closed stroke:#3fb950,stroke-dasharray:4 3,fill:#3fb950,fill-opacity:0.25
   class i_forest root
-  class i_maitred,i_s_outcomes member
+  class i_outcomes,i_tasks member

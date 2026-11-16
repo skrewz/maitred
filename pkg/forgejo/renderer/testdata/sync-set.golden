@@ -1,17 +1,17 @@
 flowchart TD
-%% forest s-outcomes#1 rendered by maitred
-  i_s_outcomes_1{{"<a href='https://example.com/s-git/s-outcomes/issues/1' target='_blank' style='color:inherit'>s-outcomes#1 · ideation</a>"}}
-  i_maitred_200["<a href='https://example.com/s-git/maitred/issues/200' target='_blank' style='color:inherit'>maitred#200 ·<br/>land together (#201 #202)</a>"]
-  i_maitred_201["<a href='https://example.com/s-git/maitred/issues/201' target='_blank' style='color:inherit'>maitred#201 · first of the set</a>"]
-  i_maitred_202["<a href='https://example.com/s-git/maitred/issues/202' target='_blank' style='color:inherit'>maitred#202 ·<br/>second of the set</a>"]
-  i_s_outcomes_1 -.-> i_maitred_200
-  i_s_outcomes_1 -.-> i_maitred_201
-  i_s_outcomes_1 -.-> i_maitred_202
-  i_maitred_201 ==> i_maitred_200
-  i_maitred_202 ==> i_maitred_200
+%% forest outcomes#1 rendered by maitred
+  i_outcomes_1{{"<a href='https://example.com/outcomes/issues/1' target='_blank' style='color:inherit'>outcomes#1 · ideation</a>"}}
+  i_tasks_200["<a href='https://example.com/tasks/issues/200' target='_blank' style='color:inherit'>tasks#200 ·<br/>land together (#201 #202)</a>"]
+  i_tasks_201["<a href='https://example.com/tasks/issues/201' target='_blank' style='color:inherit'>tasks#201 · first of the set</a>"]
+  i_tasks_202["<a href='https://example.com/tasks/issues/202' target='_blank' style='color:inherit'>tasks#202 · second of the set</a>"]
+  i_outcomes_1 -.-> i_tasks_200
+  i_outcomes_1 -.-> i_tasks_201
+  i_outcomes_1 -.-> i_tasks_202
+  i_tasks_201 ==> i_tasks_200
+  i_tasks_202 ==> i_tasks_200
   classDef root stroke:#5319e7,stroke-width:2px
   classDef tracker stroke:#1d76db,stroke-width:2px
   classDef member stroke:#6b7a8c
   classDef closed stroke:#3fb950,stroke-dasharray:4 3,fill:#3fb950,fill-opacity:0.25
-  class i_s_outcomes_1 root
-  class i_maitred_200,i_maitred_201,i_maitred_202 member
+  class i_outcomes_1 root
+  class i_tasks_200,i_tasks_201,i_tasks_202 member
