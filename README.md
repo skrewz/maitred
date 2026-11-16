@@ -299,9 +299,16 @@ immediately instead of waiting for the next
 reconcile tick. A sweep is the backstop for webhook deliveries the engine
 missed, so the modal asks whether you have taken the steps that make the button
 unnecessary before anything runs. The same can be driven over the API:
-`GET /api/forgejo` lists the sweep catalog in its `sweeps` field, and
+`GET /api/forgejo` lists the sweep catalog in its `sweeps` field,
 `POST /api/forgejo/sweeps/{id}` starts one (a sweep already in flight is
-skipped, as with a scheduled sweep; see `specification/forgejo/observability.md`).
+skipped, as with a scheduled sweep), and `GET /api/forgejo/outcomes`
+lists the current forests — each open `ideation` root in the outcomes
+repositories paired with the `outcome` tracker it blocks. Like the
+tracked view, the outcomes view answers from memory: the forest set is
+rebuilt on the reconcile sweep's tick rather than per request, so
+polling it is a freshness choice rather than a cost one, and its
+enumeration cost and audience are spelled out where the view is
+specified (see `specification/forgejo/observability.md`).
 
 The dashboard has no authentication of its own: like the trigger cards'
 fire-now and pause/resume controls, the sweep trigger is reachable by anyone

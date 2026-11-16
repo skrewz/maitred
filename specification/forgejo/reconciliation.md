@@ -23,7 +23,26 @@ created while the engine was down.
    roles each repository holds (§forgejo/webhook/the-scope-cache) — so the
    sweep adds no API call to the scope test, and a repository excluded
    here is held off on the event path too.
-2. **Enumerate the objects.** For each such repository, list **all**
+2. **Record the forest set.** Enumerate the **current forests** — the
+   open `ideation` issues of the outcomes repositories paired with the
+   trackers their roots block — and record the set the **outcomes
+   view** is served from
+   (§forgejo/observability/the-outcomes-view). This is why the sweep,
+   not an API request, pays the view's reads; a failed enumeration
+   leaves the view saying so rather than serving a set it can no
+   longer vouch for (§forgejo/webhook/the-scope-cache). The set carries
+   the moment it was recorded, and the view serves it for at most one
+   reconcile interval, so a sweep that returns before this step — the
+   organisation listing of step 1 having failed — ages the view out
+   instead of leaving it serving the set recorded before the outage.
+   It is step 2 rather than a tail to the walk so that the walk, with
+   the pipeline's re-fetches in it, keeps the sweep's slow work: a walk
+   delays the next recording only by overrunning a whole reconcile
+   interval — the ticks themselves belong to the interval as counted
+   from the engine's start. Where a walk does overrun one, the set ages
+   out while that walk runs, which is the one-interval bound holding
+   rather than a hole in it.
+3. **Enumerate the objects.** For each such repository, list **all**
    open issues and all open pull requests
    (§forgejo/client/operations). The issue list includes pull requests
    (Forgejo represents them as issues); the sweep skips the ones marked
@@ -36,7 +55,7 @@ created while the engine was down.
    into an error line and no pull-request decision can come of it
    (§forgejo/client/operations). Issues are still listed and decided as
    usual.
-3. **Decide and dispatch.** For each listed object, feed the synthetic
+4. **Decide and dispatch.** For each listed object, feed the synthetic
    `reconcile` event (§forgejo/decisions/inputs) through the **same
    pipeline as the event path** (§forgejo/webhook/the-pipeline):
    re-fetch, decide, dispatch, watermark — serialised on the watermark

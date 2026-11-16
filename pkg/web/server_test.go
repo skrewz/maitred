@@ -26,13 +26,38 @@ type stubForgejoAPI struct {
 	// org's repositories, so a test can see a manually fired sweep
 	// run (§forgejo/observability/triggering-a-sweep).
 	reposCounts atomic.Int32
+
+	// The outcomes-view fixtures: the organisation's repositories,
+	// open issues per repository, and the blocks listings — set only
+	// by the outcomes-endpoint tests, so every other test keeps the
+	// single maitred-enabled repository below (§forgejo/observability/the-outcomes-view).
+	repos      []forgejo.Repository
+	openIssues map[string][]forgejo.Issue
+	blocks     map[int][]forgejo.Issue
+
+	// reposErr, when set, fails only ListOrgRepositories — so a test
+	// can break the outcomes view's scope listing without breaking
+	// anything else it reads.
+	reposErr error
+
+	// issuesErr, when set, fails every ListOpenIssues — so a test can
+	// make a sweep's forest enumeration fail while its own listing
+	// lands (§forgejo/observability/the-outcomes-view).
+	issuesErr error
 }
 
 // The stub's organisation holds the one maitred-enabled repository the
 // tests dispatch in — the event path's scope test consults the listing
-// (§forgejo/webhook/the-scope-cache).
+// (§forgejo/webhook/the-scope-cache) — unless a test restates the
+// listing outright.
 func (s *stubForgejoAPI) ListOrgRepositories(string) ([]forgejo.Repository, error) {
 	s.reposCounts.Add(1)
+	if s.reposErr != nil {
+		return nil, s.reposErr
+	}
+	if s.repos != nil {
+		return s.repos, nil
+	}
 	return []forgejo.Repository{{
 		Name:     "r",
 		FullName: "o/r",
@@ -41,8 +66,11 @@ func (s *stubForgejoAPI) ListOrgRepositories(string) ([]forgejo.Repository, erro
 	}}, nil
 }
 
-func (s *stubForgejoAPI) ListOpenIssues(string, string) ([]forgejo.Issue, error) {
-	return nil, nil
+func (s *stubForgejoAPI) ListOpenIssues(_, repo string) ([]forgejo.Issue, error) {
+	if s.issuesErr != nil {
+		return nil, s.issuesErr
+	}
+	return s.openIssues[repo], nil
 }
 
 func (s *stubForgejoAPI) ListOpenPullRequests(string, string) ([]forgejo.PullRequest, error) {
@@ -57,8 +85,8 @@ func (s *stubForgejoAPI) GetPullRequest(string, string, int) (*forgejo.PullReque
 	return nil, nil
 }
 
-func (s *stubForgejoAPI) IssueBlocks(string, string, int) ([]forgejo.Issue, error) {
-	return nil, nil
+func (s *stubForgejoAPI) IssueBlocks(_, _ string, number int) ([]forgejo.Issue, error) {
+	return s.blocks[number], nil
 }
 
 func (s *stubForgejoAPI) IssueDependencies(string, string, int) ([]forgejo.Issue, error) {
@@ -73,10 +101,9 @@ func (s *stubForgejoAPI) ListPullRequestReviews(string, string, int) ([]forgejo.
 	return nil, nil
 }
 
-// testForgejoEngine builds an engine that has made one dispatching
-// decision, alongside the API stub it reads through
-// (§forgejo/observability/the-dashboard-view).
-func testForgejoEngine(t *testing.T) (*forgejo.Engine, *stubForgejoAPI) {
+// newForgejoEngine builds an engine over the given API stub, without
+// handling any event.
+func newForgejoEngine(t *testing.T, api *stubForgejoAPI) *forgejo.Engine {
 	t.Helper()
 	store, err := forgejo.NewStore(t.TempDir())
 	if err != nil {
@@ -91,12 +118,6 @@ func testForgejoEngine(t *testing.T) (*forgejo.Engine, *stubForgejoAPI) {
 			Timeout:  time.Hour,
 		}
 	}
-	api := &stubForgejoAPI{issue: &forgejo.Issue{
-		Number:     7,
-		State:      "open",
-		UpdatedAt:  time.Date(2026, 9, 16, 13, 25, 18, 0, time.UTC),
-		Repository: "o/r",
-	}}
 	eng := forgejo.NewEngine(
 		api,
 		store, cfg, queue.NewTaskQueue(),
@@ -105,6 +126,21 @@ func testForgejoEngine(t *testing.T) (*forgejo.Engine, *stubForgejoAPI) {
 	// Stop waits the in-flight sweep out whatever a test started, so
 	// no sweep goroutine outlives the temporary directories above.
 	t.Cleanup(eng.Stop)
+	return eng
+}
+
+// testForgejoEngine builds an engine that has made one dispatching
+// decision, alongside the API stub it reads through
+// (§forgejo/observability/the-dashboard-view).
+func testForgejoEngine(t *testing.T) (*forgejo.Engine, *stubForgejoAPI) {
+	t.Helper()
+	api := &stubForgejoAPI{issue: &forgejo.Issue{
+		Number:     7,
+		State:      "open",
+		UpdatedAt:  time.Date(2026, 9, 16, 13, 25, 18, 0, time.UTC),
+		Repository: "o/r",
+	}}
+	eng := newForgejoEngine(t, api)
 	eng.HandleEvent(forgejo.Event{Type: forgejo.EventIssueOpened, Repo: "o/r", Kind: forgejo.KindIssue, Number: 7, Sender: "alice"})
 	return eng, api
 }
@@ -457,5 +493,244 @@ func TestServerStartStop(t *testing.T) {
 	// top of the test safe alongside the one just above.
 	if err := srv.Stop(); err != nil {
 		t.Errorf("second Stop: %v, want the no-op to report nothing", err)
+	}
+}
+
+// outcomesStubAPI is the outcomes-view fixture: the organisation holds a
+// work-item repository and an outcomes repository; the outcomes
+// repository holds a root paired with its tracker and a root whose
+// tracker is absent (§forgejo/observability/the-outcomes-view).
+func outcomesStubAPI() *stubForgejoAPI {
+	root := forgejo.Issue{
+		Number: 51, Title: "UI for human review", State: "open",
+		Labels: []string{"ideation"}, Repository: "o/out",
+		HTMLURL: "https://forge.example.com/o/out/issues/51",
+	}
+	tracker := forgejo.Issue{
+		Number: 71, Title: "forest tracker", State: "open",
+		Labels: []string{"outcome"}, Repository: "o/out",
+		HTMLURL: "https://forge.example.com/o/out/issues/71",
+	}
+	loneRoot := forgejo.Issue{
+		Number: 52, Title: "root without a gate", State: "open",
+		Labels: []string{"ideation"}, Repository: "o/out",
+		HTMLURL: "https://forge.example.com/o/out/issues/52",
+	}
+	return &stubForgejoAPI{
+		issue: &forgejo.Issue{Number: 7, State: "open", Repository: "o/r"},
+		repos: []forgejo.Repository{
+			{Name: "r", FullName: "o/r", Owner: "o", Topics: []string{"maitred-enabled"}},
+			{Name: "out", FullName: "o/out", Owner: "o", Topics: []string{"maitred-outcomes-repo"}},
+		},
+		openIssues: map[string][]forgejo.Issue{"out": {root, tracker, loneRoot}},
+		blocks:     map[int][]forgejo.Issue{51: {tracker}},
+	}
+}
+
+// forestIssueJSON mirrors one issue row of a forest in the outcomes
+// view: number, title, state, HTML URL, and the repository the issue
+// lives in — stated per row, because a tracker may sit outside the
+// repository the forest grew in (§forgejo/observability/the-outcomes-view).
+type forestIssueJSON struct {
+	Number     int    `json:"number"`
+	Repository string `json:"repository"`
+	Title      string `json:"title"`
+	State      string `json:"state"`
+	HTMLURL    string `json:"html_url"`
+}
+
+// forestJSON mirrors one forest of the outcomes view: the repository,
+// the root, and the tracker — a null tracker states its honest absence
+// (§forgejo/observability/the-outcomes-view).
+type forestJSON struct {
+	Repository string           `json:"repository"`
+	Root       forestIssueJSON  `json:"root"`
+	Tracker    *forestIssueJSON `json:"tracker"`
+}
+
+// outcomesViewJSON mirrors the /api/forgejo/outcomes response shape:
+// the forest list and the one engine-status field
+// (§forgejo/observability/the-outcomes-view).
+type outcomesViewJSON struct {
+	EngineStatus string       `json:"engine_status"`
+	Forests      []forestJSON `json:"forests"`
+}
+
+func getOutcomes(t *testing.T, srv *Server) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/forgejo/outcomes", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+// TestForgejoOutcomesEndpoint: the endpoint serves the forests the
+// sweep tick recorded — a root and its tracker listed together, a root
+// whose tracker is missing listed with the absence stated — alongside
+// the engine-status field; serving the request itself reads no forge
+// (§forgejo/observability/the-outcomes-view).
+func TestForgejoOutcomesEndpoint(t *testing.T) {
+	api := outcomesStubAPI()
+	fjEng := newForgejoEngine(t, api)
+	fjEng.Reconcile() // the sweep tick records the set the view serves
+	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
+	rec := getOutcomes(t, srv)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var view outcomesViewJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if view.EngineStatus != forgejo.EngineUpWord {
+		t.Errorf("engine_status = %q, want %q", view.EngineStatus, forgejo.EngineUpWord)
+	}
+	if len(view.Forests) != 2 {
+		t.Fatalf("forests = %+v, want both roots of o/out listed", view.Forests)
+	}
+	var paired, lone *forestJSON
+	for i := range view.Forests {
+		switch view.Forests[i].Root.Number {
+		case 51:
+			paired = &view.Forests[i]
+		case 52:
+			lone = &view.Forests[i]
+		default:
+			t.Errorf("unexpected root %d listed", view.Forests[i].Root.Number)
+		}
+	}
+	if paired == nil || lone == nil {
+		t.Fatalf("forests = %+v, want roots 51 and 52", view.Forests)
+	}
+	if paired.Repository != "o/out" {
+		t.Errorf("repository = %q, want o/out", paired.Repository)
+	}
+	if paired.Root.Title != "UI for human review" || paired.Root.State != "open" || paired.Root.HTMLURL == "" {
+		t.Errorf("root = %+v, want ideation issue 51 with its fields", paired.Root)
+	}
+	if paired.Root.Repository != "o/out" || (paired.Tracker != nil && paired.Tracker.Repository != "o/out") {
+		t.Errorf("rows = %+v, want each row to state the repository the issue lives in", paired)
+	}
+	if paired.Tracker == nil {
+		t.Fatal("tracker = nil, want the outcome issue the root blocks")
+	}
+	if paired.Tracker.Number != 71 || paired.Tracker.Title != "forest tracker" || paired.Tracker.State != "open" || paired.Tracker.HTMLURL == "" {
+		t.Errorf("tracker = %+v, want outcome issue 71 with its fields", paired.Tracker)
+	}
+	if lone.Tracker != nil {
+		t.Errorf("root 52 tracker = %+v, want the absence stated", lone.Tracker)
+	}
+	// The stated absence is spelled as a null in the body, not omitted:
+	// one check inside the shape test, since root 52 already stands
+	// here for the case (§forgejo/observability/the-outcomes-view).
+	if !strings.Contains(rec.Body.String(), `"tracker":null`) {
+		t.Errorf("body %s, want the absent tracker spelled as null", rec.Body.String())
+	}
+	// The open tracker is no forest of its own: only roots are listed.
+	for _, f := range view.Forests {
+		if f.Root.Number == 71 {
+			t.Error("the tracker stands as a forest of its own")
+		}
+	}
+}
+
+// TestForgejoOutcomesEndpoint_Disabled: with no engine and no cause in
+// hand, the endpoint answers an empty list — never null — alongside the
+// not-configured engine status (§forgejo/observability/the-outcomes-view).
+func TestForgejoOutcomesEndpoint_Disabled(t *testing.T) {
+	srv := New(0, nil, "test", nil, forgejo.EngineStateWord(false, nil))
+	rec := getOutcomes(t, srv)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"forests":[]`) {
+		t.Errorf("body %s, want an empty forests list, never null", rec.Body.String())
+	}
+	var view outcomesViewJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if view.EngineStatus != forgejo.CategoryNotConfigured.String() {
+		t.Errorf("engine_status = %q, want %q", view.EngineStatus, forgejo.CategoryNotConfigured.String())
+	}
+	if len(view.Forests) != 0 {
+		t.Errorf("forests = %d, want none without an engine", len(view.Forests))
+	}
+}
+
+// TestForgejoOutcomesEndpoint_ReadFailure: a sweep whose forest
+// enumeration fails takes the view down with it — 500, not an empty
+// list a caller could read as "no forests", and not the earlier set
+// served as if fresh — and the 500 carries a fixed sentence, not the
+// read's raw error text: this port authenticates nothing, and the raw
+// text names repositories and forge response bodies a stranger should
+// not read (§forgejo/observability/the-outcomes-view,
+// §forgejo/observability/why-the-engine-is-off).
+func TestForgejoOutcomesEndpoint_ReadFailure(t *testing.T) {
+	api := outcomesStubAPI()
+	fjEng := newForgejoEngine(t, api)
+	fjEng.Reconcile() // a set the view stood on, until the reads broke
+	api.issuesErr = fmt.Errorf("issue listing down")
+	fjEng.Reconcile() // the sweep's enumeration fails; the view says so
+	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
+	rec := getOutcomes(t, srv)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if body := rec.Body.String(); strings.Contains(body, "issue listing down") || strings.Contains(body, "o/out") || !strings.Contains(body, "outcomes read failed") {
+		t.Errorf("body %q, want the fixed sentence and no raw forge error text", body)
+	}
+}
+
+// TestForgejoOutcomesEndpoint_NotYetEnumerated: an engine whose first
+// sweep has not yet recorded a forest set answers 500, not an empty
+// list — the honest empty is reserved for a view that read fine and
+// found nothing (§forgejo/observability/the-outcomes-view).
+func TestForgejoOutcomesEndpoint_NotYetEnumerated(t *testing.T) {
+	fjEng := newForgejoEngine(t, outcomesStubAPI())
+	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
+	rec := getOutcomes(t, srv)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "outcomes read failed") {
+		t.Errorf("body %q, want the fixed sentence", rec.Body.String())
+	}
+}
+
+// TestForgejoOutcomesEndpoint_Method: only GET is allowed.
+func TestForgejoOutcomesEndpoint_Method(t *testing.T) {
+	srv := New(0, nil, "test", nil, forgejo.EngineStateWord(false, nil))
+	req := httptest.NewRequest(http.MethodPost, "/api/forgejo/outcomes", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rec.Code)
+	}
+}
+
+// TestForgejoOutcomesEndpoint_RecordedEmpty: an engine whose sweep
+// enumerated no forests answers 200 with an empty list. This is the
+// honest empty the view reserves for a read that succeeded and found
+// nothing, which the no-engine case cannot stand in for because that
+// one holds no engine at all (§forgejo/observability/the-outcomes-view).
+func TestForgejoOutcomesEndpoint_RecordedEmpty(t *testing.T) {
+	api := outcomesStubAPI()
+	api.openIssues["out"] = nil
+	fjEng := newForgejoEngine(t, api)
+	fjEng.Reconcile() // the sweep tick records an empty set
+	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
+	rec := getOutcomes(t, srv)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"forests":[]`) {
+		t.Errorf("body %s, want an empty forests list, never null", rec.Body.String())
 	}
 }

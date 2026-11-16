@@ -88,6 +88,98 @@ decisions: the tracked list is empty when the engine is disabled or
 has made no decisions yet, and it is cleared on restart (the
 watermark store is unaffected, §forgejo/state/persistence).
 
+## The outcomes view
+
+The forest is the unit of work this engine stewards: an ideation root and
+the outcome tracker it blocks (§forgejo/decisions/commissioning). The
+engine therefore offers an **outcomes view**: the **current forests** of
+the organisation — every open `ideation` issue in the repositories holding
+the outcomes role (§forgejo/webhook/repository-roles), paired with the
+`outcome` issue it blocks. The view introduces no new label vocabulary:
+it reads only the reserved `ideation` and `outcome` names
+(§forgejo/decisions/actions).
+
+The pairing is found the way the cascade finds connected issues: for each
+open ideation issue the engine asks which issues it blocks
+(§forgejo/client/operations) and takes the first blocked issue the
+engine reads as a **tracker** — one carrying `outcome` and not
+`ideation`, the one reading the cascade and the teardown apply
+(§forgejo/decisions/unblock-cascade, §forgejo/decisions/forest-teardown).
+A blocked row carrying both kinds is another forest's root, not this
+one's tracker: decompose wins over wrap-up wherever both apply, here as
+everywhere else in the engine. A root whose tracker is missing — it
+blocks no tracker — is listed anyway, **with the tracker stated as
+absent**: a forest without its gate is exactly the situation a human
+needs to see, so the view never papers over it by dropping the row. An
+`outcome` issue that no open ideation root blocks is not a forest and is
+not listed. The view is a picture of what exists, not of what an order
+is about to do: an `ideation` root already carrying `teardown-forest` or
+`sync` — a forest under teardown or mid-sync — is still among the
+current forests, whatever the decompose gate makes of the same row
+(§forgejo/decisions/forest-teardown, §forgejo/decisions/sync-set).
+
+The dashboard API serves the view at `GET /api/forgejo/outcomes`. The
+set it serves is the one the last sweep tick recorded: like the tracked
+view it answers from memory, and a request costs no forge read
+(§forgejo/observability/the-dashboard-view). The response is an object
+carrying two things: the **forest list** and **one engine-status field**
+rendering the engine's state as the forgejo view does
+(§forgejo/observability/the-dashboard-view), so a configured-but-broken
+engine never reads as a healthy one with nothing to show. Each forest
+names its **repository** — spelled as the forge's listing spells it,
+falling back to the scope cache's lowercased key where a listing row
+omits it — its **root** — number, title, state, repository, and HTML URL
+— and its **tracker** — the same fields, naming the repository the
+tracker itself lives in, a blocks row listing none living where the
+root does, so a tracker blocked across a repository boundary says where
+it lives rather than inheriting the root's address
+(§forgejo/client/operations) — or the honest absence of one, spelled as
+a `null` tracker so the field is always present. Without the engine, or
+with no forests, the list is empty — never `null`: an enumeration that
+found nothing is an honest empty, not a view that never read. A view the
+engine cannot vouch for — no sweep's enumeration has landed yet, the
+most recent one failed (the organisation listing, an issue listing, or a
+blocks read), or the set it holds has aged past one `reconcile_interval`
+without a sweep having recorded a newer one — answers `500` rather than
+an empty list or a stale set, because a failed read must not read as an
+empty set of forests and a set no longer vouched for is never served as
+if fresh: the same rule the scope cache applies to stale snapshots
+(§forgejo/webhook/the-scope-cache). The bound is the view's own, applied
+as the set is read, so a sweep that never reached the step that records
+the set — its own organisation listing having failed — ages the view out
+rather than leaving it serving what it recorded before the outage. The
+sweep records the set at its head, as its step 2
+(§forgejo/reconciliation/the-sweep). Only the honest empty answers `200`
+with an empty list. The `500` carries a fixed sentence and the read's
+detail goes to the log: raw forge error text carries repository names
+and forge response bodies a caller need not be entitled to, and this
+port authenticates nothing
+(§forgejo/observability/why-the-engine-is-off). A method other than GET
+answers `405`.
+
+The enumeration happens on the reconciliation sweep's tick, not on the
+request path (§forgejo/reconciliation/the-sweep): per tick it costs one
+issue listing per outcomes repository and one blocks read per open
+ideation root, on top of the sweep's own walk; the sweep's own
+organisation listing keeps the scope cache fresh, so the walk adds no
+listing of its own (§forgejo/webhook/the-scope-cache). That walk is the
+view's own reader rather than a pairing folded into the sweep's fourth
+step: the sweep's listings cover every repository holding either role,
+and the blocks reads the digest makes happen inside the pipeline, where
+their rows are summed into a digest and discarded, so folding the
+pairing in would thread forest rows through the decision path to save
+little. A manual sweep start refreshes the set too
+(§forgejo/observability/triggering-a-sweep).
+What the endpoint answers is therefore always the set the last sweep
+tick enumerated, and a request to it — however often a later
+`/outcomes` page polls on a timer — costs no forge read at all: the
+poll interval becomes a freshness choice, not a cost one. The payload
+still enumerates the organisation's ideation roots and trackers to an
+unauthenticated port, so the view rides the dashboard's standing trust
+model — an endpoint reachable by anyone who can reach the port,
+which is meant to reach only its operator's network
+(§forgejo/observability/triggering-a-sweep, README Web Dashboard).
+
 ## Triggering a sweep
 
 The sweeps are the backstop for deliveries the event path missed, and a

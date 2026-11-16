@@ -21,7 +21,9 @@ const maitredOutcomesTopic = "maitred-outcomes-repo"
 // through the same pipeline as the event path — re-fetch, decide,
 // dispatch, watermark, serialised on the watermark store's per-key lock.
 // A sweep that starts while another is in flight is skipped
-// (§forgejo/reconciliation/scheduling).
+// (§forgejo/reconciliation/scheduling). The tick also records the
+// forest set the outcomes view is served from
+// (§forgejo/observability/the-outcomes-view).
 func (e *Engine) Reconcile() {
 	if !e.sweeping.CompareAndSwap(false, true) {
 		e.log.Info("reconciliation already in flight; skipping")
@@ -37,6 +39,10 @@ func (e *Engine) Reconcile() {
 	// The listing is the scope cache: the event path consults it instead
 	// of fetching per delivery (§forgejo/webhook/the-scope-cache).
 	e.refreshScopeCache(repos)
+	// The tick records the forest set before the walk below dispatches
+	// any event (§forgejo/reconciliation/the-sweep,
+	// §forgejo/observability/the-outcomes-view).
+	e.recordForests()
 	for i := range repos {
 		repo := &repos[i]
 		// The sweep visits the union of both role sets, so a missed
@@ -125,11 +131,16 @@ func (e *Engine) Stop() {
 // (§forgejo/observability/triggering-a-sweep) leaves the dashboard and
 // the endpoint alone but must give startCh an id to carry and dispatch
 // on it here.
+// The ticker is created before the first sweep so that every tick
+// belongs to the interval as counted from the engine's start: a first
+// sweep that keeps busy would otherwise push the whole schedule out by
+// its own length, and with it the moment the outcomes view's set is
+// next refreshed (§forgejo/observability/the-outcomes-view).
 func (e *Engine) sweepLoop() {
 	defer close(e.doneCh)
-	e.Reconcile()
 	t := time.NewTicker(e.cfg.ReconcileInterval)
 	defer t.Stop()
+	e.Reconcile()
 	for {
 		select {
 		case <-t.C:

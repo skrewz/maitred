@@ -93,6 +93,20 @@ type Engine struct {
 	// burst costs one listing rather than one each.
 	refreshMu sync.Mutex
 
+	// The forest snapshot: the current forests as the last sweep tick
+	// enumerated them, the moment that enumeration landed, and the
+	// error the most recent enumeration failed with — nil alongside a
+	// set only for as long as that set is what the engine can vouch
+	// for. forestsAt's zero value says nothing ever was recorded, so
+	// an empty set means only emptiness, and its age is what bounds how
+	// long a set is served as fresh. The outcomes view is served from
+	// here, never from the request path
+	// (§forgejo/observability/the-outcomes-view).
+	forestsMu   sync.Mutex
+	forestsSnap []Forest
+	forestsAt   time.Time
+	forestsErr  error
+
 	// The re-fire bound: the last landed singleton dispatch per key and
 	// action, and the moment it landed, so one unchanged
 	// (action, revision) re-fires at most once per reconcile interval
