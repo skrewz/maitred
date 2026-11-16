@@ -21,3 +21,4 @@ Specifications that have landed:
 | `webhook.md` | the webhook handler (event path) — §forgejo/webhook/the-pipeline |
 | `reconciliation.md` | the reconciliation sweep — §forgejo/reconciliation/the-sweep |
 | `observability.md` | the decision log, the dashboard view, the outcomes view and triggering a sweep — §forgejo/observability/the-decision-log |
+| `renderer.md` | the forest renderer (graph in, Mermaid out) — §forgejo/renderer/the-contract |
