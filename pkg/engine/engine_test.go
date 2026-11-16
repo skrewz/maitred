@@ -1170,11 +1170,12 @@ triggers:
 	}
 }
 
-// TestEngine_TriggersLeavePriorityUnset: the trigger paths declare no
-// queue tier — the vip policy of §forgejo/webhook/vip-priority is
-// forgejoeng's, judged from labels a trigger has no access to — so their
-// tasks carry no priority and the queue's own default applies, exactly as
-// before the field existed (§forgejo/webhook/vip-priority).
+// TestEngine_TriggersLeavePriorityUnset: a trigger that declares no priority
+// dispatches a task carrying none — the vip policy of
+// §forgejo/webhook/vip-priority is forgejoeng's, judged from labels a trigger
+// has no access to, and a trigger's own tier is a declaration it may simply
+// not make — so the queue's default applies, exactly as before the field
+// existed (§overview/scope).
 func TestEngine_TriggersLeavePriorityUnset(t *testing.T) {
 	dir := t.TempDir()
 
@@ -1209,5 +1210,46 @@ triggers:
 	}
 	if tasks[0].Priority != "" {
 		t.Errorf("priority = %q, want unset so the queue's default tier applies", tasks[0].Priority)
+	}
+}
+
+// TestEngine_TriggerCarriesDeclaredPriority: the tier a trigger declares rides
+// on the task it dispatches, so the queue serves that trigger's work above its
+// default tier (§overview/scope).
+func TestEngine_TriggerCarriesDeclaredPriority(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "ranked"
+    type: periodic
+    schedule: "@every 1h"
+    priority: teacher
+    prompt: "research"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mq := &mockQueue{}
+	eng, err := engine.New(engine.Config{
+		TriggerDir: dir,
+		DataDir:    t.TempDir(),
+		Queue:      mq,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating engine: %v", err)
+	}
+
+	if err := eng.FireNow("ranked"); err != nil {
+		t.Fatalf("FireNow: %v", err)
+	}
+
+	tasks := mq.Tasks()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(tasks))
+	}
+	if tasks[0].Priority != "teacher" {
+		t.Errorf("priority = %q, want the tier the trigger declared", tasks[0].Priority)
 	}
 }

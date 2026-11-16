@@ -265,7 +265,7 @@ The `vip` label names the tier a task is scheduled at. It is an
 **annotation, not a trigger**: it asks for no work item and gates no
 decision, and attaching or removing it is just editing labels
 (§forgejo/decisions/actions). The priority itself is the queue's own
-vocabulary, forwarded verbatim and never interpreted by maitred
+vocabulary, forwarded verbatim and read by nothing in the engine
 (§overview/scope); the tier this section names is `teacher`, and
 where nothing carries the label the field stays absent from the wire body
 and the queue's default tier applies — the body is the one maitred

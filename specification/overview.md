@@ -22,7 +22,11 @@ HTTP queue system.
   human-readable `title` for the work it enqueues, expanded with the same
   template machinery as the prompt and carried on the dispatched task; a
   trigger that declares none leaves the task untitled and the queue system
-  names it.
+  names it. A trigger may declare a `priority` — one of the tiers the queue
+  recognises — for the task it enqueues, and one it does not recognise fails
+  the load naming the trigger and the value, so a typo is a startup failure
+  rather than a dispatch the queue refuses. Declaring nothing leaves the field
+  off the task and the queue's own default tier applies.
 - **Prompt templating.** A trigger's `prompt` is a Go `text/template` with
   `.LastRun` (RFC 3339 timestamp of the trigger's last execution) and
   `.Payload` (the webhook payload, when present), plus custom template
@@ -46,14 +50,14 @@ HTTP queue system.
   Forgejo engine sets one per dispatch
   identity, and names each task with a title and a reference URL, per
   §forgejo/webhook/the-pipeline). A priority is the queue's own vocabulary,
-  forwarded verbatim and never interpreted by maitred; a task that declares
-  none omits the field from the wire body entirely, so the queue's default
-  tier applies and the body is the one maitred produced before the field
-  existed. The Forgejo engine sets one wherever the `vip` label stands
-  behind the dispatch — on the object, on the issue a pull request
-  delivers, or on its forest's tracker — per
-  §forgejo/webhook/vip-priority; a trigger's task declares none, since a
-  trigger has no labelled object to judge.
+  forwarded verbatim; a task that declares none omits the field from the wire
+  body entirely, so the queue's default tier applies and the body is the one
+  maitred produced before the field existed. The Forgejo engine sets one
+  wherever the `vip` label stands behind the dispatch — on the object, on the
+  issue a pull request delivers, or on its forest's tracker — per
+  §forgejo/webhook/vip-priority; a trigger's task carries the tier its
+  definition declares, checked against the tiers the queue recognises when the
+  trigger is loaded (§overview/scope).
 - **Persistent state.** Each trigger's last run time and extra state is
   persisted as a JSON file per trigger under the data directory and survives
   restarts. Per-trigger execution history is recorded.

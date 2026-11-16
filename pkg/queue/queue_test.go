@@ -244,3 +244,56 @@ func TestTask_Priority_JSON(t *testing.T) {
 		t.Errorf("expected priority in JSON, got %s", b)
 	}
 }
+
+// TestValidPriorities: the tiers maitred forwards are the three the queue
+// recognises — hotelier validates the field against exactly this set and serves
+// a task whose priority is absent at the lowest of them (see
+// https://github.com/skrewz/hotelier#api and its queue.ValidatePriority).
+func TestValidPriorities(t *testing.T) {
+	got := queue.ValidPriorities()
+	want := []string{queue.PriorityFirefighter, queue.PriorityTeacher, queue.PriorityOrangutan}
+
+	if len(got) != len(want) {
+		t.Fatalf("got %d priorities %v, want %v", len(got), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("priority %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	// The slice is the caller's to keep: sorting or appending to it must not
+	// edit the vocabulary every later caller sees.
+	got[0] = "tampered"
+	if again := queue.ValidPriorities(); again[0] != queue.PriorityFirefighter {
+		t.Errorf("ValidPriorities returned a shared slice: %v", again)
+	}
+}
+
+// TestIsValidPriority: the predicate trigger validation asks. The queue matches
+// tiers exactly, so an empty string (which says nothing at all) and anything
+// merely resembling a tier are not tiers.
+func TestIsValidPriority(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"firefighter", queue.PriorityFirefighter, true},
+		{"teacher", queue.PriorityTeacher, true},
+		{"orangutan", queue.PriorityOrangutan, true},
+		{"empty says nothing", "", false},
+		{"whitespace only", "   ", false},
+		{"wrong case", "Teacher", false},
+		{"unknown tier", "urgent", false},
+		{"padded tier", " teacher", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := queue.IsValidPriority(tc.in); got != tc.want {
+				t.Errorf("IsValidPriority(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}

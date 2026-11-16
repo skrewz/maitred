@@ -40,10 +40,9 @@ type Task struct {
 	// does not interpret it. Empty omits the field.
 	URL string `json:"url,omitempty"`
 	// Priority is the tier the queue should serve the task at. It is the
-	// downstream queue's own vocabulary, forwarded verbatim: the queue
-	// maitred is designed to run alongside accepts "firefighter",
-	// "teacher" or "orangutan" and answers 400 for any other non-empty
-	// value (see the hotelier API, POST /api/tasks and
+	// downstream queue's own vocabulary, forwarded verbatim: ValidPriorities
+	// names the tiers it may hold, and the queue answers 400 for any other
+	// non-empty value (see the hotelier API, POST /api/tasks and
 	// POST /api/tasks/{id}/priority in
 	// https://github.com/skrewz/hotelier/blob/main/README.md; the server
 	// validates the field against that vocabulary in handleCreateTask,
@@ -52,11 +51,49 @@ type Task struct {
 	// as of this writing). Empty means nothing was decided: the field is
 	// left off the wire body and the queue's own default tier applies,
 	// so the payload an unset priority produces is the payload maitred
-	// produced before the field existed. forgejoeng sets it where the
-	// `vip` label asks for the teacher tier
-	// (§forgejo/webhook/vip-priority); every other dispatch site leaves
-	// it unset.
+	// produced before the field existed. A trigger's task carries the tier
+	// its definition declares, if any (§overview/scope); forgejoeng sets it
+	// where the `vip` label asks for the teacher tier
+	// (§forgejo/webhook/vip-priority).
 	Priority string `json:"priority,omitempty"`
+}
+
+// The queue's priority tiers, highest first. The vocabulary is the queue's
+// own and maitred forwards it verbatim (§overview/scope); it is named here so
+// the one place that asks "is this a tier the queue will accept?" — trigger
+// validation — has an authority to ask. hotelier recognises these three and
+// serves a task whose priority is absent at the lowest of them (see
+// https://github.com/skrewz/hotelier/blob/main/README.md and
+// https://github.com/skrewz/hotelier/blob/main/pkg/queue/queue.go).
+const (
+	PriorityFirefighter = "firefighter"
+	PriorityTeacher     = "teacher"
+	PriorityOrangutan   = "orangutan"
+)
+
+// validPriorities lists the tiers in descending order, the order the queue
+// serves them in.
+var validPriorities = []string{PriorityFirefighter, PriorityTeacher, PriorityOrangutan}
+
+// ValidPriorities returns the tiers the queue recognises, highest first. The
+// slice is a copy, so a caller may sort or format it freely.
+func ValidPriorities() []string {
+	return append([]string(nil), validPriorities...)
+}
+
+// IsValidPriority reports whether priority names a tier the queue recognises.
+// The match is exact, as the queue's own match is: an empty priority is not a
+// tier but a refusal to name one — the field is left off the wire body and the
+// queue's default applies — so it is not valid here either. Where empty means
+// "say nothing" is the caller's business; Task.Priority and the trigger schema
+// both treat it that way (§overview/scope).
+func IsValidPriority(priority string) bool {
+	for _, p := range validPriorities {
+		if p == priority {
+			return true
+		}
+	}
+	return false
 }
 
 // String returns a human-readable representation of the task.
