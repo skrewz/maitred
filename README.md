@@ -308,7 +308,12 @@ tracked view, the outcomes view answers from memory: the forest set is
 rebuilt on the reconcile sweep's tick rather than per request, so
 polling it is a freshness choice rather than a cost one, and its
 enumeration cost and audience are spelled out where the view is
-specified (see `specification/forgejo/observability.md`).
+specified (see `specification/forgejo/observability.md`). The dashboard
+also serves that view as a page at `/outcomes` (reachable from the
+header): one tall row per current forest, linking out to its ideation
+root and its tracker with their states, and stating plainly when the
+engine is off or there are no forests instead of rendering an empty
+rectangle.
 
 The dashboard has no authentication of its own: like the trigger cards'
 fire-now and pause/resume controls, the sweep trigger is reachable by anyone
