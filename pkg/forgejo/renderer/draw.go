@@ -13,14 +13,14 @@ import (
 func draw(f *forest, strokes Strokes, cfg Config, collapsed bool) string {
 	var b strings.Builder
 	b.WriteString("flowchart TD\n")
-	b.WriteString("%% forest " + f.root().ref.String() + " rendered by maitred\n")
+	b.WriteString("%% forest " + escapeText(f.root().ref.String()) + " rendered by maitred\n")
 	for _, n := range f.nodes {
 		if n.role == RoleTracker && n.fan > 0 {
 			noun := "issues"
 			if n.fan == 1 {
 				noun = "issue"
 			}
-			b.WriteString("%% tracker " + n.ref.String() + " fans to " + strconv.Itoa(n.fan) +
+			b.WriteString("%% tracker " + escapeText(n.ref.String()) + " fans to " + strconv.Itoa(n.fan) +
 				" " + noun + " (fan stated, not drawn)\n")
 		}
 	}
@@ -109,7 +109,7 @@ func drawCollapsed(b *strings.Builder, f *forest, classes map[string][]string) {
 		if repo.allClosed {
 			prefix = "✅ "
 		}
-		fmt.Fprintf(b, "  %s%s\"%s%s (%d)\"%s\n", repo.id, opening, prefix, repo.name, repo.count, closing)
+		fmt.Fprintf(b, "  %s%s\"%s%s (%d)\"%s\n", repo.id, opening, prefix, escapeText(repo.name), repo.count, closing)
 		classes[class] = append(classes[class], repo.id)
 	}
 
@@ -224,7 +224,7 @@ func (n *node) label(cfg Config) string {
 		}
 		summary += "(" + strings.Join(carry, " ") + ")"
 	}
-	text := n.ref.String()
+	text := escapeText(n.ref.String())
 	if summary != "" {
 		text += separator + summary
 	}

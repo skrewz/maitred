@@ -331,11 +331,17 @@ func declare(g Graph) ([]*node, map[string]*node, error) {
 }
 
 // checkNode rejects the rows no drawing can be honest about: a node that names
-// no issue or cannot be linked, and one that says "closed" without a time
+// no issue or cannot be linked, a repository name no source line could carry,
+// and one that says "closed" without a time
 // (§forgejo/renderer/labels, §forgejo/renderer/closed-members).
 func checkNode(row Node) error {
-	if strings.TrimSpace(row.Repository) == "" || row.Number <= 0 {
+	name := bareName(row.Repository)
+	if name == "" || row.Number <= 0 {
 		return fmt.Errorf("renderer: a node names no issue (%s)", row.Ref)
+	}
+	if strings.ContainsAny(name, " \t\n\r\v\f") {
+		return fmt.Errorf("renderer: issue %s carries a repository name that cannot be drawn: %q",
+			row.Ref, name)
 	}
 	if !quotable(row.HTMLURL) {
 		return fmt.Errorf("renderer: issue %s has a URL that cannot be quoted: %q", row.Ref, row.HTMLURL)
@@ -408,7 +414,9 @@ func reachable(next map[string][]string, from, to string) bool {
 }
 
 // findCycle returns an identifier a work-order cycle passes through, or the
-// empty string when the order is acyclic.
+// empty string when the order is acyclic. The walk is iterative: a chain of
+// edges as long as the graph is a colouring task, not a stack-depth bet
+// (§forgejo/renderer/edge-classes).
 func findCycle(next map[string][]string, starts []string) string {
 	const (
 		unread = iota
@@ -416,26 +424,31 @@ func findCycle(next map[string][]string, starts []string) string {
 		closed
 	)
 	state := make(map[string]int, len(next))
-	var walk func(string) string
-	walk = func(id string) string {
-		state[id] = open
-		for _, to := range next[id] {
+	type frame struct {
+		id string
+		i  int
+	}
+	for _, start := range starts {
+		if state[start] != unread {
+			continue
+		}
+		state[start] = open
+		stack := []frame{{id: start}}
+		for len(stack) > 0 {
+			top := &stack[len(stack)-1]
+			if top.i >= len(next[top.id]) {
+				state[top.id] = closed
+				stack = stack[:len(stack)-1]
+				continue
+			}
+			to := next[top.id][top.i]
+			top.i++
 			switch state[to] {
 			case open:
 				return to
 			case unread:
-				if found := walk(to); found != "" {
-					return found
-				}
-			}
-		}
-		state[id] = closed
-		return ""
-	}
-	for _, id := range starts {
-		if state[id] == unread {
-			if found := walk(id); found != "" {
-				return found
+				state[to] = open
+				stack = append(stack, frame{id: to})
 			}
 		}
 	}

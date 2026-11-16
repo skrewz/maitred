@@ -478,7 +478,8 @@ func TestClosedMember(t *testing.T) {
 	}
 }
 
-// TestLabelEscapesFreeText keeps a label's HTML to <br/> and the anchor
+// TestLabelEscapesFreeText keeps a label's HTML to <br/> and the anchor, the
+// repository name included — graph text is escaped wherever it is drawn
 // (§forgejo/renderer/labels).
 func TestLabelEscapesFreeText(t *testing.T) {
 	t.Parallel()
@@ -488,18 +489,25 @@ func TestLabelEscapesFreeText(t *testing.T) {
 			Summary: "fix & run <tests>",
 			HTMLURL: "https://example.com/forest/issues/1",
 		},
+		Members: []Node{
+			{Ref: ref("example/fo<re\"st", 2), Summary: "here", HTMLURL: "https://example.com/forest/issues/2"},
+		},
 		Strokes: strokes(),
 	}
 	got, err := Render(graph, wideCeiling())
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	want := "forest#1 ·<br/>fix &amp; run &lt;tests&gt;"
-	if !strings.Contains(got, want) {
-		t.Errorf("want %q, got:\n%s", want, got)
+	for _, want := range []string{
+		"forest#1 ·<br/>fix &amp; run &lt;tests&gt;",
+		`>fo&lt;re&quot;st#2 · here</a>`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("want %q, got:\n%s", want, got)
+		}
 	}
-	if strings.Contains(got, "<tests>") || strings.Contains(got, "& run") {
-		t.Errorf("free text reached the source as markup:\n%s", got)
+	if strings.Contains(got, "<tests>") || strings.Contains(got, `fo<re"st`) {
+		t.Errorf("graph text reached the source as markup:\n%s", got)
 	}
 }
 
@@ -663,6 +671,24 @@ func TestRenderErrors(t *testing.T) {
 			graph: Graph{Root: Node{Ref: one.Ref, HTMLURL: "https://example.com/a'b"}, Strokes: strokes()},
 			cfg:   cfg,
 			want:  "URL",
+		},
+		{
+			name:  "a URL of a scheme the anchor will not link",
+			graph: Graph{Root: Node{Ref: one.Ref, HTMLURL: "javascript:alert(document.domain)"}, Strokes: strokes()},
+			cfg:   cfg,
+			want:  "URL",
+		},
+		{
+			name:  "a data URL",
+			graph: Graph{Root: Node{Ref: one.Ref, HTMLURL: "data:text/html;base64,PHNjcmlwdD4="}, Strokes: strokes()},
+			cfg:   cfg,
+			want:  "URL",
+		},
+		{
+			name:  "a repository name carrying whitespace",
+			graph: Graph{Root: Node{Ref: ref("example/fo\nrest", 1), HTMLURL: "https://example.com/forest/issues/1"}, Strokes: strokes()},
+			cfg:   cfg,
+			want:  "cannot be drawn",
 		},
 		{
 			name:  "an invented colour",

@@ -54,11 +54,13 @@ func lessRef(a, b Ref) bool {
 	return a.Number < b.Number
 }
 
-// quotable reports whether a URL can sit inside a single-quoted attribute:
-// non-empty, with nothing that would close the attribute or the label
-// (§forgejo/renderer/labels).
+// quotable reports whether a URL can be drawn as the anchor's link: it must
+// carry a scheme whose whole purpose is navigation to the issue — http or
+// https — and nothing that would close the attribute or the label
+// (§forgejo/renderer/labels). A javascript: or data: URL quotes cleanly yet
+// turns the label into a clickable script, so no other scheme is admitted.
 func quotable(url string) bool {
-	if url == "" {
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return false
 	}
 	return !strings.ContainsAny(url, "'\"<> \t\n\r\v\f")

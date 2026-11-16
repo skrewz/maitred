@@ -82,16 +82,20 @@ passes a whole title still gets a bounded label. A sync issue carries the
 numbers of the members that block it after the summary, in ascending order, as
 ` (#<m1> #<m2> …)`.
 
-The summary is the only free text in the source, so it is escaped: `&`, `<`,
-`>` and `"` become their HTML entity references. A label carries no other
-markup. Where the graph carries no summary for a node, its label is its
-reference alone: the separator never stands without a summary to separate.
+The summary and the repository half of the reference are the graph's text,
+so they are escaped: `&`, `<`, `>` and `"` become their HTML entity
+references. A label carries no other markup. A repository name carrying
+whitespace is an error: no source line — label or note — could carry it.
+Where the graph carries no summary for a node, its label is its reference
+alone: the separator never stands without a summary to separate.
 
 The summary text is wrapped in an anchor carrying `href` set to the issue's web
 URL, `target='_blank'` and `style='color:inherit'`, in that order, quoted with
 single quotes inside the double-quoted label. The URL is the graph's, never
-composed from a host the renderer knows; a URL that cannot sit inside a
-single-quoted attribute is an error.
+composed from a host the renderer knows, and its scheme must be `http` or
+`https` — the navigation the anchor exists for; a `javascript:` or `data:` URL
+quotes cleanly yet turns the label into a clickable script. A URL that cannot
+sit inside a single-quoted attribute, or whose scheme is neither, is an error.
 
 The label is wrapped past about 30 characters: when the wrapped text would
 exceed 30 characters the break falls after the `·` separator, and the remaining
@@ -206,8 +210,9 @@ rendered sources, not graph hashes — the digest of
 whether the graph moved at all.
 
 Each of these is an error, named, and none of them yields partial source: a
-graph with no root, a node that names no issue, two issues folding to one
-identifier, an edge naming an issue the graph holds no node for, a work-order
-cycle, a closed node with no close time, a URL that cannot be quoted, a stroke
-hex that is not a six-digit `#rrggbb`, or a ceiling of zero or less, which no
-graph can fit.
+graph with no root, a node that names no issue, a repository name carrying
+whitespace, two issues folding to one identifier, an edge naming an issue the
+graph holds no node for, a work-order cycle, a closed node with no close time,
+a URL that cannot be quoted or whose scheme is neither http nor https, a
+stroke hex that is not a six-digit `#rrggbb`, or a ceiling of zero or less,
+which no graph can fit.
