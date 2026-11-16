@@ -457,8 +457,6 @@ func loadTriggerFile(path string) ([]TriggerDefinition, error) {
 		if _, err := ParseSchedule(def.Schedule); err != nil {
 			return nil, fmt.Errorf("trigger %s: %w", def.ID, err)
 		}
-		// An unset priority says nothing and lets the queue's default apply;
-		// anything else must be a tier the queue recognises.
 		if def.Priority != "" && !queue.IsValidPriority(def.Priority) {
 			return nil, fmt.Errorf("trigger %s: unsupported priority %q (valid: %s)",
 				def.ID, def.Priority, strings.Join(queue.ValidPriorities(), ", "))
