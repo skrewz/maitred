@@ -2,6 +2,7 @@ package queue_test
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -245,48 +246,34 @@ func TestTask_Priority_JSON(t *testing.T) {
 	}
 }
 
-// TestValidPriorities: the tiers maitred forwards are the three the queue
-// recognises — hotelier validates the field against exactly this set and serves
-// a task whose priority is absent at the lowest of them (see
-// https://github.com/skrewz/hotelier#api and its queue.ValidatePriority).
-func TestValidPriorities(t *testing.T) {
-	got := queue.ValidPriorities()
-	want := []string{queue.PriorityFirefighter, queue.PriorityTeacher, queue.PriorityOrangutan}
+// TestPriorityVocabulary: the tiers maitred passes on, and the predicate trigger
+// validation asks.
+//
+// The vocabulary is a deliberate copy of hotelier's rather than an import, so
+// this is the only alarm that fires when the copy drifts from the source: the
+// tiers are spelled as literals, not through the constants above, and hotelier
+// validates the field against exactly these — highest first, serving a task
+// whose priority is absent at the lowest of them (see
+// https://github.com/skrewz/hotelier/blob/main/pkg/queue/queue.go).
+//
+// The queue matches a tier exactly, so an empty string — which says nothing at
+// all — and anything merely resembling a tier are not tiers.
+func TestPriorityVocabulary(t *testing.T) {
+	want := []string{"firefighter", "teacher", "orangutan"}
 
-	if len(got) != len(want) {
-		t.Fatalf("got %d priorities %v, want %v", len(got), got, want)
+	if got := queue.ValidPriorities(); !slices.Equal(got, want) {
+		t.Fatalf("ValidPriorities() = %v, want %v", got, want)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("priority %d = %q, want %q", i, got[i], want[i])
+
+	for _, tier := range want {
+		if !queue.IsValidPriority(tier) {
+			t.Errorf("IsValidPriority(%q) = false, want true", tier)
 		}
 	}
-}
 
-// TestIsValidPriority: the predicate trigger validation asks. The queue matches
-// tiers exactly, so an empty string (which says nothing at all) and anything
-// merely resembling a tier are not tiers.
-func TestIsValidPriority(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want bool
-	}{
-		{"firefighter", queue.PriorityFirefighter, true},
-		{"teacher", queue.PriorityTeacher, true},
-		{"orangutan", queue.PriorityOrangutan, true},
-		{"empty says nothing", "", false},
-		{"whitespace only", "   ", false},
-		{"wrong case", "Teacher", false},
-		{"unknown tier", "urgent", false},
-		{"padded tier", " teacher", false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := queue.IsValidPriority(tc.in); got != tc.want {
-				t.Errorf("IsValidPriority(%q) = %v, want %v", tc.in, got, tc.want)
-			}
-		})
+	for _, not := range []string{"", "   ", "Teacher", "urgent", " teacher"} {
+		if queue.IsValidPriority(not) {
+			t.Errorf("IsValidPriority(%q) = true, want false", not)
+		}
 	}
 }

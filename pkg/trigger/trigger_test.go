@@ -1,6 +1,7 @@
 package trigger_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1531,33 +1532,39 @@ func TestTriggerDefinition_Validate_InvalidTitle(t *testing.T) {
 
 // TestLoadTriggerDefinition_Priority: a trigger that names a tier keeps it, so
 // the task the trigger dispatches is served there rather than at the queue's
-// default (§overview/scope).
+// default (§overview/scope). The tiers are spelled the way a trigger file spells
+// them — that spelling is what reaches the wire, and a tier the queue does not
+// know would be refused there, not here.
 func TestLoadTriggerDefinition_Priority(t *testing.T) {
-	dir := t.TempDir()
+	for _, tier := range []string{"firefighter", "teacher", "orangutan"} {
+		t.Run(tier, func(t *testing.T) {
+			dir := t.TempDir()
 
-	configYAML := `
+			configYAML := fmt.Sprintf(`
 triggers:
   - id: "ranked-trigger"
     type: periodic
     schedule: "@every 1h"
-    priority: teacher
+    priority: %s
     prompt: "Research the news"
-`
-	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
-		t.Fatal(err)
-	}
+`, tier)
+			if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+				t.Fatal(err)
+			}
 
-	defs, err := trigger.LoadTriggerDefinitions(dir)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+			defs, err := trigger.LoadTriggerDefinitions(dir)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-	if len(defs) != 1 {
-		t.Fatalf("expected 1 trigger, got %d", len(defs))
-	}
+			if len(defs) != 1 {
+				t.Fatalf("expected 1 trigger, got %d", len(defs))
+			}
 
-	if defs[0].Priority != "teacher" {
-		t.Errorf("expected priority 'teacher', got %q", defs[0].Priority)
+			if defs[0].Priority != tier {
+				t.Errorf("expected priority %q, got %q", tier, defs[0].Priority)
+			}
+		})
 	}
 }
 
@@ -1590,27 +1597,5 @@ triggers:
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q should name %q", err, want)
 		}
-	}
-}
-
-// TestLoadTriggerDefinitions_PriorityCaseSensitive: the queue matches tiers
-// exactly, so maitred does too rather than inventing a normalisation of its own.
-func TestLoadTriggerDefinitions_PriorityCaseSensitive(t *testing.T) {
-	dir := t.TempDir()
-
-	configYAML := `
-triggers:
-  - id: "mixed-case-trigger"
-    type: periodic
-    schedule: "@every 1h"
-    priority: Teacher
-    prompt: "Research the news"
-`
-	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := trigger.LoadTriggerDefinitions(dir); err == nil {
-		t.Fatal("expected a tier with the wrong case to fail at load, got none")
 	}
 }
