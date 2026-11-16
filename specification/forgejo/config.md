@@ -100,8 +100,16 @@ The config also names the **org** the engine tracks (the organisation
 whose role-holding repositories it watches
 (§forgejo/webhook/repository-roles)), sets the
 **reconciliation interval** (`reconcile_interval`): how often the
-reconciliation sweep runs (§forgejo/reconciliation/scheduling), and
-carries the ordered **review lens list** (§forgejo/config/review-lenses).
+reconciliation sweep runs (§forgejo/reconciliation/scheduling), carries
+the ordered **review lens list** (§forgejo/config/review-lenses), and may
+set the **stale-merge threshold** (`stale_merge_threshold`): how long an
+approved, mergeable and still-unmerged pull request delivering a
+landing-labelled forest member may stand before the outcomes view warns
+the forest is waiting on a human
+(§forgejo/observability/the-warnings-a-forest-carries). The key is
+optional and its absence is the one-hour default, never zero — an unset
+bound would make every approved head stale the moment it was approved. A
+negative value is a load error, not a silently defaulted one.
 
 ## Review lenses
 
@@ -349,12 +357,16 @@ Loading **fails at load time** — mirroring the trigger `Validate()` — when:
   retired `persona` among them, refused by name
   (§forgejo/config/identity-collapse),
 - `reconcile_interval` is missing or not positive,
+- `stale_merge_threshold` is negative: the option is optional, so a
+  negative value states nothing the default does not already state, and a
+  config that guesses on the operator's behalf is a load error
+  (§forgejo/observability/the-warnings-a-forest-carries),
 - a prompt template does not parse, or references a placeholder that is not
   in the placeholder table above,
 - the config names an action the decision function does not dispatch,
 - the org is missing, or a directory's files disagree about it, about
-  `reconcile_interval`, about `decomposer_identity`, or about
-  `implementer_identity`,
+  `reconcile_interval`, about `stale_merge_threshold`, about
+  `decomposer_identity`, or about `implementer_identity`,
 - the engine's own account (`engine_account`) is missing: the digest
   gate cannot exclude the engine's own comments without it
   (§forgejo/config/engine-account),

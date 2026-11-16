@@ -304,8 +304,12 @@ unnecessary before anything runs. The same can be driven over the API:
 skipped, as with a scheduled sweep), and `GET /api/forgejo/outcomes`
 lists the current forests — each open `ideation` root in the outcomes
 repositories paired with the `outcome` tracker it blocks, each forest
-carrying the picture scraped from that tracker's current-state block. Like
-the tracked view, the outcomes view answers from memory: the forest set is
+carrying the picture scraped from that tracker's current-state block, and
+the **warnings** saying whether the forest is waiting on a person: an
+approved, mergeable pull request that has sat unmerged past a threshold
+(`stale_merge_threshold`, one hour by default), or a `human-task` whose
+blockers have all closed. Like the tracked view, the outcomes view answers
+from memory: the forest set is
 rebuilt on the reconcile sweep's tick rather than per request, so
 polling it is a freshness choice rather than a cost one, and its
 enumeration cost and audience are spelled out where the view is

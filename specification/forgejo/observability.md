@@ -138,7 +138,11 @@ a `null` tracker so the field is always present. Each forest carries the
 **picture of the forest** alongside its rows as two further fields, both
 always present: **`chart`**, the Mermaid source of the tracker's
 current-state block, and **`chart_revisited`**, that region's recency
-stamp, both scraped as described below. Without the engine, or
+stamp, both scraped as described below — and its **warnings**, the ⚠️
+marks saying whether the forest is waiting on a person, an empty list
+when it is not
+(§forgejo/observability/the-warnings-a-forest-carries). Without the
+engine, or
 with no forests, the list is empty — never `null`: an enumeration that
 found nothing is an honest empty, not a view that never read. A view the
 engine cannot vouch for — no sweep's enumeration has landed yet, the
@@ -262,9 +266,11 @@ tick enumerated, and a request to it — however often a later
 `/outcomes` page polls on a timer — costs no forge read at all: the
 poll interval becomes a freshness choice, not a cost one. The payload
 still enumerates the organisation's ideation roots and trackers to an
-unauthenticated port, so the view rides the dashboard's standing trust
-model — an endpoint reachable by anyone who can reach the port,
-which is meant to reach only its operator's network
+unauthenticated port, and the warnings below add the pull requests whose
+merges have gone stale and the tickets a human has claimed to what that
+port reveals — the same audience, a little more of it — so the view rides
+the dashboard's standing trust model: an endpoint reachable by anyone who
+can reach the port, which is meant to reach only its operator's network
 (§forgejo/observability/triggering-a-sweep, README Web Dashboard).
 
 The dashboard serves the view as a page at `/outcomes` — a route on
@@ -290,6 +296,58 @@ the way back when the route is where the reader already is. The
 header's trigger statistics — numbers this page never reads — stay
 hidden on the route, so they state nothing rather than rendering
 their defaults as facts.
+### The warnings a forest carries
+
+A forest waits on a person in exactly two ways, and each forest of the
+payload carries a **warnings** list saying which — and nothing else.
+Each warning is a reference (repository, number, title and HTML URL, the
+same four fields a forest row carries and for the same reason, since what
+holds a forest up may live across the organisation), its **kind**, and
+the **age** of the condition in seconds, so the dashboard links to the
+object rather than constructing the judgement from reads of its own. A
+forest nothing is waiting on carries an empty list, never `null` — the
+honest empty the forest list itself is. A warning reports; it dispatches
+nothing, holds nothing off and gates nothing, and no decision reads a
+warning back (§forgejo/decisions/actions).
+
+- **`stale_agentic_merge`** — an open pull request delivering an open
+  member that opted its landing in, through `agentic-auto-merge` or
+  `agentic-sync-merge` (§forgejo/decisions/merge-gate,
+  §forgejo/decisions/sync-set), that is still open, still mergeable, and
+  stands approved at head by every lens with no non-approval above it:
+  the shape the merge gate would fire at. It warns once that has held
+  longer than the **stale-merge threshold**, the `stale_merge_threshold`
+  config option, one hour where the config says nothing
+  (§forgejo/config/validation). The wait is dated from the verdict that
+  satisfied the chain — the latest of the standing approvals — so an
+  approval a moment old is not stale and a head that has since moved is
+  not approved at all. Where the read carries no timestamp for that
+  verdict the pull request's own last activity dates the wait, since an
+  unknown one must not read as centuries.
+- **`human_task_blocking`** — an open member carrying `human-task`
+  (§forgejo/decisions/transition-table) whose blockers are all closed,
+  so nothing stands between the person and the ticket. The forest's own
+  rows are membership, not work orders (§forgejo/decisions/commissioning):
+  the root's membership edge — open for as long as the forest is — and
+  the tracker gate hold no warning back, or no human task could ever
+  warn. The wait is dated from the last blocker to close, that being the
+  moment the ticket became the person's; a member with no work-order
+  blocker at all is dated from its own last activity, the newest moment
+  the read carries.
+
+Both kinds are found by walking the members along the root's membership
+edges — the one `IssueBlocks` hop out of the root the forest already is,
+read the way the digest reads it (§forgejo/decisions/commissioning,
+§forgejo/decisions/actionable-state-digest) — on the sweep's tick with
+the enumeration, so the request path still costs no forge read. The test
+is against the clock, never against a watermark: the question is how long
+a human has been unnecessary, not whether the engine has acted
+(§forgejo/state/watermark). A warning read that fails fails the
+enumeration, so the endpoint answers `500` rather than presenting an
+unchecked forest as a healthy one — the fail-closed rule the view already
+applies to its own reads — and the walk pays one pull-request listing per
+repository its members live in, the sharing the landing-set predicate
+already applies (§forgejo/decisions/sync-set).
 
 ## Triggering a sweep
 

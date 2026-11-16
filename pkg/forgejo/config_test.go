@@ -356,6 +356,13 @@ func TestLoadConfigValidation(t *testing.T) {
 			},
 			wantSub: "reconcile_interval",
 		},
+		{
+			name: "negative stale_merge_threshold",
+			mutate: func(y string) string {
+				return strings.Replace(y, "reconcile_interval: 15m\n", "reconcile_interval: 15m\nstale_merge_threshold: -5m\n", 1)
+			},
+			wantSub: "stale_merge_threshold",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -401,6 +408,14 @@ func TestLoadConfigDirectoryConflicts(t *testing.T) {
 		writeConfig(t, dir, "02-b.yaml", "reconcile_interval: 20m\n")
 		if _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), "reconcile_interval") {
 			t.Fatalf("expected conflicting-reconcile_interval error, got %v", err)
+		}
+	})
+	t.Run("conflicting stale_merge_threshold", func(t *testing.T) {
+		dir := t.TempDir()
+		writeConfig(t, dir, "01-a.yaml", "org: example-org\nstale_merge_threshold: 1h\n")
+		writeConfig(t, dir, "02-b.yaml", "stale_merge_threshold: 2h\n")
+		if _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), "stale_merge_threshold") {
+			t.Fatalf("expected conflicting-stale_merge_threshold error, got %v", err)
 		}
 	})
 	t.Run("conflicting decomposer_identity", func(t *testing.T) {
@@ -1004,6 +1019,46 @@ reviews:
 `)
 		if _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), "already defined") {
 			t.Fatalf("LoadConfig(dir): error = %v, want duplicate identity conflict", err)
+		}
+	})
+}
+
+// TestConfig_StaleMergeThreshold: the stale-merge bound of the outcomes
+// view is optional, and unset means the default rather than zero — an
+// unset bound would otherwise read as "every approved head is stale"
+// (§forgejo/observability/the-outcomes-view).
+func TestConfig_StaleMergeThreshold(t *testing.T) {
+	t.Run("unset means the default", func(t *testing.T) {
+		cfg := loadValid(t)
+		if cfg.StaleMergeThreshold != 0 {
+			t.Errorf("stale_merge_threshold = %s, want the zero the default stands in for", cfg.StaleMergeThreshold)
+		}
+		if got := cfg.staleMergeThreshold(); got != DefaultStaleMergeThreshold {
+			t.Errorf("staleMergeThreshold() = %s, want %s", got, DefaultStaleMergeThreshold)
+		}
+	})
+	t.Run("configured value is honoured", func(t *testing.T) {
+		dir := t.TempDir()
+		path := writeConfig(t, dir, "forgejoeng.yaml",
+			strings.Replace(validConfigYAML, "reconcile_interval: 15m\n", "reconcile_interval: 15m\nstale_merge_threshold: 4h30m\n", 1))
+		cfg, err := LoadConfig(path)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if got := cfg.staleMergeThreshold(); got != 4*time.Hour+30*time.Minute {
+			t.Errorf("staleMergeThreshold() = %s, want 4h30m", got)
+		}
+	})
+	t.Run("a directory file naming it survives the merge", func(t *testing.T) {
+		dir := t.TempDir()
+		writeConfig(t, dir, "01-a.yaml", "org: example-org\nstale_merge_threshold: 90m\n")
+		writeConfig(t, dir, "02-b.yaml", validConfigYAML)
+		cfg, err := LoadConfig(dir)
+		if err != nil {
+			t.Fatalf("LoadConfig(dir): %v", err)
+		}
+		if got := cfg.staleMergeThreshold(); got != 90*time.Minute {
+			t.Errorf("staleMergeThreshold() = %s, want the 90m one file named", got)
 		}
 	})
 }

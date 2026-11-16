@@ -520,6 +520,14 @@ func outcomesStubAPI() *stubForgejoAPI {
 		Labels: []string{"ideation"}, Repository: "o/out",
 		HTMLURL: "https://forge.example.com/o/out/issues/52",
 	}
+	// The forest's one member is a human task with no blockers of its
+	// own, so the forest is waiting on a person and carries a warning
+	// naming it (§forgejo/observability/the-outcomes-view).
+	member := forgejo.Issue{
+		Number: 90, Title: "hand the keys over", State: "open",
+		Labels: []string{"human-task"}, Repository: "o/r",
+		HTMLURL: "https://forge.example.com/o/r/issues/90",
+	}
 	return &stubForgejoAPI{
 		issue: &forgejo.Issue{Number: 7, State: "open", Repository: "o/r"},
 		repos: []forgejo.Repository{
@@ -527,7 +535,7 @@ func outcomesStubAPI() *stubForgejoAPI {
 			{Name: "out", FullName: "o/out", Owner: "o", Topics: []string{"maitred-outcomes-repo"}},
 		},
 		openIssues: map[string][]forgejo.Issue{"out": {root, tracker, loneRoot}},
-		blocks:     map[int][]forgejo.Issue{51: {tracker}},
+		blocks:     map[int][]forgejo.Issue{51: {tracker, member}},
 	}
 }
 
@@ -555,6 +563,19 @@ type forestJSON struct {
 	Tracker        *forestIssueJSON `json:"tracker"`
 	Chart          string           `json:"chart"`
 	ChartRevisited string           `json:"chart_revisited"`
+	Warnings       []forestWarnJSON `json:"warnings"`
+}
+
+// forestWarnJSON mirrors one warning of a forest: its reference, the
+// kind naming why it warns, and the age of the condition in seconds
+// (§forgejo/observability/the-outcomes-view).
+type forestWarnJSON struct {
+	Kind       string  `json:"kind"`
+	Repository string  `json:"repository"`
+	Number     int     `json:"number"`
+	Title      string  `json:"title"`
+	HTMLURL    string  `json:"html_url"`
+	AgeSeconds float64 `json:"age_seconds"`
 }
 
 // outcomesViewJSON mirrors the /api/forgejo/outcomes response shape:
@@ -636,10 +657,28 @@ func TestForgejoOutcomesEndpoint(t *testing.T) {
 	if paired.ChartRevisited != "2026-11-16 09:12 AEDT" {
 		t.Errorf("chart_revisited = %q, want the block's stamp as written", paired.ChartRevisited)
 	}
+	// The forest waiting on a person says so: the warning is the member
+	// itself, linked rather than described, and carries its kind
+	// (§forgejo/observability/the-outcomes-view).
+	if len(paired.Warnings) != 1 {
+		t.Fatalf("warnings = %+v, want the one human task holding this forest", paired.Warnings)
+	}
+	warn := paired.Warnings[0]
+	if warn.Kind != "human_task_blocking" {
+		t.Errorf("kind = %q, want human_task_blocking", warn.Kind)
+	}
+	if warn.Repository != "o/r" || warn.Number != 90 || warn.Title != "hand the keys over" || warn.HTMLURL == "" {
+		t.Errorf("warning = %+v, want the member o/r#90 with its fields", warn)
+	}
 	// A forest with no tracker publishes both fields empty — present in
 	// the body, and stating nothing rather than omitting the subject.
 	if lone.Chart != "" || lone.ChartRevisited != "" {
 		t.Errorf("root 52 picture = %q/%q, want both empty with no tracker to read", lone.Chart, lone.ChartRevisited)
+	}
+	// A forest nothing is waiting on carries the honest empty, spelled
+	// as a list rather than a null (§forgejo/observability/the-outcomes-view).
+	if lone.Warnings == nil || len(lone.Warnings) != 0 {
+		t.Errorf("root 52 warnings = %+v, want the empty list", lone.Warnings)
 	}
 	if lone.Tracker != nil {
 		t.Errorf("root 52 tracker = %+v, want the absence stated", lone.Tracker)

@@ -79,6 +79,14 @@ const (
 	// only the seeding window (§forgejo/decisions/transition-table,
 	// s-git/maitred#125).
 	LabelForestSeeding = "forest-seeding"
+	// LabelHumanTask marks a ticket claimed by a human: an issue carrying
+	// it is never an implement candidate anywhere in the engine
+	// (§forgejo/decisions/transition-table). It is no kind of work item:
+	// carrying it opens no ticket and retires none. The outcomes view is
+	// the one surface that reads it to report rather than to decide — the
+	// warning that a forest is waiting on the person the label names
+	// (§forgejo/observability/the-outcomes-view).
+	LabelHumanTask = "human-task"
 	// LabelVIP marks the objects whose tasks forgejoeng schedules at a
 	// higher queue tier — carriers, tier and edit authority are the
 	// spec's (§forgejo/webhook/vip-priority). Unlike the kind labels
