@@ -1170,13 +1170,13 @@ triggers:
 	}
 }
 
-// TestEngine_TriggersLeavePriorityUnset: a trigger that declares no priority
-// dispatches a task carrying none — the vip policy of
+// TestEngine_TriggerWithoutDeclaredPriorityLeavesItUnset: a trigger that
+// declares no priority dispatches a task carrying none — the vip policy of
 // §forgejo/webhook/vip-priority is forgejoeng's, judged from labels a trigger
 // has no access to, and a trigger's own tier is a declaration it may simply
 // not make — so the queue's default applies, exactly as before the field
 // existed (§overview/scope).
-func TestEngine_TriggersLeavePriorityUnset(t *testing.T) {
+func TestEngine_TriggerWithoutDeclaredPriorityLeavesItUnset(t *testing.T) {
 	dir := t.TempDir()
 
 	configYAML := `

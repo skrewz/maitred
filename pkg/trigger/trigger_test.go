@@ -1561,36 +1561,6 @@ triggers:
 	}
 }
 
-// TestLoadTriggerDefinition_PriorityOptional: declaring no priority is valid and
-// means "say nothing", leaving the queue's own default tier to apply.
-func TestLoadTriggerDefinition_PriorityOptional(t *testing.T) {
-	dir := t.TempDir()
-
-	configYAML := `
-triggers:
-  - id: "unranked-trigger"
-    type: periodic
-    schedule: "@every 1h"
-    prompt: "Research the news"
-`
-	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	defs, err := trigger.LoadTriggerDefinitions(dir)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(defs) != 1 {
-		t.Fatalf("expected 1 trigger, got %d", len(defs))
-	}
-
-	if defs[0].Priority != "" {
-		t.Errorf("expected an unset priority, got %q", defs[0].Priority)
-	}
-}
-
 // TestLoadTriggerDefinitions_InvalidPriority: a tier the queue does not
 // recognise fails at load, naming the trigger and the bad value. The queue
 // would answer 400 for it, and yaml.Unmarshal is non-strict, so the alternative
