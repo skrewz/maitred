@@ -325,11 +325,11 @@ func declare(g Graph) ([]*node, map[string]*node, error) {
 		}
 		id := nodeID(row.Ref)
 		if _, seen := byKey[row.Ref.key()]; seen {
-			return nil, nil, fmt.Errorf("renderer: the graph names issue %s twice", row.Ref)
+			return nil, nil, fmt.Errorf("renderer: the graph names issue %q twice", row.Ref)
 		}
 		for _, other := range nodes {
 			if other.id == id {
-				return nil, nil, fmt.Errorf("renderer: issues %s and %s fold to one identifier %s",
+				return nil, nil, fmt.Errorf("renderer: issues %q and %q fold to one identifier %s",
 					other.ref, row.Ref, id)
 			}
 		}
@@ -367,17 +367,17 @@ func declare(g Graph) ([]*node, map[string]*node, error) {
 func checkNode(row Node) error {
 	name := bareName(row.Repository)
 	if name == "" || row.Number <= 0 {
-		return fmt.Errorf("renderer: a node names no issue (%s)", row.Ref)
+		return fmt.Errorf("renderer: a node names no issue (%q)", row.Ref)
 	}
-	if strings.ContainsAny(name, " \t\n\r\v\f") {
-		return fmt.Errorf("renderer: issue %s carries a repository name that cannot be drawn: %q",
+	if !printable(name) {
+		return fmt.Errorf("renderer: issue %q carries a repository name that cannot be drawn: %q",
 			row.Ref, name)
 	}
 	if !quotable(row.HTMLURL) {
-		return fmt.Errorf("renderer: issue %s has a URL that cannot be quoted: %q", row.Ref, row.HTMLURL)
+		return fmt.Errorf("renderer: issue %q has a URL that cannot be quoted: %q", row.Ref, row.HTMLURL)
 	}
 	if row.Closed && row.ClosedAt.IsZero() {
-		return fmt.Errorf("renderer: issue %s is closed but carries no close time", row.Ref)
+		return fmt.Errorf("renderer: issue %q is closed but carries no close time", row.Ref)
 	}
 	return nil
 }
@@ -388,7 +388,7 @@ func lookup(byKey map[string]*node, ref Ref) (*node, error) {
 	if n, ok := byKey[ref.key()]; ok {
 		return n, nil
 	}
-	return nil, fmt.Errorf("renderer: an edge names %s, which the graph holds no node for", ref)
+	return nil, fmt.Errorf("renderer: an edge names %q, which the graph holds no node for", ref)
 }
 
 // reduceWork drops the work-order edges a path already states, and refuses a

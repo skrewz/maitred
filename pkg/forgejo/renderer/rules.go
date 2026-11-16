@@ -3,6 +3,7 @@ package renderer
 import (
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // bareName is the repository's name: the last /-separated element of the
@@ -103,10 +104,30 @@ func isHex(s string) bool {
 	return true
 }
 
-// escapeText keeps a label's HTML to <br/> and the anchor: the summary is the
-// source's only free text, so its markup becomes entity references
+// printable reports whether a repository name could stand on a source line: no
+// character below the space, no delete, and no space at all — a line break would
+// end the line it is drawn on and any other control byte would reach whatever
+// prints the source unrendered (§forgejo/renderer/labels).
+func printable(name string) bool {
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f || unicode.IsSpace(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// escapeText keeps a label's HTML to <br/> and the anchor: the graph's free text
+// becomes entity references where it would be markup, and the characters no
+// printer should act on — the control class — are dropped rather than left raw
 // (§forgejo/renderer/labels).
 func escapeText(text string) string {
+	text = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, text)
 	text = strings.ReplaceAll(text, "&", "&amp;")
 	text = strings.ReplaceAll(text, "<", "&lt;")
 	text = strings.ReplaceAll(text, ">", "&gt;")

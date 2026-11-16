@@ -513,6 +513,35 @@ func TestLabelEscapesFreeText(t *testing.T) {
 	}
 }
 
+// TestControlBytesNeverReachTheSource: the characters no printer should act on
+// are dropped from drawn text rather than left raw — a summary carrying an
+// escape sequence would otherwise reach whatever prints the source
+// (§forgejo/renderer/labels).
+func TestControlBytesNeverReachTheSource(t *testing.T) {
+	t.Parallel()
+	graph := Graph{
+		Root: Node{
+			Ref:     ref("example/forest", 1),
+			Summary: "run \x1b[0m\x00 & <tests>",
+			HTMLURL: "https://example.com/forest/issues/1",
+		},
+		Members: []Node{
+			{Ref: ref("example/forest", 2), Summary: "calm", HTMLURL: "https://example.com/forest/issues/2"},
+		},
+		Strokes: strokes(),
+	}
+	got, err := Render(graph, wideCeiling())
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if strings.ContainsAny(got, "\x00\x1b") {
+		t.Errorf("a control byte reached the source raw:\n%q", got)
+	}
+	if !strings.Contains(got, "run [0m &amp; &lt;tests&gt;") {
+		t.Errorf("the words the control bytes stood inside did not survive:\n%s", got)
+	}
+}
+
 // TestNoSummaryNamesNoSeparator: an issue with no summary is its reference
 // alone, never a dangling middle dot.
 func TestNoSummaryNamesNoSeparator(t *testing.T) {
@@ -661,6 +690,12 @@ func TestRenderErrors(t *testing.T) {
 			graph: Graph{Root: one, Edges: []Edge{{From: one.Ref, To: ref("example/forest", 99)}}, Strokes: strokes()},
 			cfg:   cfg,
 			want:  "forest#99",
+		},
+		{
+			name:  "a repository name carrying a control character",
+			graph: Graph{Root: Node{Ref: ref("example/fo\x1bbst", 1), HTMLURL: one.HTMLURL}, Strokes: strokes()},
+			cfg:   cfg,
+			want:  "cannot be drawn",
 		},
 		{
 			name: "work order in a cycle",

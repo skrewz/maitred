@@ -82,10 +82,12 @@ passes a whole title still gets a bounded label. A sync issue carries the
 numbers of the members that block it after the summary, in ascending order, as
 ` (#<m1> #<m2> …)`.
 
-The summary and the repository half of the reference are the graph's text,
-so they are escaped: `&`, `<`, `>` and `"` become their HTML entity
-references. A label carries no other markup. A repository name carrying
-whitespace is an error: no source line — label or note — could carry it.
+The summary and the repository half of the reference are the graph's text, so
+they are escaped: `&`, `<`, `>` and `"` become their HTML entity references,
+and a character below the space — every line break included — is dropped rather
+than left raw, since no printer should act on it. A label carries no other
+markup. A repository name carrying whitespace or any other character that is
+not printable is an error: no source line — label or note — could carry it.
 Where the graph carries no summary for a node, its label is its reference
 alone: the separator never stands without a summary to separate.
 
@@ -223,10 +225,11 @@ whether the graph moved at all.
 
 Each of these is an error, named, and none of them yields partial source: a
 graph with no root, a node that names no issue, a repository name carrying
-whitespace, two issues folding to one identifier, an edge naming an issue the
-graph holds no node for, a work-order cycle, a closed node with no close time,
-a URL that cannot be quoted or whose scheme is neither http nor https, a
-stroke hex that is not a six-digit `#rrggbb`, a ceiling of zero or less which
+whitespace or any other character that is not printable, two issues folding to
+one identifier, an edge naming an issue the graph holds no node for, a
+work-order cycle, a closed node with no close time, a URL that cannot be quoted
+or whose scheme is neither http nor https, a stroke hex that is not a six-digit
+`#rrggbb`, a ceiling of zero or less which
 no graph can fit, a graph whose collapsed form still exceeds that ceiling, or
 two repositories whose names fold to one identifier the collapsed view would
 have to share.
