@@ -2,7 +2,7 @@ flowchart TD
 %% forest outcomes#63 rendered by maitred
 %% tracker outcomes#66 fans to 3 issues (fan stated, not drawn)
   i_outcomes_63{{"<a href='https://example.com/outcomes/issues/63' target='_blank' style='color:inherit'>outcomes#63 · ideation</a>"}}
-  i_outcomes_66(["<a href='https://example.com/outcomes/issues/66' target='_blank' style='color:inherit'>outcomes#66 · tracker</a>""])
+  i_outcomes_66(["<a href='https://example.com/outcomes/issues/66' target='_blank' style='color:inherit'>outcomes#66 · tracker</a>"])
   i_tasks_182["<a href='https://example.com/tasks/issues/182' target='_blank' style='color:inherit'>tasks#182 ·<br/>deterministic forest renderer</a>"]
   i_tasks_183["<a href='https://example.com/tasks/issues/183' target='_blank' style='color:inherit'>tasks#183 ·<br/>engine writes tracker block</a>"]
   i_tasks_184["⚑ <a href='https://example.com/tasks/issues/184' target='_blank' style='color:inherit'>tasks#184 ·<br/>retire prompt chart authoring</a>"]

@@ -181,13 +181,15 @@ func drawClasses(b *strings.Builder, strokes Strokes, classes map[string][]strin
 	}
 }
 
-// shapeOf is the shape that carries a role (§forgejo/renderer/identifiers-and-shapes).
+// shapeOf is the shape that carries a role. Each half sits outside the quotes
+// the emit formats already write, so a label is quoted once and once only
+// (§forgejo/renderer/identifiers-and-shapes).
 func shapeOf(kind int) (opening, closing string) {
 	switch kind {
 	case 0:
 		return `{{`, `}}`
 	case 1:
-		return `([`, `"])`
+		return `([`, `])`
 	default:
 		return `[`, `]`
 	}
