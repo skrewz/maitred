@@ -80,10 +80,11 @@ type Engine struct {
 	sweeping atomic.Bool
 
 	// The scope cache: the roles each of the org's repositories holds,
-	// refreshed at most once per reconcile interval
+	// with the pull requests unit the same listing states, refreshed at
+	// most once per reconcile interval
 	// (§forgejo/webhook/the-scope-cache, §forgejo/webhook/repository-roles).
 	scopeMu sync.Mutex
-	scope   map[string]roles
+	scope   map[string]scopeEntry
 	scopeAt time.Time
 	// scopeFailedAt stamps the last failed listing attempt, bounding
 	// the retry of a failing API to one listing per scopeRetryInterval.
@@ -930,40 +931,67 @@ func (e *Engine) syncMembers(blockers []Issue) ([]SyncMember, error) {
 			continue
 		}
 		if b.State == "open" && hasLabel(&b, LabelAgenticSyncMerge) {
-			pulls, ok := listing[b.Repository]
-			if !ok {
-				var err error
-				pulls, err = e.api.ListOpenPullRequests(owner, name)
-				if err != nil {
-					return nil, err
-				}
-				listing[b.Repository] = pulls
+			pr, reviews, err := e.deliveryPR(&b, b.Repository, listing)
+			if err != nil {
+				return nil, err
 			}
-			for j := range pulls {
-				if !prAutoClosesIssue(pulls[j].Body, b.Repository, b.Repository, b.Number) {
-					continue
-				}
-				// The listing is the lead; the single read is the
-				// authoritative state the predicate and the revision
-				// digest, as everywhere else (§forgejo/client/operations).
-				pr, err := e.api.GetPullRequest(owner, name, pulls[j].Number)
-				if err != nil {
-					return nil, err
-				}
-				if !prOpen(pr) {
-					continue // closed or merged between the listing and the read
-				}
-				reviews, err := e.api.ListPullRequestReviews(owner, name, pulls[j].Number)
-				if err != nil {
-					return nil, err
-				}
-				m.PR, m.Reviews = pr, reviews
-				break
-			}
+			m.PR, m.Reviews = pr, reviews
 		}
 		members = append(members, m)
 	}
 	return members, nil
+}
+
+// deliveryPR is the pull request delivering a member — the walk every
+// reader of the delivery relation walks: the landing-set predicate
+// projecting a set's members, and the outcomes view asking whether a
+// member's delivery has gone stale (§forgejo/decisions/sync-set,
+// §forgejo/decisions/merge-gate, §forgejo/observability/the-outcomes-view).
+// The repository's open-pull-request listing is the lead and is shared
+// across a caller's members through listings; the single read is the
+// authoritative state, as everywhere else (§forgejo/client/operations).
+// Where several open pull requests auto-close a member the first in the
+// listing is its delivery — the one-delivery-per-member projection, so
+// a member has one delivery whatever a caller then asks of it.
+// A repository whose pull requests unit is off holds no pull request and
+// is not asked, the way the sweep does not ask it: the refusal is an
+// ordinary state, not a failed read (§forgejo/reconciliation/the-sweep).
+// A nil pull request, with no reviews and no error, says the member
+// delivers nothing.
+func (e *Engine) deliveryPR(member *Issue, repo string, listings map[string][]PullRequest) (*PullRequest, []Review, error) {
+	owner, name := splitRepo(repo)
+	hasPulls, err := e.repoHasPullRequests(repo)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !hasPulls {
+		return nil, nil, nil
+	}
+	pulls, ok := listings[repo]
+	if !ok {
+		if pulls, err = e.api.ListOpenPullRequests(owner, name); err != nil {
+			return nil, nil, err
+		}
+		listings[repo] = pulls
+	}
+	for j := range pulls {
+		if !prAutoClosesIssue(pulls[j].Body, repo, repo, member.Number) {
+			continue
+		}
+		pr, err := e.api.GetPullRequest(owner, name, pulls[j].Number)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !prOpen(pr) {
+			continue // closed or merged between the listing and the read
+		}
+		reviews, err := e.api.ListPullRequestReviews(owner, name, pulls[j].Number)
+		if err != nil {
+			return nil, nil, err
+		}
+		return pr, reviews, nil
+	}
+	return nil, nil, nil
 }
 
 // closeKeywordRef mirrors the forge's own reading of an auto-close

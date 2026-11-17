@@ -25,6 +25,16 @@ type roles struct {
 // admission test (§forgejo/webhook/repository-roles).
 func (r roles) any() bool { return r.workItems || r.outcomes }
 
+// scopeEntry is what the cache remembers of one repository: the roles
+// its topics carry and whether its pull requests unit is on, so a reader
+// that must ask the unit asks the listing the sweep already made rather
+// than paying a listing of its own (§forgejo/reconciliation/the-sweep,
+// §forgejo/webhook/the-scope-cache).
+type scopeEntry struct {
+	roles        roles
+	pullRequests bool
+}
+
 // rolesFromTopics derives a repository's roles from its topics
 // (§forgejo/webhook/repository-roles). The derivation is written once
 // here and shared by the scope cache and the sweep filter
@@ -70,9 +80,12 @@ func (e *Engine) scopeRetry() time.Duration {
 // forge addresses a repository and the way the closing-reference
 // grammar matches one (§forgejo/webhook/re-fetch).
 func (e *Engine) refreshScopeCache(repos []Repository) {
-	scoped := make(map[string]roles, len(repos))
+	scoped := make(map[string]scopeEntry, len(repos))
 	for i := range repos {
-		scoped[strings.ToLower(repos[i].FullName)] = rolesFromTopics(repos[i].Topics)
+		scoped[strings.ToLower(repos[i].FullName)] = scopeEntry{
+			roles:        rolesFromTopics(repos[i].Topics),
+			pullRequests: repos[i].HasPullRequests,
+		}
 	}
 	e.scopeMu.Lock()
 	e.scope = scoped
@@ -128,7 +141,7 @@ func (e *Engine) tryRefreshScopeCache() error {
 // with the snapshot gone stale — the latter answering
 // errScopeUnavailable; the caller acts only on the error, never on an
 // empty result misread as "no repositories".
-func (e *Engine) freshScope() (map[string]roles, error) {
+func (e *Engine) freshScope() (map[string]scopeEntry, error) {
 	if e.scopeNeedsRefresh() {
 		e.refreshMu.Lock()
 		defer e.refreshMu.Unlock()
@@ -163,7 +176,23 @@ func (e *Engine) repoRoles(repo string) (roles, error) {
 	if err != nil {
 		return roles{}, err
 	}
-	return scope[strings.ToLower(repo)], nil
+	return scope[strings.ToLower(repo)].roles, nil
+}
+
+// repoHasPullRequests reports whether the repository has the pull
+// requests unit on, according to the same snapshot repoRoles reads, so a
+// reader never asks an endpoint the repository refuses
+// (§forgejo/reconciliation/the-sweep, §forgejo/webhook/the-scope-cache).
+// The name is matched case-insensitively as repoRoles matches it. A
+// repository absent from a fresh snapshot answers false, the way it holds
+// no role: a reader that has already established the repository is in
+// remit is asking about one the listing named.
+func (e *Engine) repoHasPullRequests(repo string) (bool, error) {
+	scope, err := e.freshScope()
+	if err != nil {
+		return false, err
+	}
+	return scope[strings.ToLower(repo)].pullRequests, nil
 }
 
 // outcomesRepositories reports the full names of the repositories the
@@ -179,8 +208,8 @@ func (e *Engine) outcomesRepositories() ([]string, error) {
 		return nil, err
 	}
 	names := make([]string, 0, len(scope))
-	for name, r := range scope {
-		if r.outcomes {
+	for name, entry := range scope {
+		if entry.roles.outcomes {
 			names = append(names, name)
 		}
 	}
