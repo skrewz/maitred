@@ -418,6 +418,14 @@ func TestLoadConfigDirectoryConflicts(t *testing.T) {
 			t.Fatalf("expected conflicting-stale_merge_threshold error, got %v", err)
 		}
 	})
+	t.Run("negative stale_merge_threshold in one file of a directory", func(t *testing.T) {
+		dir := t.TempDir()
+		writeConfig(t, dir, "01-a.yaml", "org: example-org\n")
+		writeConfig(t, dir, "02-b.yaml", "stale_merge_threshold: -5m\n")
+		if _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), "stale_merge_threshold") {
+			t.Fatalf("expected the negative a directory file declares to reach Validate, got %v", err)
+		}
+	})
 	t.Run("conflicting decomposer_identity", func(t *testing.T) {
 		dir := t.TempDir()
 		writeConfig(t, dir, "01-a.yaml", "org: example-org\ndecomposer_identity: one\n")

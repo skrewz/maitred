@@ -450,10 +450,15 @@ func loadConfigDir(dir string) (*Config, error) {
 		if cfg.ReconcileInterval > 0 {
 			merged.ReconcileInterval = cfg.ReconcileInterval
 		}
-		if cfg.StaleMergeThreshold > 0 && merged.StaleMergeThreshold > 0 && cfg.StaleMergeThreshold != merged.StaleMergeThreshold {
+		// A non-zero value carries through the merge whichever sign it
+		// carries, so a negative declared here reaches Validate and is a
+		// load error rather than a silently defaulted one — the outcome
+		// the single-file path already gives, and the one config.md
+		// promises for this key (§forgejo/config/validation).
+		if cfg.StaleMergeThreshold != 0 && merged.StaleMergeThreshold != 0 && cfg.StaleMergeThreshold != merged.StaleMergeThreshold {
 			return nil, fmt.Errorf("config %q: stale_merge_threshold %s conflicts with %s", name, cfg.StaleMergeThreshold, merged.StaleMergeThreshold)
 		}
-		if cfg.StaleMergeThreshold > 0 {
+		if cfg.StaleMergeThreshold != 0 {
 			merged.StaleMergeThreshold = cfg.StaleMergeThreshold
 		}
 		if cfg.DecomposerIdentity != "" && merged.DecomposerIdentity != "" && cfg.DecomposerIdentity != merged.DecomposerIdentity {
