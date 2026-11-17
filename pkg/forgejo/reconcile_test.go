@@ -971,11 +971,13 @@ func TestReconcile_DecomposeDigestGate_QuietForest(t *testing.T) {
 	if got := len(q.all()); got != 1 {
 		t.Fatalf("quiet forest dispatched %d tasks across two sweeps, want 1", got)
 	}
-	// Each sweep reads the root's blocks twice: the digest
-	// computation and the outcomes view's walk (recordForests) each
-	// make one read (§forgejo/observability/the-outcomes-view).
-	if got := api.callCount("IssueBlocks:r/1"); got != readsAfterOne+2 {
-		t.Errorf("second sweep cost %d forest reads, want one digest computation plus one outcomes walk (%d total)", got-readsAfterOne, readsAfterOne+2)
+	// Each sweep reads the root's blocks three times: the digest
+	// computation, the outcomes view's walk (recordForests) and the
+	// tracker block's graph each make one read
+	// (§forgejo/observability/the-outcomes-view,
+	// §forgejo/reconciliation/the-tracker-block).
+	if got := api.callCount("IssueBlocks:r/1"); got != readsAfterOne+3 {
+		t.Errorf("second sweep cost %d forest reads, want one digest computation, one outcomes walk and one chart graph (%d total)", got-readsAfterOne, readsAfterOne+3)
 	}
 }
 

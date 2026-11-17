@@ -132,6 +132,20 @@ type Config struct {
 	// (§forgejo/decisions/actionable-state-digest, s-git/maitred#209).
 	// Unset is a load error, never a silently inert gate.
 	EngineAccount string `yaml:"engine_account"`
+	// TrackerTimezone names the zone the tracker's current-state block
+	// is stamped in — both its `Last revisited:` line and a closed
+	// member's `closed` line — spelled as an IANA name such as
+	// "Australia/Sydney" (§forgejo/config/tracker-chart). Unset means
+	// UTC; a name that will not load is a load error, never a silent
+	// fall back to a zone the deployment did not ask for.
+	TrackerTimezone string `yaml:"tracker_timezone"`
+	// MermaidMaxSourceCharacters is the ceiling past which a rendered
+	// chart collapses to one node per repository
+	// (§forgejo/renderer/collapsing, §forgejo/config/tracker-chart).
+	// Unset — or zero, which YAML gives no other shape — means
+	// DefaultMermaidMaxSourceCharacters; a negative ceiling is a load
+	// error, since a ceiling below zero fits no graph at all.
+	MermaidMaxSourceCharacters int `yaml:"mermaid_max_source_characters"`
 	// Actions maps each action the decision function references to its
 	// canned prompt.
 	Actions map[string]PromptConfig `yaml:"actions"`
@@ -140,6 +154,39 @@ type Config struct {
 	// extending or contracting the chain is a config edit. At least one
 	// lens is required (§forgejo/config/validation).
 	Reviews []ReviewLens `yaml:"reviews"`
+}
+
+// DefaultMermaidMaxSourceCharacters is the ceiling a config that says nothing
+// gives the renderer. It is the length the forge's own Mermaid renderer draws
+// by default (Gitea's `MERMAID_MAX_SOURCE_CHARACTERS`, which Forgejo inherits:
+// https://github.com/go-gitea/gitea/blob/main/modules/setting/markup.go), so
+// the collapse threshold is never worth more than what the forge will actually
+// draw — a chart past the forge's own ceiling renders as text
+// (§forgejo/config/tracker-chart).
+const DefaultMermaidMaxSourceCharacters = 50000
+
+// ChartLocation is the zone the tracker's current-state block is stamped in,
+// UTC when the config names none (§forgejo/config/tracker-chart). A name the
+// system cannot load is a load error (§forgejo/config/validation), so this
+// never has to answer that question at sweep time.
+func (c *Config) ChartLocation() *time.Location {
+	if c.TrackerTimezone == "" {
+		return time.UTC
+	}
+	loc, err := time.LoadLocation(c.TrackerTimezone)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}
+
+// ChartCeiling is the character ceiling the renderer collapses past, the
+// default when the config names none (§forgejo/config/tracker-chart).
+func (c *Config) ChartCeiling() int {
+	if c.MermaidMaxSourceCharacters <= 0 {
+		return DefaultMermaidMaxSourceCharacters
+	}
+	return c.MermaidMaxSourceCharacters
 }
 
 // Placeholders are the values the engine fills into a prompt template at
@@ -214,6 +261,14 @@ func (c *Config) Validate() error {
 	}
 	if c.StaleMergeThreshold < 0 {
 		return fmt.Errorf("stale_merge_threshold must not be negative; leave it unset for the %s default", DefaultStaleMergeThreshold)
+	}
+	if c.TrackerTimezone != "" {
+		if _, err := time.LoadLocation(c.TrackerTimezone); err != nil {
+			return fmt.Errorf("tracker_timezone %q is not a zone the engine can load: %w", c.TrackerTimezone, err)
+		}
+	}
+	if c.MermaidMaxSourceCharacters < 0 {
+		return fmt.Errorf("mermaid_max_source_characters must be positive when set, got %d", c.MermaidMaxSourceCharacters)
 	}
 	for _, a := range AllActions {
 		pc, ok := c.Actions[string(a)]
@@ -478,6 +533,18 @@ func loadConfigDir(dir string) (*Config, error) {
 		}
 		if cfg.EngineAccount != "" {
 			merged.EngineAccount = cfg.EngineAccount
+		}
+		if cfg.TrackerTimezone != "" && merged.TrackerTimezone != "" && cfg.TrackerTimezone != merged.TrackerTimezone {
+			return nil, fmt.Errorf("config %q: tracker_timezone %q conflicts with %q", name, cfg.TrackerTimezone, merged.TrackerTimezone)
+		}
+		if cfg.TrackerTimezone != "" {
+			merged.TrackerTimezone = cfg.TrackerTimezone
+		}
+		if cfg.MermaidMaxSourceCharacters > 0 && merged.MermaidMaxSourceCharacters > 0 && cfg.MermaidMaxSourceCharacters != merged.MermaidMaxSourceCharacters {
+			return nil, fmt.Errorf("config %q: mermaid_max_source_characters %d conflicts with %d", name, cfg.MermaidMaxSourceCharacters, merged.MermaidMaxSourceCharacters)
+		}
+		if cfg.MermaidMaxSourceCharacters > 0 {
+			merged.MermaidMaxSourceCharacters = cfg.MermaidMaxSourceCharacters
 		}
 		if merged.Actions == nil {
 			merged.Actions = make(map[string]PromptConfig)

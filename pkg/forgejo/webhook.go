@@ -1059,7 +1059,7 @@ func (e *Engine) deliveryPR(member *Issue, repo string, listings map[string][]Pu
 // whitespace and the pair would resolve to one. The engine mirrors the
 // forge's **default** keyword set: an instance that reconfigures the
 // keywords reads differently than the predicate does — a known
-// limitation of a read-only client (§forgejo/decisions/sync-set).
+// limitation of what the API reports (§forgejo/decisions/sync-set).
 var closeKeywordRef = regexp.MustCompile(
 	`(?i)(?:\s|^|\(|\[)(?:closed|closes|close|fixed|fixes|fix|resolved|resolves|resolve):? (?:([0-9a-zA-Z-_.]+/[0-9a-zA-Z-_.]+))?#([0-9]+)([^0-9A-Za-z]|$)`)
 

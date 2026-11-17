@@ -44,6 +44,12 @@ type stubForgejoAPI struct {
 	// make a sweep's forest enumeration fail while its own listing
 	// lands (§forgejo/observability/the-outcomes-view).
 	issuesErr error
+
+	// writes counts the issue-body writes the engine landed. The engine's
+	// one mutation is the tracker's current-state block, and the web tests
+	// are not the ones that study it, so the stub only keeps the tally
+	// (§forgejo/reconciliation/the-tracker-block).
+	writes atomic.Int32
 }
 
 // The stub's organisation holds the one maitred-enabled repository the
@@ -99,6 +105,14 @@ func (s *stubForgejoAPI) ListIssueComments(string, string, int) ([]forgejo.Comme
 
 func (s *stubForgejoAPI) ListPullRequestReviews(string, string, int) ([]forgejo.Review, error) {
 	return nil, nil
+}
+
+// UpdateIssueBody is the engine's one mutation. The web tests do not study
+// the drawing it lands, so the stub counts the write and lands nothing
+// (§forgejo/reconciliation/the-tracker-block).
+func (s *stubForgejoAPI) UpdateIssueBody(string, string, int, string) error {
+	s.writes.Add(1)
+	return nil
 }
 
 // newForgejoEngine builds an engine over the given API stub, without

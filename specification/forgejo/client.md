@@ -1,9 +1,11 @@
 # Forgejo client
 
-The engine talks to Forgejo through a **read-only** client that exposes
-exactly the operations the decision function and the event/reconciliation
-paths need. It has **no mutation operations**: the engine's side effects are
-dispatched tasks, never direct writes to Forgejo (§overview/non-goals).
+The engine talks to Forgejo through a client that exposes exactly the
+operations the decision function and the event/reconciliation paths need. It
+carries **one mutation** — the narrow issue-body write that lands a tracker's
+current-state block (§forgejo/reconciliation/the-tracker-block) — and no
+other: every other side effect the engine has is a dispatched task
+(§overview/non-goals).
 
 ## Operations
 
@@ -21,6 +23,19 @@ authenticated with a bearer token:
 | list the issues that block an issue (`issue-dependencies`) | the unblock cascade, including cross-repo blockers |
 | list a pull request's reviews (event + author + commit) | the review transitions |
 | list an issue's comments (author + body) | the forest's actionable-state digest, which folds comments by anyone other than the engine's own account or the configured decomposer identity (§forgejo/decisions/actionable-state-digest) |
+| edit an issue's body (`body` only) | the one mutation: a tracker's current-state block (§forgejo/reconciliation/the-tracker-block) |
+
+Issue responses also report **when the issue closed** (`closed_at`): the
+close time a rendered chart stamps on a closed member
+(§forgejo/renderer/closed-members). It is zero while the issue is open, and
+`updated_at` is never used in its place — the last edit to a closed issue is
+not the moment it closed.
+
+Issue labels carry **the colour the forge reports for each** (`color`, a
+six-digit hex without its `#`), mapped onto the issue as the client's
+normalised `#rrggbb`: the stroke hexes of a rendered chart read from it, so a
+label recoloured in the forge shows in the next chart
+(§forgejo/renderer/classes-and-strokes, §forgejo/reconciliation/the-tracker-block).
 
 Issue responses also report **who opened the issue** (`user.login`): the
 author is carried on the issue model and read by nothing in the engine
@@ -89,6 +104,24 @@ so where the unit is on a `404` stays an error.
 
 The operations are exposed behind an **interface** so the decision function,
 webhook handler, and reconciliation sweep can be tested against a fake.
+
+## The one mutation
+
+`UpdateIssueBody` sends `PATCH /repos/{owner}/{repo}/issues/{index}` carrying
+`body` and nothing else. The narrowness is the point and is enforced by the
+payload: a title, a state, a label set, a milestone and an assignment are
+never sent, so they cannot change — and a body-only payload cannot reopen or
+close the issue it rewrites.
+
+The engine addresses only the tracker row of a forest it enumerated
+(§forgejo/reconciliation/the-tracker-block, §forgejo/observability/the-outcomes-view),
+under the bearer token its reads already use: the account that authors the
+write is the one `engine_account` names (§forgejo/config/engine-account), and
+no second token, persona or endpoint exists for this write to fall back on.
+Where that account has no write on an outcomes repository, the engine logs the
+refusal and writes nothing; it does not substitute a comment, which would land
+in the very digest the write exists to stay out of
+(§forgejo/decisions/actionable-state-digest).
 
 ## Errors
 

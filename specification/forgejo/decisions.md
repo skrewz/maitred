@@ -335,7 +335,7 @@ non-PR issues it blocks
 (§forgejo/webhook/re-fetch). The blocking edges among them are
 **recorded** relationships. Forgejo creates no PR→issue dependency from a
 `Fixes #NN`
-keyword in a PR body, and the engine's client is read-only
+keyword in a PR body, and the engine's client writes no edges
 (§forgejo/client/operations), so an edge must be recorded when
 the PR is opened: the workflow the `implement` prompt dispatches — the
 `/issue-implementer` invocation (§forgejo/config/canned-prompts) —
@@ -678,7 +678,7 @@ proceed while this is open* — and the edge that would make a pull
 request *deliver* an issue is one no implementer records and no
 author is meant to hand-author; a predicate gated on it strands
 every set in silence (s-git/maitred#171). The instance's configured
-keyword set is a known limitation of a read-only client: the engine
+keyword set is a known limitation of what the API reports: the engine
 mirrors the forge's defaults. A member delivers through **one** open
 pull request — the authoring contract the decomposer keeps. Where a
 member nonetheless stands with several auto-closing open pull

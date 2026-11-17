@@ -20,10 +20,11 @@ const maitredOutcomesTopic = "maitred-outcomes-repo"
 // for pull requests at all), and feeds each a synthetic reconcile event
 // through the same pipeline as the event path — re-fetch, decide,
 // dispatch, watermark, serialised on the watermark store's per-key lock.
-// A sweep that starts while another is in flight is skipped
-// (§forgejo/reconciliation/scheduling). The tick also records the
-// forest set the outcomes view is served from
-// (§forgejo/observability/the-outcomes-view).
+// Before the walk it records the forest set the outcomes view is served
+// from and lands each forest's drawing on its tracker
+// (§forgejo/observability/the-outcomes-view,
+// §forgejo/reconciliation/the-tracker-block). A sweep that starts while
+// another is in flight is skipped (§forgejo/reconciliation/scheduling).
 func (e *Engine) Reconcile() {
 	if !e.sweeping.CompareAndSwap(false, true) {
 		e.log.Info("reconciliation already in flight; skipping")
@@ -41,8 +42,16 @@ func (e *Engine) Reconcile() {
 	e.refreshScopeCache(repos)
 	// The tick records the forest set before the walk below dispatches
 	// any event (§forgejo/reconciliation/the-sweep,
-	// §forgejo/observability/the-outcomes-view).
-	e.recordForests()
+	// §forgejo/observability/the-outcomes-view), and the same set is what
+	// the trackers' current-state blocks are written from — step 3 below
+	// (§forgejo/reconciliation/the-tracker-block).
+	forests, err := e.recordForests()
+	if err == nil {
+		// Step 3: the tick pays for the drawings so no request path does
+		// (§forgejo/reconciliation/the-tracker-block). A forest whose write
+		// fails is logged and skipped, never fatal to the walk below.
+		e.writeTrackerBlocks(forests, time.Now())
+	}
 	for i := range repos {
 		repo := &repos[i]
 		// The sweep visits the union of both role sets, so a missed

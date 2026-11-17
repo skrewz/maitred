@@ -400,8 +400,12 @@ func (e *Engine) Forests() ([]Forest, error) {
 // function's. The scope cache is refreshed by the sweep
 // itself just before, so the walk rides the listing the sweep already
 // made fresh and costs no organisation listing of its own
-// (§forgejo/webhook/the-scope-cache).
-func (e *Engine) recordForests() {
+// (§forgejo/webhook/the-scope-cache). The set and the error are reported
+// to the caller as well as recorded: the sweep's next step writes each
+// forest it enumerated to that forest's tracker, and a forest the
+// enumeration did not name is never written to
+// (§forgejo/reconciliation/the-tracker-block).
+func (e *Engine) recordForests() ([]Forest, error) {
 	forests, err := e.enumerateForests()
 	if err != nil {
 		e.log.Error("reconciliation: forest enumeration failed; the outcomes view will say so until a sweep succeeds",
@@ -414,4 +418,5 @@ func (e *Engine) recordForests() {
 		e.forestsSnap, e.forestsAt, e.forestsErr = forests, time.Now(), nil
 	}
 	e.forestsMu.Unlock()
+	return forests, err
 }

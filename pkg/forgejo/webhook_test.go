@@ -170,6 +170,15 @@ type fakeAPI struct {
 	comments    map[int][]Comment
 	commentsErr error
 
+	// writes holds the body of every issue the engine wrote, keyed
+	// "repo/number", and writeErr, when set, fails every write the way a
+	// forge whose identity may not edit an issue body does. The engine's
+	// one mutation is the tracker's current-state block
+	// (§forgejo/client/the-one-mutation,
+	// §forgejo/reconciliation/the-tracker-block).
+	writes   map[string]string
+	writeErr error
+
 	// pullErr, when set, fails only GetPullRequest — so a test can
 	// break the cascade's PR re-fetch without breaking the event's
 	// reads (§forgejo/decisions/unblock-cascade).
@@ -205,6 +214,7 @@ func newFakeAPI() *fakeAPI {
 		openPulls:     map[string][]PullRequest{},
 		listIssuesErr: map[string]error{},
 		listPullsErr:  map[string]error{},
+		writes:        map[string]string{},
 		// The org's repositories default to the one the fixtures live
 		// in, maitred-enabled, so the event path's scope test passes
 		// unless a test restates the listing (§forgejo/webhook/the-scope-cache).
@@ -272,6 +282,13 @@ func (f *fakeAPI) GetIssue(owner, repo string, number int) (*Issue, error) {
 		return nil, &APIError{StatusCode: http.StatusNotFound, Message: "issue not found"}
 	}
 	filled := withIssueURL(owner, repo, *issue)
+	// A body the engine wrote is the body a later read returns, the way
+	// the forge does it, so a second sweep finds the block already in
+	// place rather than rewriting it forever
+	// (§forgejo/reconciliation/the-tracker-block).
+	if body, ok := f.writtenBody(repo, number); ok {
+		filled.Body = body
+	}
 	return &filled, nil
 }
 
@@ -390,6 +407,44 @@ func (f *fakeAPI) ListIssueComments(owner, repo string, number int) ([]Comment, 
 		return nil, f.err
 	}
 	return f.comments[number], nil
+}
+
+// UpdateIssueBody is the engine's one mutation: the fake records the body it
+// was handed under "repo/number" and lands it on the row a later GetIssue
+// returns, the way the forge does, so a test can watch a second sweep find the
+// block already in place (§forgejo/reconciliation/the-tracker-block).
+func (f *fakeAPI) UpdateIssueBody(owner, repo string, number int, body string) error {
+	f.record("UpdateIssueBody:" + repo + "/" + strconv.Itoa(number))
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.writeErr != nil {
+		return f.writeErr
+	}
+	if f.err != nil {
+		return f.err
+	}
+	if f.writes == nil {
+		f.writes = map[string]string{}
+	}
+	f.writes[repo+"/"+strconv.Itoa(number)] = body
+	return nil
+}
+
+// writtenBody is the body the fake last landed on an issue, and whether any
+// write reached it at all.
+func (f *fakeAPI) writtenBody(repo string, number int) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	body, ok := f.writes[repo+"/"+strconv.Itoa(number)]
+	return body, ok
+}
+
+// writeCount is how many issues the engine wrote — one per tracker, and per
+// nothing else (§forgejo/reconciliation/the-tracker-block).
+func (f *fakeAPI) writeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.writes)
 }
 
 // fakeQueue is a fake queue provider for the webhook tests.

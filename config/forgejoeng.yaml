@@ -24,6 +24,18 @@ implementer_identity: implementer
 # s-git/maitred#209).
 engine_account: maitred
 
+# Optional: the zone the tracker's current-state block is stamped in — both
+# its "Last revisited:" line and a closed member's "closed" line — as an IANA
+# name. Unset means UTC; a name the system cannot load is a load error
+# (§forgejo/config/tracker-chart).
+tracker_timezone: Australia/Sydney
+# Optional: the character ceiling past which a rendered forest collapses to one
+# node per repository (§forgejo/renderer/collapsing). Unset means 50000, the
+# length the forge's own Mermaid renderer draws by default — a chart past that
+# reaches a human as text, so collapsing earlier than the forge would is the
+# honest reading of "the chart is legible" (§forgejo/config/tracker-chart).
+mermaid_max_source_characters: 50000
+
 # Every prompt invokes the runner-side Pi canned prompt of the identity
 # the task runs as: Pi expands a prompt template only when the
 # dispatched message starts with "/<template-name>", so a prompt without
