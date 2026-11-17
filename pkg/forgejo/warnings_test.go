@@ -154,6 +154,51 @@ func TestForestWarnings_MergeGateHoldsOffDoesNotWarn(t *testing.T) {
 	}
 }
 
+// TestForestWarnings_OwedVerdictDoesNotWarn: a lens has reported nothing
+// at head, so the chain owes its verdict, the wait is the reviewers',
+// and the ⚠️ that asserts a person is the wait says nothing
+// (§forgejo/observability/the-outcomes-view).
+func TestForestWarnings_OwedVerdictDoesNotWarn(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(35, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	api.reviews[pr.Number] = nil // the lens has reported nothing at the head
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests[0].Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none while the chain owes its verdict", forests[0].Warnings)
+	}
+}
+
+// TestForestWarnings_UndatedApprovalDoesNotWarn: an approval the chain
+// stands on that carries no moment says the wait cannot be dated, and
+// the walk says nothing rather than borrowing another object's
+// timestamp (§forgejo/observability/the-outcomes-view).
+func TestForestWarnings_UndatedApprovalDoesNotWarn(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(36, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	api.reviews[pr.Number] = []Review{{
+		Event:    ReviewApproved,
+		Author:   "bob",
+		CommitID: pr.HeadSHA,
+		// SubmittedAt is the zero time: a verdict no clock dates.
+	}}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests[0].Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none beside a verdict no clock dates", forests[0].Warnings)
+	}
+}
+
 // TestForestWarnings_ThresholdHonouredWhenConfigured: the bound is a
 // config option, so a forest whose delivery has stood approved for ninety
 // minutes is stale against a one-hour default and healthy against a two
@@ -294,7 +339,7 @@ func TestForestWarnings_FailedReadFailsTheEnumeration(t *testing.T) {
 		{"pull request listing", func(f *fakeAPI) { f.listPullsErr = map[string]error{"r": errWarnFixture} }},
 		{"blocker read", func(f *fakeAPI) { f.issueDepsErr = errWarnFixture }},
 		{"pull request read", func(f *fakeAPI) { f.pullErr = errWarnFixture }},
-		{"membership read", func(f *fakeAPI) { f.issueBlocksErr = errWarnFixture }},
+		{"membership read", func(f *fakeAPI) { f.issueBlocksErrOn = map[int]error{22: errWarnFixture} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			eng, api, _, _ := newTestEngine(t)

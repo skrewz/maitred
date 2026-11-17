@@ -148,6 +148,9 @@ func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) (
 			// Outside the engine's remit: neither read nor warned
 			// on, as the walk's note above states once
 			// (§forgejo/webhook/repository-roles).
+			e.log.Debug("forest warnings: skipping a member outside the engine's remit",
+				"forest", rootRepo+"#"+strconv.Itoa(root.Number),
+				"member", repo+"#"+strconv.Itoa(member.Number))
 			continue
 		}
 		owner, name := splitRepo(repo)

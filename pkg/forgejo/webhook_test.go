@@ -147,6 +147,12 @@ type fakeAPI struct {
 	// re-fetches (§forgejo/webhook/re-fetch).
 	issueBlocksErr error
 
+	// issueBlocksErrOn, when it holds an error for an issue number,
+	// fails only that issue's IssueBlocks read — so a test can break
+	// one membership read while the same read elsewhere, say a root's
+	// walk of its members, still answers.
+	issueBlocksErrOn map[int]error
+
 	// issueDepsErr, when set, fails only IssueDependencies — so a test
 	// can break the blocker resolution of the connected issue alone
 	// (§forgejo/webhook/re-fetch).
@@ -342,6 +348,9 @@ func (f *fakeAPI) IssueBlocks(owner, repo string, number int) ([]Issue, error) {
 	f.record("IssueBlocks:" + repo + "/" + strconv.Itoa(number))
 	if f.issueBlocksErr != nil {
 		return nil, f.issueBlocksErr
+	}
+	if err := f.issueBlocksErrOn[number]; err != nil {
+		return nil, err
 	}
 	if f.err != nil {
 		return nil, f.err
