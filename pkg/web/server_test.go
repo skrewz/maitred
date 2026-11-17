@@ -35,12 +35,6 @@ type stubForgejoAPI struct {
 	openIssues map[string][]forgejo.Issue
 	blocks     map[int][]forgejo.Issue
 
-	// getIssues answers GetIssue by number for the numbers it holds —
-	// the outcomes fixture's tracker, whose body the forest's picture is
-	// scraped from. Any other number answers as issue does
-	// (§forgejo/observability/the-outcomes-view).
-	getIssues map[int]*forgejo.Issue
-
 	// reposErr, when set, fails only ListOrgRepositories — so a test
 	// can break the outcomes view's scope listing without breaking
 	// anything else it reads.
@@ -83,10 +77,7 @@ func (s *stubForgejoAPI) ListOpenPullRequests(string, string) ([]forgejo.PullReq
 	return nil, nil
 }
 
-func (s *stubForgejoAPI) GetIssue(_, _ string, number int) (*forgejo.Issue, error) {
-	if row, ok := s.getIssues[number]; ok {
-		return row, nil
-	}
+func (s *stubForgejoAPI) GetIssue(string, string, int) (*forgejo.Issue, error) {
 	return s.issue, nil
 }
 
@@ -537,7 +528,6 @@ func outcomesStubAPI() *stubForgejoAPI {
 		},
 		openIssues: map[string][]forgejo.Issue{"out": {root, tracker, loneRoot}},
 		blocks:     map[int][]forgejo.Issue{51: {tracker}},
-		getIssues:  map[int]*forgejo.Issue{71: &tracker},
 	}
 }
 

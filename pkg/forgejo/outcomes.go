@@ -178,16 +178,15 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 // reads as a tracker — isTracker's one reading, the one the cascade and
 // the teardown apply (Client.IssueBlocks, the same read the cascade
 // follows, §forgejo/client/operations, §forgejo/decisions/unblock-cascade).
-// Each tracker found is read once more, from the repository it lives in,
-// for the description its current-state block lives in: that read's body
-// is scraped for the forest's picture, and nothing is ever written back
-// (§forgejo/observability/the-outcomes-view).
+// Each tracker found brings its picture: the description of the row the
+// blocks read already holds is scraped for the forest's chart and stamp,
+// and nothing is ever written back (§forgejo/observability/the-outcomes-view,
+// §forgejo/client/operations).
 // A root whose tracker is missing is listed with the absence stated; an
 // outcome issue no open root blocks is not a forest and is not listed.
 // Pull requests carry no forest. The list is empty — never nil — when
 // no repository holds the role. A non-nil error means a read failed —
-// the organisation listing, an issue listing, a blocks read, or a
-// tracker's body read — each
+// the organisation listing, an issue listing or a blocks read — each
 // wrapped with the repository or issue it concerned, and the partial
 // result is dropped: a failed read must not read as an empty set of
 // forests, the same fail-closed discipline as the scope test
@@ -225,19 +224,14 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 				}
 				tracker := forestIssue(*b, root.Repository)
 				forest.Tracker = &tracker
-				// The picture comes from the tracker's own read, which is
-				// the read carrying the full description; the blocks row
-				// already in hand is a listing, and a listing's body is
-				// not trusted with it. Reading from the tracker's own
-				// repository is what makes a cross-repo tracker's chart
-				// the tracker's, not the root's
+				// The picture comes from the row already in hand. The blocks
+				// read answers with the same issue model a single-issue read
+				// does, body included, so scraping it costs no read and says
+				// nothing a re-read would put right; and because the row *is*
+				// the tracker's, a tracker living in another repository
+				// brings its own picture rather than the root's
 				// (§forgejo/client/operations).
-				tOwner, tName := splitRepo(tracker.Repository)
-				own, err := e.api.GetIssue(tOwner, tName, tracker.Number)
-				if err != nil {
-					return nil, fmt.Errorf("forgejo: outcomes: tracker %s#%d: %w", tracker.Repository, tracker.Number, err)
-				}
-				forest.Chart, forest.ChartRevisited = scrapeForestChart(own.Body)
+				forest.Chart, forest.ChartRevisited = scrapeForestChart(b.Body)
 				break
 			}
 			forests = append(forests, forest)

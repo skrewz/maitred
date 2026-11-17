@@ -65,9 +65,7 @@ func TestForests_PairsRootWithTracker(t *testing.T) {
 	tracker := outcomesTracker(71, "forest tracker")
 	// The tracker is open in the same listing: it must pair into the
 	// forest, never stand as a forest of its own.
-	api.openIssues["out"] = []Issue{root, tracker}
-	api.blocks[51] = []Issue{tracker}
-	api.issues[71] = &tracker // the scrape reads the tracker's own body
+	stageForest(api, root, tracker)
 
 	forests, err := eng.enumerateForests()
 	if err != nil {
@@ -150,9 +148,7 @@ func TestForests_OnlyOutcomesReposEnumerated(t *testing.T) {
 	api.repos = []Repository{testRepo("o/wi"), outcomesRepo("o/out")}
 	root := outcomesRoot(51, "outcomes root")
 	tracker := outcomesTracker(71, "outcomes tracker")
-	api.openIssues["out"] = []Issue{root, tracker}
-	api.blocks[51] = []Issue{tracker}
-	api.issues[71] = &tracker // the scrape reads the tracker's own body
+	stageForest(api, root, tracker)
 	// A work-item repository is never walked, even when it holds rows
 	// that look like forests, and a pull request carrying the labels is
 	// no root.
@@ -218,9 +214,7 @@ func TestForests_ReadFailureIsError(t *testing.T) {
 			api.repos = []Repository{outcomesRepo("o/out")}
 			root := outcomesRoot(51, "root")
 			tracker := outcomesTracker(71, "tracker")
-			api.openIssues["out"] = []Issue{root, tracker}
-			api.blocks[51] = []Issue{tracker}
-			api.issues[71] = &tracker // the scrape reads the tracker's own body
+			stageForest(api, root, tracker)
 			tc.mutate(api)
 
 			forests, err := eng.enumerateForests()
@@ -295,7 +289,6 @@ func TestForests_TrackerReadIsTheEngines(t *testing.T) {
 	tracker := outcomesTracker(71, "forest tracker")
 	api.openIssues["out"] = []Issue{root, tracker}
 	api.blocks[51] = []Issue{both, tracker}
-	api.issues[71] = &tracker // the scrape reads the tracker's own body
 
 	forests, err := eng.enumerateForests()
 	if err != nil {
@@ -323,7 +316,6 @@ func TestForests_CrossRepoTrackerStatesRepository(t *testing.T) {
 	tracker.Repository = "o/elsewhere"
 	api.openIssues["out"] = []Issue{root}
 	api.blocks[51] = []Issue{tracker}
-	api.issues[71] = &tracker // the scrape reads the tracker's own body
 
 	forests, err := eng.enumerateForests()
 	if err != nil {
@@ -359,7 +351,6 @@ func TestForests_RepositorySpellingFollowsTheListing(t *testing.T) {
 	blocksRow := tracker
 	blocksRow.Repository = "" // the blocks listing may omit the field
 	api.blocks[51] = []Issue{blocksRow}
-	api.issues[71] = &tracker // the scrape reads the tracker's own body
 
 	forests, err := eng.enumerateForests()
 	if err != nil {
@@ -386,9 +377,7 @@ func TestForests_ViewIsTheLastSweepsSet(t *testing.T) {
 	api.repos = []Repository{outcomesRepo("o/out")}
 	root := outcomesRoot(51, "root")
 	tracker := outcomesTracker(71, "tracker")
-	api.openIssues["out"] = []Issue{root, tracker}
-	api.blocks[51] = []Issue{tracker}
-	api.issues[71] = &tracker // the scrape reads the tracker's own body
+	stageForest(api, root, tracker)
 
 	if forests, err := eng.Forests(); !errors.Is(err, errForestsUnavailable) || forests != nil {
 		t.Fatalf("Forests = %+v, %v, want errForestsUnavailable and nil before the first enumeration", forests, err)
@@ -422,9 +411,7 @@ func TestForests_FailedEnumerationSilencesTheView(t *testing.T) {
 	api.repos = []Repository{outcomesRepo("o/out")}
 	root := outcomesRoot(51, "root")
 	tracker := outcomesTracker(71, "tracker")
-	api.openIssues["out"] = []Issue{root, tracker}
-	api.blocks[51] = []Issue{tracker}
-	api.issues[71] = &tracker // the scrape reads the tracker's own body
+	stageForest(api, root, tracker)
 
 	eng.recordForests()
 	if _, err := eng.Forests(); err != nil {
@@ -485,9 +472,7 @@ func TestForests_SnapshotAgesOutFailsClosed(t *testing.T) {
 	api.repos = []Repository{outcomesRepo("o/out")}
 	root := outcomesRoot(51, "root")
 	tracker := outcomesTracker(71, "tracker")
-	api.openIssues["out"] = []Issue{root, tracker}
-	api.blocks[51] = []Issue{tracker}
-	api.issues[71] = &tracker // the scrape reads the tracker's own body
+	stageForest(api, root, tracker)
 
 	eng.Reconcile()
 	if _, err := eng.Forests(); err != nil {
@@ -595,11 +580,6 @@ func TestForests_ViewServesBeforeTheFirstWalkFinishes(t *testing.T) {
 	entered := make(chan struct{})
 	api.blockGetIssue = release
 	api.getIssueEntered = entered
-	// The hold belongs to the walk's re-fetch of the work issue alone:
-	// the tick's head now reads a tracker's body too, and holding every
-	// read would hold the recording the test is watching for
-	// (§forgejo/observability/the-outcomes-view).
-	api.blockGetIssueFor = "r/7"
 	releaseOnce := sync.OnceFunc(func() { close(release) })
 
 	eng.Start()
@@ -697,15 +677,12 @@ func currentStatedBlock(stamp, block string) string {
 }
 
 // stageForest stages one forest in the outcomes fixtures: the root and its
-// tracker in the listing, the pairing in the root's blocks read, and both
-// rows fetchable by their own reads. The blocks row carries no body — the
-// picture is scraped from the tracker's own read, not from a listing
+// tracker in the listing, and the pairing in the root's blocks read — the
+// row that read carries is the description the picture is scraped from
 // (§forgejo/observability/the-outcomes-view, §forgejo/client/operations).
 func stageForest(api *fakeAPI, root, tracker Issue) {
 	api.openIssues["out"] = []Issue{root, tracker}
 	api.blocks[root.Number] = []Issue{tracker}
-	api.issues[root.Number] = &root
-	api.issues[tracker.Number] = &tracker
 }
 
 // TestForests_ChartIsScrapedFromTheTrackersBody: the forest carries the
@@ -849,36 +826,12 @@ func TestForests_AbsentTrackerPublishesNoPictureAndIsNotRead(t *testing.T) {
 	}
 }
 
-// TestForests_TrackerBodyReadFailsClosed: a tracker whose read fails fails
-// the enumeration, naming the tracker — an empty chart must never be what
-// a broken read looks like (§forgejo/observability/the-outcomes-view,
-// §forgejo/webhook/the-scope-cache).
-func TestForests_TrackerBodyReadFailsClosed(t *testing.T) {
-	eng, api, _, _ := newTestEngine(t)
-	api.repos = []Repository{outcomesRepo("o/out")}
-	root := outcomesRoot(51, "root")
-	tracker := outcomesTracker(71, "tracker")
-	tracker.Body = currentStatedBlock("2026-11-16 09:12 AEDT", mermaidBlock())
-	stageForest(api, root, tracker)
-	api.getIssueErr = errors.New("issue read down")
-
-	forests, err := eng.enumerateForests()
-	if err == nil {
-		t.Fatalf("enumerateForests = %+v, want an error: a tracker read that broke is not a forest with no chart", forests)
-	}
-	if forests != nil {
-		t.Errorf("forests = %+v, want nil alongside the error", forests)
-	}
-	if !strings.Contains(err.Error(), "tracker o/out#71") {
-		t.Errorf("error %q, want it to name the tracker whose read broke", err)
-	}
-}
-
-// TestForests_ChartReadUsesTheTrackersRepository: a tracker living in
-// another repository has its body read from where it lives, not from the
-// repository the forest grew in (§forgejo/client/operations,
+// TestForests_ChartComesFromTheTrackersRow: a tracker living in another
+// repository brings the picture its own description holds rather than the
+// root's, and the walk pays no extra read for it — the row the blocks read
+// returned *is* the tracker's own row (§forgejo/client/operations,
 // §forgejo/observability/the-outcomes-view).
-func TestForests_ChartReadUsesTheTrackersRepository(t *testing.T) {
+func TestForests_ChartComesFromTheTrackersRow(t *testing.T) {
 	eng, api, _, _ := newTestEngine(t)
 	api.repos = []Repository{outcomesRepo("o/out")}
 	root := outcomesRoot(51, "root")
@@ -887,7 +840,6 @@ func TestForests_ChartReadUsesTheTrackersRepository(t *testing.T) {
 	tracker.Body = currentStatedBlock("2026-11-16 09:12 AEDT", mermaidBlock())
 	api.openIssues["out"] = []Issue{root}
 	api.blocks[51] = []Issue{tracker}
-	api.issues[71] = &tracker
 
 	forests, err := eng.enumerateForests()
 	if err != nil {
@@ -896,10 +848,7 @@ func TestForests_ChartReadUsesTheTrackersRepository(t *testing.T) {
 	if len(forests) != 1 || forests[0].Chart != forestChartSource {
 		t.Fatalf("forests = %+v, want the cross-repo tracker's chart", forests)
 	}
-	if n := api.callCount("GetIssue:elsewhere/71"); n != 1 {
-		t.Errorf("the tracker's body was read %d time(s) from o/elsewhere, want exactly once: the read follows where the tracker lives", n)
-	}
-	if n := api.callCount("GetIssue:out/71"); n != 0 {
-		t.Errorf("the tracker's body was read from the root's repository %d time(s), want never", n)
+	if n := api.callCount("GetIssue:"); n != 0 {
+		t.Errorf("the walk made %d issue read(s), want none: the picture is scraped from the row the blocks read returned", n)
 	}
 }

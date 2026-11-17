@@ -58,13 +58,17 @@ type Issue struct {
 	// forest member
 	// (§forgejo/decisions/transition-table, s-git/maitred#135).
 	Author string
-	// Body is the issue's text. The engine reads it at one seat: the
-	// landing set's revision digests the grouping issue's body, because
-	// that is the field naming the order the set must land in, and a
-	// restatement of it is the human's lever on a landing run that
-	// reported a conflict (§forgejo/decisions/sync-set). It is whatever
-	// the endpoint reported: the issue's own read carries the full text,
-	// the dependency and blocks listings carry theirs.
+	// Body is the issue's text. Two seats read it: the landing set's
+	// revision digests the grouping issue's body, because that is the
+	// field naming the order the set must land in, and a restatement of
+	// it is the human's lever on a landing run that reported a conflict
+	// (§forgejo/decisions/sync-set); and the outcomes view scrapes a
+	// forest's picture out of the current-state block its tracker's body
+	// carries (§forgejo/observability/the-outcomes-view). It is whatever
+	// the endpoint reported, and every endpoint the engine reads an issue
+	// from — the single-issue read and the dependency and blocks listings
+	// alike — answers with this same model, body filled the same way
+	// (§forgejo/client/operations).
 	Body string
 	// UpdatedAt is the issue's last update time; it serves as the issue's
 	// activity revision for the watermark (§forgejo/client/operations).

@@ -50,11 +50,21 @@ reads them counts a comment as its author and text alone
 (§forgejo/decisions/actionable-state-digest). A response without a `user`
 object yields an empty author.
 
-Issue responses also report the issue's **body** (`body`). One seat reads
+Issue responses also report the issue's **body** (`body`). Two seats read
 it: the landing set's revision digests the grouping issue's body, the
 field that names the order its members must land in, so a restatement of
 the order moves the digest while a comment or a label toggle does not
-(§forgejo/decisions/sync-set).
+(§forgejo/decisions/sync-set), and the outcomes view scrapes a forest's
+picture out of the current-state block its tracker's body carries
+(§forgejo/observability/the-outcomes-view).
+
+An issue arrives in the same shape whichever operation carried it: the
+single-issue read, the dependency listing and the blocks listing all
+answer with the issue model, `body` among its fields, and the forge
+fills that field the same way for each — no operation hands back a stub
+where another gives the description. A caller holding an issue's row
+therefore holds its description, and reading it from that row costs no
+second read of the same issue.
 
 Pull request responses likewise report the pull request's **body**
 (`body`). Two seats read it: the landing set's predicate resolves a
