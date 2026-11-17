@@ -1154,9 +1154,29 @@ async function testOutcomesPage(page, results) {
   const dashHidden = await page.evaluate(() =>
     getComputedStyle(document.getElementById('dashboard-view')).display === 'none');
   results.push(assert(dashHidden, 'The trigger dashboard is hidden on /outcomes'));
+  const backHref = await page.locator('#outcomes-link').getAttribute('href');
+  results.push(assert(
+    backHref === '/',
+    `The header's one link is the way back on /outcomes (got: "${backHref}")`
+  ));
   const statsHidden = await page.evaluate(() =>
     getComputedStyle(document.querySelector('.header .stats')).display === 'none');
   results.push(assert(statsHidden, 'The trigger stats are hidden on /outcomes rather than reading as zeros'));
+
+  // The compare-then-render discipline the dashboard follows: an
+  // unchanged payload renders no new rows, so a keyboard operator's
+  // focus on a row's link survives the poll
+  // (§forgejo/observability/the-dashboard-view).
+  const survivesPoll = await page.evaluate(async () => {
+    await refreshOutcomes();
+    const before = document.querySelector('#outcomes-list > *');
+    await refreshOutcomes();
+    return before !== null && document.querySelector('#outcomes-list > *') === before;
+  });
+  results.push(assert(
+    survivesPoll,
+    'An unchanged payload renders no new rows'
+  ));
 
   // One tall row per forest, each carrying its ideation and tracker
   // links, exercised through the page's own renderer on a synthetic
@@ -1194,8 +1214,8 @@ async function testOutcomesPage(page, results) {
     `A forest row links its ideation root and its tracker (got: ${synthetic.firstRowLinks.join(', ')})`
   ));
   results.push(assert(
-    synthetic.minHeight.length === 2 && synthetic.minHeight.every(h => h >= 240),
-    `Rows are tall enough for a chart underneath (min-heights: ${synthetic.minHeight.join(', ')})`
+    synthetic.minHeight.length === 2 && synthetic.minHeight.every(h => h >= 320),
+    `Rows are tall enough for the chart promised underneath (min-heights: ${synthetic.minHeight.join(', ')})`
   ));
   results.push(assert(
     synthetic.texts[0]?.includes('o/out') && synthetic.texts[0]?.includes('open'),
@@ -1204,6 +1224,34 @@ async function testOutcomesPage(page, results) {
   results.push(assert(
     /no tracker/i.test(synthetic.texts[1] ?? ''),
     `A tracker's absence is stated, not dropped (got: "${synthetic.texts[1]?.trim()}")`
+  ));
+
+  // safeUrl is the guard between a forge-supplied html_url and an
+  // href: anything a link cannot carries renders as text, never as a
+  // clickable destination (§forgejo/observability/the-outcomes-view).
+  const hostile = await page.evaluate(() => {
+    renderOutcomes({
+      engine_status: 'enabled',
+      forests: [
+        {
+          repository: 'o/out',
+          root: { number: 7, repository: 'o/out', title: 'Executes on click', state: 'open', html_url: 'javascript:alert(1)' },
+          tracker: { number: 8, repository: 'o/out', title: 'No destination at all', state: 'open', html_url: '' },
+        },
+      ],
+    });
+    return {
+      hrefs: [...document.querySelectorAll('#outcomes-list a')].map(a => a.getAttribute('href')),
+      text: document.getElementById('outcomes-list').textContent,
+    };
+  });
+  results.push(assert(
+    hostile.hrefs.length === 0,
+    `A URL a link cannot carry never becomes an href (hrefs: ${hostile.hrefs.join(', ') || 'none'})`
+  ));
+  results.push(assert(
+    (hostile.text ?? '').includes('Executes on click') && (hostile.text ?? '').includes('No destination at all'),
+    `An unlinkable issue still renders as text (got: "${hostile.text?.trim().slice(0, 80)}")`
   ));
 
   // The honest empty and the unreadable view are different words:

@@ -13,7 +13,6 @@
         .header-nav { margin-top: 0.35rem; display: flex; gap: 0.75rem; }
         .header-nav a { font-size: 0.75rem; color: #94a3b8; text-decoration: none; }
         .header-nav a:hover { color: #e2e8f0; }
-        .header-nav a.current { color: #a78bfa; font-weight: 600; }
         .stats { display: flex; gap: 1.5rem; }
         .stat { text-align: center; }
         .stat-value { font-size: 1.25rem; font-weight: bold; color: #a78bfa; }
@@ -122,7 +121,6 @@
             <span class="version" id="version">loading...</span>
             <nav class="header-nav">
                 <a href="/outcomes" id="outcomes-link">Outcomes</a>
-                <a href="/" id="dashboard-link" style="display: none;">Dashboard</a>
             </nav>
         </div>
         <div class="stats">
@@ -749,11 +747,16 @@
             if (!issue) {
                 return `<div class="meta-item"><span class="meta-label">${escapeHtml(label)}</span><span class="meta-value" style="color:#64748b;">${escapeHtml(absentText)}</span></div>`;
             }
-            const badge = issue.state === 'open' ? 'badge-open' : (issue.state === 'closed' ? 'badge-closed' : 'badge-none');
+            // State arrives as Forgejo's own field through an open-issue
+            // listing or a blocks read, so it is open or closed — the
+            // same two-way reading the dashboard's issue renderer uses.
+            const badge = issue.state === 'open' ? 'badge-open' : 'badge-closed';
             const text = `${escapeHtml(issue.repository)}#${escapeHtml(String(issue.number ?? ''))} \u2014 ${escapeHtml(issue.title ?? '')}`;
             const href = safeUrl(issue.html_url);
-            const link = href ? `<a href="${escapeHtml(href)}">${text}</a>` : `<span>${text}</span>`;
-            return `<div class="meta-item"><span class="meta-label">${escapeHtml(label)}</span><span class="meta-value">${link} <span class="badge ${badge}">${escapeHtml(issue.state || 'unknown')}</span></span></div>`;
+            // rel="noreferrer" keeps the click from leaking this
+            // dashboard's own origin to the forge as the Referer.
+            const link = href ? `<a href="${escapeHtml(href)}" rel="noreferrer">${text}</a>` : `<span>${text}</span>`;
+            return `<div class="meta-item"><span class="meta-label">${escapeHtml(label)}</span><span class="meta-value">${link} <span class="badge ${badge}">${escapeHtml(issue.state)}</span></span></div>`;
         }
 
         // renderOutcomes renders the outcomes view
@@ -772,15 +775,20 @@
         function renderOutcomes(payload) {
             const list = document.getElementById('outcomes-list');
             const statusEl = document.getElementById('outcomes-status-text');
-            if (!payload) {
+            // A failed poll and a payload that carries no status word
+            // both mean the engine has said nothing about the view;
+            // "could not be read" is the true statement, and the
+            // enum's fixed set has no blank word to render instead
+            // (TestNonFaultWords pins it in pkg/forgejo/status_test.go).
+            if (!payload || !payload.engine_status) {
                 statusEl.textContent = 'Error loading outcomes';
                 list.innerHTML = '<div class="empty-state"><h2>Outcomes could not be read</h2><p>The engine has nothing it can vouch for yet: the last enumeration failed, has not landed, or has aged out.</p></div>';
                 return;
             }
             statusEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
-            const status = payload.engine_status || '';
+            const status = payload.engine_status;
             if (status !== 'enabled') {
-                const word = escapeHtml(status || 'off');
+                const word = escapeHtml(status);
                 list.innerHTML = `<div class="empty-state"><h2>Forgejo engine \u2014 ${word}</h2><p>The outcomes view is what the Forgejo engine knows of the current forests, and the engine is ${word}.</p></div>`;
                 return;
             }
@@ -800,13 +808,31 @@
             `).join('');
         }
 
+        // The outcomes payload last rendered, in the same
+        // compare-then-render discipline as refresh(): the rows carry
+        // links, so an unchanged poll must not rebuild them under a
+        // keyboard operator's focus
+        // (§forgejo/observability/the-dashboard-view).
+        let lastOutcomesJson;
+
         async function refreshOutcomes() {
+            let payload = null;
             try {
                 const res = await fetch('/api/forgejo/outcomes');
-                renderOutcomes(res.ok ? await res.json() : null);
+                if (res.ok) payload = await res.json();
             } catch (e) {
                 console.error('outcomes refresh failed:', e);
-                renderOutcomes(null);
+            }
+            const outcomesJson = JSON.stringify(payload);
+            if (outcomesJson !== lastOutcomesJson) {
+                renderOutcomes(payload);
+                // Recorded only once the render returned, as refresh()
+                // does: a throw leaves the next poll free to retry.
+                lastOutcomesJson = outcomesJson;
+            } else if (payload) {
+                // The renderer sets the stamp when it renders; a skipped
+                // render still stamps the poll, as refresh() does.
+                document.getElementById('outcomes-status-text').textContent = 'Updated ' + new Date().toLocaleTimeString();
             }
         }
 
@@ -815,11 +841,17 @@
             document.title = 'maitred \u2014 Outcomes';
             document.getElementById('dashboard-view').style.display = 'none';
             document.getElementById('outcomes-view').style.display = '';
-            document.getElementById('dashboard-link').style.display = '';
-            document.getElementById('outcomes-link').classList.add('current');
-            // The trigger stats would read as zeros here — the
-            // dashboard's numbers have nothing to do with forests, so
-            // they are hidden rather than left to mislead.
+            // The header carries one link, as the brief asks; on this
+            // route it states its opposite, so the way in is also the
+            // way back.
+            const navLink = document.getElementById('outcomes-link');
+            navLink.setAttribute('href', '/');
+            navLink.textContent = 'Dashboard';
+            // The header's trigger stats are the dashboard's numbers,
+            // which this route never reads. Left visible they would
+            // state "0 Triggers" — a falsehood, not a blank — so the
+            // honest rendering here is silence
+            // (§forgejo/observability/the-outcomes-view).
             document.querySelector('.header .stats').style.display = 'none';
             fetch('/api/version').then(r => r.ok ? r.text() : 'dev')
                 .then(v => { document.getElementById('version').textContent = v; })

@@ -198,7 +198,11 @@ whose last sweep found nothing says there are no current forests.
 A view the engine answers `500` for says it could not be read, so an
 empty rectangle never passes for a dashboard
 (§forgejo/observability/the-dashboard-view). The header links to the
-route so it is reachable by eye.
+route so it is reachable by eye; it carries one link, which reads as
+the way back when the route is where the reader already is. The
+header's trigger statistics — numbers this page never reads — stay
+hidden on the route, so they state nothing rather than rendering
+their defaults as facts.
 
 ## Triggering a sweep
 
