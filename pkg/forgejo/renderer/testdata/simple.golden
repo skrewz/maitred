@@ -1,0 +1,21 @@
+flowchart TD
+%% forest outcomes#63 rendered by maitred
+%% tracker outcomes#66 fans to 3 issues (fan stated, not drawn)
+  i_outcomes_63{{"<a href='https://example.com/outcomes/issues/63' target='_blank' style='color:inherit'>outcomes#63 · ideation</a>"}}
+  i_outcomes_66(["<a href='https://example.com/outcomes/issues/66' target='_blank' style='color:inherit'>outcomes#66 · tracker</a>"])
+  i_tasks_182["<a href='https://example.com/tasks/issues/182' target='_blank' style='color:inherit'>tasks#182 ·<br/>deterministic forest renderer</a>"]
+  i_tasks_183["<a href='https://example.com/tasks/issues/183' target='_blank' style='color:inherit'>tasks#183 ·<br/>engine writes tracker block</a>"]
+  i_tasks_184["⚑ <a href='https://example.com/tasks/issues/184' target='_blank' style='color:inherit'>tasks#184 ·<br/>retire prompt chart authoring</a>"]
+  i_outcomes_63 -.-> i_outcomes_66
+  i_outcomes_63 -.-> i_tasks_182
+  i_outcomes_63 -.-> i_tasks_183
+  i_outcomes_63 -.-> i_tasks_184
+  i_tasks_182 ==> i_tasks_183
+  i_tasks_183 ==> i_tasks_184
+  classDef root stroke:#5319e7,stroke-width:2px
+  classDef tracker stroke:#1d76db,stroke-width:2px
+  classDef member stroke:#6b7a8c
+  classDef closed stroke:#3fb950,stroke-dasharray:4 3,fill:#3fb950,fill-opacity:0.25
+  class i_outcomes_63 root
+  class i_outcomes_66 tracker
+  class i_tasks_182,i_tasks_183,i_tasks_184 member
