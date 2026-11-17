@@ -1122,6 +1122,186 @@ async function testSweepTriggering(page, results) {
   results.push(assert(wrongMethod.status === 405, `GET on the trigger answers 405 (got: ${wrongMethod.status})`));
 }
 
+// testOutcomesPage covers the /outcomes page
+// (§forgejo/observability/the-outcomes-view): the header link that
+// makes the route reachable by eye, the SPA fallback serving the page
+// for the route, one tall row per forest with its ideation and
+// tracker links, and the three states that are not rows — the honest
+// empty, the unreadable view, and a disabled engine stating itself
+// in its own status words.
+async function testOutcomesPage(page, results) {
+  console.log('  Outcomes page');
+
+  // The header link is how the route is found by eye.
+  await page.goto(baseUrl);
+  await page.waitForLoadState('networkidle').catch(() => {});
+  const linkHref = await page.locator('#outcomes-link').getAttribute('href');
+  results.push(assert(linkHref === '/outcomes', `Header links to /outcomes (got: "${linkHref}")`));
+
+  // The route is served: the fallback answers the path with the
+  // page, which then renders the outcomes view instead of the
+  // trigger dashboard.
+  const routeResp = await page.goto(`${baseUrl}/outcomes`);
+  results.push(assert(routeResp.status() === 200, 'GET /outcomes returns 200'));
+  results.push(assert(
+    routeResp.headers()['content-type']?.includes('text/html'),
+    'The route answers with the page'
+  ));
+  results.push(assert(
+    await page.locator('#outcomes-view').isVisible(),
+    'The outcomes view is visible on /outcomes'
+  ));
+  const dashHidden = await page.evaluate(() =>
+    getComputedStyle(document.getElementById('dashboard-view')).display === 'none');
+  results.push(assert(dashHidden, 'The trigger dashboard is hidden on /outcomes'));
+  const backHref = await page.locator('#outcomes-link').getAttribute('href');
+  results.push(assert(
+    backHref === '/',
+    `The header's one link is the way back on /outcomes (got: "${backHref}")`
+  ));
+  const statsHidden = await page.evaluate(() =>
+    getComputedStyle(document.querySelector('.header .stats')).display === 'none');
+  results.push(assert(statsHidden, 'The trigger stats are hidden on /outcomes rather than reading as zeros'));
+
+  // The compare-then-render discipline the dashboard follows: an
+  // unchanged payload renders no new rows, so a keyboard operator's
+  // focus on a row's link survives the poll
+  // (§forgejo/observability/the-dashboard-view).
+  const survivesPoll = await page.evaluate(async () => {
+    await refreshOutcomes();
+    const before = document.querySelector('#outcomes-list > *');
+    await refreshOutcomes();
+    return before !== null && document.querySelector('#outcomes-list > *') === before;
+  });
+  results.push(assert(
+    survivesPoll,
+    'An unchanged payload renders no new rows'
+  ));
+
+  // One tall row per forest, each carrying its ideation and tracker
+  // links, exercised through the page's own renderer on a synthetic
+  // payload: the mock organisation holds no outcomes repository, so
+  // the live instance cannot produce a forest here
+  // (§forgejo/observability/the-outcomes-view).
+  const synthetic = await page.evaluate(() => {
+    renderOutcomes({
+      engine_status: 'enabled',
+      forests: [
+        {
+          repository: 'o/out',
+          root: { number: 5, repository: 'o/out', title: 'Ideation root', state: 'open', html_url: 'https://forge.example.com/o/out/issues/5' },
+          tracker: { number: 6, repository: 'o/out', title: 'Outcome tracker', state: 'open', html_url: 'https://forge.example.com/o/out/issues/6' },
+        },
+        {
+          repository: 'a/x',
+          root: { number: 1, repository: 'a/x', title: 'Root without its gate', state: 'open', html_url: 'https://forge.example.com/a/x/issues/1' },
+          tracker: null,
+        },
+      ],
+    });
+    const rows = [...document.querySelectorAll('#outcomes-list .outcomes-row')];
+    return {
+      rowCount: rows.length,
+      firstRowLinks: [...rows[0]?.querySelectorAll('a') ?? []].map(a => a.getAttribute('href')),
+      minHeight: rows.map(r => parseFloat(getComputedStyle(r).minHeight) || 0),
+      texts: rows.map(r => r.textContent),
+    };
+  });
+  results.push(assert(synthetic.rowCount === 2, `One row per forest (got: ${synthetic.rowCount})`));
+  results.push(assert(
+    synthetic.firstRowLinks.includes('https://forge.example.com/o/out/issues/5')
+      && synthetic.firstRowLinks.includes('https://forge.example.com/o/out/issues/6'),
+    `A forest row links its ideation root and its tracker (got: ${synthetic.firstRowLinks.join(', ')})`
+  ));
+  results.push(assert(
+    synthetic.minHeight.length === 2 && synthetic.minHeight.every(h => h >= 320),
+    `Rows are tall enough for the chart promised underneath (min-heights: ${synthetic.minHeight.join(', ')})`
+  ));
+  results.push(assert(
+    synthetic.texts[0]?.includes('o/out') && synthetic.texts[0]?.includes('open'),
+    `A row names its repository and the issue states (got: "${synthetic.texts[0]?.trim()}")`
+  ));
+  results.push(assert(
+    /no tracker/i.test(synthetic.texts[1] ?? ''),
+    `A tracker's absence is stated, not dropped (got: "${synthetic.texts[1]?.trim()}")`
+  ));
+
+  // safeUrl is the guard between a forge-supplied html_url and an
+  // href: anything a link cannot carries renders as text, never as a
+  // clickable destination (§forgejo/observability/the-outcomes-view).
+  const hostile = await page.evaluate(() => {
+    renderOutcomes({
+      engine_status: 'enabled',
+      forests: [
+        {
+          repository: 'o/out',
+          root: { number: 7, repository: 'o/out', title: 'Executes on click', state: 'open', html_url: 'javascript:alert(1)' },
+          tracker: { number: 8, repository: 'o/out', title: 'No destination at all', state: 'open', html_url: '' },
+        },
+      ],
+    });
+    return {
+      hrefs: [...document.querySelectorAll('#outcomes-list a')].map(a => a.getAttribute('href')),
+      text: document.getElementById('outcomes-list').textContent,
+    };
+  });
+  results.push(assert(
+    hostile.hrefs.length === 0,
+    `A URL a link cannot carry never becomes an href (hrefs: ${hostile.hrefs.join(', ') || 'none'})`
+  ));
+  results.push(assert(
+    (hostile.text ?? '').includes('Executes on click') && (hostile.text ?? '').includes('No destination at all'),
+    `An unlinkable issue still renders as text (got: "${hostile.text?.trim().slice(0, 80)}")`
+  ));
+
+  // The honest empty and the unreadable view are different words:
+  // an enabled engine that found nothing says there are no forests
+  // (§forgejo/observability/the-outcomes-view).
+  const empty = await page.evaluate(() => {
+    renderOutcomes({ engine_status: 'enabled', forests: [] });
+    return document.getElementById('outcomes-list').textContent;
+  });
+  results.push(assert(
+    /no current forests/i.test(empty ?? ''),
+    `An honest empty says so (got: "${empty?.trim().slice(0, 80)}")`
+  ));
+
+  // A view the engine answers 500 for must not read as "no forests".
+  const unreadable = await page.evaluate(() => {
+    renderOutcomes(null);
+    return document.getElementById('outcomes-list').textContent;
+  });
+  results.push(assert(
+    /could not be read/i.test(unreadable ?? '') && !/no current forests/i.test(unreadable ?? ''),
+    `A view that cannot be vouched for says so plainly (got: "${unreadable?.trim().slice(0, 80)}")`
+  ));
+
+  // The disabled-engine instances state themselves in their own
+  // status words on the page, not as an empty dashboard.
+  if (faultUrl) {
+    await page.goto(`${faultUrl}/outcomes`);
+    await page.waitForTimeout(1500);
+    const faultText = await page.locator('#outcomes-list').textContent();
+    results.push(assert(
+      /credentials missing/i.test(faultText ?? ''),
+      `Fault instance states its category on /outcomes (got: "${faultText?.trim().slice(0, 80)}")`
+    ));
+  }
+  if (unconfiguredUrl) {
+    await page.goto(`${unconfiguredUrl}/outcomes`);
+    await page.waitForTimeout(1500);
+    const noneText = await page.locator('#outcomes-list').textContent();
+    results.push(assert(
+      /not configured/i.test(noneText ?? ''),
+      `Unconfigured instance states itself on /outcomes (got: "${noneText?.trim().slice(0, 80)}")`
+    ));
+  }
+
+  // Return to the main instance for anything that follows.
+  await page.goto(baseUrl);
+  await page.waitForLoadState('networkidle').catch(() => {});
+}
+
 // ─── Main ────────────────────────────────────────────────────────────
 
 async function main() {
@@ -1167,6 +1347,7 @@ async function main() {
   await testPromptSection(page, results);
   await testForgejoTracking(page, results);
   await testSweepTriggering(page, results);
+  await testOutcomesPage(page, results);
   if (faultUrl && unconfiguredUrl) {
     await testForgejoEngineStates(page, results);
   }

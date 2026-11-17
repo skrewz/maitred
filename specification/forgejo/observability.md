@@ -180,6 +180,30 @@ model — an endpoint reachable by anyone who can reach the port,
 which is meant to reach only its operator's network
 (§forgejo/observability/triggering-a-sweep, README Web Dashboard).
 
+The dashboard serves the view as a page at `/outcomes` — a route on
+the existing SPA, whose fallback already answers the path, so the
+route costs the server nothing new. The page polls the endpoint on a
+timer and renders **one row per current forest**: the repository the
+forest grew in, the ideation root as a link carrying its state, and
+the tracker as a link carrying its state — or the absence of one,
+stated in the row rather than dropped. The rows are tall so the forest
+chart has room underneath when that work lands. The link is only a
+link when the forge's URL is one a link can carry (http or https);
+anything else renders as text, since the port authenticates nothing.
+Where there are no rows the page says which of the two states it is
+in, in the engine's own status words: an engine that is not up names
+its state (the category word the enum prints,
+§forgejo/observability/why-the-engine-is-off), and an enabled engine
+whose last sweep found nothing says there are no current forests.
+A view the engine answers `500` for says it could not be read, so an
+empty rectangle never passes for a dashboard
+(§forgejo/observability/the-dashboard-view). The header links to the
+route so it is reachable by eye; it carries one link, which reads as
+the way back when the route is where the reader already is. The
+header's trigger statistics — numbers this page never reads — stay
+hidden on the route, so they state nothing rather than rendering
+their defaults as facts.
+
 ## Triggering a sweep
 
 The sweeps are the backstop for deliveries the event path missed, and a
