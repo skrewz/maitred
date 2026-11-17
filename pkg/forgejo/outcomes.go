@@ -47,11 +47,13 @@ type Forest struct {
 	// over (§forgejo/observability/the-outcomes-view).
 	Tracker *ForestIssue `json:"tracker"`
 	// Chart is the Mermaid source of the tracker's current-state block,
-	// carried verbatim from between the fences the curating agent wrote
-	// it inside. It is empty when the tracker's description says nothing
-	// — no fence pair, more than one pair, no fenced Mermaid block, one
-	// never closed — and when the forest has no tracker at all: the
-	// picture is never composed, repaired or guessed here
+	// carried verbatim from between the fences the curating agent wrote it
+	// inside — never composed, repaired or guessed here, and empty
+	// wherever a description says nothing; the ragged edges are enumerated
+	// once, in §forgejo/observability/the-outcomes-view. It is text this
+	// engine does not own: a description is editable by anyone with write
+	// access to the tracker's repository, so whatever draws this field
+	// treats it as untrusted input
 	// (§forgejo/observability/the-outcomes-view).
 	Chart string `json:"chart"`
 	// ChartRevisited is the current-state block's `Last revisited:` stamp,
@@ -78,18 +80,14 @@ const (
 	stampLabel = "Last revisited:"
 )
 
-// scrapeForestChart reads the picture out of a tracker's description:
-// the fenced Mermaid block inside the fence pair, verbatim, and the
-// block's recency stamp as written
-// (§forgejo/observability/the-outcomes-view). Every ragged edge answers
-// with nothing rather than a guess — which is why each rule below says
-// "publish nothing" rather than "pick the best candidate": no fence
-// pair, two or more pairs (whose region belongs to whom is not
-// guessable), a pair whose end marker precedes its begin, no fenced
-// Mermaid block, two of them, or one whose fence is never closed leave
-// the chart empty; no stamp line, or more than one, leaves the stamp
-// empty. Neither field is parsed: the stamp's abbreviation is whatever
-// the agent wrote.
+// scrapeForestChart reads the picture out of a tracker's description: the
+// fenced Mermaid block inside the fence pair, verbatim, and the block's
+// recency stamp as written. Every ragged edge answers with nothing rather
+// than a guess — which is why each rule below says "publish nothing"
+// rather than "pick the best candidate" — and the edges themselves are
+// enumerated once, in §forgejo/observability/the-outcomes-view, so the
+// rules and this function cannot drift apart. Neither field is parsed
+// further: the stamp's abbreviation is whatever the agent wrote.
 func scrapeForestChart(body string) (chart, revisited string) {
 	if strings.Count(body, forestFenceBegin) != 1 || strings.Count(body, forestFenceEnd) != 1 {
 		return "", ""

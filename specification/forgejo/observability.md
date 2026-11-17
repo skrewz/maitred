@@ -143,9 +143,8 @@ forests, the list is empty — never `null`: an enumeration that found
 nothing is an honest empty, not a view that never read. A view the engine
 cannot vouch for — no sweep's enumeration has landed yet, the most recent
 one failed (the organisation listing, an issue listing or a blocks read),
-or the set it holds has aged past one
-`reconcile_interval` without a sweep having recorded a newer one —
-answers `500` rather than an empty list or a stale set, because a failed
+or the set it holds has aged past one `reconcile_interval` without a
+sweep having recorded a newer one — answers `500` rather than an empty list or a stale set, because a failed
 read must not read as an empty set of forests and a set no longer vouched
 for is never served as if fresh: the same rule the scope cache applies to
 stale snapshots (§forgejo/webhook/the-scope-cache). The bound is the
@@ -181,6 +180,19 @@ the picture is without parsing prose and an abbreviation of `CET` reads
 exactly as the agent wrote it. Neither field is parsed further: the
 stamp is a string the view does not interpret.
 
+Verbatim is a promise about the text, not about its source. Whatever
+stands between the fences reaches the payload untouched, and a
+description is editable by anyone with write access to the tracker's
+repository — the fence pair is a scraping contract, never an access
+control — mirrored onto a port that authenticates nothing
+(§forgejo/observability/why-the-engine-is-off). The rendered source a
+writer splices in carries no `click`, no `subgraph` and no comment
+(§forgejo/renderer/the-source), but the view cannot tell rendered source
+from hand-written text, and Mermaid drawn at a scripting security level
+runs `click` and `link` callbacks in the viewer. So anything drawing
+`chart` treats it as untrusted input: render it at a non-scripting
+security level, or show it as text and never as a graph.
+
 What scraping promises is exactly one well-formed region, and every
 ragged edge publishes **nothing** rather than a guess: no fence pair, two
 or more fence pairs (which region belongs to whom is not guessable), a
@@ -197,14 +209,21 @@ rather than publishing the empty chart a stranger would read as a forest
 with no picture. A forest whose tracker is absent publishes both fields
 empty.
 
+A description that says nothing leaves no trace in the log, and that
+silence is the rule rather than an oversight: a tracker whose picture has
+not been written yet is an ordinary state rather than a fault, and
+repeating the same sentence for it on every tick would bury the failures
+the log is for — a read that broke, which fails the enumeration and
+reaches the log loudly.
+
 The enumeration happens on the reconciliation sweep's tick, not on the
 request path (§forgejo/reconciliation/the-sweep): per tick it costs one
 issue listing per outcomes repository and one blocks read per open
 ideation root, on top of the sweep's own walk; the picture is scraped
 from the rows those reads return, so it adds no read of its own. The
-sweep's own
-organisation listing keeps the scope cache fresh, so the walk adds no
-listing of its own (§forgejo/webhook/the-scope-cache). That walk is the
+sweep's own organisation listing keeps the scope cache fresh, so the walk
+adds no listing of its own (§forgejo/webhook/the-scope-cache). That walk
+is the
 view's own reader rather than a pairing folded into the sweep's fourth
 step: the sweep's listings cover every repository holding either role,
 and the blocks reads the digest makes happen inside the pipeline, where
