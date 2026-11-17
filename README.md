@@ -306,9 +306,12 @@ lists the current forests — each open `ideation` root in the outcomes
 repositories paired with the `outcome` tracker it blocks, each forest
 carrying the picture scraped from that tracker's current-state block, and
 the **warnings** saying whether the forest is waiting on a person: an
-approved, mergeable pull request that has sat unmerged past a threshold
+approved, mergeable pull request that the merge gate would fire at and
+holds nothing else off, which has sat unmerged past a threshold
 (`stale_merge_threshold`, one hour by default), or a `human-task` whose
-blockers have all closed. Like the tracked view, the outcomes view answers
+work-order blockers have all closed. A warning is a reference — repository,
+number, title and URL — and those may live in repositories the view did
+not previously name. Like the tracked view, the outcomes view answers
 from memory: the forest set is
 rebuilt on the reconcile sweep's tick rather than per request, so
 polling it is a freshness choice rather than a cost one, and its

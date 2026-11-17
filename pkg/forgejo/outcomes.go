@@ -243,13 +243,17 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 // A root whose tracker is missing is listed with the absence stated; an
 // outcome issue no open root blocks is not a forest and is not listed.
 // Pull requests carry no forest. Each forest additionally carries its
-// warnings, walked from the same rows the pairing reads, so an
-// enumeration costs the pull-request listings, reads and review reads
-// the two kinds need and fails on any of them
-// (§forgejo/observability/the-warnings-a-forest-carries). The list is
+// warnings, walked from the same rows the pairing reads: one blockers
+// read per member either kind concerns, one membership read per
+// landing-set member, and the pull-request listing, read and review
+// reads the delivery needs — every one of them in a repository the scope
+// test admitted first, so a blocking-edge row cannot send the engine's
+// token where no role names it (§forgejo/webhook/repository-roles,
+// §forgejo/observability/the-warnings-a-forest-carries). A failed read
+// fails the enumeration. The list is
 // empty — never nil — when no repository holds the role. A non-nil error
 // means a read failed — the organisation listing, an issue listing, a
-// blocks read, or one of the warning reads — each
+// blocks read, a scope lookup, or one of the warning reads — each
 // wrapped with the repository or issue it concerned, and the partial
 // result is dropped: a failed read must not read as an empty set of
 // forests, the same fail-closed discipline as the scope test

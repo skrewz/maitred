@@ -46,7 +46,8 @@ func approvedDelivery(t *testing.T, api *fakeAPI, member Issue, approved time.Ti
 	t.Helper()
 	pr := *testPR(900+member.Number, "open", true)
 	pr.Body = "Fixes " + member.Repository + "#" + strconv.Itoa(member.Number)
-	api.openPulls["r"] = []PullRequest{pr}
+	_, name := splitRepo(member.Repository)
+	api.openPulls[name] = []PullRequest{pr}
 	api.pulls[pr.Number] = &pr
 	api.reviews[pr.Number] = []Review{{
 		Event:       ReviewApproved,
@@ -95,9 +96,10 @@ func TestForestWarnings_StaleAgenticMergeWarns(t *testing.T) {
 }
 
 // TestForestWarnings_SyncMergeMemberWarns: a landing-set member's
-// delivery that has gone stale warns too — the issue names both landing
-// labels, and which set's decision a merge belongs to is not the
-// warning's question (§forgejo/observability/the-outcomes-view).
+// delivery that has gone stale warns when the member stands in no open
+// set — a label the decomposer left behind gates nothing, and the merge
+// gate fires at the head whatever the label says
+// (§forgejo/decisions/sync-set, §forgejo/observability/the-outcomes-view).
 func TestForestWarnings_SyncMergeMemberWarns(t *testing.T) {
 	eng, api, _, _ := newTestEngine(t)
 	member := warningsMember(13, LabelAgenticSyncMerge)
@@ -155,7 +157,7 @@ func TestForestWarnings_MergeGateHoldsOffDoesNotWarn(t *testing.T) {
 // TestForestWarnings_ThresholdHonouredWhenConfigured: the bound is a
 // config option, so a forest whose delivery has stood approved for ninety
 // minutes is stale against a one-hour default and healthy against a two
-// hour threshold (§forgejo/config/stale-merge-threshold,
+// hour threshold (§forgejo/config/validation,
 // §forgejo/observability/the-outcomes-view).
 func TestForestWarnings_ThresholdHonouredWhenConfigured(t *testing.T) {
 	for _, tc := range []struct {
@@ -292,10 +294,11 @@ func TestForestWarnings_FailedReadFailsTheEnumeration(t *testing.T) {
 		{"pull request listing", func(f *fakeAPI) { f.listPullsErr = map[string]error{"r": errWarnFixture} }},
 		{"blocker read", func(f *fakeAPI) { f.issueDepsErr = errWarnFixture }},
 		{"pull request read", func(f *fakeAPI) { f.pullErr = errWarnFixture }},
+		{"membership read", func(f *fakeAPI) { f.issueBlocksErr = errWarnFixture }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			eng, api, _, _ := newTestEngine(t)
-			member := warningsMember(22, LabelAgenticAutoMerge, LabelHumanTask)
+			member := warningsMember(22, LabelAgenticAutoMerge, LabelAgenticSyncMerge, LabelHumanTask)
 			warningsForest(api, member)
 			approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
 			api.deps[member.Number] = []Issue{{Number: 51, State: "open", Repository: "o/out"}}
@@ -311,12 +314,149 @@ func TestForestWarnings_FailedReadFailsTheEnumeration(t *testing.T) {
 
 var errWarnFixture = &APIError{StatusCode: 500, Message: "read failed"}
 
-// TestForestWarnings_OrderIsDeterministic: the payload's order is the
-// walk's, not the forge listing's, so two enumerations of one state
-// answer alike (§forgejo/observability/the-outcomes-view).
-func TestForestWarnings_OrderIsDeterministic(t *testing.T) {
+// TestForestWarnings_MergeGateBlockerHoldsOffDoesNotWarn: the merge gate
+// holds an approved head off on an open blocker of the issue it delivers,
+// so the forest waits on that work and not on a person — and the ⚠️ that
+// asserts a person is the wait says nothing (§forgejo/decisions/merge-gate,
+// §forgejo/observability/the-warnings-a-forest-carries).
+func TestForestWarnings_MergeGateBlockerHoldsOffDoesNotWarn(t *testing.T) {
 	eng, api, _, _ := newTestEngine(t)
-	first := warningsMember(23, LabelHumanTask)
+	member := warningsMember(26, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	api.deps[member.Number] = []Issue{{
+		Number: 27, Title: "waiting on that", State: "open", Repository: "o/r",
+		UpdatedAt: testUpdatedAt,
+	}}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests[0].Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none while the merge gate waits on an open blocker", forests[0].Warnings)
+	}
+}
+
+// TestForestWarnings_SyncSetMemberHoldsOffDoesNotWarn: a landing-set
+// member whose set has not landed waits on the set's other members, never
+// on a person, so the approval path's hold-off holds the warning back too
+// (§forgejo/decisions/sync-set, §forgejo/observability/the-warnings-a-forest-carries).
+func TestForestWarnings_SyncSetMemberHoldsOffDoesNotWarn(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(28, LabelAgenticSyncMerge)
+	warningsForest(api, member)
+	approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	api.blocks[member.Number] = []Issue{{
+		Number: 29, Title: "landing set", State: "open", Repository: "o/r",
+		Labels:    []string{LabelSync},
+		UpdatedAt: testUpdatedAt,
+	}}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests[0].Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none while the set's landing is the wait", forests[0].Warnings)
+	}
+}
+
+// TestForestWarnings_HumanTaskDeliveryIsNotABlocker: a human who has
+// raised their pull request and is waiting on review is the forest
+// waiting on a person — the member's own delivery is a delivery and never
+// a work order, the way every other blocker read in the engine reads it
+// (§forgejo/decisions/merge-gate, §forgejo/observability/the-outcomes-view).
+func TestForestWarnings_HumanTaskDeliveryIsNotABlocker(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(30, LabelHumanTask, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	api.deps[member.Number] = []Issue{{
+		Number: 930, Title: "pr 930", State: "open", Repository: "o/r", IsPull: true,
+		UpdatedAt: testUpdatedAt,
+	}}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	warns := forests[0].Warnings
+	if len(warns) != 1 || warns[0].Kind != WarningHumanTaskBlocking || warns[0].Number != member.Number {
+		t.Fatalf("warnings = %+v, want the human task %d its own delivery does not hold back", warns, member.Number)
+	}
+}
+
+// TestForestWarnings_OutOfRemitRowIsReadNowhere: a blocking-edge row may
+// name any repository the author had in mind, and the walk pays the scope
+// test before it reads there — a row outside the engine's remit costs no
+// read and states no warning, or an authored edge would point the
+// engine's token at a repository no role names and publish what it found
+// on an unauthenticated port (§forgejo/webhook/repository-roles,
+// §forgejo/webhook/re-fetch, §forgejo/observability/the-outcomes-view).
+func TestForestWarnings_OutOfRemitRowIsReadNowhere(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(31, LabelAgenticAutoMerge, LabelHumanTask)
+	member.Repository = "archive/r"
+	warningsForest(api, member)
+	api.repos = append(api.repos, testRepoDisabled("archive/r"))
+	approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	api.deps[member.Number] = []Issue{{
+		Number: 32, State: "closed", Repository: "archive/r", UpdatedAt: testUpdatedAt,
+	}}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests[0].Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none from a repository outside the remit", forests[0].Warnings)
+	}
+	for _, op := range []string{"ListOpenPullRequests:r", "GetPullRequest:r", "IssueDependencies:r"} {
+		if n := api.callCount(op); n != 0 {
+			t.Errorf("%s paid %d time(s); an out-of-remit row must cost no read", op, n)
+		}
+	}
+}
+
+// TestForestWarnings_PullRequestsUnitOffDeliversNothing: a repository
+// that refuses the pull-request endpoint cannot hold a delivery, so the
+// walk does not ask it — an ordinary state the sweep already reads this
+// way, not an enumeration failure that would take every forest with it
+// (§forgejo/reconciliation/the-sweep,
+// §forgejo/observability/the-warnings-a-forest-carries).
+func TestForestWarnings_PullRequestsUnitOffDeliversNothing(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(33, LabelAgenticAutoMerge)
+	member.Repository = "o/noswift"
+	warningsForest(api, member)
+	unitOff := testRepo("o/noswift")
+	unitOff.HasPullRequests = false
+	api.repos = append(api.repos, unitOff)
+	api.deps[member.Number] = []Issue{{
+		Number: 34, State: "closed", Repository: "o/noswift", UpdatedAt: testUpdatedAt,
+	}}
+	approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests[0].Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none from a repository that holds no pull request", forests[0].Warnings)
+	}
+	if n := api.callCount("ListOpenPullRequests:noswift"); n != 0 {
+		t.Errorf("ListOpenPullRequests:noswift paid %d time(s); the unit is off", n)
+	}
+}
+
+// TestForestWarnings_WarningsArePerReference: the payload's order is the
+// walk's, and the walk walks one blocks listing, so one state enumerated
+// twice answers alike; and a reference is warned on once, since one pull
+// request delivering two members is one wait and two marks for it would
+// read as two (§forgejo/observability/the-outcomes-view).
+func TestForestWarnings_WarningsArePerReference(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	first := warningsMember(23, LabelHumanTask, LabelAgenticAutoMerge)
 	second := warningsMember(24, LabelAgenticAutoMerge)
 	api.repos = []Repository{testRepo("o/r"), outcomesRepo("o/out")}
 	root := outcomesRoot(51, "UI for human review")
@@ -324,50 +464,42 @@ func TestForestWarnings_OrderIsDeterministic(t *testing.T) {
 	api.openIssues["out"] = []Issue{root, tracker}
 	api.blocks[51] = []Issue{tracker, second, first}
 	api.deps[first.Number] = nil
-	approvedDelivery(t, api, second, time.Now().Add(-3*time.Hour))
+	api.deps[second.Number] = nil
+	// One pull request delivering both members: the delivery relation
+	// both members read (§forgejo/decisions/sync-set).
+	pr := *testPR(900, "open", true)
+	pr.Body = "Fixes " + first.Repository + "#" + strconv.Itoa(first.Number) +
+		" and Fixes " + second.Repository + "#" + strconv.Itoa(second.Number)
+	api.openPulls["r"] = []PullRequest{pr}
+	api.pulls[pr.Number] = &pr
+	api.reviews[pr.Number] = []Review{{
+		Event: ReviewApproved, Author: "bob", CommitID: pr.HeadSHA,
+		SubmittedAt: time.Now().Add(-3 * time.Hour),
+	}}
 
 	warns, err := eng.forestWarnings(&root, "o/out", api.blocks[51])
 	if err != nil {
 		t.Fatalf("forestWarnings: %v", err)
 	}
 	if len(warns) != 2 {
-		t.Fatalf("warnings = %+v, want one of each kind", warns)
+		t.Fatalf("warnings = %+v, want the human task and the one delivery it shares with the other member", warns)
 	}
-	if warns[0].Number != first.Number || warns[0].Kind != WarningHumanTaskBlocking {
-		t.Errorf("warnings[0] = %+v, want the human task 23 first", warns[0])
+	if warns[0].Number != pr.Number || warns[0].Kind != WarningStaleAgenticMerge {
+		t.Errorf("warnings[0] = %+v, want the delivering PR %d once, in the listing's order", warns[0], pr.Number)
 	}
-	if warns[1].Number != 900+second.Number || warns[1].Kind != WarningStaleAgenticMerge {
-		t.Errorf("warnings[1] = %+v, want its delivering PR 9%d second", warns[1], second.Number)
+	if warns[1].Number != first.Number || warns[1].Kind != WarningHumanTaskBlocking {
+		t.Errorf("warnings[1] = %+v, want the human task %d beside it", warns[1], first.Number)
 	}
-	for _, w := range warns {
-		if w.Kind == "" {
-			t.Errorf("warning %+v carries no kind", w)
-		}
-	}
-}
-
-// TestForestWarnings_ApprovalWithoutTimestampAgesFromThePR: where the
-// review read carries no timestamp for the verdict that satisfied the
-// chain, the wait is dated from the pull request's own last activity
-// rather than from the epoch, so the age the payload states is one a
-// human can act on (§forgejo/observability/the-warnings-a-forest-carries).
-func TestForestWarnings_ApprovalWithoutTimestampAgesFromThePR(t *testing.T) {
-	eng, api, _, _ := newTestEngine(t)
-	member := warningsMember(25, LabelAgenticAutoMerge)
-	warningsForest(api, member)
-	pr := approvedDelivery(t, api, member, time.Time{})
-	pr.UpdatedAt = time.Now().Add(-3 * time.Hour)
-	api.pulls[pr.Number] = &pr
-
-	forests, err := eng.enumerateForests()
+	again, err := eng.forestWarnings(&root, "o/out", api.blocks[51])
 	if err != nil {
-		t.Fatalf("enumerateForests: %v", err)
+		t.Fatalf("forestWarnings: %v", err)
 	}
-	warns := forests[0].Warnings
-	if len(warns) != 1 {
-		t.Fatalf("warnings = %+v, want the stale merge the undated approval leaves standing", warns)
+	if len(again) != len(warns) {
+		t.Fatalf("second enumeration = %+v, want %d warnings", again, len(warns))
 	}
-	if warns[0].AgeSeconds < 3*3600-60 || warns[0].AgeSeconds > 3*3600+60 {
-		t.Errorf("age_seconds = %v, want the three hours since the pull request last moved", warns[0].AgeSeconds)
+	for i := range warns {
+		if again[i].Kind != warns[i].Kind || again[i].Repository != warns[i].Repository || again[i].Number != warns[i].Number {
+			t.Errorf("second enumeration's warnings[%d] = %+v, want the first's %+v", i, again[i], warns[i])
+		}
 	}
 }
