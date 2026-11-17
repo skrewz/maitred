@@ -167,7 +167,7 @@ func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) (
 			add(humanTaskWarning(member, repo, work, now))
 		}
 		if landing {
-			warn, err := e.staleMergeWarning(member, repo, work, listings, now)
+			warn, err := e.staleMergeWarning(member, repo, work, gates, listings, now)
 			if err != nil {
 				return nil, err
 			}
@@ -192,16 +192,21 @@ func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) (
 // work is the member's work-order blockers, forest rows and deliveries
 // aside. An open one holds the warning back because the merge gate holds
 // the merge off on it: the forest waits on that work, not on a reviewer
-// or an operator (§forgejo/decisions/merge-gate). The forest's own rows
-// are the one hold the walk sets aside even where the gate counts it,
-// and why the ⚠️ may fire while the gate waits on the membership edge is
-// the spec's (§forgejo/observability/the-warnings-a-forest-carries). A
+// or an operator (§forgejo/decisions/merge-gate). So does an open work
+// order of a sibling the delivery's body also names, because the gate
+// asks the blockers of every issue the delivery names — the ⚠️ may not
+// claim a person is the wait while the gate waits on that work. A
+// sibling whose repository the remit will not admit cannot be checked,
+// and an unchecked wait is not asserted. The forest's own rows are the
+// one hold the walk sets aside even where the gate counts it, and why
+// the ⚠️ may fire while the gate waits on the membership edge is the
+// spec's (§forgejo/observability/the-warnings-a-forest-carries). A
 // member of an open landing set holds the warning back for the gate's
 // own reason, stated the other way: landing a set is the set's decision
 // and never the individual pull request's, so an approved member whose
 // set has not landed waits on the set's other members
 // (§forgejo/decisions/sync-set).
-func (e *Engine) staleMergeWarning(member *Issue, repo string, work []Issue, listings map[string][]PullRequest, now time.Time) (*ForestWarning, error) {
+func (e *Engine) staleMergeWarning(member *Issue, repo string, work []Issue, gates map[string]bool, listings map[string][]PullRequest, now time.Time) (*ForestWarning, error) {
 	for _, b := range work {
 		if b.State == "open" {
 			return nil, nil // the wait is the open work order, not a person
@@ -232,9 +237,37 @@ func (e *Engine) staleMergeWarning(member *Issue, repo string, work []Issue, lis
 	if age <= e.cfg.staleMergeThreshold() {
 		return nil, nil
 	}
-	// The membership edge is the one read this predicate pays for
-	// itself, so it is the last thing asked: only a wait that would
-	// already warn can be a set's landing rather than a person's.
+	// The delivery's co-members are part of the same wait: the gate
+	// asks the blockers of every issue the delivery's body names, not
+	// only this member's, so the walk asks them the same way before it
+	// asserts a person is the wait (§forgejo/decisions/merge-gate).
+	for _, ref := range autoCloseRefs(pr.Body, repo) {
+		if warningKey(ref.repo, ref.number) == warningKey(repo, member.Number) {
+			continue // the member's own blockers are already asked
+		}
+		scope, err := e.repoRoles(ref.repo)
+		if err != nil {
+			return nil, fmt.Errorf("scope of %s: %w", ref.repo, err)
+		}
+		if !scope.any() {
+			return nil, nil // an unchecked sibling's wait is not asserted
+		}
+		owner, name := splitRepo(ref.repo)
+		rows, err := e.api.IssueDependencies(owner, name, ref.number)
+		if err != nil {
+			return nil, fmt.Errorf("blockers of %s#%d: %w", ref.repo, ref.number, err)
+		}
+		for _, b := range workOrders(rows, ref.repo, gates) {
+			if b.State == "open" {
+				return nil, nil // the wait is the sibling's open work
+			}
+		}
+	}
+	// The reads beyond the head's own — the co-members' blockers, the
+	// set's membership — are the last things asked, paid for only by a
+	// wait that would already warn. A member of an open landing set is
+	// the gate's own hold-off stated the other way: the set's landing,
+	// not a person (§forgejo/decisions/sync-set).
 	if hasLabel(member, LabelAgenticSyncMerge) {
 		inSet, err := e.inOpenSyncSet(member, repo)
 		if err != nil {

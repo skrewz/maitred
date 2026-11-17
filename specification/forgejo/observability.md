@@ -319,23 +319,28 @@ warning back (§forgejo/decisions/actions).
   forest's own rows are set aside, and holding nothing else off
   (§forgejo/decisions/merge-gate, §forgejo/decisions/sync-set): still
   open, still mergeable, approved at head by every lens with no
-  non-approval above it, no open work order of the member ahead of it,
-  and — for a member of a landing set — no open set whose landing it
-  waits on. Each of those is the merge gate waiting on work rather than
-  on a person, and so warns nothing: the ⚠️ asserts that a human is the
-  remaining wait and must not fire where the gate is waiting on work.
-  The forest's own rows are the one carve-out, under the argument the
-  next bullet gives for the human task's: the root's membership edge is
-  open for as long as the forest is, so a stale warning that counted it
-  could never fire on a live forest at all
-  (§forgejo/decisions/commissioning). Where that edge is a delivery's
-  only remaining hold, the wait is the forest's closing, and closing
-  the root is a person's act — the ⚠️ still says a person is what
-  remains, even where the merge gate counts the edge and holds the
-  merge until the forest closes (§forgejo/decisions/merge-gate). It
-  warns once the shape has held longer than the **stale-merge
-  threshold**, the `stale_merge_threshold` config option, one hour where
-  the config says nothing (§forgejo/config/validation). The wait is dated from the verdict that
+  non-approval above it, no open work order of the member — nor of a
+  sibling the delivery's body also names — ahead of it, and — for a
+  member of a landing set — no open set whose landing it waits on. The
+  sibling question is the gate's own, asked of every issue the delivery
+  names; a sibling whose repository the remit will not admit holds the
+  warning back, because what the walk may not read it does not assert
+  (§forgejo/webhook/repository-roles). Each of those holds is the merge
+  gate waiting on work rather than on a person, and so warns nothing:
+  the ⚠️ asserts that a human is the remaining wait and must not fire
+  where the gate is waiting on work. The forest's own rows are the one
+  carve-out, under the argument the next bullet gives for the human
+  task's: the root's membership edge is open for as long as the forest
+  is, so a stale warning that counted it could never fire on a live
+  forest at all (§forgejo/decisions/commissioning). Where that edge is
+  a delivery's only remaining hold, the wait is the forest's closing,
+  and closing the root is a person's act — the ⚠️ still says a person
+  is what remains, even where the merge gate counts the edge and holds
+  the merge until the forest closes
+  (§forgejo/decisions/merge-gate). It warns once the shape has held
+  longer than the **stale-merge threshold**, the `stale_merge_threshold`
+  config option, one hour where the config says nothing
+  (§forgejo/config/validation). The wait is dated from the verdict that
   satisfied the chain — the latest of the standing approvals — so an
   approval a moment old is not stale and a head that has since moved is
   not approved at all. A verdict that carries no moment dates nothing, and
@@ -348,8 +353,9 @@ warning back (§forgejo/decisions/actions).
   the root's membership edge — open for as long as the forest is — and
   the tracker gate hold no warning back, or no human task could ever
   warn. Neither does the member's own delivery: a pull-request row is a
-  delivery and never a work order, the way every other blocker read in the
-  engine reads it (§forgejo/decisions/merge-gate), or the ⚠️ would go
+  delivery and never a work order, the way the merge gate excludes the
+  delivering pull request itself
+  (§forgejo/decisions/merge-gate), or the ⚠️ would go
   silent for the one ticket whose delivery is up for review — the exact
   state it exists to publish. The wait is dated from the last blocker to
   close, that being the moment the ticket became the person's; a member

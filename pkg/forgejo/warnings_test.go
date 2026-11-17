@@ -383,6 +383,35 @@ func TestForestWarnings_MergeGateBlockerHoldsOffDoesNotWarn(t *testing.T) {
 	}
 }
 
+// TestForestWarnings_CoDeliveredSiblingHoldsOffDoesNotWarn: one pull
+// request delivering two members is one wait, and the gate asks the
+// blockers of every issue its body names, so a sibling with work still
+// open holds the stale ⚠️ back — the gate waits on that work, not on a
+// person (§forgejo/decisions/merge-gate,
+// §forgejo/observability/the-warnings-a-forest-carries).
+func TestForestWarnings_CoDeliveredSiblingHoldsOffDoesNotWarn(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(37, LabelAgenticAutoMerge)
+	sibling := warningsMember(38, LabelAgenticAutoMerge)
+	warningsForest(api, member) // the walk visits only the member
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	pr.Body += " and Fixes " + sibling.Repository + "#" + strconv.Itoa(sibling.Number)
+	api.openPulls["r"] = []PullRequest{pr}
+	api.pulls[pr.Number] = &pr
+	api.deps[sibling.Number] = []Issue{{
+		Number: 39, Title: "the sibling's work", State: "open", Repository: "o/r",
+		UpdatedAt: testUpdatedAt,
+	}}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests[0].Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none while a co-delivered sibling's work is open", forests[0].Warnings)
+	}
+}
+
 // TestForestWarnings_SyncSetMemberHoldsOffDoesNotWarn: a landing-set
 // member whose set has not landed waits on the set's other members, never
 // on a person, so the approval path's hold-off holds the warning back too
