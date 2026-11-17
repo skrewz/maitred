@@ -315,18 +315,27 @@ warning back (§forgejo/decisions/actions).
 
 - **`stale_agentic_merge`** — an open pull request delivering an open
   member that opted its landing in, through `agentic-auto-merge` or
-  `agentic-sync-merge`, at the shape the merge gate fires at and holds
-  nothing else off (§forgejo/decisions/merge-gate,
-  §forgejo/decisions/sync-set): still open, still mergeable, approved at
-  head by every lens with no non-approval above it, no open work order of
-  the member ahead of it, and — for a member of a landing set — no open
-  set whose landing it waits on. Each of those is the merge gate waiting
-  on work rather than on a person, and so warns nothing: the ⚠️ asserts
-  that a human is the remaining wait and must not fire where the gate is
-  deliberately holding a head off. It warns once the shape has held
-  longer than the **stale-merge threshold**, the `stale_merge_threshold`
-  config option, one hour where the config says nothing
-  (§forgejo/config/validation). The wait is dated from the verdict that
+  `agentic-sync-merge`, at the shape the merge gate fires at once the
+  forest's own rows are set aside, and holding nothing else off
+  (§forgejo/decisions/merge-gate, §forgejo/decisions/sync-set): still
+  open, still mergeable, approved at head by every lens with no
+  non-approval above it, no open work order of the member ahead of it,
+  and — for a member of a landing set — no open set whose landing it
+  waits on. Each of those is the merge gate waiting on work rather than
+  on a person, and so warns nothing: the ⚠️ asserts that a human is the
+  remaining wait and must not fire where the gate is waiting on work.
+  The forest's own rows are the one carve-out, under the argument the
+  next bullet gives for the human task's: the root's membership edge is
+  open for as long as the forest is, so a stale warning that counted it
+  could never fire on a live forest at all
+  (§forgejo/decisions/commissioning). Where that edge is a delivery's
+  only remaining hold, the wait is the forest's closing, and closing
+  the root is a person's act — the ⚠️ still says a person is what
+  remains, even where the merge gate counts the edge and holds the
+  merge until the forest closes (§forgejo/decisions/merge-gate). It
+  warns once the shape has held longer than the **stale-merge
+  threshold**, the `stale_merge_threshold` config option, one hour where
+  the config says nothing (§forgejo/config/validation). The wait is dated from the verdict that
   satisfied the chain — the latest of the standing approvals — so an
   approval a moment old is not stale and a head that has since moved is
   not approved at all. A verdict that carries no moment dates nothing, and

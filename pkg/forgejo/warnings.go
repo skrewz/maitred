@@ -111,11 +111,13 @@ func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) (
 		seen[key] = true
 		warnings = append(warnings, *w)
 	}
-	// The forest's own rows are not blockers of its members: the root's
-	// membership edge stands while the forest lives, so reading it as a
-	// work order would keep every human task from ever warning
-	// (§forgejo/decisions/commissioning). The tracker is a gate for the
-	// same reason.
+	// The forest's own rows are not work orders: the root's
+	// membership edge stands while the forest lives, so reading it
+	// as a wait would keep every human task from ever warning, and
+	// the tracker is a gate for the same reason. The stale walk
+	// takes the same carve-out where the merge gate itself counts
+	// the edge — the spec says why (§forgejo/decisions/commissioning,
+	// §forgejo/observability/the-warnings-a-forest-carries).
 	gates := map[string]bool{warningKey(rowRepository(root, rootRepo), root.Number): true}
 	for i := range blocked {
 		if !blocked[i].IsPull && isTracker(&blocked[i]) {
@@ -143,13 +145,9 @@ func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) (
 			return nil, fmt.Errorf("scope of %s: %w", repo, err)
 		}
 		if !scope.any() {
-			// The row points outside the engine's remit: reading it
-			// would let an authored edge direct the engine's token
-			// into a repository no role names, and publish what it
-			// found on an unauthenticated port. It is neither read nor
-			// warned on, the way the re-fetch refuses such a reference
-			// (§forgejo/webhook/repository-roles,
-			// §forgejo/webhook/re-fetch).
+			// Outside the engine's remit: neither read nor warned
+			// on, as the walk's note above states once
+			// (§forgejo/webhook/repository-roles).
 			continue
 		}
 		owner, name := splitRepo(repo)
@@ -184,17 +182,22 @@ func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) (
 // still open, still mergeable, and approved at head by every lens for
 // longer than the configured threshold
 // (§forgejo/observability/the-outcomes-view). The answer is nil, not an
-// error, wherever the merge gate would not fire at the head: the wait
-// then belongs to something other than a person.
+// error, wherever a hold other than a person stands on the head — the
+// holds the next paragraph names — except the forest's own membership
+// edge, which the walk sets aside and the spec accounts for.
 //
 // work is the member's work-order blockers, forest rows and deliveries
 // aside. An open one holds the warning back because the merge gate holds
 // the merge off on it: the forest waits on that work, not on a reviewer
-// or an operator (§forgejo/decisions/merge-gate). A member of an open
-// landing set holds it back for the same reason stated the other way:
-// landing a set is the set's decision and never the individual pull
-// request's, so an approved member whose set has not landed waits on the
-// set's other members (§forgejo/decisions/sync-set).
+// or an operator (§forgejo/decisions/merge-gate). The forest's own rows
+// are the one hold the walk sets aside even where the gate counts it,
+// and why the ⚠️ may fire while the gate waits on the membership edge is
+// the spec's (§forgejo/observability/the-warnings-a-forest-carries). A
+// member of an open landing set holds the warning back for the gate's
+// own reason, stated the other way: landing a set is the set's decision
+// and never the individual pull request's, so an approved member whose
+// set has not landed waits on the set's other members
+// (§forgejo/decisions/sync-set).
 func (e *Engine) staleMergeWarning(member *Issue, repo string, work []Issue, listings map[string][]PullRequest, now time.Time) (*ForestWarning, error) {
 	for _, b := range work {
 		if b.State == "open" {

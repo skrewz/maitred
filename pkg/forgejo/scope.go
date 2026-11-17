@@ -184,9 +184,13 @@ func (e *Engine) repoRoles(repo string) (roles, error) {
 // reader never asks an endpoint the repository refuses
 // (§forgejo/reconciliation/the-sweep, §forgejo/webhook/the-scope-cache).
 // The name is matched case-insensitively as repoRoles matches it. A
-// repository absent from a fresh snapshot answers false, the way it holds
-// no role: a reader that has already established the repository is in
-// remit is asking about one the listing named.
+// repository absent from a fresh snapshot answers false, the way it
+// holds no role. The outcomes walk tests the remit before asking, so
+// absence there names a repository the listing left out; syncMembers
+// asks without testing it, and so reads an out-of-remit repository as
+// delivering nothing — the same conservative answer a delivery it
+// cannot read gives, which no sync predicate can fire on
+// (§forgejo/decisions/sync-set).
 func (e *Engine) repoHasPullRequests(repo string) (bool, error) {
 	scope, err := e.freshScope()
 	if err != nil {
