@@ -783,6 +783,15 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 			wantStamp: "",
 		},
 		{
+			// The label is what is counted, not the value: an unwritten
+			// placeholder above the real stamp leaves the block's recency
+			// as unguessable as two filled lines would.
+			name:      "a stamp line carrying nothing then one carrying the stamp",
+			body:      currentStatedBlock("\n\nLast revisited: "+stamp, mermaidBlock()),
+			wantChart: forestChartSource,
+			wantStamp: "",
+		},
+		{
 			name:      "a CET stamp is carried as written",
 			body:      currentStatedBlock("2026-11-16 09:12 CET", mermaidBlock()),
 			wantChart: forestChartSource,

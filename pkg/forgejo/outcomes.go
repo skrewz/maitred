@@ -132,16 +132,19 @@ func mermaidBlocks(region string) []string {
 
 // revisitedStamp returns the region's `Last revisited:` value as written,
 // or nothing when the region carries no such line or more than one — two
-// stamps leave the block's recency as unguessable as two charts.
+// stamps leave the block's recency as unguessable as two charts. What is
+// counted is the label, not its value: a line carrying the label and
+// nothing after it is one of those two stamps, not an absence.
 func revisitedStamp(region string) string {
-	stamp := ""
+	stamp, found := "", 0
 	for _, line := range strings.Split(region, "\n") {
 		if value, ok := strings.CutPrefix(strings.TrimSpace(line), stampLabel); ok {
-			if stamp != "" {
-				return ""
-			}
+			found++
 			stamp = strings.TrimSpace(value)
 		}
+	}
+	if found != 1 {
+		return ""
 	}
 	return stamp
 }
