@@ -470,6 +470,13 @@ func TestIssueBlocks_CrossRepo(t *testing.T) {
 	if !reflect.DeepEqual(blocked[1].Labels, []string{"outcome"}) {
 		t.Errorf("blocked[1].Labels = %v, want [outcome]: the labels must survive the mapping", blocked[1].Labels)
 	}
+	// The description survives the wire mapping too: the picture is scraped
+	// from this row (§forgejo/client/operations,
+	// §forgejo/observability/the-outcomes-view).
+	if blocked[1].Body != "body of issue 7" {
+		t.Errorf("blocked[1].Body = %q, want %q: the body must survive the mapping, since the picture is scraped from this row",
+			blocked[1].Body, "body of issue 7")
+	}
 }
 
 func TestIssueDependencies(t *testing.T) {

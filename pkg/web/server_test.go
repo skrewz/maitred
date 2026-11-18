@@ -510,6 +510,10 @@ func outcomesStubAPI() *stubForgejoAPI {
 		Number: 71, Title: "forest tracker", State: "open",
 		Labels: []string{"outcome"}, Repository: "o/out",
 		HTMLURL: "https://forge.example.com/o/out/issues/71",
+		Body: "## Outcome\n\nThe prose a human wrote.\n\n" +
+			"<!-- maitred:forest:begin -->\n\nLast revisited: 2026-11-16 09:12 AEDT\n\n" +
+			"```mermaid\nflowchart TD\n\tr51[root #51] --> t71[tracker #71]\n```\n\n" +
+			"<!-- maitred:forest:end -->\n",
 	}
 	loneRoot := forgejo.Issue{
 		Number: 52, Title: "root without a gate", State: "open",
@@ -540,12 +544,17 @@ type forestIssueJSON struct {
 }
 
 // forestJSON mirrors one forest of the outcomes view: the repository,
-// the root, and the tracker — a null tracker states its honest absence
+// the root, the tracker — a null tracker states its honest absence — and
+// the picture scraped from the tracker's current-state block: its Mermaid
+// source and that region's recency stamp, each refused on its own and
+// empty when the tracker's description says nothing
 // (§forgejo/observability/the-outcomes-view).
 type forestJSON struct {
-	Repository string           `json:"repository"`
-	Root       forestIssueJSON  `json:"root"`
-	Tracker    *forestIssueJSON `json:"tracker"`
+	Repository     string           `json:"repository"`
+	Root           forestIssueJSON  `json:"root"`
+	Tracker        *forestIssueJSON `json:"tracker"`
+	Chart          string           `json:"chart"`
+	ChartRevisited string           `json:"chart_revisited"`
 }
 
 // outcomesViewJSON mirrors the /api/forgejo/outcomes response shape:
@@ -618,6 +627,20 @@ func TestForgejoOutcomesEndpoint(t *testing.T) {
 	if paired.Tracker.Number != 71 || paired.Tracker.Title != "forest tracker" || paired.Tracker.State != "open" || paired.Tracker.HTMLURL == "" {
 		t.Errorf("tracker = %+v, want outcome issue 71 with its fields", paired.Tracker)
 	}
+	// The forest carries its picture: the Mermaid source the tracker's
+	// current-state block holds and the block's stamp, carried as written
+	// (§forgejo/observability/the-outcomes-view).
+	if !strings.Contains(paired.Chart, "flowchart TD") || !strings.Contains(paired.Chart, "r51[root #51]") {
+		t.Errorf("chart = %q, want the tracker's Mermaid source", paired.Chart)
+	}
+	if paired.ChartRevisited != "2026-11-16 09:12 AEDT" {
+		t.Errorf("chart_revisited = %q, want the block's stamp as written", paired.ChartRevisited)
+	}
+	// A forest with no tracker publishes both fields empty — present in
+	// the body, and stating nothing rather than omitting the subject.
+	if lone.Chart != "" || lone.ChartRevisited != "" {
+		t.Errorf("root 52 picture = %q/%q, want both empty with no tracker to read", lone.Chart, lone.ChartRevisited)
+	}
 	if lone.Tracker != nil {
 		t.Errorf("root 52 tracker = %+v, want the absence stated", lone.Tracker)
 	}
@@ -626,6 +649,11 @@ func TestForgejoOutcomesEndpoint(t *testing.T) {
 	// here for the case (§forgejo/observability/the-outcomes-view).
 	if !strings.Contains(rec.Body.String(), `"tracker":null`) {
 		t.Errorf("body %s, want the absent tracker spelled as null", rec.Body.String())
+	}
+	// The trackerless root's picture fields are present and empty rather
+	// than omitted, the same spelling discipline as the null tracker.
+	if !strings.Contains(rec.Body.String(), `"chart":""`) {
+		t.Errorf("body %s, want the absent tracker's picture spelled as empty fields", rec.Body.String())
 	}
 	// The open tracker is no forest of its own: only roots are listed.
 	for _, f := range view.Forests {

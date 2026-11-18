@@ -134,7 +134,11 @@ tracker itself lives in, a blocks row listing none living where the
 root does, so a tracker blocked across a repository boundary says where
 it lives rather than inheriting the root's address
 (§forgejo/client/operations) — or the honest absence of one, spelled as
-a `null` tracker so the field is always present. Without the engine, or
+a `null` tracker so the field is always present. Each forest carries the
+**picture of the forest** alongside its rows as two further fields, both
+always present: **`chart`**, the Mermaid source of the tracker's
+current-state block, and **`chart_revisited`**, that region's recency
+stamp, both scraped as described below. Without the engine, or
 with no forests, the list is empty — never `null`: an enumeration that
 found nothing is an honest empty, not a view that never read. A view the
 engine cannot vouch for — no sweep's enumeration has landed yet, the
@@ -157,13 +161,96 @@ port authenticates nothing
 (§forgejo/observability/why-the-engine-is-off). A method other than GET
 answers `405`.
 
+**Scraping the current-state block.** The picture is not composed by the
+engine: it is read out of the tracker's description, which is where the
+forest's picture already lives. That description is the blocks row the
+walk already holds — the listing and the single-issue read answer with
+the same model and fill `body` the same way, so scraping the row costs
+no second read of an issue the enumeration is already holding
+(§forgejo/client/operations). The region scraped is the one the
+curating agent delimits with the HTML-comment fence pair
+`<!-- maitred:forest:begin -->` and `<!-- maitred:forest:end -->` — the
+view reads that pair and writes nothing: the client it reads through
+carries no mutation at all, so the tracker's description is left
+byte-for-byte as found (§forgejo/client/operations). Within the
+region the view carries two things and nothing else: the fenced `mermaid`
+block between its fences, **verbatim** — never re-indented, repaired, or
+completed in code — and the `Last revisited: <YYYY-MM-DD HH:MM> <TZ>`
+line, whose value is carried **as written**, so a UI states how recent
+the picture is without parsing prose and an abbreviation of `CET` reads
+exactly as the agent wrote it. Neither field is parsed further: the
+stamp is a string the view does not interpret.
+
+Verbatim is a promise about the text, not about its source. Whatever
+stands between the fences reaches the payload untouched, and a
+description is editable by anyone with write access to the tracker's
+repository — the fence pair is a scraping contract, never an access
+control — mirrored onto a port that authenticates nothing
+(§forgejo/observability/why-the-engine-is-off). The rendered source a
+writer splices in carries no `click`, no `subgraph` and no comment
+(§forgejo/renderer/the-source), but the view cannot tell rendered source
+from hand-written text, and Mermaid drawn at a scripting security level
+runs `click` and `link` callbacks in the viewer. So anything drawing
+`chart` treats it as untrusted input: render it at a non-scripting
+security level, or show it as text and never as a graph.
+
+What scraping promises is exactly one well-formed region, and every
+ragged edge publishes **nothing** rather than a guess. The refusal is
+per field, not per region: the stamp describes the **region**, so a
+region holding two pictures or none still states when it was last
+revisited, and one holding two stamps still states its picture — "last
+revisited at X, and it holds no single picture" is a thing a tracker can
+honestly be, which is why a UI printing recency above a graph must read
+the fields as two statements rather than one. The edges: no fence pair,
+two or more fence pairs (which region belongs to whom is not guessable),
+a region holding no fenced Mermaid block or more than one, a Mermaid
+fence never closed, and a region carrying no stamp line or more than one.
+A `Last revisited:` line carrying the label and no value counts as one of
+those lines rather than as an absence, so a placeholder above the stamp
+the agent later wrote publishes nothing. The two ways a region says nothing
+about recency are told apart by whether the line is there at all: the
+template the curating agent writes carries the label, so a line with nothing
+after it is a recency not yet written, while a region holding no such line
+was written by something other than that template — the contract drifting,
+which the log says and silence would hide. An empty field is a statement
+about the tracker's description, never about a read that broke: the
+description came from a read that succeeded, since a blocks read that
+fails fails the enumeration the way every other failed read does,
+answering `500` rather than publishing the empty chart a stranger would
+read as a forest with no picture. A forest whose tracker is absent
+publishes both fields empty.
+
+What the log says about an empty field is therefore the one thing a
+reader cannot see in the payload, and the two families that produce one
+are said apart. A description carrying **neither** marker is a tracker
+whose picture has not been written yet — an ordinary state rather than a
+fault, what a young organisation looks like from the outside — and it
+leaves no trace at any level, because repeating the same sentence for it
+on every tick would bury the failures the log is for: a read that broke,
+which fails the enumeration and reaches the log loudly. A lone `Last
+revisited:` line carrying the label and no value belongs to that family
+seen from the field side: the stamp has not been written yet, so the stamp
+publishes nothing and nothing is said — the picture the same region holds
+still stands in the payload. A region that was
+there and was refused is the other family, the one a fence pair drifting
+away from what the curating agent writes lands in, and it says so once
+per tick at `Debug`: the tracker, and the rule that refused. Debug rather
+than above it because the refusal is not a fault either, only a
+statement that the contract and the description have stopped agreeing —
+information for whoever is looking, noise for whoever is not. Without
+that line the two
+families are indistinguishable from outside, and the drift the marker
+contract depends on would show up as an empty picture rather than as a
+rule named.
+
 The enumeration happens on the reconciliation sweep's tick, not on the
 request path (§forgejo/reconciliation/the-sweep): per tick it costs one
 issue listing per outcomes repository and one blocks read per open
-ideation root, on top of the sweep's own walk; the sweep's own
-organisation listing keeps the scope cache fresh, so the walk adds no
-listing of its own (§forgejo/webhook/the-scope-cache). That walk is the
-view's own reader rather than a pairing folded into the sweep's fourth
+ideation root, on top of the sweep's own walk; the picture is scraped
+from the rows those reads return, so it adds no read of its own. The
+sweep's own organisation listing keeps the scope cache fresh, so the walk
+adds no listing of its own (§forgejo/webhook/the-scope-cache). That walk
+is the view's own reader rather than a pairing folded into the sweep's fourth
 step: the sweep's listings cover every repository holding either role,
 and the blocks reads the digest makes happen inside the pipeline, where
 their rows are summed into a digest and discarded, so folding the
