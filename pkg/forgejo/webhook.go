@@ -987,7 +987,7 @@ func (e *Engine) deliveryPR(member *Issue, repo string, listings map[string][]Pu
 	}
 	memberRef := repo + "#" + strconv.Itoa(member.Number)
 	if !hasPulls {
-		e.log.Debug("member delivers nothing: its repository holds no pull request",
+		e.log.Debug("member delivers nothing: no pull request known for its repository",
 			"member", memberRef)
 		return nil, nil, nil
 	}

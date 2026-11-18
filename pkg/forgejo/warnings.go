@@ -440,11 +440,15 @@ func humanTaskWarning(member *Issue, repo string, work []Issue, now time.Time) *
 }
 
 // workOrders is a member's blockers as the warnings read them. A
-// pull-request row is a delivery and never a work order, the way every
-// other blocker read in the package treats it
-// (§forgejo/decisions/merge-gate, §forgejo/webhook/re-fetch): counting
-// it would silence the human-task warning for the one ticket whose
+// pull-request row is a delivery and never a work order, the way the merge
+// gate excludes the delivering pull request itself from the blockers it
+// counts (§forgejo/decisions/merge-gate, §forgejo/webhook/re-fetch):
+// counting it would silence the human-task warning for the one ticket whose
 // delivery is up for review — the exact state the ⚠️ exists to publish.
+// Where the gate counts *another* pull request as an open blocker of a
+// connected issue, this read names no work order at all: the question here
+// is whether a person can start, and a delivery on the table does not
+// answer it.
 // The forest's own rows are membership rather than a wait
 // (§forgejo/decisions/commissioning).
 func workOrders(rows []Issue, entered string, gates map[string]bool) []Issue {
