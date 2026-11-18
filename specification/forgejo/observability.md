@@ -195,27 +195,47 @@ runs `click` and `link` callbacks in the viewer. So anything drawing
 security level, or show it as text and never as a graph.
 
 What scraping promises is exactly one well-formed region, and every
-ragged edge publishes **nothing** rather than a guess: no fence pair, two
-or more fence pairs (which region belongs to whom is not guessable), a
-region holding no fenced Mermaid block or more than one, a Mermaid fence
-never closed, and a region carrying no stamp line or more than one each
-leave `chart` empty, `chart_revisited` empty, or both. A `Last
-revisited:` line carrying the label and no value counts as one of those
-lines rather than as an absence, so a placeholder above the stamp the
-agent later wrote publishes nothing. An empty field is a statement about
-the tracker's description, never about a read that broke: the description
-came from a read that succeeded, since a blocks read that fails fails
-the enumeration the way every other failed read does, answering `500`
-rather than publishing the empty chart a stranger would read as a forest
-with no picture. A forest whose tracker is absent publishes both fields
-empty.
+ragged edge publishes **nothing** rather than a guess. The refusal is
+per field, not per region: the stamp describes the **region**, so a
+region holding two pictures or none still states when it was last
+revisited, and one holding two stamps still states its picture — "last
+revisited at X, and it holds no single picture" is a thing a tracker can
+honestly be, which is why a UI printing recency above a graph must read
+the fields as two statements rather than one. The edges: no fence pair,
+two or more fence pairs (which region belongs to whom is not guessable),
+a region holding no fenced Mermaid block or more than one, a Mermaid
+fence never closed, and a region carrying no stamp line or more than one.
+A `Last revisited:` line carrying the label and no value counts as one of
+those lines rather than as an absence, so a placeholder above the stamp
+the agent later wrote publishes nothing. An empty field is a statement
+about the tracker's description, never about a read that broke: the
+description came from a read that succeeded, since a blocks read that
+fails fails the enumeration the way every other failed read does,
+answering `500` rather than publishing the empty chart a stranger would
+read as a forest with no picture. A forest whose tracker is absent
+publishes both fields empty.
 
-A description that says nothing leaves no trace in the log, and that
-silence is the rule rather than an oversight: a tracker whose picture has
-not been written yet is an ordinary state rather than a fault, and
-repeating the same sentence for it on every tick would bury the failures
-the log is for — a read that broke, which fails the enumeration and
-reaches the log loudly.
+What the log says about an empty field is therefore the one thing a
+reader cannot see in the payload, and the two families that produce one
+are said apart. A description carrying **neither** marker is a tracker
+whose picture has not been written yet — an ordinary state rather than a
+fault, what a young organisation looks like from the outside — and it
+leaves no trace at any level, because repeating the same sentence for it
+on every tick would bury the failures the log is for: a read that broke,
+which fails the enumeration and reaches the log loudly. A lone `Last
+revisited:` line carrying the label and no value belongs to that family
+seen from the field side: the stamp has not been written yet, so nothing
+is published and nothing is said. A region that was
+there and was refused is the other family, the one a fence pair drifting
+away from what the curating agent writes lands in, and it says so once
+per tick at `Debug`: the tracker, and the rule that refused. Debug rather
+than above it because the refusal is not a fault either, only a
+statement that the contract and the description have stopped agreeing —
+information for whoever is looking, noise for whoever is not. Without
+that line the two
+families are indistinguishable from outside, and the drift the marker
+contract depends on would show up as an empty picture rather than as a
+rule named.
 
 The enumeration happens on the reconciliation sweep's tick, not on the
 request path (§forgejo/reconciliation/the-sweep): per tick it costs one

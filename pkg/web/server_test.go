@@ -546,8 +546,9 @@ type forestIssueJSON struct {
 // forestJSON mirrors one forest of the outcomes view: the repository,
 // the root, the tracker — a null tracker states its honest absence — and
 // the picture scraped from the tracker's current-state block: its Mermaid
-// source and that block's recency stamp, each empty when the tracker's
-// description says nothing (§forgejo/observability/the-outcomes-view).
+// source and that region's recency stamp, each refused on its own and
+// empty when the tracker's description says nothing
+// (§forgejo/observability/the-outcomes-view).
 type forestJSON struct {
 	Repository     string           `json:"repository"`
 	Root           forestIssueJSON  `json:"root"`

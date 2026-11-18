@@ -3,6 +3,7 @@ package forgejo
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -56,10 +57,12 @@ type Forest struct {
 	// treats it as untrusted input
 	// (§forgejo/observability/the-outcomes-view).
 	Chart string `json:"chart"`
-	// ChartRevisited is the current-state block's `Last revisited:` stamp,
+	// ChartRevisited is the current-state region's `Last revisited:` stamp,
 	// carried as the agent wrote it so a reader states the picture's
-	// recency without parsing prose — a CET stamp reads as CET
-	// (§forgejo/observability/the-outcomes-view).
+	// recency without parsing prose — a CET stamp reads as CET. It is the
+	// region's stamp rather than the block's, so it is refused
+	// independently of Chart: a recency can arrive with no picture beside
+	// it (§forgejo/observability/the-outcomes-view).
 	ChartRevisited string `json:"chart_revisited"`
 }
 
@@ -81,27 +84,64 @@ const (
 )
 
 // scrapeForestChart reads the picture out of a tracker's description: the
-// fenced Mermaid block inside the fence pair, verbatim, and the block's
+// fenced Mermaid block inside the fence pair, verbatim, and the region's
 // recency stamp as written. Every ragged edge answers with nothing rather
 // than a guess — which is why each rule below says "publish nothing"
 // rather than "pick the best candidate" — and the edges themselves are
 // enumerated once, in §forgejo/observability/the-outcomes-view, so the
 // rules and this function cannot drift apart. Neither field is parsed
 // further: the stamp's abbreviation is whatever the agent wrote.
-func scrapeForestChart(body string) (chart, revisited string) {
-	if strings.Count(body, forestFenceBegin) != 1 || strings.Count(body, forestFenceEnd) != 1 {
-		return "", ""
+//
+// The third answer names the rule that refused, so a reader can tell "the
+// scrape contract broke" from "nothing was written yet": it is empty for
+// the description that carries neither marker, which is a tracker whose
+// picture has not been written yet — an ordinary state rather than a
+// fault — and empty whenever a field was published from the region that
+// held it. Otherwise it states the rule that refused, and the walk says
+// so at Debug (§forgejo/observability/the-outcomes-view).
+func scrapeForestChart(body string) (chart, revisited, refused string) {
+	begins := strings.Count(body, forestFenceBegin)
+	ends := strings.Count(body, forestFenceEnd)
+	switch {
+	case begins == 0 && ends == 0:
+		// No fence pair at all: the one silence the view keeps even at
+		// Debug, because an uncatalogued forest is what a young
+		// organisation looks like from the outside.
+		return "", "", ""
+	case begins != 1 || ends != 1:
+		// Which region belongs to whom is not guessable, and one marker
+		// without its pair is a description mid-edit at best.
+		return "", "", "the fence pair is not exactly one begin and one end"
 	}
 	begin := strings.Index(body, forestFenceBegin) + len(forestFenceBegin)
 	end := strings.Index(body, forestFenceEnd)
 	if end < begin {
-		return "", ""
+		return "", "", "the end marker sits before the begin marker"
 	}
 	region := body[begin:end]
-	if blocks := mermaidBlocks(region); len(blocks) == 1 {
+
+	// The two fields are refused independently: the stamp describes the
+	// region, not the block, so a region holding two pictures still
+	// states when it was last revisited
+	// (§forgejo/observability/the-outcomes-view).
+	var reasons []string
+	switch blocks := mermaidBlocks(region); len(blocks) {
+	case 1:
 		chart = blocks[0]
+	case 0:
+		reasons = append(reasons, "the region holds no closed Mermaid block")
+	default:
+		reasons = append(reasons, "the region holds more than one Mermaid block")
 	}
-	return chart, revisitedStamp(region)
+	switch stamp, found := revisitedStamp(region); found {
+	case 1:
+		revisited = stamp
+	case 0:
+		reasons = append(reasons, "the region holds no stamp line")
+	default:
+		reasons = append(reasons, "the region holds more than one stamp line")
+	}
+	return chart, revisited, strings.Join(reasons, "; ")
 }
 
 // mermaidBlocks returns each fenced Mermaid block of the region, its
@@ -128,13 +168,14 @@ func mermaidBlocks(region string) []string {
 	return blocks
 }
 
-// revisitedStamp returns the region's `Last revisited:` value as written,
-// or nothing when the region carries no such line or more than one — two
-// stamps leave the block's recency as unguessable as two charts. What is
-// counted is the label, not its value: a line carrying the label and
-// nothing after it is one of those two stamps, not an absence.
-func revisitedStamp(region string) string {
-	stamp, found := "", 0
+// revisitedStamp returns the region's `Last revisited:` value as written
+// and how many lines carried the label. The count travels with the value
+// so the scrape can say which rule refused a region rather than only that
+// it refused one: what is counted is the label, not its value, so a line
+// carrying the label and nothing after it is one of those lines rather
+// than an absence. Only a count of one publishes anything — two stamps
+// leave the block's recency as unguessable as two charts.
+func revisitedStamp(region string) (stamp string, found int) {
 	for _, line := range strings.Split(region, "\n") {
 		if value, ok := strings.CutPrefix(strings.TrimSpace(line), stampLabel); ok {
 			found++
@@ -142,9 +183,9 @@ func revisitedStamp(region string) string {
 		}
 	}
 	if found != 1 {
-		return ""
+		return "", found
 	}
-	return stamp
+	return stamp, found
 }
 
 // forestIssue slims an issue to its row in the view. The row names the
@@ -184,7 +225,7 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 // outcome issue no open root blocks is not a forest and is not listed.
 // Pull requests carry no forest. The list is empty — never nil — when
 // no repository holds the role. A non-nil error means a read failed —
-// the organisation listing, an issue listing or a blocks read — each
+// the organisation listing, an issue listing, or a blocks read — each
 // wrapped with the repository or issue it concerned, and the partial
 // result is dropped: a failed read must not read as an empty set of
 // forests, the same fail-closed discipline as the scope test
@@ -228,7 +269,19 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 				// because the row *is* the tracker's, a tracker living in
 				// another repository brings its own picture rather than the
 				// root's (§forgejo/client/operations).
-				forest.Chart, forest.ChartRevisited = scrapeForestChart(b.Body)
+				chart, revisited, refused := scrapeForestChart(b.Body)
+				forest.Chart, forest.ChartRevisited = chart, revisited
+				if refused != "" {
+					// A region that was there and was refused is the one
+					// state a drifted marker leaves behind, so it says so
+					// once per tick at Debug — the level the uncatalogued
+					// forest never reaches, which is what keeps the
+					// silence above it intact
+					// (§forgejo/observability/the-outcomes-view).
+					e.log.Debug("outcomes: a tracker's current-state region refused; publishing nothing",
+						"tracker", tracker.Repository+"#"+strconv.Itoa(tracker.Number),
+						"why", refused)
+				}
 				break
 			}
 			forests = append(forests, forest)

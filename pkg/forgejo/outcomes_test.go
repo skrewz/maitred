@@ -1,7 +1,9 @@
 package forgejo
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -796,6 +798,111 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 			}
 			if forests[0].ChartRevisited != tc.wantStamp {
 				t.Errorf("chart_revisited = %q, want %q", forests[0].ChartRevisited, tc.wantStamp)
+			}
+		})
+	}
+}
+
+// TestForests_ARefusedRegionSaysWhichRuleRefused: a region that was there
+// and was refused leaves one Debug line naming the tracker and the rule,
+// so a marker that drifted away from what the curating agent writes reads
+// differently from a forest nobody has catalogued yet
+// (§forgejo/observability/the-outcomes-view).
+func TestForests_ARefusedRegionSaysWhichRuleRefused(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		why  string
+	}{
+		{
+			name: "a second fence pair",
+			body: currentStateBlock("2026-11-16 09:12 AEDT", mermaidBlock()) + "\n" +
+				currentStateBlock("2025-01-01 00:00 AEDT", mermaidBlock()),
+			why: "the fence pair is not exactly one begin and one end",
+		},
+		{
+			name: "an end marker before its begin",
+			body: forestFenceEnd + "\n" + mermaidBlock() + "\n" + forestFenceBegin,
+			why:  "the end marker sits before the begin marker",
+		},
+		{
+			name: "two pictures in one region",
+			body: currentStateBlock("2026-11-16 09:12 AEDT", mermaidBlock()+"\n\n"+mermaidBlock()),
+			why:  "the region holds more than one Mermaid block",
+		},
+		{
+			name: "two stamps in one region",
+			body: currentStateBlock("2026-11-16 09:12 AEDT\n\nLast revisited: 2025-01-01 00:00 AEDT", mermaidBlock()),
+			why:  "the region holds more than one stamp line",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var log bytes.Buffer
+			eng, api, _, _ := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log,
+				&slog.HandlerOptions{Level: slog.LevelDebug})))
+			api.repos = []Repository{outcomesRepo("o/out")}
+			root := outcomesRoot(51, "root")
+			tracker := outcomesTracker(71, "tracker")
+			tracker.Body = tc.body
+			stageForest(api, root, tracker)
+
+			if _, err := eng.enumerateForests(); err != nil {
+				t.Fatalf("enumerateForests: %v", err)
+			}
+			line := findEntry(t, parseLogLines(t, log.Bytes()),
+				"outcomes: a tracker's current-state region refused; publishing nothing")
+			if line["why"] != tc.why {
+				t.Errorf("why = %v, want %q", line["why"], tc.why)
+			}
+			if line["tracker"] != "o/out#71" {
+				t.Errorf("tracker = %v, want o/out#71: a refusal names whose description refused", line["tracker"])
+			}
+		})
+	}
+}
+
+// TestForests_NoPictureWrittenYetStaysSilent: the states that mean "the
+// picture has not been written yet" — a description carrying neither
+// marker, and a region whose stamp line is still the empty placeholder —
+// publish empty fields and say nothing at any level, because an
+// uncatalogued forest is an ordinary state and a sentence per tick would
+// bury the failures the log is for
+// (§forgejo/observability/the-outcomes-view).
+func TestForests_NoPictureWrittenYetStaysSilent(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "no fence pair at all",
+			body: "## Outcome\n\nNothing was ever delimited here.\n",
+		},
+		{
+			name: "a stamp line carrying nothing",
+			body: currentStateBlock("", mermaidBlock()),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var log bytes.Buffer
+			eng, api, _, _ := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log,
+				&slog.HandlerOptions{Level: slog.LevelDebug})))
+			api.repos = []Repository{outcomesRepo("o/out")}
+			root := outcomesRoot(51, "root")
+			tracker := outcomesTracker(71, "tracker")
+			tracker.Body = tc.body
+			stageForest(api, root, tracker)
+
+			forests, err := eng.enumerateForests()
+			if err != nil {
+				t.Fatalf("enumerateForests: %v", err)
+			}
+			if len(forests) != 1 || forests[0].ChartRevisited != "" {
+				t.Fatalf("forests = %+v, want the one forest with its stamp empty", forests)
+			}
+			if out := log.String(); out != "" {
+				t.Errorf("the enumeration logged %q, want silence: nothing written yet is not a fault", out)
 			}
 		})
 	}
