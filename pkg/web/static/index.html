@@ -739,6 +739,22 @@
             return /^https?:\/\//i.test(s) ? s : '';
         }
 
+        // issueLink renders one issue or pull request reference — its
+        // repository, number and title — as a link when the forge's
+        // URL is one a link can carry, and as plain text when it is
+        // not, under rel="noreferrer" so the click leaks no origin to
+        // the forge as the Referer. One function owns the discipline
+        // every reference on this page pays, so a fix to it is one
+        // edit and not two places that drift.
+        function issueLink(obj) {
+            // A reference with no number says nothing rather than
+            // printing a bare '#': a default is not a fact.
+            const number = obj.number == null ? '' : '#' + escapeHtml(String(obj.number));
+            const text = `${escapeHtml(obj.repository)}${number} \u2014 ${escapeHtml(obj.title ?? '')}`;
+            const href = safeUrl(obj.html_url);
+            return href ? `<a href="${escapeHtml(href)}" rel="noreferrer">${text}</a>` : `<span>${text}</span>`;
+        }
+
         // issueCell renders one link of a forest row: the issue with
         // its state badge, or its absence stated — a root without its
         // tracker is exactly what a human needs to see, so the row is
@@ -752,12 +768,7 @@
             // listing or a blocks read, so it is open or closed — the
             // same two-way reading the dashboard's issue renderer uses.
             const badge = issue.state === 'open' ? 'badge-open' : 'badge-closed';
-            const text = `${escapeHtml(issue.repository)}#${escapeHtml(String(issue.number ?? ''))} \u2014 ${escapeHtml(issue.title ?? '')}`;
-            const href = safeUrl(issue.html_url);
-            // rel="noreferrer" keeps the click from leaking this
-            // dashboard's own origin to the forge as the Referer.
-            const link = href ? `<a href="${escapeHtml(href)}" rel="noreferrer">${text}</a>` : `<span>${text}</span>`;
-            return `<div class="meta-item"><span class="meta-label">${escapeHtml(label)}</span><span class="meta-value">${link} <span class="badge ${badge}">${escapeHtml(issue.state)}</span></span></div>`;
+            return `<div class="meta-item"><span class="meta-label">${escapeHtml(label)}</span><span class="meta-value">${issueLink(issue)} <span class="badge ${badge}">${escapeHtml(issue.state)}</span></span></div>`;
         }
 
         // warningKindLabels gives a warning's kind the words the row
@@ -772,23 +783,18 @@
 
         // warningsHtml renders one ⚠️ entry per warning of a forest:
         // the reference the payload names — never built from the row's
-        // own fields — its kind, and the age of the condition. The
-        // link is the warning's own html_url through safeUrl, and
-        // every field is text its authors wrote, inserted as text and
-        // never as markup
+        // own fields — through the page's one link discipline
+        // (issueLink), its kind, and the age of the condition. Every
+        // field is text its authors wrote, inserted as text and never
+        // as markup
         // (§forgejo/observability/the-warnings-a-forest-carries). A
         // forest with no warnings renders nothing: the honest empty
         // carries no marker.
         function warningsHtml(warnings) {
             return (warnings ?? []).map(w => {
                 const kind = warningKindLabels[w.kind] ?? String(w.kind ?? '');
-                const text = `${escapeHtml(w.repository)}#${escapeHtml(String(w.number ?? ''))} \u2014 ${escapeHtml(w.title ?? '')}`;
-                const href = safeUrl(w.html_url);
-                // rel="noreferrer" as in issueCell: the click leaks no
-                // origin to the forge.
-                const link = href ? `<a href="${escapeHtml(href)}" rel="noreferrer">${text}</a>` : `<span>${text}</span>`;
                 const age = formatDuration(Math.round((w.age_seconds ?? 0) * 1000));
-                return `<div class="outcomes-warning">\u26a0\ufe0f ${link} \u2014 ${escapeHtml(kind)} \u00b7 ${escapeHtml(age)}</div>`;
+                return `<div class="outcomes-warning">\u26a0\ufe0f ${issueLink(w)} \u2014 ${escapeHtml(kind)} \u00b7 ${escapeHtml(age)}</div>`;
             }).join('');
         }
 
