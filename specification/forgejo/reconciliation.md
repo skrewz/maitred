@@ -104,13 +104,16 @@ rendered in the configured timezone (§forgejo/config/tracker-chart).
   test every other cross-repository hop pays
   (§forgejo/webhook/repository-roles): the enumeration's own repository is
   admitted by the enumeration, every other only where a maitred role names it. A
-  tracker in a repository no role names is neither read nor written and the log
-  names the repository refused at Debug, the level the engine's other
-  cross-repository hops use for the sentence; a row no role admits draws no
-  node, contributes no title to a body the outcomes view publishes, and has no
-  edges read. The forest's actionable-state digest is the reader that pays no
-  such test, folding every row a blocking edge reaches, so where an edge leaves
-  the roles a chart shows less than the state decided
+  tracker in a repository no role names is neither written nor scraped — the
+  write skips it and the pairing publishes no chart and no stamp from it, the
+  tracker row itself standing — and the log names the repository refused at
+  Debug, the level the engine's other cross-repository hops use for the
+  sentence; a row no role admits draws no node, contributes no title to a body
+  the outcomes view publishes, and has no edges read. Three readers thus pay
+  the test — the write, the draw and the pairing's scrape — and one does not:
+  the forest's actionable-state digest folds every row and comment body a
+  blocking edge reaches, wherever the edge points, so where an edge leaves the
+  roles the digest decides on rows the chart neither draws nor publishes
   (§forgejo/decisions/actionable-state-digest). An unknown scope fails closed,
   naming the failure rather than reading as a repository holding no role
   (§forgejo/webhook/the-scope-cache).

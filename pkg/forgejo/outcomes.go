@@ -236,7 +236,10 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 // Each tracker found brings its picture: the description of the row the
 // blocks read already holds is scraped for the forest's chart and stamp,
 // and nothing is ever written back (§forgejo/observability/the-outcomes-view,
-// §forgejo/client/operations).
+// §forgejo/client/operations). The region is the engine's own drawing, so
+// the scrape pays the same admission test the write pays: a tracker in a
+// repository no maitred role names stays paired but pictureless, and an
+// unknown scope fails the enumeration like every other failed read.
 // A root whose tracker is missing is listed with the absence stated; an
 // outcome issue no open root blocks is not a forest and is not listed.
 // Pull requests carry no forest. Each forest additionally carries its
@@ -293,7 +296,25 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 				// does, body included, so scraping it costs no read; and
 				// because the row *is* the tracker's, a tracker living in
 				// another repository brings its own picture rather than the
-				// root's (§forgejo/client/operations).
+				// root's (§forgejo/client/operations). The region is the
+				// engine's own drawing now, so the read half pays the
+				// admission test the write half pays: the view publishes no
+				// picture scraped from a repository no maitred role admits
+				// (§forgejo/webhook/repository-roles,
+				// §forgejo/reconciliation/the-tracker-block).
+				admits, err := e.remitAdmits(tracker.Repository, entered)
+				if err != nil {
+					return nil, fmt.Errorf("forgejo: outcomes: scope of %s: %w", tracker.Repository, err)
+				}
+				if !admits {
+					// The tracker stands, honestly paired; only the
+					// picture is withheld, at the level every other
+					// cross-repository hop uses for this sentence
+					// (§forgejo/observability/the-decision-log).
+					e.log.Debug("outcomes: tracker lives in a repository no maitred role names; publishing no picture",
+						"tracker", forestRef(tracker.Repository, tracker.Number))
+					break
+				}
 				chart, revisited, refused := scrapeForestChart(b.Body)
 				forest.Chart, forest.ChartRevisited = chart, revisited
 				if refused != "" {
