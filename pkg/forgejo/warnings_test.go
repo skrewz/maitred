@@ -344,6 +344,18 @@ func TestForestWarnings_FailedReadFailsTheEnumeration(t *testing.T) {
 		{"pull request read", func(f *fakeAPI) { f.pullErr = errWarnFixture }},
 		{"membership read", func(f *fakeAPI) { f.issueBlocksErrOn = map[int]error{22: errWarnFixture} }},
 		{"connected-issues read", func(f *fakeAPI) { f.issueBlocksErrOn = map[int]error{922: errWarnFixture} }},
+		// The same concern one read further in: the blockers of an issue
+		// the delivery blocks are read by the assembly alone, so this is
+		// the case that names the connected issue's own read — the one
+		// connectedIssues pays past its listing
+		// (§forgejo/webhook/re-fetch).
+		{"connected issue's blockers read", func(f *fakeAPI) {
+			f.blocks[922] = append(f.blocks[922], Issue{
+				Number: 612, Title: "edge", State: "open", Repository: "o/r",
+				UpdatedAt: testUpdatedAt,
+			})
+			f.issueDepsErrOn = map[int]error{612: errWarnFixture}
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			eng, api, _, _ := newTestEngine(t)
@@ -805,6 +817,43 @@ func TestForestWarnings_PullRequestsUnitOffDeliversNothing(t *testing.T) {
 	}
 	if n := api.callCount("ListOpenPullRequests:noswift"); n != 0 {
 		t.Errorf("ListOpenPullRequests:noswift paid %d time(s); the unit is off", n)
+	}
+}
+
+// TestForestWarnings_EdgeRowNamingNoRepositoryIsReadAtTheDelivery: a blocks
+// listing may name no repository for a row, which then lives in the issue
+// the listing was read from — the rule rowRepository exists for
+// (§forgejo/client/operations). The screen admits such a row at the
+// delivery's own repository, so the read must go there too: addressing
+// the empty field raw is a path no repository answers, paid every tick,
+// and a test of one repository is not a screen of the read at another
+// (§forgejo/webhook/re-fetch, §forgejo/observability/the-warnings-a-forest-carries).
+func TestForestWarnings_EdgeRowNamingNoRepositoryIsReadAtTheDelivery(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(64, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	api.blocks[pr.Number] = []Issue{{
+		Number: 65, Title: "names none", State: "open", UpdatedAt: testUpdatedAt,
+		// Repository is empty: the forge's listing says the row lives
+		// beside the delivery without spelling that out.
+	}}
+	api.deps[65] = []Issue{{
+		Number: 66, State: "closed", Repository: "o/r", UpdatedAt: testUpdatedAt,
+	}}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v; a row naming no repository is the ordinary listing, not an outage", err)
+	}
+	if len(forests[0].Warnings) != 1 || forests[0].Warnings[0].Kind != WarningStaleAgenticMerge {
+		t.Fatalf("warnings = %+v, want the stale ⚠️ the member's shape carries", forests[0].Warnings)
+	}
+	if n := api.callCount("IssueDependencies:/"); n != 0 {
+		t.Errorf("IssueDependencies at no repository paid %d time(s); the row must be read where it lives", n)
+	}
+	if n := api.callCount("IssueDependencies:r/65"); n != 1 {
+		t.Errorf("IssueDependencies:r/65 paid %d time(s), want 1: the delivery's repository is where the row lives", n)
 	}
 }
 

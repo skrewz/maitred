@@ -583,6 +583,15 @@ func (e *Engine) connectedIssues(owner, name string, number int, body string) ([
 		if blocks[i].IsPull {
 			continue // only issues connect a PR to the graph this way
 		}
+		// A blocks listing may name no repository for a row, which then
+		// lives in the issue the listing was read from — the rule the
+		// forest rows and the digest apply (§forgejo/client/operations).
+		// Resolved once here so the read, the dedup key and the row the
+		// assembly's next hop addresses all name the same repository:
+		// a screen of one repository is no screen of the read at
+		// another, and an empty field addressed raw is a path no
+		// repository answers.
+		blocks[i].Repository = rowRepository(&blocks[i], prRepo)
 		co, cn := splitRepo(blocks[i].Repository)
 		blockers, err := e.api.IssueDependencies(co, cn, blocks[i].Number)
 		if err != nil {
