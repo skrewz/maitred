@@ -9,12 +9,11 @@ import (
 	"maitred/pkg/forgejo/renderer"
 )
 
-// The tracker's current-state block: the region of an outcome tracker's own
-// description the engine writes on every sweep tick
-// (§forgejo/reconciliation/the-tracker-block). An agent authored this region
-// before the renderer landed; the renderer (#182) makes the drawing
-// deterministic, and this file makes the write narrow enough that the drawing
-// is the only thing that changes.
+// The tracker block: the region of an outcome tracker's own description the
+// engine writes on every sweep tick (§forgejo/reconciliation/the-tracker-block).
+// The drawing comes from the renderer (§forgejo/renderer/the-contract); this
+// file makes the write narrow enough that the drawing is the only thing the
+// write can change.
 //
 // The block is delimited by a pair of HTML comments so it can sit inside prose
 // a human owns. Everything outside the pair — the outcome prose, a member's
@@ -405,12 +404,18 @@ func trackerRow(rows []Issue) *Issue {
 
 // labelColour is the stroke hex a role label gives a node: the colour the forge
 // reports for the label, matched the way every reserved name is matched —
-// case-insensitively (§forgejo/decisions/transition-table). A label the issue
+// case-insensitively (§forgejo/decisions/transition-table). The label names are
+// walked in the order the row carries them, never the colour map, so a forge
+// that let one issue carry `outcome` and `Outcome` in two colours would draw
+// the same stroke every tick (§forgejo/renderer/determinism). A label the issue
 // carries with no readable colour is as good as absent
 // (§forgejo/client/operations).
 func labelColour(issue *Issue, label string) (string, bool) {
-	for name, hex := range issue.LabelColours {
-		if strings.EqualFold(name, label) {
+	for _, name := range issue.Labels {
+		if !strings.EqualFold(name, label) {
+			continue
+		}
+		if hex, ok := issue.LabelColours[name]; ok {
 			return hex, true
 		}
 	}
