@@ -2051,52 +2051,62 @@ func issueRevision(issue *Issue) string {
 	return issue.UpdatedAt.UTC().Format(time.RFC3339)
 }
 
-// trackerRevision is a tracker's revision: its state, its labels and the body
-// outside the fence pair, hashed. The digest folds no tracker body at all for
-// the mirror reason — the engine rewrites that region every tick, and a fact
-// the engine moves by writing it cannot be the fact that decides whether to
-// dispatch (§forgejo/decisions/actionable-state-digest). Everything a decision
-// reads about a tracker still moves this revision: closing it, labelling it,
-// and an edit to the outcome prose. The drawing never does.
+// trackerRevision is a tracker's revision: the facts trackerFacts folds,
+// hashed. The digest folds no tracker body at all for the mirror reason — the
+// engine rewrites that region every tick, and a fact the engine moves by
+// writing it cannot be the fact that decides whether to dispatch
+// (§forgejo/decisions/actionable-state-digest). Everything a decision reads
+// about a tracker still moves this revision: closing it, labelling it, and an
+// edit to the outcome prose. The drawing never does.
 func trackerRevision(issue *Issue) string {
-	labels := append([]string(nil), issue.Labels...)
-	sort.Strings(labels)
 	h := sha256.New()
-	folded := []string{"state " + issue.State}
-	for _, label := range labels {
-		folded = append(folded, "label "+label)
-	}
-	folded = append(folded, "body "+proseRevision(issue.Body))
-	for _, fact := range folded {
+	for _, fact := range trackerFacts(issue) {
 		fmt.Fprintf(h, "%d:%s\n", len(fact), fact)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// revisionFacts is a revision in the words a reason line carries. For a row
-// whose revision is an instant, it is that instant; for an `outcome` tracker,
-// whose revision is a digest so the current-state write cannot move it, it names
-// the three facts that digest folds — the same strings the digest itself folds,
-// so the reason and the watermark agree. A bare digest tells an operator nothing
-// they can line up against the forge's history when the question is why a
-// tracker woke an agent at an odd hour (§forgejo/state/watermark,
-// §forgejo/observability/the-decision-log).
+// trackerFacts are the facts an `outcome` tracker's revision folds, in the order
+// the digest hashes them: the issue's state, one line per label in sorted order
+// so a label toggle moves the digest whichever way the forge lists them, and the
+// description outside the fence pair as a digest, so the folded input is bounded
+// whatever the description holds. This is the one statement of that set: the
+// digest hashes these strings and the reason lines render them, so a fact added
+// to the revision cannot fail to appear in the log line that explains it
+// (§forgejo/state/watermark, §forgejo/observability/the-decision-log).
+func trackerFacts(issue *Issue) []string {
+	labels := append([]string(nil), issue.Labels...)
+	sort.Strings(labels)
+	folded := []string{"state " + issue.State}
+	for _, label := range labels {
+		folded = append(folded, "label "+label)
+	}
+	return append(folded, "body "+digestRevision(outsideFence(issue.Body)))
+}
+
+// revisionFacts is a revision in the words a reason line carries: the strings
+// trackerFacts folds, joined, for an `outcome` tracker whose revision is a
+// digest the current-state write cannot move, and the instant itself for every
+// row the engine never writes. A bare digest tells an operator nothing they can
+// line up against the forge's history when the question is why a tracker woke an
+// agent at an odd hour (§forgejo/state/watermark,
+// §forgejo/observability/the-decision-log). A tracker's reasons reach this from
+// the wrap-up row and from the re-fire bound; a tracker never reaches the
+// reassess row's call, which its reserved label holds off first, so what reaches
+// that one is a row whose revision is already an instant.
 func revisionFacts(issue *Issue) string {
 	if !isTracker(issue) {
 		return issueRevision(issue)
 	}
-	labels := append([]string(nil), issue.Labels...)
-	sort.Strings(labels)
-	return fmt.Sprintf("state %s, labels %s, prose %s",
-		issue.State, strings.Join(labels, " "), proseRevision(issue.Body))
+	return strings.Join(trackerFacts(issue), ", ")
 }
 
-// proseRevision is a tracker's description outside the fence pair as the
-// revision folds it: a digest, so the folded input is bounded whatever the
-// description holds, and one change anywhere in the prose moves it
-// (§forgejo/state/watermark).
-func proseRevision(body string) string {
-	sum := sha256.Sum256([]byte(outsideFence(body)))
+// digestRevision is a fact too long, or too little its own, to quote whole — a
+// description, a landing prompt — as the hex the revision digests it to: one
+// change anywhere inside it moves the digest, and its length says nothing about
+// its content (§forgejo/state/watermark, §forgejo/decisions/sync-set).
+func digestRevision(fact string) string {
+	sum := sha256.Sum256([]byte(fact))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -2105,8 +2115,7 @@ func proseRevision(body string) string {
 // last touched — a comment or a label toggle moves updated_at and says
 // nothing about the order (§forgejo/decisions/sync-set).
 func bodyRevision(issue *Issue) string {
-	sum := sha256.Sum256([]byte(issue.Body))
-	return hex.EncodeToString(sum[:])
+	return digestRevision(issue.Body)
 }
 
 // alreadyDispatched reports whether the watermark already records

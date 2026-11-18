@@ -819,7 +819,11 @@ func TestTrackerRevision_IgnoresTheFencedRegion(t *testing.T) {
 func TestRevisionFacts_NamesWhatTheDigestHides(t *testing.T) {
 	tracker := chartTracker("prose\n\n" + fenceBegin + "\nthe chart\n\n" + fenceEnd + "\n")
 	got := revisionFacts(&tracker)
-	for _, want := range []string{"state open", "labels outcome", proseRevision(tracker.Body)} {
+	for _, want := range []string{
+		"state open",
+		"label " + LabelOutcome,
+		"body " + digestRevision(outsideFence(tracker.Body)),
+	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("revisionFacts = %q, carries no %q", got, want)
 		}
