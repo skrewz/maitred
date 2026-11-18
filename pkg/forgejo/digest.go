@@ -211,7 +211,9 @@ func foldComments(f *fold, api API, ref, repo string, number int, engineAccount,
 	return nil
 }
 
-// forestRef is the digest key of an issue: its repository and number.
+// forestRef is one issue's identity as this package writes it: its
+// repository and number, the form the digest keys on and the form a log
+// line names.
 func forestRef(repo string, number int) string {
 	return repo + "#" + strconv.Itoa(number)
 }

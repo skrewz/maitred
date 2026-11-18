@@ -3,7 +3,6 @@ package forgejo
 import (
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -288,7 +287,7 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 					// the region published nothing at all
 					// (§forgejo/observability/the-outcomes-view).
 					e.log.Debug("outcomes: a tracker's current-state region refused; publishing nothing for the refused field",
-						"tracker", tracker.Repository+"#"+strconv.Itoa(tracker.Number),
+						"tracker", forestRef(tracker.Repository, tracker.Number),
 						"why", refused)
 				}
 				break
