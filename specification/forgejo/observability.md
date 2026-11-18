@@ -13,10 +13,12 @@ watermark key, §forgejo/state/storage). The log entry is
 decision (dispatch or hold-off), the dispatched action, the reason, and
 the revision the decision was made at are discrete fields, so a human
 or a tool can filter the log per object and follow the engine's
-reasoning. Where a reason quotes the revision, it names the facts behind
-it — the instant a row keyed on `updated_at` carries, or the state, labels
-and prose digest an `outcome` tracker's revision folds — so a line stays
-readable against the forge's history (§forgejo/state/watermark).
+reasoning. Where a reason quotes a revision, it names the facts behind it — the
+instant a row keyed on `updated_at` carries, or the state, labels and masked-body
+digest an `outcome` tracker's revision folds — so a line stays readable against
+the forge's history; a revision that describes more than the row in hand, such as
+a landing set's, is quoted as it stands (§forgejo/state/watermark,
+§forgejo/decisions/sync-set).
 
 The event path and the reconciliation sweep log their decisions alike:
 the sweep feeds the same decision function through the same pipeline

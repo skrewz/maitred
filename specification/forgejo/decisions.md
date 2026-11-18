@@ -1010,11 +1010,10 @@ Six mechanisms, in this order:
    exclusion of the engine's own comments, and read in two halves because the
    engine's one mutation is a write to an issue the engine also decides on
    (§forgejo/reconciliation/the-tracker-block). **The revision masks the
-   written region out**: an `outcome` tracker's revision is its state, labels
-   and body minus the fenced region, never its `updated_at` — which the write
-   moves every tick — so the re-fire bound and the queue's dedup key both see
-   one unchanged state as one revision and a redraw dispatches no second agent
-   while the first is still pending (§forgejo/state/watermark). **The delivery
+   written region out**, so one unchanged state is one revision however often
+   the forest is redrawn and a drawing dispatches no second agent while the
+   first is still pending; what that digest folds is §forgejo/state/watermark's
+   to state. **The delivery
    holds off unread**: an `issues`/`edited` delivery whose sender is the
    account `engine_account` names holds off **before the re-fetch**, since the
    only edit that account authors is the drawing — a re-fetch and a decision
