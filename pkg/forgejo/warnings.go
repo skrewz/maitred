@@ -287,8 +287,7 @@ func (e *Engine) staleMergeWarning(member *Issue, repo string, gates map[string]
 // (§forgejo/decisions/merge-gate) and membership of an open landing set
 // (§forgejo/decisions/sync-set) — through the gate's own readings, so
 // "the gate would fire at this head" is one implementation's answer and
-// not two that must be kept alike. A true answer says the wait is that
-// work or that set, not a person, and the ⚠️ says nothing.
+// not two that must be kept alike.
 //
 // The delivery's body chooses which issues the ask reaches, so it is
 // screened against the two bounds the gate's resolving loop carries —
