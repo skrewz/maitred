@@ -190,6 +190,12 @@ type fakeAPI struct {
 	// (§forgejo/webhook/re-fetch, s-git/maitred#180).
 	getIssueErr error
 
+	// getIssueErrOn, when it holds an error for an issue number, fails only
+	// that issue's GetIssue — so a test can break one object's read while
+	// every other read in the same walk still answers
+	// (§forgejo/reconciliation/the-tracker-block).
+	getIssueErrOn map[int]error
+
 	// GetIssue blocking hooks for the concurrency tests: GetIssue
 	// closes getIssueEntered (once) on entry, then waits on
 	// blockGetIssue when it is set.
@@ -273,6 +279,9 @@ func (f *fakeAPI) GetIssue(owner, repo string, number int) (*Issue, error) {
 	}
 	if f.getIssueErr != nil {
 		return nil, f.getIssueErr
+	}
+	if err := f.getIssueErrOn[number]; err != nil {
+		return nil, err
 	}
 	if f.err != nil {
 		return nil, f.err

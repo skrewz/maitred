@@ -138,7 +138,8 @@ On each `POST`:
    the `vip` label's doing alone: unset unless a carrier wears that label,
    per §forgejo/webhook/vip-priority.
 7. **Watermark.** A dispatch records its watermark — the action and the
-   revision (the PR head sha, or the issue's `updated_at`) — in the store
+   revision (the PR head sha, the issue's `updated_at`, or, for a tracker, the
+   digest §forgejo/state/watermark describes) — in the store
    (§forgejo/state/watermark); a hold-off records nothing. Each key of the
    unblock cascade (§forgejo/decisions/unblock-cascade) has its own
    watermark applied before its dispatch, so an already-dispatched

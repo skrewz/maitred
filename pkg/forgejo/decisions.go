@@ -574,7 +574,7 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 			}
 			return holdOff(fmt.Sprintf("issue %d is an open %s tracker whose forest the digest gate assembled no observation of: nothing dispatches on a missing digest", issue.Number, LabelOutcome))
 		}
-		return stateGoverned(dispatch(ActionWrapUp, fmt.Sprintf("issue %d is an open, fully unblocked %s tracker; the state calls for wrap-up regardless of revision %s", issue.Number, LabelOutcome, issueRevision(issue))))
+		return stateGoverned(dispatch(ActionWrapUp, fmt.Sprintf("issue %d is an open, fully unblocked %s tracker; the state calls for wrap-up regardless of revision %s", issue.Number, LabelOutcome, revisionFacts(issue))))
 	}
 	return decideIssueOpened(e, s, w)
 }
@@ -696,7 +696,7 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	}
 	rev := issueRevision(issue)
 	if alreadyDispatched(w, ActionReassess, rev) {
-		return holdOff(fmt.Sprintf("reassess already dispatched at revision %s", rev))
+		return holdOff(fmt.Sprintf("reassess already dispatched at revision %s", revisionFacts(issue)))
 	}
 	return dispatch(ActionReassess, fmt.Sprintf("issue %d: %s", issue.Number, e.Type))
 }
@@ -2066,11 +2066,38 @@ func trackerRevision(issue *Issue) string {
 	for _, label := range labels {
 		folded = append(folded, "label "+label)
 	}
-	folded = append(folded, "body "+outsideFence(issue.Body))
+	folded = append(folded, "body "+proseRevision(issue.Body))
 	for _, fact := range folded {
 		fmt.Fprintf(h, "%d:%s\n", len(fact), fact)
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// revisionFacts is a revision in the words a reason line carries. For a row
+// whose revision is an instant, it is that instant; for an `outcome` tracker,
+// whose revision is a digest so the current-state write cannot move it, it names
+// the three facts that digest folds — the same strings the digest itself folds,
+// so the reason and the watermark agree. A bare digest tells an operator nothing
+// they can line up against the forge's history when the question is why a
+// tracker woke an agent at an odd hour (§forgejo/state/watermark,
+// §forgejo/observability/the-decision-log).
+func revisionFacts(issue *Issue) string {
+	if !isTracker(issue) {
+		return issueRevision(issue)
+	}
+	labels := append([]string(nil), issue.Labels...)
+	sort.Strings(labels)
+	return fmt.Sprintf("state %s, labels %s, prose %s",
+		issue.State, strings.Join(labels, " "), proseRevision(issue.Body))
+}
+
+// proseRevision is a tracker's description outside the fence pair as the
+// revision folds it: a digest, so the folded input is bounded whatever the
+// description holds, and one change anywhere in the prose moves it
+// (§forgejo/state/watermark).
+func proseRevision(body string) string {
+	sum := sha256.Sum256([]byte(outsideFence(body)))
+	return hex.EncodeToString(sum[:])
 }
 
 // bodyRevision is the grouping issue's body as the set revision digests

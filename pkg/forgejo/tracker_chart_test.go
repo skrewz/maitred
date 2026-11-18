@@ -524,7 +524,8 @@ func TestTrackerBlock_ForestWithoutTrackerRowIsRefused(t *testing.T) {
 }
 
 // TestTrackerBlock_FailedReadWritesNothing: the region is composed from the body
-// found, so a read that fails must not send anything
+// found, so a read that fails must not send anything. This is the gather's own
+// read failing — the root — which is the first read the tick makes
 // (§forgejo/reconciliation/the-tracker-block).
 func TestTrackerBlock_FailedReadWritesNothing(t *testing.T) {
 	eng, api, log := chartForestEngine(t, chartFenced())
@@ -534,8 +535,25 @@ func TestTrackerBlock_FailedReadWritesNothing(t *testing.T) {
 	if got := api.writeCount(); got != 0 {
 		t.Errorf("wrote %d issues, want none after a read failed", got)
 	}
-	if !strings.Contains(log.String(), "forge is unreachable") {
-		t.Errorf("log = %s, want the failed read named", log.String())
+	if !strings.Contains(log.String(), "root read o/out#1") {
+		t.Errorf("log = %s, want the failed root read named with the row it concerned", log.String())
+	}
+}
+
+// TestTrackerBlock_TrackerReadFailureNamesTheTracker: the root and its rows read
+// fine and the tracker alone does not — deleted, archived, or one 500 — so the
+// branch that splices against a body the tick never got is the one reported, not
+// a failure from anywhere in the forest (§forgejo/reconciliation/the-tracker-block).
+func TestTrackerBlock_TrackerReadFailureNamesTheTracker(t *testing.T) {
+	eng, api, log := chartForestEngine(t, chartFenced())
+	api.getIssueErrOn = map[int]error{2: errors.New("issue not found")}
+
+	eng.writeTrackerBlocks(chartForests(), chartAt)
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("wrote %d issues, want none after the tracker read failed", got)
+	}
+	if !strings.Contains(log.String(), "tracker read o/out#2") {
+		t.Errorf("log = %s, want the tracker's own read named as the failure", log.String())
 	}
 }
 
@@ -791,6 +809,25 @@ func TestTrackerRevision_IgnoresTheFencedRegion(t *testing.T) {
 	root := chartRoot()
 	if got, want := issueRevision(&root), root.UpdatedAt.UTC().Format(time.RFC3339); got != want {
 		t.Errorf("an issue the engine never writes reports revision %q, want its updated_at %q", got, want)
+	}
+}
+
+// TestRevisionFacts_NamesWhatTheDigestHides: a tracker's revision is a digest,
+// so the reasons that quote one say what it folds instead — the same strings the
+// digest folds, and an instant for a row the engine never writes
+// (§forgejo/state/watermark, §forgejo/observability/the-decision-log).
+func TestRevisionFacts_NamesWhatTheDigestHides(t *testing.T) {
+	tracker := chartTracker("prose\n\n" + fenceBegin + "\nthe chart\n\n" + fenceEnd + "\n")
+	got := revisionFacts(&tracker)
+	for _, want := range []string{"state open", "labels outcome", proseRevision(tracker.Body)} {
+		if !strings.Contains(got, want) {
+			t.Errorf("revisionFacts = %q, carries no %q", got, want)
+		}
+	}
+
+	root := chartRoot()
+	if want := root.UpdatedAt.UTC().Format(time.RFC3339); revisionFacts(&root) != want {
+		t.Errorf("revisionFacts of a row the engine never writes = %q, want its updated_at %q", revisionFacts(&root), want)
 	}
 }
 
