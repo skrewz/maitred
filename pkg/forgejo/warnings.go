@@ -280,10 +280,13 @@ func (e *Engine) staleMergeWarning(member *Issue, repo string, gates map[string]
 // that cannot be read completely holds the warning back rather than
 // buying reads or failing the view (§forgejo/webhook/re-fetch,
 // §forgejo/webhook/repository-roles, §forgejo/observability/the-warnings-a-forest-carries).
-// What the screen admits is then resolved the way the gate resolves it,
-// so the states the forge itself ignores — a dangling reference, a
+// What the screen admits is then assembled and resolved the way the gate
+// does, so the states the forge itself ignores — a dangling reference, a
 // reference naming a pull request — arrive as the same ordinary answers
-// here as they do there (§forgejo/webhook/re-fetch).
+// here as they do there, and the two predicates are never handed two
+// different states (§forgejo/webhook/re-fetch). A true answer says the
+// wait is that work or that set, not a person — or that the wait cannot
+// be established, which warns nothing for the same reason.
 func (e *Engine) gateHoldsDeliveryOff(pr *PullRequest, repo string, gates map[string]bool) (bool, error) {
 	askable, err := e.refsAreAskable(pr, repo)
 	if err != nil {
@@ -293,22 +296,21 @@ func (e *Engine) gateHoldsDeliveryOff(pr *PullRequest, repo string, gates map[st
 		return true, nil
 	}
 	owner, name := splitRepo(repo)
-	connected, err := e.connectedIssues(owner, name, pr.Number, pr.Body)
-	if err != nil {
+	// The state the two predicates read is the gate's own assembly: the
+	// connected issues of the body and the blocking edges, then the
+	// landing-set membership those rows imply — the call the approval path
+	// makes, so a field the assembly grows cannot be present for a merge
+	// and zero for the walk (§forgejo/webhook/re-fetch,
+	// §forgejo/decisions/sync-set).
+	st := State{PR: pr}
+	if err := e.fetchPRSetState(owner, name, pr.Number, &st); err != nil {
 		return false, fmt.Errorf("delivery %s#%d: %w", repo, pr.Number, err)
-	}
-	st := State{ConnectedIssues: connected}
-	// The landing set's membership comes from the rows this read already
-	// holds — an open grouping issue the delivery itself blocks — and from
-	// one membership edge per connected member, the read the approval
-	// path makes the same way (§forgejo/decisions/sync-set,
-	// §forgejo/webhook/re-fetch).
-	if err := e.fetchSyncSets(owner, name, pr.Number, &st); err != nil {
-		return false, err
 	}
 	if _, held := syncMemberSetHoldOff(pr, repo, st); held {
 		return true, nil // the wait is the set's landing, not a person
 	}
+	// The event names the delivery alone — the two fields the gate's blocker
+	// test consults, to exclude the delivery from its own blockers.
 	open := mergeGateOpenBlockers(Event{Kind: KindPR, Repo: repo, Number: pr.Number}, st)
 	for i := range open {
 		if gates[warningKey(rowRepository(&open[i], repo), open[i].Number)] {
