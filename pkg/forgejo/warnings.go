@@ -93,10 +93,10 @@ type ForestWarning struct {
 // other path (§forgejo/observability/the-outcomes-view,
 // §forgejo/decisions/actionable-state-digest). The states that are an
 // ordinary answer rather than a failure — a repository outside the remit,
-// one whose pull requests unit is off, a delivery whose body asks for more
-// references than the read budget pays — are settled before the read or
-// hold their warning back, so what is left to fail is a read the engine
-// should have been able to pay and could not.
+// one whose pull requests unit is off, a delivery whose graph reaches past
+// the read budget — are settled before the read or hold their warning back,
+// so what is left to fail is a read the engine should have been able to pay
+// and could not.
 func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) ([]ForestWarning, error) {
 	warnings := []ForestWarning{}
 	seen := map[string]bool{}
@@ -214,10 +214,10 @@ func (e *Engine) repoInRemit(repo string) (bool, error) {
 // while the gate waits on work (§forgejo/decisions/merge-gate,
 // §forgejo/decisions/sync-set). Two answers the gate path forces on a
 // merge are turned the other way here, because the view has no merge to
-// protect and an unchecked wait is not asserted: a body that asks for
-// more references than the read budget pays, and a reference into a
-// repository outside the remit, hold the warning back rather than failing
-// the whole view (§forgejo/webhook/re-fetch,
+// protect and an unchecked wait is not asserted: a graph that reaches past
+// the read budget, and a reference or blocking-edge row naming a repository
+// outside the remit, hold the warning back rather than failing the whole
+// view (§forgejo/webhook/re-fetch,
 // §forgejo/webhook/repository-roles). The forest's own rows are the one
 // hold the walk sets aside even where the gate counts it, and why the ⚠️
 // may fire while the gate waits on the membership edge is the spec's
@@ -276,7 +276,7 @@ func (e *Engine) staleMergeWarning(member *Issue, repo string, gates map[string]
 //
 // The delivery's body chooses which issues the ask reaches, so it is
 // screened against the two bounds the gate's resolving loop carries —
-// the read budget and the remit — before anything is read, and a body
+// the read budget and the remit — before anything is read, and a graph
 // that cannot be read completely holds the warning back rather than
 // buying reads or failing the view (§forgejo/webhook/re-fetch,
 // §forgejo/webhook/repository-roles, §forgejo/observability/the-warnings-a-forest-carries).
@@ -288,7 +288,7 @@ func (e *Engine) staleMergeWarning(member *Issue, repo string, gates map[string]
 // wait is that work or that set, not a person — or that the wait cannot
 // be established, which warns nothing for the same reason.
 func (e *Engine) gateHoldsDeliveryOff(pr *PullRequest, repo string, gates map[string]bool) (bool, error) {
-	askable, err := e.refsAreAskable(pr, repo)
+	askable, err := e.graphIsAskable(pr, repo)
 	if err != nil {
 		return false, err
 	}
@@ -321,20 +321,30 @@ func (e *Engine) gateHoldsDeliveryOff(pr *PullRequest, repo string, gates map[st
 	return false, nil
 }
 
-// refsAreAskable reports whether a delivery's body can be read completely
-// within the bounds the resolving loop carries: no more references than the
-// read budget pays, no reference whose repository names a path segment, and
-// no reference into a repository the engine's remit will not admit. A false
-// answer does not say the delivery is healthy — it says the wait cannot be
-// established, which is the one thing a warning may not paper over, and it
-// leaves the line every other dropped relation leaves
-// (§forgejo/webhook/re-fetch, §forgejo/webhook/repository-roles,
-// §forgejo/observability/the-warnings-a-forest-carries). The test costs no
-// forge read: the grammar is in memory and the remit test is the scope
-// cache's. Unknown scope is the one answer that is not a hold-off but an
-// error — scope the engine cannot establish fails the walk rather than
-// reading on, here as everywhere else (§forgejo/webhook/the-scope-cache).
-func (e *Engine) refsAreAskable(pr *PullRequest, prRepo string) (bool, error) {
+// graphIsAskable reports whether the graph the stale question reaches can be
+// read completely within the bounds the resolving loop carries — the read
+// budget and the remit — before any of it is read. Two shapes choose what the
+// ask reaches, and neither is the walk's author: the references the delivery's
+// body names, which the grammar lists for free, and the delivery's blocking
+// edges, which the walk lists before it reads a reference and whose rows name
+// whichever repository their author had in mind. Both pay the remit test every
+// other cross-repository read pays, and both are counted against the one budget
+// the resolving loop charges, distinct objects the way that loop deduplicates
+// them — so the reads the ask pays are bounded by a graph the delivery states,
+// never by one a stranger draws (§forgejo/webhook/re-fetch,
+// §forgejo/webhook/repository-roles,
+// §forgejo/observability/the-warnings-a-forest-carries).
+//
+// A false answer does not say the delivery is healthy — it says the wait cannot
+// be established, which is the one thing a warning may not paper over, and it
+// leaves the line every other dropped relation leaves. Unknown scope is the one
+// answer that is not a hold-off but an error — scope the engine cannot
+// establish fails the walk rather than reading on, here as everywhere else
+// (§forgejo/webhook/the-scope-cache). Listing the edges costs the one read the
+// ask then pays again inside the assembly: hoisting that read above the gate's
+// own assembly would mean a second assembly able to drift, and one read per
+// stalled delivery per tick is the smaller price.
+func (e *Engine) graphIsAskable(pr *PullRequest, prRepo string) (bool, error) {
 	delivery := prRepo + "#" + strconv.Itoa(pr.Number)
 	refs := autoCloseRefs(pr.Body, prRepo)
 	if len(refs) > maxAutoCloseRefs {
@@ -342,12 +352,14 @@ func (e *Engine) refsAreAskable(pr *PullRequest, prRepo string) (bool, error) {
 			"delivery", delivery, "references", len(refs))
 		return false, nil
 	}
+	seen := make(map[Key]bool, len(refs))
 	for _, ref := range refs {
 		if !validRepoRef(ref.repo) {
 			e.log.Debug("forest warnings: holding a stale warning back: a reference names a path segment",
 				"delivery", delivery)
 			return false, nil
 		}
+		seen[ref.key()] = true
 		if strings.EqualFold(ref.repo, prRepo) {
 			continue // the walk has admitted the delivery's own repository
 		}
@@ -358,6 +370,39 @@ func (e *Engine) refsAreAskable(pr *PullRequest, prRepo string) (bool, error) {
 		if !inRemit {
 			e.log.Debug("forest warnings: holding a stale warning back: a reference names a repository outside the engine's remit",
 				"delivery", delivery, "reference", ref.repo+"#"+strconv.Itoa(ref.number))
+			return false, nil
+		}
+	}
+	owner, name := splitRepo(prRepo)
+	rows, err := e.api.IssueBlocks(owner, name, pr.Number)
+	if err != nil {
+		return false, fmt.Errorf("blocking edges of %s#%d: %w", prRepo, pr.Number, err)
+	}
+	for i := range rows {
+		if rows[i].IsPull {
+			continue // a pull request is a delivery; the walk reads it nowhere
+		}
+		repo := rowRepository(&rows[i], prRepo)
+		key := connectedKey(repo, rows[i].Number)
+		if seen[key] {
+			continue // an issue reachable both ways is one object, one read
+		}
+		seen[key] = true
+		if len(seen) > maxAutoCloseRefs {
+			e.log.Debug("forest warnings: holding a stale warning back: the graph reaches more objects than the read budget pays",
+				"delivery", delivery, "objects", len(seen))
+			return false, nil
+		}
+		if strings.EqualFold(repo, prRepo) {
+			continue // the walk has admitted the delivery's own repository
+		}
+		inRemit, err := e.repoInRemit(repo)
+		if err != nil {
+			return false, fmt.Errorf("scope of %s: %w", repo, err)
+		}
+		if !inRemit {
+			e.log.Debug("forest warnings: holding a stale warning back: a blocking edge names a repository outside the engine's remit",
+				"delivery", delivery, "reference", repo+"#"+strconv.Itoa(rows[i].Number))
 			return false, nil
 		}
 	}

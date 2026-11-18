@@ -332,9 +332,9 @@ warning back (§forgejo/decisions/actions).
   person, so the ⚠️ that asserts a human is the remaining wait says
   nothing. Two answers the gate path forces on a merge are turned the
   other way here, because the view has no merge to protect and an
-  unchecked wait is not asserted: a reference into a repository the
-  remit will not admit, and a body naming more references than the read
-  budget pays, hold the warning back rather than failing the view
+  unchecked wait is not asserted: a reference or blocking-edge row into a
+  repository the remit will not admit, and a graph reaching past the read
+  budget, hold the warning back rather than failing the view
   (§forgejo/webhook/repository-roles, §forgejo/webhook/re-fetch). What
   the screen admits is resolved as the gate resolves it, so the answers
   the forge itself ignores — a dangling reference, a reference naming a
@@ -381,17 +381,28 @@ is against the clock, never against a watermark: the question is how long
 a human has been unnecessary, not whether the engine has acted
 (§forgejo/state/watermark).
 
-A blocking-edge row names whichever repository its author had in mind, so
-the walk admits a member's repository the way every other cross-repository
-read admits one: the scope test runs before anything is read there
-(§forgejo/webhook/repository-roles, §forgejo/webhook/re-fetch). A row
-whose repository holds no maitred role is read nowhere and warns nothing
-— an authored edge must not direct the engine's token into a repository
-no role names and publish what it finds on this unauthenticated port —
-and scope the engine cannot establish fails the walk rather than reading
-on. A delivery's body chooses which issues the stale question reaches, so
-its references pay the same test and the same read cap before anything is
-resolved (§forgejo/webhook/re-fetch). A repository whose pull requests
+A blocking-edge row names whichever repository its author had in mind, and a
+body names whichever issues its author had in mind, so the walk admits a
+repository the way every other cross-repository read admits one: the scope test
+runs before anything is read there (§forgejo/webhook/repository-roles,
+§forgejo/webhook/re-fetch). It is paid for both shapes the stale question
+reaches — a member's own repository, and every object the delivery's references
+or blocking edges name, which the walk screens before it reads any of them. An
+object whose repository holds no maitred role is read nowhere: a member's warns
+nothing, and one the ask reaches holds the whole warning back — an authored edge
+or body must not direct the engine's token into a repository no role names,
+once per sweep tick, nor publish what it finds on this unauthenticated port —
+and scope the engine cannot establish fails the walk rather than reading on.
+The same screen counts the graph against the read budget the gate's resolving
+loop charges, distinct objects the way that loop deduplicates them, so a
+delivery whose graph reaches past the budget costs no blocker read and asserts
+no wait: which rows the hop reads is graph state an author chooses, and where
+the merge path pays one read per row the delivery states, the walk — which
+pays the same hop on every tick, for every stalled delivery — will not pay past
+the count (§forgejo/webhook/re-fetch). The screen pays the one blocking-edge
+read the ask then pays again: the alternative, hoisting that read above the
+gate's own assembly, is a second assembly able to drift, and one read per
+stalled delivery per tick is the smaller price. A repository whose pull requests
 unit is off is not asked, the way the sweep does not ask it
 (§forgejo/reconciliation/the-sweep): it holds no delivery, which is an
 ordinary state and not a failed read — and *delivers nothing* is a state
@@ -399,7 +410,8 @@ the engine says out loud, since it is also what a repository the snapshot
 does not know means (§forgejo/decisions/sync-set). The two predicates ask
 different questions and pay for them separately: a human task reads the
 member's own blockers, and a stalled delivery costs the connected-issues
-read the gate pays, bounded by the cap that bounds the gate's. Both are
+read the gate pays, within the budget that bounds the gate's and screened
+before it is paid. Both are
 paid only for a wait that would otherwise warn, after the head's own
 checks. The pull-request listing is shared per repository, the sharing
 the landing-set predicate already applies (§forgejo/decisions/sync-set).

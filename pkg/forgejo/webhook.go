@@ -560,7 +560,13 @@ func (e *Engine) refreshForestDigest(st State) {
 // complete one is the fail-open #180 exists to close: the re-fetch
 // fails — a hold-off naming the failure, never a merge. The grammar
 // itself stays uncapped, a faithful mirror for the predicate's pure
-// in-memory read. Every drop — a skip, a refusal, the cap's
+// in-memory read, and the cap prices this loop alone: the blocking-edge
+// hop above it costs one read per row the delivery states, bounded by
+// that graph rather than this charge, and the outcomes walk — which
+// pays the same hop from the sweep, every tick — screens those rows
+// against the budget before reading any of them
+// (§forgejo/observability/the-warnings-a-forest-carries). Every drop — a
+// skip, a refusal, the cap's
 // overflow — leaves a debug line naming the resolved reference, so a
 // dropped relation is visible rather than silent. A pull request is
 // never a connected issue: it is a delivery, so a reference naming
@@ -716,10 +722,14 @@ func isNotFound(err error) bool {
 // it happened to collect: which references survive must never be
 // decided by the body being read.
 //
-// The cap belongs to that resolving loop, not to the grammar, and every
-// caller that resolves pays it: the re-fetch, whose overflow is a hold-off
-// naming the incompleteness, and the outcomes walk of a stalled delivery,
-// which screens its body against the same budget before it reads anything
+// The cap belongs to that resolving loop, not to the grammar, and it prices
+// the per-reference fan-out of that loop. The blocking-edge hop the walk makes
+// before it costs one read per row the delivery states and is bounded by that
+// graph, not this count — but every caller that resolves pays the cap: the
+// re-fetch, whose overflow is a hold-off naming the incompleteness, and the
+// outcomes walk of a stalled delivery, which screens both halves of its graph —
+// rows and references — against this budget before it reads either, and holds
+// its warning back rather than failing the view
 // (§forgejo/observability/the-warnings-a-forest-carries). What costs
 // nothing per reference is the grammar alone — the delivery relation's
 // match and the walk's screening are in-memory reads of the same body, and

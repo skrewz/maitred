@@ -363,6 +363,72 @@ func TestForestWarnings_FailedReadFailsTheEnumeration(t *testing.T) {
 
 var errWarnFixture = &APIError{StatusCode: 500, Message: "read failed"}
 
+// TestForestWarnings_EdgeRowOutOfRemitHoldsOffDoesNotWarn: a blocking-edge row
+// names whichever repository its author had in mind, and the walk lists those
+// rows before it reads a reference, so a row pays the same admission test the
+// member's repository and the body's references pay. An edge into a repository
+// no role names reads nothing and states no wait — an authored edge must not
+// direct the engine's token once per tick, and a read it refuses there must not
+// answer 500 for every forest (§forgejo/webhook/repository-roles,
+// §forgejo/webhook/re-fetch, §forgejo/observability/the-warnings-a-forest-carries).
+func TestForestWarnings_EdgeRowOutOfRemitHoldsOffDoesNotWarn(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(53, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	api.repos = append(api.repos, testRepoDisabled("archive/quiet"))
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	api.blocks[pr.Number] = []Issue{{
+		Number: 54, Title: "authored edge", State: "open", Repository: "archive/quiet",
+		UpdatedAt: testUpdatedAt,
+	}}
+	api.deps[54] = []Issue{{
+		Number: 55, State: "open", Repository: "archive/quiet", UpdatedAt: testUpdatedAt,
+	}}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v; a row outside the remit is an ordinary answer, not an outage", err)
+	}
+	if len(forests[0].Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none from an edge the remit will not let the walk read", forests[0].Warnings)
+	}
+	for _, op := range []string{"IssueDependencies:quiet", "GetIssue:quiet", "IssueBlocks:quiet"} {
+		if n := api.callCount(op); n != 0 {
+			t.Errorf("%s paid %d time(s); an out-of-remit edge row must cost no read", op, n)
+		}
+	}
+}
+
+// TestForestWarnings_EdgeRowsBeyondTheBudgetHoldOffDoesNotWarn: a delivery's
+// blocking edges are graph state its author chooses, and this walk pays that hop
+// from the sweep every tick, so the budget the resolving loop charges bounds the
+// rows too: a graph past the budget costs no blocker read and asserts no wait
+// (§forgejo/webhook/re-fetch, §forgejo/observability/the-warnings-a-forest-carries).
+func TestForestWarnings_EdgeRowsBeyondTheBudgetHoldOffDoesNotWarn(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(56, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	rows := make([]Issue, 0, maxAutoCloseRefs+1)
+	for i := 0; i <= maxAutoCloseRefs; i++ {
+		rows = append(rows, Issue{
+			Number: 300 + i, State: "open", Repository: "o/r", UpdatedAt: testUpdatedAt,
+		})
+	}
+	api.blocks[pr.Number] = rows
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests[0].Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none from a graph the read budget cannot finish", forests[0].Warnings)
+	}
+	if n := api.callCount("IssueDependencies"); n != 0 {
+		t.Errorf("IssueDependencies paid %d time(s); a graph past the budget must cost no blocker read", n)
+	}
+}
+
 // TestForestWarnings_ConnectedEdgeBlockerHoldsOffDoesNotWarn: the gate
 // asks the blockers of every issue the delivery connects — those its body
 // names and those its blocking edges name — so an open blocker of an issue
@@ -429,15 +495,15 @@ func TestForestWarnings_SiblingOutOfRemitHoldsOffDoesNotWarn(t *testing.T) {
 	eng, api, _, _ := newTestEngine(t)
 	member := warningsMember(45, LabelAgenticAutoMerge)
 	sibling := warningsMember(46, LabelAgenticAutoMerge)
-	sibling.Repository = "archive/r"
+	sibling.Repository = "archive/quiet"
 	warningsForest(api, member)
-	api.repos = append(api.repos, testRepoDisabled("archive/r"))
+	api.repos = append(api.repos, testRepoDisabled("archive/quiet"))
 	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
 	pr.Body += " and Fixes " + sibling.Repository + "#" + strconv.Itoa(sibling.Number)
 	api.openPulls["r"] = []PullRequest{pr}
 	api.pulls[pr.Number] = &pr
 	api.deps[sibling.Number] = []Issue{{
-		Number: 47, State: "closed", Repository: "archive/r", UpdatedAt: testUpdatedAt,
+		Number: 47, State: "closed", Repository: "archive/quiet", UpdatedAt: testUpdatedAt,
 	}}
 
 	forests, err := eng.enumerateForests()
@@ -447,7 +513,10 @@ func TestForestWarnings_SiblingOutOfRemitHoldsOffDoesNotWarn(t *testing.T) {
 	if len(forests[0].Warnings) != 0 {
 		t.Fatalf("warnings = %+v, want none from a sibling the remit will not let the walk read", forests[0].Warnings)
 	}
-	for _, op := range []string{"GetIssue:archive", "IssueDependencies:archive"} {
+	// The fake records a call by the repository's name, so the fixture is
+	// named apart from o/r rather than sharing its name: a prefix that
+	// matches no recording would witness nothing.
+	for _, op := range []string{"GetIssue:quiet", "IssueDependencies:quiet"} {
 		if n := api.callCount(op); n != 0 {
 			t.Errorf("%s paid %d time(s); an out-of-remit reference must cost no read", op, n)
 		}

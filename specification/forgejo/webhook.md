@@ -490,7 +490,13 @@ For each decision event, the re-fetch assembles the state
   the fan-out against a body written to cost the engine the delivery;
   the predicate's read of the same body is pure in-memory matching
   that costs nothing per reference and stays uncapped, a faithful
-  mirror of the forge. The budget is charged beside the call it bounds,
+  mirror of the forge. The count prices that resolving loop alone: the
+  blocking-edge hop the same walk makes first costs one read per row the
+  delivery states and is bounded by that graph rather than by the count —
+  a caller that pays the hop repeatedly, as the outcomes walk does on
+  every sweep tick, screens those rows against the same budget before
+  reading any of them (§forgejo/observability/the-warnings-a-forest-carries).
+  The budget is charged beside the call it bounds,
   so a reference that costs no read — deduped against a blocking-edge
   row, refused as a path segment, turned away by the remit test —
   spends none of it, and a body of repeats followed by genuinely-new
