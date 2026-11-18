@@ -1226,9 +1226,103 @@ async function testOutcomesPage(page, results) {
     `A tracker's absence is stated, not dropped (got: "${synthetic.texts[1]?.trim()}")`
   ));
 
+  // A forest the payload says is waiting on a person draws its
+  // warnings in the row: one ⚠️ entry per warning, naming its kind,
+  // the object holding the forest up and the age of the condition,
+  // each linking to the object the payload names. Both kinds render
+  // distinctly enough to tell apart, and a forest with no warnings
+  // carries no marker at all
+  // (§forgejo/observability/the-warnings-a-forest-carries).
+  const warned = await page.evaluate(() => {
+    renderOutcomes({
+      engine_status: 'enabled',
+      forests: [
+        {
+          repository: 'o/out',
+          root: { number: 5, repository: 'o/out', title: 'Ideation root', state: 'open', html_url: 'https://forge.example.com/o/out/issues/5' },
+          tracker: { number: 6, repository: 'o/out', title: 'Outcome tracker', state: 'open', html_url: 'https://forge.example.com/o/out/issues/6' },
+          warnings: [
+            { kind: 'stale_agentic_merge', repository: 'o/deliv', number: 12, title: 'Delivery waiting unmerged', html_url: 'https://forge.example.com/o/deliv/pulls/12', age_seconds: 7500 },
+            { kind: 'human_task_blocking', repository: 'o/out', number: 6, title: 'Claimed by a person', html_url: 'https://forge.example.com/o/out/issues/6', age_seconds: 120 },
+          ],
+        },
+        {
+          repository: 'q/quiet',
+          root: { number: 1, repository: 'q/quiet', title: 'Healthy root', state: 'open', html_url: 'https://forge.example.com/q/quiet/issues/1' },
+          tracker: { number: 2, repository: 'q/quiet', title: 'Healthy tracker', state: 'open', html_url: 'https://forge.example.com/q/quiet/issues/2' },
+          warnings: [],
+        },
+      ],
+    });
+    const rows = [...document.querySelectorAll('#outcomes-list .outcomes-row')];
+    const entries = [...(rows[0]?.querySelectorAll('.outcomes-warning') ?? [])];
+    return {
+      entryTexts: entries.map(e => e.textContent),
+      entryHrefs: [...(rows[0]?.querySelectorAll('.outcomes-warning a') ?? [])].map(a => a.getAttribute('href')),
+      quietEntries: rows[1]?.querySelectorAll('.outcomes-warning').length ?? -1,
+      quietText: rows[1]?.textContent ?? '',
+    };
+  });
+  results.push(assert(
+    warned.entryTexts.length === 2,
+    `One warning entry per warning of the forest (got: ${warned.entryTexts.length})`
+  ));
+  results.push(assert(
+    warned.entryTexts.every(t => t.includes('\u26a0')),
+    'Every warning entry carries the \u26a0 marker'
+  ));
+  results.push(assert(
+    warned.entryTexts.some(t => t.includes('stale_agentic_merge') && t.includes('o/deliv#12') && t.includes('Delivery waiting unmerged'))
+      && warned.entryTexts.some(t => t.includes('human_task_blocking') && t.includes('o/out#6') && t.includes('Claimed by a person')),
+    `The two kinds render distinctly in the payload's own words, with their references (got: ${warned.entryTexts.join(' | ')})`
+  ));
+  results.push(assert(
+    warned.entryTexts.some(t => t.includes('2h 5m')) && warned.entryTexts.some(t => t.includes('2m 0s')),
+    `A warning entry converts the payload's seconds to a duration (7500s renders 2h 5m, 120s renders 2m 0s; got: ${warned.entryTexts.join(' | ')})`
+  ));
+  results.push(assert(
+    warned.entryHrefs.includes('https://forge.example.com/o/deliv/pulls/12')
+      && warned.entryHrefs.includes('https://forge.example.com/o/out/issues/6'),
+    `Warning entries link the objects the payload names (got: ${warned.entryHrefs.join(', ') || 'none'})`
+  ));
+  results.push(assert(
+    warned.quietEntries === 0 && !warned.quietText.includes('\u26a0'),
+    `A forest with no warnings shows no marker (entries: ${warned.quietEntries})`
+  ));
+
+  // A warning whose condition the payload does not date states
+  // nothing about its age rather than rendering a default as a fact:
+  // the entry carries no age clause at all when age_seconds is
+  // absent, and likewise no kind word when the payload names no
+  // kind (§forgejo/observability/the-warnings-a-forest-carries).
+  const undated = await page.evaluate(() => {
+    renderOutcomes({
+      engine_status: 'enabled',
+      forests: [
+        {
+          repository: 'o/out',
+          root: { number: 10, repository: 'o/out', title: 'Root', state: 'open', html_url: 'https://forge.example.com/o/out/issues/10' },
+          tracker: { number: 11, repository: 'o/out', title: 'Tracker', state: 'open', html_url: 'https://forge.example.com/o/out/issues/11' },
+          warnings: [
+            { repository: 'o/out', number: 12, title: 'No kind, no date', html_url: 'https://forge.example.com/o/out/issues/12' },
+          ],
+        },
+      ],
+    });
+    const entries = [...document.querySelectorAll('#outcomes-list .outcomes-warning')];
+    return { count: entries.length, text: entries[0]?.textContent ?? '' };
+  });
+  results.push(assert(
+    undated.count === 1 && !undated.text.includes('0s') && !undated.text.includes('\u00b7'),
+    `A warning with no kind and no age states neither as a default (got: "${undated.text}")`
+  ));
+
   // safeUrl is the guard between a forge-supplied html_url and an
   // href: anything a link cannot carries renders as text, never as a
-  // clickable destination (§forgejo/observability/the-outcomes-view).
+  // clickable destination. A warning's reference enters the page the
+  // same way a forest row's does — through a repository the view did
+  // not previously name — so it pays the same guard
+  // (§forgejo/observability/the-warnings-a-forest-carries).
   const hostile = await page.evaluate(() => {
     renderOutcomes({
       engine_status: 'enabled',
@@ -1237,12 +1331,16 @@ async function testOutcomesPage(page, results) {
           repository: 'o/out',
           root: { number: 7, repository: 'o/out', title: 'Executes on click', state: 'open', html_url: 'javascript:alert(1)' },
           tracker: { number: 8, repository: 'o/out', title: 'No destination at all', state: 'open', html_url: '' },
+          warnings: [
+            { kind: 'human_task_blocking', repository: 'o/out', number: 9, title: '<img src=x onerror=alert(1)>', html_url: 'javascript:alert(2)', age_seconds: 60 },
+          ],
         },
       ],
     });
     return {
       hrefs: [...document.querySelectorAll('#outcomes-list a')].map(a => a.getAttribute('href')),
       text: document.getElementById('outcomes-list').textContent,
+      markup: document.querySelectorAll('#outcomes-list img').length,
     };
   });
   results.push(assert(
@@ -1252,6 +1350,10 @@ async function testOutcomesPage(page, results) {
   results.push(assert(
     (hostile.text ?? '').includes('Executes on click') && (hostile.text ?? '').includes('No destination at all'),
     `An unlinkable issue still renders as text (got: "${hostile.text?.trim().slice(0, 80)}")`
+  ));
+  results.push(assert(
+    hostile.markup === 0 && (hostile.text ?? '').includes('<img src=x onerror=alert(1)>'),
+    `A warning's authored title renders as text, never markup (img elements: ${hostile.markup})`
   ));
 
   // The honest empty and the unreadable view are different words:

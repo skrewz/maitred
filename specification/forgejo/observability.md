@@ -294,8 +294,19 @@ stated in the row rather than dropped. The rows are tall so the forest
 chart has room underneath when that work lands. The link is only a
 link when the forge's URL is one a link can carry (http or https);
 anything else renders as text, since the port authenticates nothing.
-Where there are no rows the page says which of the two states it is
-in, in the engine's own status words: an engine that is not up names
+A forest the payload says is waiting on a person draws its **warnings**
+in the row: one ⚠️ entry per warning, each naming its kind, the issue
+or pull request holding the forest up, and the age of the condition,
+and linked through the warning's own HTML URL under the same link test
+the row's other links pay
+(§forgejo/observability/the-warnings-a-forest-carries). The page
+composes nothing of its own: an entry's reference, kind and age are
+the payload's fields and nothing else, so what the row marks is what
+the walk found and not a second judgement. A forest that carries no
+warnings carries no marker — a forest that is merely big is not a
+forest that is waiting. Where there are no rows the page says which
+of the two states it is in, in the engine's own status words: an
+engine that is not up names
 its state (the category word the enum prints,
 §forgejo/observability/why-the-engine-is-off), and an enabled engine
 whose last sweep found nothing says there are no current forests.

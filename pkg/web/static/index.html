@@ -106,6 +106,7 @@
         .outcomes-repo { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 1rem; color: #a78bfa; margin-bottom: 0.75rem; }
         .outcomes-row a { color: #38bdf8; text-decoration: none; }
         .outcomes-row a:hover { text-decoration: underline; }
+        .outcomes-warning { margin-top: 0.75rem; font-size: 0.8rem; color: #fde68a; }
         .modal-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.8); display: flex; align-items: center; justify-content: center; z-index: 100; }
         .modal { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; padding: 1.5rem; max-width: 480px; }
         .modal h2 { font-size: 1rem; color: #fde68a; margin-bottom: 0.75rem; }
@@ -738,6 +739,22 @@
             return /^https?:\/\//i.test(s) ? s : '';
         }
 
+        // issueLink renders one issue or pull request reference — its
+        // repository, number and title — as a link when the forge's
+        // URL is one a link can carry, and as plain text when it is
+        // not, under rel="noreferrer" so the click leaks no origin to
+        // the forge as the Referer. One function owns the discipline
+        // every reference on this page pays, so a fix to it is one
+        // edit and not two places that drift.
+        function issueLink(obj) {
+            // A reference with no number says nothing rather than
+            // printing a bare '#': a default is not a fact.
+            const number = obj.number == null ? '' : '#' + escapeHtml(String(obj.number));
+            const text = `${escapeHtml(obj.repository)}${number} \u2014 ${escapeHtml(obj.title ?? '')}`;
+            const href = safeUrl(obj.html_url);
+            return href ? `<a href="${escapeHtml(href)}" rel="noreferrer">${text}</a>` : `<span>${text}</span>`;
+        }
+
         // issueCell renders one link of a forest row: the issue with
         // its state badge, or its absence stated — a root without its
         // tracker is exactly what a human needs to see, so the row is
@@ -751,12 +768,27 @@
             // listing or a blocks read, so it is open or closed — the
             // same two-way reading the dashboard's issue renderer uses.
             const badge = issue.state === 'open' ? 'badge-open' : 'badge-closed';
-            const text = `${escapeHtml(issue.repository)}#${escapeHtml(String(issue.number ?? ''))} \u2014 ${escapeHtml(issue.title ?? '')}`;
-            const href = safeUrl(issue.html_url);
-            // rel="noreferrer" keeps the click from leaking this
-            // dashboard's own origin to the forge as the Referer.
-            const link = href ? `<a href="${escapeHtml(href)}" rel="noreferrer">${text}</a>` : `<span>${text}</span>`;
-            return `<div class="meta-item"><span class="meta-label">${escapeHtml(label)}</span><span class="meta-value">${link} <span class="badge ${badge}">${escapeHtml(issue.state)}</span></span></div>`;
+            return `<div class="meta-item"><span class="meta-label">${escapeHtml(label)}</span><span class="meta-value">${issueLink(issue)} <span class="badge ${badge}">${escapeHtml(issue.state)}</span></span></div>`;
+        }
+
+        // warningsHtml renders one ⚠️ entry per warning of a forest:
+        // the reference the payload names — never built from the row's
+        // own fields — through the page's one link discipline
+        // (issueLink), the payload's own kind word, and the age of
+        // the condition. Every field is text its authors wrote,
+        // inserted as text and never as markup
+        // (§forgejo/observability/the-warnings-a-forest-carries). The
+        // page translates the kind word into nothing: printing the
+        // payload's field directly is what lets the row's words be
+        // the walk's words. A forest with no warnings renders
+        // nothing: the honest empty carries no marker.
+        function warningsHtml(warnings) {
+            return (warnings ?? []).map(w => {
+                // An undated warning drops the age clause: printing
+                // 0s would state a wait of no duration as a fact.
+                const age = w.age_seconds == null ? '' : ` \u00b7 ${escapeHtml(formatDuration(Math.round(w.age_seconds * 1000)))}`;
+                return `<div class="outcomes-warning">\u26a0\ufe0f ${issueLink(w)} \u2014 ${escapeHtml(String(w.kind ?? ''))}${age}</div>`;
+            }).join('');
         }
 
         // renderOutcomes renders the outcomes view
@@ -804,6 +836,7 @@
                         ${issueCell('Ideation', f.root, 'no open ideation root')}
                         ${issueCell('Tracker', f.tracker, 'no tracker \u2014 this root blocks no outcome issue')}
                     </div>
+                    ${warningsHtml(f.warnings)}
                 </div>
             `).join('');
         }

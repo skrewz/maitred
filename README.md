@@ -319,7 +319,9 @@ enumeration cost and audience are spelled out where the view is
 specified (see `specification/forgejo/observability.md`). The dashboard
 also serves that view as a page at `/outcomes` (reachable from the
 header): one tall row per current forest, linking out to its ideation
-root and its tracker with their states, and stating plainly when the
+root and its tracker with their states, marking each forest the payload
+says is waiting on a person with one ⚠️ entry per warning linking to
+the issue or pull request holding it up, and stating plainly when the
 engine is off or there are no forests instead of rendering an empty
 rectangle.
 
