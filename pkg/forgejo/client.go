@@ -429,9 +429,13 @@ func (c *Client) ListIssueComments(owner, repo string, number int) ([]Comment, e
 // UpdateIssueBody implements API. It is the one mutation the client carries:
 // the PATCH carries `body` and nothing else, so the fields the engine has no
 // business changing are never sent, and a body is the only thing the forge may
-// change (§forgejo/client/the-one-mutation).
+// change (§forgejo/client/the-one-mutation). It travels the same transport
+// every read travels — the auth header and the non-2xx rule live in
+// doJSON alone, so a second operation cannot drift away from them
+// (§forgejo/client/errors).
 func (c *Client) UpdateIssueBody(owner, repo string, number int, body string) error {
-	return c.patchJSON(repoPath(owner, repo)+"/issues/"+strconv.Itoa(number), map[string]any{"body": body})
+	_, err := c.doJSON(http.MethodPatch, repoPath(owner, repo)+"/issues/"+strconv.Itoa(number), map[string]any{"body": body})
+	return err
 }
 
 // repoPath builds the escaped "/repos/{owner}/{repo}" path prefix.
@@ -464,66 +468,57 @@ func listAll[T any](c *Client, path string, params ...string) ([]T, error) {
 	}
 }
 
-// getJSON performs an authenticated GET on path (relative to the "/api/v1"
-// prefix of the base URL) and decodes the JSON response into out.
-// Non-2xx responses are returned as *APIError.
-func (c *Client) getJSON(out any, path string) error {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, c.baseURL+"/api/v1"+path, nil)
+// doJSON is this file's one transport: an authenticated request with method
+// on path (relative to the "/api/v1" prefix of the base URL), whose non-nil
+// payload is sent as a JSON body, whose response body it returns, and whose
+// non-2xx answer is an *APIError. Every operation here — each read and the
+// engine's one mutation — goes through it, so the auth header, the response
+// ceiling and the non-2xx rule are stated once and a new operation cannot
+// drift away from them (§forgejo/client/operations, §forgejo/client/errors).
+func (c *Client) doJSON(method, path string, payload any) ([]byte, error) {
+	var reqBody io.Reader
+	if payload != nil {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("forgejo: encode request for %s: %w", path, err)
+		}
+		reqBody = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), method, c.baseURL+"/api/v1"+path, reqBody)
 	if err != nil {
-		return fmt.Errorf("forgejo: %w", err)
+		return nil, fmt.Errorf("forgejo: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/json")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("forgejo: GET %s: %w", path, err)
+		return nil, fmt.Errorf("forgejo: %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
-		return fmt.Errorf("forgejo: read response from %s: %w", path, err)
+		return nil, fmt.Errorf("forgejo: read response from %s: %w", path, err)
 	}
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &APIError{StatusCode: resp.StatusCode, Message: apiErrorMessage(body)}
+		return nil, &APIError{StatusCode: resp.StatusCode, Message: apiErrorMessage(body)}
+	}
+	return body, nil
+}
+
+// getJSON performs an authenticated GET on path and decodes the JSON
+// response into out (§forgejo/client/operations).
+func (c *Client) getJSON(out any, path string) error {
+	body, err := c.doJSON(http.MethodGet, path, nil)
+	if err != nil {
+		return err
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("forgejo: decode response from %s: %w", path, err)
-	}
-	return nil
-}
-
-// patchJSON sends an authenticated PATCH with a JSON payload to path and
-// reports a non-2xx response as *APIError. The response body is read and
-// discarded: the engine's one mutation lands the bytes it sent or fails
-// naming why (§forgejo/client/the-one-mutation, §forgejo/client/errors).
-func (c *Client) patchJSON(path string, payload any) error {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("forgejo: encode request for %s: %w", path, err)
-	}
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPatch, c.baseURL+"/api/v1"+path, bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("forgejo: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("forgejo: PATCH %s: %w", path, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-	if err != nil {
-		return fmt.Errorf("forgejo: read response from %s: %w", path, err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &APIError{StatusCode: resp.StatusCode, Message: apiErrorMessage(body)}
 	}
 	return nil
 }
