@@ -201,12 +201,8 @@ collision needed two coincidences to matter; with one name that is
 simultaneously what the decisions compare review authors against and the
 persona the task is materialised with, one mistyped lens entry would hand the
 implementing account a gate whose whole job is to be somebody else's verdict.
-
-The same reasoning keeps `engine_account` a login of its own: the engine's
-account names the author the guards that read a delivery's sender compare
-against, so naming it as an actor or a lens as well would turn those guards
-into suppression rules for that account's real work
-(§forgejo/config/engine-account, §forgejo/decisions/loop-prevention).
+The reasoning holds for `engine_account` too, whose own rule belongs to
+§forgejo/config/engine-account.
 
 **The name travels, so the pairing downstream must fail closed.** The
 persona name the queue system receives is read off a key the operator
@@ -337,9 +333,13 @@ edit the tick provokes (§forgejo/decisions/loop-prevention) — read this login
 as a fact about *who authored the delivery*, so a config that named an
 implementing account here would drop that account's own edits before the
 re-fetch, quietly discarding the prose change the tracker's revision exists to
-capture. Load-time is the only place the property can be established: the
-sender alone cannot tell the engine's handwriting from an agent's
-(§forgejo/config/identity-collapse).
+capture. Those two comparisons, like every comparison of a declared identity,
+are by exact, case-sensitive equality (§forgejo/config/decomposer-identity,
+§forgejo/config/review-lenses), so the key must be spelled as the forge spells
+the account: a differently-cased spelling leaves the guard fail-open, and the
+churn is what shows in the decision log. Load-time is the only place the
+property can be established: the sender alone cannot tell the engine's
+handwriting from an agent's (§forgejo/config/identity-collapse).
 
 ## Tracker chart
 
@@ -412,10 +412,9 @@ Loading **fails at load time** — mirroring the trigger `Validate()` — when:
 - the engine's own account (`engine_account`) is missing: the digest
   gate cannot exclude the engine's own comments without it
   (§forgejo/config/engine-account),
-- `engine_account` names a login the config also declares as an actor or a
-  lens: the guards that read a delivery's sender would hold that account's own
-  work off unread (§forgejo/config/identity-collapse,
-  §forgejo/decisions/loop-prevention),
+- `engine_account` names a login the config declares elsewhere: the guards
+  that read a delivery's sender would hold that account's own work off unread
+  (§forgejo/config/engine-account),
 - `tracker_timezone` is set to a zone that will not load, or
   `mermaid_max_source_characters` is set to something that is not positive
   (§forgejo/config/tracker-chart),

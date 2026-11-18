@@ -21,11 +21,8 @@ implementer_identity: implementer
 # hold quiet forests quiet; without it the digest would fold the
 # engine's own reports and move every sweep, so the engine refuses to
 # start with the key unset (§forgejo/config/engine-account,
-# s-git/maitred#209). It must also be a login no action or lens identity
-# uses: the guards that read a delivery's sender — the digest's exclusion
-# and the hold-off on the tracker edit the sweep's own write provokes —
-# read this login as authorship, so naming an acting account here would
-# hold its real work off unread (§forgejo/config/identity-collapse).
+# s-git/maitred#209). It must also name a login no other identity in this file
+# declares (§forgejo/config/engine-account).
 engine_account: maitred
 
 # Optional: the zone the tracker's current-state block is stamped in — both
