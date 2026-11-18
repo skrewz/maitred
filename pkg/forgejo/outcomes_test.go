@@ -667,11 +667,11 @@ func mermaidBlock() string {
 	return "```mermaid\n" + forestChartSource + "\n```"
 }
 
-// currentStatedBlock builds a tracker body whose current-state region is
+// currentStateBlock builds a tracker body whose current-state region is
 // delimited by the fence pair the curating agent writes, holding the stamp
 // line and the given fenced block, with prose outside the pair
 // (§forgejo/observability/the-outcomes-view).
-func currentStatedBlock(stamp, block string) string {
+func currentStateBlock(stamp, block string) string {
 	region := forestFenceBegin + "\n\n## Current state\n\nLast revisited: " + stamp + "\n\n" + block + "\n\n" + forestFenceEnd
 	return "## Outcome\n\nThe prose a human wrote.\n\n" + region + "\n\nA footnote outside the pair.\n"
 }
@@ -700,7 +700,7 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 	}{
 		{
 			name:      "one pair, block and stamp",
-			body:      currentStatedBlock(stamp, mermaidBlock()),
+			body:      currentStateBlock(stamp, mermaidBlock()),
 			wantChart: forestChartSource,
 			wantStamp: stamp,
 		},
@@ -712,8 +712,8 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 		},
 		{
 			name: "two fence pairs are ambiguous",
-			body: currentStatedBlock(stamp, mermaidBlock()) + "\n" +
-				currentStatedBlock("2025-01-01 00:00 AEDT", mermaidBlock()),
+			body: currentStateBlock(stamp, mermaidBlock()) + "\n" +
+				currentStateBlock("2025-01-01 00:00 AEDT", mermaidBlock()),
 			wantChart: "",
 			wantStamp: "",
 		},
@@ -725,7 +725,7 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 		},
 		{
 			name:      "the pair holds prose but no Mermaid fence",
-			body:      currentStatedBlock(stamp, "The graph would go here, but none was written."),
+			body:      currentStateBlock(stamp, "The graph would go here, but none was written."),
 			wantChart: "",
 			wantStamp: stamp,
 		},
@@ -743,19 +743,19 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 		},
 		{
 			name:      "the pair holds two Mermaid blocks",
-			body:      currentStatedBlock(stamp, mermaidBlock()+"\n\n"+mermaidBlock()),
+			body:      currentStateBlock(stamp, mermaidBlock()+"\n\n"+mermaidBlock()),
 			wantChart: "",
 			wantStamp: stamp,
 		},
 		{
 			name:      "a second opener appears before the first block closes",
-			body:      currentStatedBlock(stamp, "```mermaid\n"+forestChartSource+"\n```mermaid\n\tmore\n```"),
+			body:      currentStateBlock(stamp, "```mermaid\n"+forestChartSource+"\n```mermaid\n\tmore\n```"),
 			wantChart: "",
 			wantStamp: stamp,
 		},
 		{
 			name:      "the pair holds two stamp lines",
-			body:      currentStatedBlock(stamp+"\n\nLast revisited: 2025-01-01 00:00 AEDT", mermaidBlock()),
+			body:      currentStateBlock(stamp+"\n\nLast revisited: 2025-01-01 00:00 AEDT", mermaidBlock()),
 			wantChart: forestChartSource,
 			wantStamp: "",
 		},
@@ -764,13 +764,13 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 			// placeholder above the real stamp leaves the block's recency
 			// as unguessable as two filled lines would.
 			name:      "a stamp line carrying nothing then one carrying the stamp",
-			body:      currentStatedBlock("\n\nLast revisited: "+stamp, mermaidBlock()),
+			body:      currentStateBlock("\n\nLast revisited: "+stamp, mermaidBlock()),
 			wantChart: forestChartSource,
 			wantStamp: "",
 		},
 		{
 			name:      "a CET stamp is carried as written",
-			body:      currentStatedBlock("2026-11-16 09:12 CET", mermaidBlock()),
+			body:      currentStateBlock("2026-11-16 09:12 CET", mermaidBlock()),
 			wantChart: forestChartSource,
 			wantStamp: "2026-11-16 09:12 CET",
 		},
@@ -837,7 +837,7 @@ func TestForests_ChartComesFromTheTrackersRow(t *testing.T) {
 	root := outcomesRoot(51, "root")
 	tracker := outcomesTracker(71, "cross-repo tracker")
 	tracker.Repository = "o/elsewhere"
-	tracker.Body = currentStatedBlock("2026-11-16 09:12 AEDT", mermaidBlock())
+	tracker.Body = currentStateBlock("2026-11-16 09:12 AEDT", mermaidBlock())
 	api.openIssues["out"] = []Issue{root}
 	api.blocks[51] = []Issue{tracker}
 

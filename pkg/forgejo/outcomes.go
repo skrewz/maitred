@@ -224,11 +224,10 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 				forest.Tracker = &tracker
 				// The picture comes from the row already in hand. The blocks
 				// read answers with the same issue model a single-issue read
-				// does, body included, so scraping it costs no read and says
-				// nothing a re-read would put right; and because the row *is*
-				// the tracker's, a tracker living in another repository
-				// brings its own picture rather than the root's
-				// (§forgejo/client/operations).
+				// does, body included, so scraping it costs no read; and
+				// because the row *is* the tracker's, a tracker living in
+				// another repository brings its own picture rather than the
+				// root's (§forgejo/client/operations).
 				forest.Chart, forest.ChartRevisited = scrapeForestChart(b.Body)
 				break
 			}
