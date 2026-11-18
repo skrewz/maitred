@@ -365,17 +365,15 @@ func TestTrackerBlock_WriteFailureIsReported(t *testing.T) {
 // pays before it reads or writes that repository — a tracker no maitred role
 // admits is left alone, unread and unwritten
 // (§forgejo/webhook/repository-roles,
-// §forgejo/reconciliation/the-tracker-block).
+// §forgejo/reconciliation/the-tracker-block). The forest is moved to the refused
+// repository alone: the gather still sees the row in a repository a role names,
+// so the only thing standing between this tick and a write outside the remit is
+// the guard on the write itself, and the refusal's own wording is what the log
+// must carry for that to be legible.
 func TestTrackerBlock_TrackerOutsideRemitIsNotWritten(t *testing.T) {
 	eng, api, log := chartForestEngine(t, chartFenced())
 	forest := chartForests()[0]
 	forest.Tracker.Repository = "o/archive"
-	root := chartRoot()
-	for i := range api.blocks[root.Number] {
-		if api.blocks[root.Number][i].Number == 2 {
-			api.blocks[root.Number][i].Repository = "o/archive"
-		}
-	}
 
 	eng.writeTrackerBlocks([]Forest{forest}, chartAt)
 	if got := api.writeCount(); got != 0 {
@@ -383,6 +381,9 @@ func TestTrackerBlock_TrackerOutsideRemitIsNotWritten(t *testing.T) {
 	}
 	if got := api.callCount("GetIssue:archive/2"); got != 0 {
 		t.Errorf("read the tracker %d times, want it not read at all", got)
+	}
+	if !strings.Contains(log.String(), "tracker lives in a repository no maitred role names") {
+		t.Errorf("log = %s, want the refusal to name the rule it refused on", log.String())
 	}
 	if !strings.Contains(log.String(), "o/archive") {
 		t.Errorf("log = %s, want the refusal to name the repository it refused", log.String())
