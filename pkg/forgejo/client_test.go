@@ -470,6 +470,17 @@ func TestIssueBlocks_CrossRepo(t *testing.T) {
 	if !reflect.DeepEqual(blocked[1].Labels, []string{"outcome"}) {
 		t.Errorf("blocked[1].Labels = %v, want [outcome]: the labels must survive the mapping", blocked[1].Labels)
 	}
+	// The description survives it too, and for a blunter reason: the
+	// outcomes view scrapes a forest's picture out of the blocks row it
+	// already holds rather than reading the tracker again, so a
+	// projection that dropped Body would publish an empty chart for
+	// every forest forever and stay green, because no other test reads
+	// that field off the wire (§forgejo/client/operations,
+	// §forgejo/observability/the-outcomes-view).
+	if blocked[1].Body != "body of issue 7" {
+		t.Errorf("blocked[1].Body = %q, want %q: the body must survive the mapping, since the picture is scraped from this row",
+			blocked[1].Body, "body of issue 7")
+	}
 }
 
 func TestIssueDependencies(t *testing.T) {
