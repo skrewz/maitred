@@ -460,5 +460,3 @@ func labelColour(issue *Issue, label string) (string, bool) {
 	}
 	return "", false
 }
-
-// labelColour is the stroke hex a role label gives a node: the colour the forge
