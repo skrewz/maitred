@@ -939,6 +939,29 @@ func TestForestWarnings_StaleAskPaysTheScreenedListingOnce(t *testing.T) {
 	}
 }
 
+// TestForestWarnings_EmptyEdgeListingIsStillHanded: a delivery stating
+// no blocking edge has had that listing read and screened, so an empty
+// listing is handed to the assembly as a fact rather than as an absence
+// that sends it to read a second listing
+// (§forgejo/observability/the-warnings-a-forest-carries).
+func TestForestWarnings_EmptyEdgeListingIsStillHanded(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(79, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests[0].Warnings) != 1 || forests[0].Warnings[0].Kind != WarningStaleAgenticMerge {
+		t.Fatalf("warnings = %+v, want the stale ⚠️ a delivery with no blocking edge still carries", forests[0].Warnings)
+	}
+	if n := api.callCount("IssueBlocks:r/" + strconv.Itoa(pr.Number)); n != 1 {
+		t.Errorf("the delivery's blocking-edge listing was read %d time(s), want 1: an empty listing is handed across, not re-read", n)
+	}
+}
+
 // TestForestWarnings_WarningsArePerReference: the payload's order is the
 // walk's, and the walk walks one blocks listing, so one state enumerated
 // twice answers alike; and a reference is warned on once, since one pull

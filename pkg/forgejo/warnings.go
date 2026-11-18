@@ -303,7 +303,7 @@ func (e *Engine) staleMergeWarning(member *Issue, repo string, gates map[string]
 // wait is that work or that set, not a person — or that the wait cannot
 // be established, which warns nothing for the same reason.
 func (e *Engine) gateHoldsDeliveryOff(pr *PullRequest, repo string, gates map[string]bool) (bool, error) {
-	rows, askable, err := e.graphIsAskable(pr, repo)
+	rows, askable, err := e.admittedGraph(pr, repo)
 	if err != nil {
 		return false, err
 	}
@@ -316,12 +316,10 @@ func (e *Engine) gateHoldsDeliveryOff(pr *PullRequest, repo string, gates map[st
 	// landing-set membership those rows imply — the call the approval path
 	// makes, so a field the assembly grows cannot be present for a merge
 	// and zero for the walk (§forgejo/webhook/re-fetch,
-	// §forgejo/decisions/sync-set). The blocking-edge listing is the one
-	// the screen above admitted, handed in rather than read again, so the
-	// rows the assembly pays are the rows the screen screened
-	// (§forgejo/observability/the-warnings-a-forest-carries).
+	// §forgejo/decisions/sync-set). The blocking-edge listing is handed in
+	// from the screen above (§forgejo/observability/the-warnings-a-forest-carries).
 	st := State{PR: pr}
-	if err := e.fetchPRSetStateWithEdges(owner, name, pr.Number, &st, rows); err != nil {
+	if err := e.fetchPRSetState(owner, name, pr.Number, &st, rows); err != nil {
 		return false, fmt.Errorf("delivery %s#%d: %w", repo, pr.Number, err)
 	}
 	if _, held := syncMemberSetHoldOff(pr, repo, st); held {
@@ -339,7 +337,7 @@ func (e *Engine) gateHoldsDeliveryOff(pr *PullRequest, repo string, gates map[st
 	return false, nil
 }
 
-// graphIsAskable reports whether the graph the stale question reaches can be
+// admittedGraph reports whether the graph the stale question reaches can be
 // read completely within the bounds the resolving loop carries — the read
 // budget and the remit — before any of it is read. Two shapes choose what the
 // ask reaches, and neither is the walk's author: the references the delivery's
@@ -360,16 +358,11 @@ func (e *Engine) gateHoldsDeliveryOff(pr *PullRequest, repo string, gates map[st
 // establish fails the walk rather than reading on, here as everywhere else
 // (§forgejo/webhook/the-scope-cache).
 //
-// A true answer carries the blocking-edge listing it screened: that listing
-// is the one read the ask pays, handed to the gate's own assembly rather
-// than re-read inside it. A listing read twice is a graph screened once and
-// paid twice, and an edge appearing between the two readings would be paid
-// for untested and uncounted; the rows the walk reads are therefore the
-// rows the walk admitted, one listing per stalled delivery per tick. The
-// hand-off goes into the gate's assembly rather than a walk-side copy, so
-// no second assembly stands ready to drift
+// A true answer carries the blocking-edge listing it screened, which the
+// ask pays once and hands to the gate's own assembly — the listing paid
+// for is the listing admitted
 // (§forgejo/observability/the-warnings-a-forest-carries).
-func (e *Engine) graphIsAskable(pr *PullRequest, prRepo string) (rows []Issue, askable bool, err error) {
+func (e *Engine) admittedGraph(pr *PullRequest, prRepo string) (rows []Issue, askable bool, err error) {
 	delivery := prRepo + "#" + strconv.Itoa(pr.Number)
 	refs := autoCloseRefs(pr.Body, prRepo)
 	if len(refs) > maxAutoCloseRefs {
@@ -399,6 +392,13 @@ func (e *Engine) graphIsAskable(pr *PullRequest, prRepo string) (rows []Issue, a
 	rows, err = e.api.IssueBlocks(owner, name, pr.Number)
 	if err != nil {
 		return nil, false, fmt.Errorf("blocking edges of %s#%d: %w", prRepo, pr.Number, err)
+	}
+	if rows == nil {
+		// An empty listing is a fact the screen established, not an
+		// absence: handing nil would tell the assembly no listing had been
+		// read and send it to read one
+		// (§forgejo/observability/the-warnings-a-forest-carries).
+		rows = []Issue{}
 	}
 	for i := range rows {
 		if rows[i].IsPull {

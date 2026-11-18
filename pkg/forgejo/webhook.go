@@ -384,7 +384,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 			// failure, never the path's default
 			// (§forgejo/webhook/re-fetch,
 			// §forgejo/decisions/merge-gate).
-			if err := e.fetchPRSetState(owner, name, ev.Number, &st); err != nil {
+			if err := e.fetchPRSetState(owner, name, ev.Number, &st, nil); err != nil {
 				return ev, State{}, err
 			}
 			fallthrough
@@ -562,39 +562,33 @@ func (e *Engine) refreshForestDigest(st State) {
 // itself stays uncapped, a faithful mirror for the predicate's pure
 // in-memory read, and the cap prices this loop alone: the blocking-edge
 // hop above it costs one read per row the delivery states, bounded by
-// that graph rather than this charge, and the outcomes walk — which
-// pays the same hop from the sweep, every tick — screens that listing
-// against the budget before reading a row of it, and hands the screened
-// rows to the assembly, so the listing it pays for is the listing it
-// admitted (§forgejo/observability/the-warnings-a-forest-carries). Every
-// drop — a skip, a refusal, the cap's
-// overflow — leaves a debug line naming the resolved reference, so a
-// dropped relation is visible rather than silent. A pull request is
-// never a connected issue: it is a delivery, so a reference naming
-// one is skipped.
-func (e *Engine) connectedIssues(owner, name string, number int, body string) ([]ConnectedIssue, error) {
-	blocks, err := e.api.IssueBlocks(owner, name, number)
-	if err != nil {
-		return nil, err
-	}
-	return e.connectedIssuesWithEdges(owner, name, number, body, blocks)
-}
-
-// connectedIssuesWithEdges is connectedIssues with the delivery's
-// blocking-edge listing already read. The outcomes walk reads that
-// listing, screens it against the remit and the read budget, and hands
-// the screened rows here, so the rows the walk pays for are the rows it
-// admitted — one listing per stalled delivery per tick, and no second
-// listing an author can slip an unscreened edge between
-// (§forgejo/observability/the-warnings-a-forest-carries). The gate's own
-// path reaches the loop through connectedIssues, which pays for the
-// listing there.
-func (e *Engine) connectedIssuesWithEdges(owner, name string, number int, body string, blocks []Issue) ([]ConnectedIssue, error) {
+// that graph rather than this charge; the outcomes walk screens that
+// listing before reading a row of it
+// (§forgejo/observability/the-warnings-a-forest-carries). Every drop — a
+// skip, a refusal, the cap's overflow — leaves a debug line naming the
+// resolved reference, so a dropped relation is visible rather than
+// silent. A pull request is never a connected issue: it is a delivery,
+// so a reference naming one is skipped.
+//
+// edges is the delivery's blocking-edge listing. nil says it has not
+// been read and this loop reads it; a slice — empty or not — says the
+// caller read it already and hands it here, so the listing paid for is
+// the listing that caller admitted and no second listing stands between
+// the two readings for a churned edge to slip into
+// (§forgejo/observability/the-warnings-a-forest-carries).
+func (e *Engine) connectedIssues(owner, name string, number int, body string, edges []Issue) ([]ConnectedIssue, error) {
 	prRepo := owner + "/" + name
+	if edges == nil {
+		blocks, err := e.api.IssueBlocks(owner, name, number)
+		if err != nil {
+			return nil, err
+		}
+		edges = blocks
+	}
 	var connected []ConnectedIssue
 	seen := make(map[Key]bool)
-	for i := range blocks {
-		if blocks[i].IsPull {
+	for i := range edges {
+		if edges[i].IsPull {
 			continue // only issues connect a PR to the graph this way
 		}
 		// A blocks listing may name no repository for a row, which then
@@ -604,15 +598,17 @@ func (e *Engine) connectedIssuesWithEdges(owner, name string, number int, body s
 		// assembly's next hop addresses all name the same repository:
 		// a screen of one repository is no screen of the read at
 		// another, and an empty field addressed raw is a path no
-		// repository answers.
-		blocks[i].Repository = rowRepository(&blocks[i], prRepo)
-		co, cn := splitRepo(blocks[i].Repository)
-		blockers, err := e.api.IssueDependencies(co, cn, blocks[i].Number)
+		// repository answers. The caller's row is left as it was read.
+		repo := rowRepository(&edges[i], prRepo)
+		co, cn := splitRepo(repo)
+		blockers, err := e.api.IssueDependencies(co, cn, edges[i].Number)
 		if err != nil {
 			return nil, err
 		}
-		seen[connectedKey(blocks[i].Repository, blocks[i].Number)] = true
-		connected = append(connected, ConnectedIssue{Issue: blocks[i], Blockers: blockers})
+		seen[connectedKey(repo, edges[i].Number)] = true
+		row := edges[i]
+		row.Repository = repo
+		connected = append(connected, ConnectedIssue{Issue: row, Blockers: blockers})
 	}
 	resolved := 0
 	for _, ref := range autoCloseRefs(body, prRepo) {
@@ -858,21 +854,12 @@ func isRefLead(b byte) bool {
 // fetched, so a delivery that names no issue costs no read beyond the
 // edge hop it always did (§forgejo/webhook/re-fetch,
 // §forgejo/decisions/sync-set, §forgejo/decisions/unblock-cascade).
-func (e *Engine) fetchPRSetState(owner, name string, number int, st *State) error {
-	blocks, err := e.api.IssueBlocks(owner, name, number)
-	if err != nil {
-		return err
-	}
-	return e.fetchPRSetStateWithEdges(owner, name, number, st, blocks)
-}
-
-// fetchPRSetStateWithEdges is fetchPRSetState with the delivery's
-// blocking-edge listing already read, for the caller that screens that
-// listing before paying for it and must pay for the rows it admitted
-// and not a second reading of the graph
+// edges is the delivery's blocking-edge listing, handed to
+// connectedIssues: nil reads it here, a slice pays for the listing the
+// caller screened
 // (§forgejo/observability/the-warnings-a-forest-carries).
-func (e *Engine) fetchPRSetStateWithEdges(owner, name string, number int, st *State, edges []Issue) error {
-	connected, err := e.connectedIssuesWithEdges(owner, name, number, st.PR.Body, edges)
+func (e *Engine) fetchPRSetState(owner, name string, number int, st *State, edges []Issue) error {
+	connected, err := e.connectedIssues(owner, name, number, st.PR.Body, edges)
 	if err != nil {
 		return err
 	}
@@ -1689,7 +1676,7 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 	// the one path the labels table forbids it on
 	// (§forgejo/decisions/sync-set, §forgejo/decisions/unblock-cascade).
 	st := State{PR: pr, Reviews: reviews, ImplementerIdentity: e.cfg.ImplementerIdentity, ReviewLenses: e.cfg.Reviews}
-	if err := e.fetchPRSetState(owner, name, k.Number, &st); err != nil {
+	if err := e.fetchPRSetState(owner, name, k.Number, &st, nil); err != nil {
 		return err
 	}
 	// Insurance against the re-fetched state, through the same pure

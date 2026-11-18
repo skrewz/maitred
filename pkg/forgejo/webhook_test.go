@@ -4121,7 +4121,7 @@ func TestConnectedIssuesUnionsTheTwoRelations(t *testing.T) {
 				api.repos = tc.repos
 			}
 
-			got, err := eng.connectedIssues("o", "r", 9, tc.body)
+			got, err := eng.connectedIssues("o", "r", 9, tc.body, nil)
 			if err != nil {
 				t.Fatalf("connectedIssues: %v", err)
 			}
@@ -4158,7 +4158,7 @@ func TestConnectedIssuesReferencedIssueReadFailure(t *testing.T) {
 	t.Run("issue read", func(t *testing.T) {
 		eng, api, _, _ := newTestEngine(t)
 		api.getIssueErr = errors.New("issue unavailable")
-		if _, err := eng.connectedIssues("o", "r", 9, "Fixes #4"); err == nil {
+		if _, err := eng.connectedIssues("o", "r", 9, "Fixes #4", nil); err == nil {
 			t.Error("connectedIssues succeeded, want the failed issue read reported")
 		}
 	})
@@ -4166,7 +4166,7 @@ func TestConnectedIssuesReferencedIssueReadFailure(t *testing.T) {
 		eng, api, _, _ := newTestEngine(t)
 		api.issues[4] = testIssue(4, "open")
 		api.issueDepsErr = errors.New("dependencies unavailable")
-		if _, err := eng.connectedIssues("o", "r", 9, "Fixes #4"); err == nil {
+		if _, err := eng.connectedIssues("o", "r", 9, "Fixes #4", nil); err == nil {
 			t.Error("connectedIssues succeeded, want the failed blockers read reported")
 		}
 	})
@@ -4176,7 +4176,7 @@ func TestConnectedIssuesReferencedIssueReadFailure(t *testing.T) {
 		// hold the re-fetch off the way an unavailable read does.
 		eng, api, _, _ := newTestEngine(t)
 		api.getIssueErr = &APIError{StatusCode: http.StatusNotFound, Message: "issue not found"}
-		got, err := eng.connectedIssues("o", "r", 9, "Fixes #4")
+		got, err := eng.connectedIssues("o", "r", 9, "Fixes #4", nil)
 		if err != nil {
 			t.Fatalf("connectedIssues: a not-found answer failed the read: %v", err)
 		}
@@ -4191,7 +4191,7 @@ func TestConnectedIssuesReferencedIssueReadFailure(t *testing.T) {
 		eng, api, _, _ := newTestEngine(t)
 		api.issues[11] = testIssue(11, "open")
 		api.listReposErr = errors.New("repository listing unavailable")
-		if _, err := eng.connectedIssues("o", "r", 9, "Fixes o/outcomes#11"); err == nil {
+		if _, err := eng.connectedIssues("o", "r", 9, "Fixes o/outcomes#11", nil); err == nil {
 			t.Error("connectedIssues succeeded, want the failed scope read reported")
 		}
 		if n := api.callCount("GetIssue"); n != 0 {
@@ -4218,7 +4218,7 @@ func TestConnectedIssuesSkipsAreLogged(t *testing.T) {
 	prAsIssue.IsPull = true
 	api.issues[9] = prAsIssue
 
-	if _, err := eng.connectedIssues("o", "r", 5, "Fixes #99.\n\nFixes #9.\n\nCloses ../x#5"); err != nil {
+	if _, err := eng.connectedIssues("o", "r", 5, "Fixes #99.\n\nFixes #9.\n\nCloses ../x#5", nil); err != nil {
 		t.Fatalf("connectedIssues: %v", err)
 	}
 	out := log.String()
@@ -4251,7 +4251,7 @@ func TestConnectedIssuesReferenceCap(t *testing.T) {
 		api.issues[n] = testIssue(n, "open")
 		body += "\n\nFixes #" + strconv.Itoa(n)
 	}
-	got, err := eng.connectedIssues("o", "r", 9, body)
+	got, err := eng.connectedIssues("o", "r", 9, body, nil)
 	if err == nil {
 		t.Fatalf("connectedIssues returned %d rows and no error, want the re-fetch to fail: a truncated read is not a complete one", len(got))
 	}
@@ -4297,7 +4297,7 @@ func TestConnectedIssuesCapOverflowFailsTheReFetch(t *testing.T) {
 	api.issues[100] = testIssue(100, "open")
 	body += "\n\nCloses #100"
 
-	got, err := eng.connectedIssues("o", "r", 9, body)
+	got, err := eng.connectedIssues("o", "r", 9, body, nil)
 	if err == nil {
 		t.Fatalf("connectedIssues returned %d rows and no error, want the re-fetch to fail: the survivor set of a truncated read must not be chosen by the body that is being read", len(got))
 	}
@@ -4340,7 +4340,7 @@ func TestConnectedIssuesCapChargesOnlyPaidReferences(t *testing.T) {
 	body += "\n\nFixes #100"
 	api.blocks[9] = edges
 
-	got, err := eng.connectedIssues("o", "r", 9, body)
+	got, err := eng.connectedIssues("o", "r", 9, body, nil)
 	if err != nil {
 		t.Fatalf("connectedIssues: %v", err)
 	}
