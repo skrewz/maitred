@@ -43,6 +43,13 @@ const ConfigEnvVar = "MAITRED_FORGEJOENG_DIR"
 // unset (§forgejo/config/loading).
 const DefaultConfigPath = "/etc/maitred/forgejoeng.yaml"
 
+// DefaultStaleMergeThreshold is the age at which an approved, mergeable
+// and still-unmerged pull request delivering a landing-labelled forest
+// member becomes the stale agentic merge warning of the outcomes view:
+// one hour, the bound a deployment that has said nothing about it lives
+// under (§forgejo/observability/the-outcomes-view).
+const DefaultStaleMergeThreshold = time.Hour
+
 // ReviewLens is one configured review lens: the identity whose approval
 // the gates count, with the canned prompt that dispatches a review from
 // it (§forgejo/config/review-lenses). It declares exactly one name — the
@@ -90,6 +97,15 @@ type Config struct {
 	// ReconcileInterval is how often the reconciliation sweep runs
 	// (§forgejo/reconciliation/scheduling).
 	ReconcileInterval time.Duration `yaml:"reconcile_interval"`
+	// StaleMergeThreshold is how long an approved, mergeable pull request
+	// delivering a landing-labelled forest member may stand unmerged
+	// before the outcomes view says the forest is waiting on a human
+	// (§forgejo/observability/the-outcomes-view). Optional: unset is
+	// DefaultStaleMergeThreshold, never zero — an unset bound would make
+	// every approved head stale the instant it was approved. A negative
+	// value is a load error, not a silently defaulted one
+	// (§forgejo/config/validation).
+	StaleMergeThreshold time.Duration `yaml:"stale_merge_threshold"`
 	// DecomposerIdentity names the Forgejo identity that performs
 	// decomposition — the author of forest members
 	// (§forgejo/config/decomposer-identity). Optional: retained as the
@@ -170,6 +186,18 @@ func (c *Config) PromptFor(a Action) (*PromptConfig, error) {
 	return &pc, nil
 }
 
+// staleMergeThreshold is the bound the outcomes view's stale agentic
+// merge warning applies: the configured one where the config names it,
+// DefaultStaleMergeThreshold where it does not — including the zero a
+// directory merge leaves when no file named the key
+// (§forgejo/observability/the-outcomes-view).
+func (c *Config) staleMergeThreshold() time.Duration {
+	if c.StaleMergeThreshold <= 0 {
+		return DefaultStaleMergeThreshold
+	}
+	return c.StaleMergeThreshold
+}
+
 // Validate checks the config at load time — mirroring the trigger
 // Validate(): a missing prompt, an unparseable template, or an unknown
 // placeholder is a load error, never a runtime surprise
@@ -183,6 +211,9 @@ func (c *Config) Validate() error {
 	}
 	if c.ReconcileInterval <= 0 {
 		return fmt.Errorf("reconcile_interval must be positive")
+	}
+	if c.StaleMergeThreshold < 0 {
+		return fmt.Errorf("stale_merge_threshold must not be negative; leave it unset for the %s default", DefaultStaleMergeThreshold)
 	}
 	for _, a := range AllActions {
 		pc, ok := c.Actions[string(a)]
@@ -418,6 +449,17 @@ func loadConfigDir(dir string) (*Config, error) {
 		}
 		if cfg.ReconcileInterval > 0 {
 			merged.ReconcileInterval = cfg.ReconcileInterval
+		}
+		// A non-zero value carries through the merge whichever sign it
+		// carries, so a negative declared here reaches Validate and is a
+		// load error rather than a silently defaulted one — the outcome
+		// the single-file path already gives, and the one config.md
+		// promises for this key (§forgejo/config/validation).
+		if cfg.StaleMergeThreshold != 0 && merged.StaleMergeThreshold != 0 && cfg.StaleMergeThreshold != merged.StaleMergeThreshold {
+			return nil, fmt.Errorf("config %q: stale_merge_threshold %s conflicts with %s", name, cfg.StaleMergeThreshold, merged.StaleMergeThreshold)
+		}
+		if cfg.StaleMergeThreshold != 0 {
+			merged.StaleMergeThreshold = cfg.StaleMergeThreshold
 		}
 		if cfg.DecomposerIdentity != "" && merged.DecomposerIdentity != "" && cfg.DecomposerIdentity != merged.DecomposerIdentity {
 			return nil, fmt.Errorf("config %q: decomposer_identity %q conflicts with %q", name, cfg.DecomposerIdentity, merged.DecomposerIdentity)

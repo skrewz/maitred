@@ -606,6 +606,16 @@ nothing: there is nothing to land. Emission is only ever a
 unless the row decides `sync`, and the sweep stays the backstop for
 any set the walk held back.
 
+A member's delivery is read through the one walk every reader of the
+delivery relation walks: a repository whose pull requests unit is off
+is not asked — it holds no delivery, the way the sweep does not ask
+it — and a repository the scope listing does not name is read
+nowhere. Both answer *delivers nothing*, which the predicate
+reads as *not ready*: a member whose delivery the engine cannot see
+must not make a set look ready to land
+(§forgejo/reconciliation/the-sweep, §forgejo/webhook/repository-roles,
+§forgejo/decisions/merge-gate).
+
 `sync` is a **kind claim**, like `ideation` and `outcome`, so one
 issue cannot make two of them. Where a grouping issue carries `sync`
 alongside either of the others the sweep's row **names the conflict

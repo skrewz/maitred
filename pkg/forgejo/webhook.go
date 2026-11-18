@@ -80,10 +80,11 @@ type Engine struct {
 	sweeping atomic.Bool
 
 	// The scope cache: the roles each of the org's repositories holds,
-	// refreshed at most once per reconcile interval
+	// with the pull requests unit the same listing states, refreshed at
+	// most once per reconcile interval
 	// (§forgejo/webhook/the-scope-cache, §forgejo/webhook/repository-roles).
 	scopeMu sync.Mutex
-	scope   map[string]roles
+	scope   map[string]scopeEntry
 	scopeAt time.Time
 	// scopeFailedAt stamps the last failed listing attempt, bounding
 	// the retry of a failing API to one listing per scopeRetryInterval.
@@ -383,7 +384,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 			// failure, never the path's default
 			// (§forgejo/webhook/re-fetch,
 			// §forgejo/decisions/merge-gate).
-			if err := e.fetchPRSetState(owner, name, ev.Number, &st); err != nil {
+			if err := e.fetchPRSetState(owner, name, ev.Number, &st, nil); err != nil {
 				return ev, State{}, err
 			}
 			fallthrough
@@ -559,30 +560,57 @@ func (e *Engine) refreshForestDigest(st State) {
 // complete one is the fail-open #180 exists to close: the re-fetch
 // fails — a hold-off naming the failure, never a merge. The grammar
 // itself stays uncapped, a faithful mirror for the predicate's pure
-// in-memory read. Every drop — a skip, a refusal, the cap's
-// overflow — leaves a debug line naming the resolved reference, so a
-// dropped relation is visible rather than silent. A pull request is
-// never a connected issue: it is a delivery, so a reference naming
-// one is skipped.
-func (e *Engine) connectedIssues(owner, name string, number int, body string) ([]ConnectedIssue, error) {
+// in-memory read, and the cap prices this loop alone: the blocking-edge
+// hop above it costs one read per row the delivery states, bounded by
+// that graph rather than this charge; the outcomes walk screens that
+// listing before reading a row of it
+// (§forgejo/observability/the-warnings-a-forest-carries). Every drop — a
+// skip, a refusal, the cap's overflow — leaves a debug line naming the
+// resolved reference, so a dropped relation is visible rather than
+// silent. A pull request is never a connected issue: it is a delivery,
+// so a reference naming one is skipped.
+//
+// edges is the delivery's blocking-edge listing. nil says it has not
+// been read and this loop reads it; a slice — empty or not — says the
+// caller read it already and hands it here, so the listing paid for is
+// the listing that caller admitted and no second listing stands between
+// the two readings for a churned edge to slip into
+// (§forgejo/observability/the-warnings-a-forest-carries). The listing is
+// never edited: a row naming no repository is resolved into the row this
+// loop appends, leaving the caller's rows as that caller read them.
+func (e *Engine) connectedIssues(owner, name string, number int, body string, edges []Issue) ([]ConnectedIssue, error) {
 	prRepo := owner + "/" + name
-	blocks, err := e.api.IssueBlocks(owner, name, number)
-	if err != nil {
-		return nil, err
-	}
-	var connected []ConnectedIssue
-	seen := make(map[Key]bool)
-	for i := range blocks {
-		if blocks[i].IsPull {
-			continue // only issues connect a PR to the graph this way
-		}
-		co, cn := splitRepo(blocks[i].Repository)
-		blockers, err := e.api.IssueDependencies(co, cn, blocks[i].Number)
+	if edges == nil {
+		blocks, err := e.api.IssueBlocks(owner, name, number)
 		if err != nil {
 			return nil, err
 		}
-		seen[connectedKey(blocks[i].Repository, blocks[i].Number)] = true
-		connected = append(connected, ConnectedIssue{Issue: blocks[i], Blockers: blockers})
+		edges = blocks
+	}
+	var connected []ConnectedIssue
+	seen := make(map[Key]bool)
+	for i := range edges {
+		if edges[i].IsPull {
+			continue // only issues connect a PR to the graph this way
+		}
+		// A blocks listing may name no repository for a row, which then
+		// lives in the issue the listing was read from — the rule the
+		// forest rows and the digest apply (§forgejo/client/operations).
+		// Resolved once here so the read, the dedup key and the row the
+		// assembly's next hop addresses all name the same repository:
+		// a screen of one repository is no screen of the read at
+		// another, and an empty field addressed raw is a path no
+		// repository answers. The caller's row is left as it was read.
+		repo := rowRepository(&edges[i], prRepo)
+		co, cn := splitRepo(repo)
+		blockers, err := e.api.IssueDependencies(co, cn, edges[i].Number)
+		if err != nil {
+			return nil, err
+		}
+		seen[connectedKey(repo, edges[i].Number)] = true
+		row := edges[i]
+		row.Repository = repo
+		connected = append(connected, ConnectedIssue{Issue: row, Blockers: blockers})
 	}
 	resolved := 0
 	for _, ref := range autoCloseRefs(body, prRepo) {
@@ -703,7 +731,7 @@ func isNotFound(err error) bool {
 
 // maxAutoCloseRefs caps the number of references connectedIssues
 // resolves. The authoring contract needs one or two; the cap bounds
-// the per-reference fan-out the approval path pays (one issue read and
+// the per-reference fan-out that resolving pays (one issue read and
 // one blockers row per resolved reference) against a body written to
 // cost the engine the delivery (§forgejo/webhook/re-fetch). It is
 // charged where that fan-out happens — beside the issue read — so a
@@ -713,10 +741,20 @@ func isNotFound(err error) bool {
 // refusal and test but meets the cap marks the read as incomplete,
 // and the re-fetch fails on it rather than answering with the rows
 // it happened to collect: which references survive must never be
-// decided by the body being read. The cap belongs to that resolving
-// loop, not to the grammar: the predicate's read of the same body is
-// pure in-memory matching that costs nothing per reference, and #180
-// asks nothing of it.
+// decided by the body being read.
+//
+// The cap belongs to that resolving loop, not to the grammar, and it prices
+// the per-reference fan-out of that loop. The blocking-edge hop the walk makes
+// before it costs one read per row the delivery states and is bounded by that
+// graph, not this count — but every caller that resolves pays the cap: the
+// re-fetch, whose overflow is a hold-off naming the incompleteness, and the
+// outcomes walk of a stalled delivery, which screens both halves of its graph —
+// rows and references — against this budget before it reads either, and holds
+// its warning back rather than failing the view
+// (§forgejo/observability/the-warnings-a-forest-carries). What costs
+// nothing per reference is the grammar alone — the delivery relation's
+// match and the walk's screening are in-memory reads of the same body, and
+// #180 asks nothing of them.
 const maxAutoCloseRefs = 8
 
 // autoCloseRefs lists the issues a pull request body auto-closes, in
@@ -818,8 +856,12 @@ func isRefLead(b byte) bool {
 // fetched, so a delivery that names no issue costs no read beyond the
 // edge hop it always did (§forgejo/webhook/re-fetch,
 // §forgejo/decisions/sync-set, §forgejo/decisions/unblock-cascade).
-func (e *Engine) fetchPRSetState(owner, name string, number int, st *State) error {
-	connected, err := e.connectedIssues(owner, name, number, st.PR.Body)
+// edges is the delivery's blocking-edge listing, handed to
+// connectedIssues: nil reads it here, a slice pays for the listing the
+// caller screened
+// (§forgejo/observability/the-warnings-a-forest-carries).
+func (e *Engine) fetchPRSetState(owner, name string, number int, st *State, edges []Issue) error {
+	connected, err := e.connectedIssues(owner, name, number, st.PR.Body, edges)
 	if err != nil {
 		return err
 	}
@@ -930,40 +972,77 @@ func (e *Engine) syncMembers(blockers []Issue) ([]SyncMember, error) {
 			continue
 		}
 		if b.State == "open" && hasLabel(&b, LabelAgenticSyncMerge) {
-			pulls, ok := listing[b.Repository]
-			if !ok {
-				var err error
-				pulls, err = e.api.ListOpenPullRequests(owner, name)
-				if err != nil {
-					return nil, err
-				}
-				listing[b.Repository] = pulls
+			pr, reviews, err := e.deliveryPR(&b, b.Repository, listing)
+			if err != nil {
+				return nil, err
 			}
-			for j := range pulls {
-				if !prAutoClosesIssue(pulls[j].Body, b.Repository, b.Repository, b.Number) {
-					continue
-				}
-				// The listing is the lead; the single read is the
-				// authoritative state the predicate and the revision
-				// digest, as everywhere else (§forgejo/client/operations).
-				pr, err := e.api.GetPullRequest(owner, name, pulls[j].Number)
-				if err != nil {
-					return nil, err
-				}
-				if !prOpen(pr) {
-					continue // closed or merged between the listing and the read
-				}
-				reviews, err := e.api.ListPullRequestReviews(owner, name, pulls[j].Number)
-				if err != nil {
-					return nil, err
-				}
-				m.PR, m.Reviews = pr, reviews
-				break
-			}
+			m.PR, m.Reviews = pr, reviews
 		}
 		members = append(members, m)
 	}
 	return members, nil
+}
+
+// deliveryPR is the pull request delivering a member — the walk every
+// reader of the delivery relation walks: the landing-set predicate
+// projecting a set's members, and the outcomes view asking whether a
+// member's delivery has gone stale (§forgejo/decisions/sync-set,
+// §forgejo/decisions/merge-gate, §forgejo/observability/the-outcomes-view).
+// The repository's open-pull-request listing is the lead and is shared
+// across a caller's members through listings; the single read is the
+// authoritative state, as everywhere else (§forgejo/client/operations).
+// Where several open pull requests auto-close a member the first in the
+// listing is its delivery — the one-delivery-per-member projection, so
+// a member has one delivery whatever a caller then asks of it.
+// A repository whose pull requests unit is off holds no pull request and
+// is not asked, the way the sweep does not ask it: the refusal is an
+// ordinary state, not a failed read (§forgejo/reconciliation/the-sweep).
+// A nil pull request, with no reviews and no error, says the member
+// delivers nothing — and says so in a line, the way every other dropped
+// relation does, because *delivers nothing* is also what a repository whose
+// pull requests unit is off answers, and what a repository a fresh snapshot
+// does not know answers, and a set that never lands wants to be diagnosable
+// rather than silent (§forgejo/decisions/sync-set,
+// §forgejo/webhook/the-scope-cache).
+func (e *Engine) deliveryPR(member *Issue, repo string, listings map[string][]PullRequest) (*PullRequest, []Review, error) {
+	owner, name := splitRepo(repo)
+	hasPulls, err := e.repoHasPullRequests(repo)
+	if err != nil {
+		return nil, nil, err
+	}
+	memberRef := repo + "#" + strconv.Itoa(member.Number)
+	if !hasPulls {
+		e.log.Debug("member delivers nothing: no pull request known for its repository",
+			"member", memberRef)
+		return nil, nil, nil
+	}
+	pulls, ok := listings[repo]
+	if !ok {
+		if pulls, err = e.api.ListOpenPullRequests(owner, name); err != nil {
+			return nil, nil, err
+		}
+		listings[repo] = pulls
+	}
+	for j := range pulls {
+		if !prAutoClosesIssue(pulls[j].Body, repo, repo, member.Number) {
+			continue
+		}
+		pr, err := e.api.GetPullRequest(owner, name, pulls[j].Number)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !prOpen(pr) {
+			continue // closed or merged between the listing and the read
+		}
+		reviews, err := e.api.ListPullRequestReviews(owner, name, pulls[j].Number)
+		if err != nil {
+			return nil, nil, err
+		}
+		return pr, reviews, nil
+	}
+	e.log.Debug("member delivers nothing: no open pull request auto-closes it",
+		"member", memberRef)
+	return nil, nil, nil
 }
 
 // closeKeywordRef mirrors the forge's own reading of an auto-close
@@ -1599,7 +1678,7 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 	// the one path the labels table forbids it on
 	// (§forgejo/decisions/sync-set, §forgejo/decisions/unblock-cascade).
 	st := State{PR: pr, Reviews: reviews, ImplementerIdentity: e.cfg.ImplementerIdentity, ReviewLenses: e.cfg.Reviews}
-	if err := e.fetchPRSetState(owner, name, k.Number, &st); err != nil {
+	if err := e.fetchPRSetState(owner, name, k.Number, &st, nil); err != nil {
 		return err
 	}
 	// Insurance against the re-fetched state, through the same pure

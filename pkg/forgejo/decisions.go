@@ -71,11 +71,6 @@ func reviewIsDismissed(r *Review) bool {
 	return r.Dismissed || r.Event == ReviewDismissed
 }
 
-// LabelHumanTask marks a ticket claimed by a human: an issue carrying
-// it is never an implement candidate anywhere in the engine
-// (§forgejo/decisions/transition-table).
-const LabelHumanTask = "human-task"
-
 // neverWorkItemLabel returns the issue label that denies the
 // implement and reassess actions, or "" when the issue may be an
 // implement or reassess candidate. The list is a permanent taxonomy:
@@ -1008,6 +1003,9 @@ type lensStanding struct {
 	// approved is true when the lens's latest undismissed review at
 	// the revision is an approval.
 	approved bool
+	// at is when that latest undismissed review was submitted; the zero
+	// value when the lens has no undismissed review at the revision.
+	at time.Time
 }
 
 // lensStandingAtHead classifies one lens against head: its latest
@@ -1027,6 +1025,9 @@ func lensStandingAtHead(reviews []Review, lens ReviewLens, head string) lensStan
 		if latest == nil || r.SubmittedAt.After(latest.SubmittedAt) {
 			latest = r
 		}
+	}
+	if latest != nil {
+		st.at = latest.SubmittedAt
 	}
 	st.approved = latest != nil && latest.Event == ReviewApproved
 	return st
@@ -1055,6 +1056,27 @@ func allLensesApproved(reviews []Review, lenses []ReviewLens, head string) bool 
 		}
 	}
 	return len(lenses) > 0
+}
+
+// standingApprovalAt is the moment the chain became an approval at head:
+// the latest of the standing approvals the lenses hold, so the wait is
+// measured from the verdict that satisfied the gate rather than from the
+// first of them. The zero value says the gate is not satisfied — some
+// lens's latest undismissed review at head is not an approval — so a
+// reader never ages something the chain has not approved
+// (§forgejo/decisions/review-lenses).
+func standingApprovalAt(reviews []Review, lenses []ReviewLens, head string) time.Time {
+	var at time.Time
+	for _, lens := range lenses {
+		st := lensStandingAtHead(reviews, lens, head)
+		if !st.approved {
+			return time.Time{}
+		}
+		if st.at.After(at) {
+			at = st.at
+		}
+	}
+	return at
 }
 
 // nonApprovalAtHead reports whether some reviewer's latest undismissed

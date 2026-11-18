@@ -63,6 +63,12 @@ type Forest struct {
 	// independently of Chart: a recency can arrive with no picture beside
 	// it (§forgejo/observability/the-outcomes-view).
 	ChartRevisited string `json:"chart_revisited"`
+	// Warnings are the forest's ⚠️ marks: the reasons the forest is
+	// waiting on a person, each stated as a reference
+	// (§forgejo/observability/the-outcomes-view). A forest nothing is
+	// waiting on carries an empty list rather than a null, the same
+	// honest empty the forest list itself is.
+	Warnings []ForestWarning `json:"warnings"`
 }
 
 // The delimiters of a tracker's current-state block, and the two things
@@ -236,9 +242,18 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 // §forgejo/client/operations).
 // A root whose tracker is missing is listed with the absence stated; an
 // outcome issue no open root blocks is not a forest and is not listed.
-// Pull requests carry no forest. The list is empty — never nil — when
-// no repository holds the role. A non-nil error means a read failed —
-// the organisation listing, an issue listing, or a blocks read — each
+// Pull requests carry no forest. Each forest additionally carries its
+// warnings, walked from the same rows the pairing reads: one blockers
+// read per member either kind concerns, one membership read per
+// landing-set member, and the pull-request listing, read and review
+// reads the delivery needs — every one of them in a repository the scope
+// test admitted first, so a blocking-edge row cannot send the engine's
+// token where no role names it (§forgejo/webhook/repository-roles,
+// §forgejo/observability/the-warnings-a-forest-carries). A failed read
+// fails the enumeration. The list is
+// empty — never nil — when no repository holds the role. A non-nil error
+// means a read failed — the organisation listing, an issue listing, a
+// blocks read, a scope lookup, or one of the warning reads — each
 // wrapped with the repository or issue it concerned, and the partial
 // result is dropped: a failed read must not read as an empty set of
 // forests, the same fail-closed discipline as the scope test
@@ -299,6 +314,15 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 				}
 				break
 			}
+			// The same rows say whether the forest is waiting on a
+			// person; the walk is the digest's one hop out of the root
+			// (§forgejo/decisions/commissioning,
+			// §forgejo/observability/the-outcomes-view).
+			warnings, err := e.forestWarnings(issue, root.Repository, blocked)
+			if err != nil {
+				return nil, fmt.Errorf("forgejo: outcomes: warnings of forest %s#%d: %w", root.Repository, issue.Number, err)
+			}
+			forest.Warnings = warnings
 			forests = append(forests, forest)
 		}
 	}
