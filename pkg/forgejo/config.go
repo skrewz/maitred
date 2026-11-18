@@ -135,9 +135,10 @@ type Config struct {
 	// TrackerTimezone names the zone the tracker's current-state block
 	// is stamped in — both its `Last revisited:` line and a closed
 	// member's `closed` line — spelled as an IANA name such as
-	// "Australia/Sydney" (§forgejo/config/tracker-chart). Unset means
-	// UTC; a name that will not load is a load error, never a silent
-	// fall back to a zone the deployment did not ask for.
+	// "UTC" (§forgejo/config/tracker-chart). Unset means UTC; a name
+	// that will not load is a load error (§forgejo/config/validation),
+	// so a running engine never stamps in a zone nobody configured
+	// without saying so.
 	TrackerTimezone string `yaml:"tracker_timezone"`
 	// MermaidMaxSourceCharacters is the ceiling past which a rendered
 	// chart collapses to one node per repository
@@ -166,9 +167,11 @@ type Config struct {
 const DefaultMermaidMaxSourceCharacters = 50000
 
 // ChartLocation is the zone the tracker's current-state block is stamped in,
-// UTC when the config names none (§forgejo/config/tracker-chart). A name the
-// system cannot load is a load error (§forgejo/config/validation), so this
-// never has to answer that question at sweep time.
+// UTC when the config names none (§forgejo/config/tracker-chart). It assumes a
+// config that came through Load, whose Validate rejects a name the system
+// cannot load (§forgejo/config/validation), so the sweep never has to answer
+// that question. A Config assembled by hand and never validated is answered
+// with UTC — what an unset key means — rather than with a zone guessed at.
 func (c *Config) ChartLocation() *time.Location {
 	if c.TrackerTimezone == "" {
 		return time.UTC

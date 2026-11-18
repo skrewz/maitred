@@ -491,13 +491,36 @@ func TestTrackerBlock_SweepWritesTheBlock(t *testing.T) {
 		t.Errorf("the sweep's last call was %s, want the tracker write to come after the walk", last)
 	}
 
-	// The forest has not moved and the tick below lands the same minute,
-	// so the second sweep converges rather than rewriting what it just
-	// wrote (§forgejo/reconciliation/the-tracker-block).
+	// The forest has not moved, and a sweep that changes nothing writes
+	// nothing. Whether the second tick lands in the same wall-clock minute
+	// as the first is not what this pins: either it converges without
+	// writing, or it rewrites the stamp and nothing else — the property is
+	// that a still forest gains no new bytes beyond the stamp, whatever
+	// minute the clock happens to be in
+	// (§forgejo/reconciliation/the-tracker-block).
+	first := body
 	eng.Reconcile()
-	if got := api.callCount("UpdateIssueBody:out/2"); got != 1 {
-		t.Errorf("two sweeps wrote the tracker %d times, want 1", got)
+	switch writes := api.callCount("UpdateIssueBody:out/2"); writes {
+	case 1:
+		// The stamp had not moved: nothing was sent.
+	case 2:
+		second, _ := api.writtenBody("out", 2)
+		if got := strings.Replace(second, stampLine(second), stampLine(first), 1); got != first {
+			t.Error("the second sweep changed more than the stamp")
+		}
+	default:
+		t.Errorf("two sweeps wrote the tracker %d times, want one write or a second that only moved the stamp", writes)
 	}
+}
+
+// stampLine is the recency line a body carries, as written.
+func stampLine(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), stampLabel) {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
 }
 
 // TestTrackerBlock_WriteDoesNotRefireAStateGovernedRow: the tick's write moves
@@ -742,7 +765,15 @@ func TestSpliceStateBlock(t *testing.T) {
 		},
 		{
 			name:    "a closer standing before its opener is ambiguous",
-			body:    fenceEnd + "\n" + fenceBegin + "\n" + fenceEnd,
+			body:    fenceEnd + "\n" + fenceBegin + "\n" + fenceEnd + "\n",
+			wantErr: true,
+		},
+		{
+			// One of each, in the wrong order: the count guard lets this
+			// through, so the order guard is the only thing standing between
+			// the splice and a region that runs backwards.
+			name:    "one closer then one opener is ambiguous",
+			body:    "before" + fenceEnd + "between" + fenceBegin + "after",
 			wantErr: true,
 		},
 	}

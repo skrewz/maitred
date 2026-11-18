@@ -27,8 +27,9 @@ engine_account: maitred
 # Optional: the zone the tracker's current-state block is stamped in — both
 # its "Last revisited:" line and a closed member's "closed" line — as an IANA
 # name. Unset means UTC; a name the system cannot load is a load error
-# (§forgejo/config/tracker-chart).
-tracker_timezone: Australia/Sydney
+# (§forgejo/config/tracker-chart). A deployment names its own zone here, e.g.
+# Australia/Sydney.
+tracker_timezone: UTC
 # Optional: the character ceiling past which a rendered forest collapses to one
 # node per repository (§forgejo/renderer/collapsing). Unset means 50000, the
 # length the forge's own Mermaid renderer draws by default — a chart past that
