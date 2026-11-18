@@ -4200,6 +4200,34 @@ func TestConnectedIssuesReferencedIssueReadFailure(t *testing.T) {
 	})
 }
 
+// TestConnectedIssuesHandedListingIsReadNotEdited: a caller that hands
+// the blocking-edge listing is not charged for reading it again, and the
+// loop resolves a row naming no repository into the row it appends — the
+// caller's listing stays as that caller read it, so a reuse after the
+// call cannot describe state the callee edited
+// (§forgejo/observability/the-warnings-a-forest-carries,
+// §forgejo/client/operations).
+func TestConnectedIssuesHandedListingIsReadNotEdited(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	edges := []Issue{{Number: 65, Title: "names none", State: "open", UpdatedAt: testUpdatedAt}}
+	got, err := eng.connectedIssues("o", "r", 9, "Probe.", edges)
+	if err != nil {
+		t.Fatalf("connectedIssues: %v", err)
+	}
+	if len(got) != 1 || got[0].Issue.Repository != "o/r" {
+		t.Fatalf("got %+v, want the one row resolved to the delivery's repository", got)
+	}
+	if n := api.callCount("IssueBlocks"); n != 0 {
+		t.Errorf("IssueBlocks called %d time(s), want 0: the caller paid for the listing", n)
+	}
+	if n := api.callCount("IssueDependencies:r/65"); n != 1 {
+		t.Errorf("IssueDependencies:r/65 called %d time(s), want 1: the row is read where it lives", n)
+	}
+	if edges[0].Repository != "" {
+		t.Errorf("the call wrote Repository %q into the caller's listing, want it left as read", edges[0].Repository)
+	}
+}
+
 // TestConnectedIssuesSkipsAreLogged: a skipped reference leaves a trace
 // naming the resolved repository and number — identifiers only, never
 // the body — so a hold-off or a merge whose relation was dropped is

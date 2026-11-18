@@ -575,7 +575,9 @@ func (e *Engine) refreshForestDigest(st State) {
 // caller read it already and hands it here, so the listing paid for is
 // the listing that caller admitted and no second listing stands between
 // the two readings for a churned edge to slip into
-// (§forgejo/observability/the-warnings-a-forest-carries).
+// (§forgejo/observability/the-warnings-a-forest-carries). The listing is
+// never edited: a row naming no repository is resolved into the row this
+// loop appends, leaving the caller's rows as that caller read them.
 func (e *Engine) connectedIssues(owner, name string, number int, body string, edges []Issue) ([]ConnectedIssue, error) {
 	prRepo := owner + "/" + name
 	if edges == nil {
