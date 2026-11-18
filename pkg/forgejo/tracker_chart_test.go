@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"maitred/pkg/queue"
 )
 
 // The fixtures below are one forest as the forge reports it: an ideation root
@@ -83,12 +85,20 @@ func chartFenced() string {
 // chartForestEngine wires the fixtures into an engine whose log a test can
 // read.
 func chartForestEngine(t *testing.T, trackerBody string) (*Engine, *fakeAPI, *bytes.Buffer) {
+	eng, api, _, log := chartForestQueue(t, trackerBody)
+	return eng, api, log
+}
+
+// chartForestQueue is the same wiring for the tests that also watch the
+// queue — which is what the loop-prevention cases read, the write having
+// landed once the tick drew it (§forgejo/decisions/loop-prevention).
+func chartForestQueue(t *testing.T, trackerBody string) (*Engine, *fakeAPI, *fakeQueue, *bytes.Buffer) {
 	t.Helper()
-	eng, api, _, _ := newTestEngine(t)
+	eng, api, q, _ := newTestEngine(t)
 	var log bytes.Buffer
 	eng.log = slog.New(slog.NewJSONHandler(&log, nil))
 	chartWire(api, trackerBody)
-	return eng, api, &log
+	return eng, api, q, &log
 }
 
 // chartSyncBody is the grouping issue's body: the order its members land in,
@@ -478,6 +488,95 @@ func TestTrackerBlock_SweepWritesTheBlock(t *testing.T) {
 	}
 }
 
+// TestTrackerBlock_WriteDoesNotRefireAStateGovernedRow: the tick's write moves
+// the tracker's updated_at, and that timestamp is what both the re-fire bound
+// and the queue's dedup key are keyed on — so a redraw would hand the engine a
+// revision it had never seen, the bound would find a revision moved, the dedup
+// key would differ, and a second wrapper would queue while the first was still
+// running. A tracker's revision masks the fenced region out, exactly as the
+// digest masks a tracker's body out, so one forest's state is one dedup key
+// however many times it was redrawn (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/the-tracker-block).
+func TestTrackerBlock_WriteDoesNotRefireAStateGovernedRow(t *testing.T) {
+	eng, api, q, _ := chartForestQueue(t, chartFenced())
+	eng.Reconcile()
+	first := wrapUpTask(t, q)
+
+	// A member's title moves the drawing and nothing else: the chart is the
+	// only part of the tracker's body between the fences. The forge bumps
+	// the tracker's updated_at for the write, as it does for any edit.
+	api.mu.Lock()
+	for i := range api.blocks[1] {
+		if api.blocks[1][i].Number == 3 {
+			api.blocks[1][i].Title = "the purge, two commands"
+		}
+	}
+	api.issues[2].UpdatedAt = testUpdatedAt.Add(time.Hour)
+	api.mu.Unlock()
+
+	eng.Reconcile()
+	second := wrapUpTask(t, q)
+
+	if got := api.callCount("UpdateIssueBody:out/2"); got != 2 {
+		t.Fatalf("the tracker was written %d times across two sweeps, want the redraw to land", got)
+	}
+	if first.DedupKey == second.DedupKey {
+		return
+	}
+	t.Errorf("the two sweeps dispatched %q and %q: a redraw moved the revision the queue squelches on", first.DedupKey, second.DedupKey)
+}
+
+// TestTrackerBlock_OwnEditIsNotReadAsActivity: the delivery the write provokes
+// is the engine's own handwriting, so it holds off before the re-fetch — an
+// edit by any other author is an event like any other and is read
+// (§forgejo/decisions/loop-prevention).
+func TestTrackerBlock_OwnEditIsNotReadAsActivity(t *testing.T) {
+	tests := []struct {
+		name       string
+		sender     string
+		wantRead   bool
+		wantReason string
+	}{
+		{"the engine's own edit is not read", "maitred-engine", false, "edited by maitred-engine"},
+		{"another author's edit is read", "alice", true, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng, api, q, log := chartForestQueue(t, chartFenced())
+			api.mu.Lock()
+			api.calls = nil
+			api.mu.Unlock()
+
+			eng.HandleEvent(Event{Type: EventIssueEdited, Repo: "o/out", Kind: KindIssue, Number: 2, Sender: tt.sender})
+
+			if got := api.callCount("GetIssue:out/2") != 0; got != tt.wantRead {
+				t.Errorf("the delivery re-fetched the tracker: %v, want a read: %v", got, tt.wantRead)
+			}
+			if n := len(q.all()); n != 0 {
+				t.Errorf("the delivery dispatched %d tasks, want none", n)
+			}
+			if tt.wantReason != "" && !strings.Contains(log.String(), tt.wantReason) {
+				t.Errorf("log = %s, want the hold-off to name the engine's own edit", log.String())
+			}
+		})
+	}
+}
+
+// wrapUpTask is the queue's most recent wrap-up dispatch.
+func wrapUpTask(t *testing.T, q *fakeQueue) *queue.Task {
+	t.Helper()
+	var last *queue.Task
+	for _, task := range q.all() {
+		if strings.Contains(task.Prompt, "action=wrap-up") {
+			last = task
+		}
+	}
+	if last == nil {
+		t.Fatal("the queue holds no wrap-up dispatch")
+	}
+	return last
+}
+
 // TestTrackerBlock_BlocksReadFailureWritesNothing: an edge read that fails is the
 // forest's own fault, reported and skipped — a chart of half a graph is a chart
 // that guessed (§forgejo/reconciliation/the-tracker-block).
@@ -528,6 +627,30 @@ func TestTrackerBlock_UnloadableZoneFallsBackToUTC(t *testing.T) {
 	cfg.TrackerTimezone = "Mars/Olympus"
 	if got := cfg.ChartLocation(); got != time.UTC {
 		t.Errorf("ChartLocation = %s, want UTC", got)
+	}
+}
+
+// TestTrackerRevision_IgnoresTheFencedRegion: the region the engine writes is
+// not a fact the engine reacts to — a redraw leaves a tracker's revision where
+// it was, prose outside the pair moves it, and an issue the engine never
+// writes still answers with its updated_at (§forgejo/state/watermark,
+// §forgejo/decisions/loop-prevention).
+func TestTrackerRevision_IgnoresTheFencedRegion(t *testing.T) {
+	before := chartTracker("prose\n\n" + fenceBegin + "\nthe old chart\n\n" + fenceEnd + "\n")
+	after := chartTracker("prose\n\n" + fenceBegin + "\nthe new chart\n\n" + fenceEnd + "\n")
+	after.UpdatedAt = before.UpdatedAt.Add(time.Hour)
+	if issueRevision(&before) != issueRevision(&after) {
+		t.Error("a redraw moved the tracker's revision")
+	}
+
+	drifted := chartTracker("prose a human rewrote\n\n" + fenceBegin + "\nthe new chart\n\n" + fenceEnd + "\n")
+	if issueRevision(&before) == issueRevision(&drifted) {
+		t.Error("prose outside the pair left the tracker's revision where it was")
+	}
+
+	root := chartRoot()
+	if got, want := issueRevision(&root), root.UpdatedAt.UTC().Format(time.RFC3339); got != want {
+		t.Errorf("an issue the engine never writes reports revision %q, want its updated_at %q", got, want)
 	}
 }
 

@@ -92,7 +92,10 @@ On each `POST`:
    (§forgejo/client/operations). The event's own claims are never trusted.
    A `pull_request` delivery with action `closed` is refined by the
    re-fetch: a merged PR is a PR-merged event, an unmerged one a
-   PR-closed event.
+   PR-closed event. One delivery never reaches this step: an issue edit
+   whose sender is the engine's own account holds off ahead of the read,
+   because that edit is the current-state block the engine itself wrote
+   (§forgejo/decisions/loop-prevention, §forgejo/reconciliation/the-tracker-block).
 5. **Decide.** `Decide(event, state, watermark)`
    (§forgejo/decisions/the-decision-function) — the re-fetched state wins
    over the event.

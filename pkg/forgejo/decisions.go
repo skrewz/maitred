@@ -2038,9 +2038,39 @@ func prOpen(pr *PullRequest) bool {
 }
 
 // issueRevision is the issue's activity revision: its updated_at in
-// RFC 3339 (§forgejo/state/watermark).
+// RFC 3339 (§forgejo/state/watermark) — except for an outcome tracker, whose
+// revision is the same facts with the region the engine owns masked out.
+// updated_at cannot serve a tracker because the current-state write moves it
+// on every tick, and a revision the engine moves itself is a revision no
+// guard can pace (§forgejo/reconciliation/the-tracker-block,
+// §forgejo/decisions/loop-prevention).
 func issueRevision(issue *Issue) string {
+	if isTracker(issue) {
+		return trackerRevision(issue)
+	}
 	return issue.UpdatedAt.UTC().Format(time.RFC3339)
+}
+
+// trackerRevision is a tracker's revision: its state, its labels and the body
+// outside the fence pair, hashed. The digest folds no tracker body at all for
+// the mirror reason — the engine rewrites that region every tick, and a fact
+// the engine moves by writing it cannot be the fact that decides whether to
+// dispatch (§forgejo/decisions/actionable-state-digest). Everything a decision
+// reads about a tracker still moves this revision: closing it, labelling it,
+// and an edit to the outcome prose. The drawing never does.
+func trackerRevision(issue *Issue) string {
+	labels := append([]string(nil), issue.Labels...)
+	sort.Strings(labels)
+	h := sha256.New()
+	folded := []string{"state " + issue.State}
+	for _, label := range labels {
+		folded = append(folded, "label "+label)
+	}
+	folded = append(folded, "body "+outsideFence(issue.Body))
+	for _, fact := range folded {
+		fmt.Fprintf(h, "%d:%s\n", len(fact), fact)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // bodyRevision is the grouping issue's body as the set revision digests
@@ -2244,4 +2274,15 @@ func holdOffForestSeeding(number int, label string) Decision {
 // (§forgejo/webhook/the-scope-cache, §forgejo/observability/the-decision-log).
 func holdOffScopeUnknown(repo string, err error) Decision {
 	return holdOff(fmt.Sprintf("scope of repo %s unknown: repository listing failed: %v", repo, err))
+}
+
+// holdOffEngineAuthoredEdit is the self-authored edit guard: the delivery was
+// authored by the account the engine itself runs as, and the only edit that
+// account sends is a tracker's current-state block — the engine's own
+// handwriting, not a fact (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/the-tracker-block). The reason names the account and
+// the object, so the decision log distinguishes the engine's own write from a
+// hold-off that means something did not line up.
+func holdOffEngineAuthoredEdit(repo string, number int, account string) Decision {
+	return holdOff(fmt.Sprintf("%s#%d was edited by %s, the engine's own account: a current-state write is the engine's own side effect and carries no fact, so it is not re-fetched and dispatches nothing", repo, number, account))
 }

@@ -2116,7 +2116,7 @@ func TestHandler_IssueClosed_CascadeWrapUpWatermarkHolds(t *testing.T) {
 	api.blocks[7] = []Issue{*tracker}
 	api.deps[10] = []Issue{*testIssue(7, "closed")}
 	if err := store.Save(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 10},
-		Watermark{Action: string(ActionWrapUp), Revision: testUpdatedAt.UTC().Format(time.RFC3339)}); err != nil {
+		Watermark{Action: string(ActionWrapUp), Revision: issueRevision(tracker)}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -2169,7 +2169,7 @@ func TestHandler_IssueClosed_CascadeBlockedTrackerNamesBlockers(t *testing.T) {
 	if d.State != "open" {
 		t.Errorf("record state = %q, want open (the tracker's own state)", d.State)
 	}
-	if want := testUpdatedAt.UTC().Format(time.RFC3339); d.Revision != want {
+	if want := issueRevision(tracker); d.Revision != want {
 		t.Errorf("record revision = %q, want %s (the tracker's own revision)", d.Revision, want)
 	}
 	// o/r holds only the work-item role, so the record must not promise a

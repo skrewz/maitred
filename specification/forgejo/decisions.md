@@ -883,7 +883,7 @@ staying silent (§forgejo/decisions/sync-set).
 
 ## Loop prevention
 
-Five mechanisms, in this order:
+Six mechanisms, in this order:
 
 1. **The machine is terminating.** Each action's side-effect maps to
    the *next* transition, never a re-run of the same one: a review
@@ -892,7 +892,9 @@ Five mechanisms, in this order:
 2. **Idempotency + watermark.** The same `(event, state, revision)`
    does not re-dispatch the same action: when the watermark already
    records the action at the current revision (the PR head sha, or the
-   issue's `updated_at`), the decision holds off. The guard is
+   issue's `updated_at` — a tracker's revision being its state, labels and
+   body outside the current-state region, §forgejo/state/watermark), the
+   decision holds off. The guard is
    revision-keyed on every path, and for the review fan-out it is
    **subject-keyed** as well: each lens is guarded by its own slot at
    the revision, so three lenses dispatched at one head are three
@@ -1004,6 +1006,23 @@ Five mechanisms, in this order:
    the gate inert. This is a PR-side ownership read, not the retired
    issue-side authorship guard (s-git/maitred#136): it asks who *owns
    the pull request*, not who opened the issue.
+6. **The self-authored side-effect guard**, the mirror of the digest's
+   exclusion of the engine's own comments, and read in two halves because the
+   engine's one mutation is a write to an issue the engine also decides on
+   (§forgejo/reconciliation/the-tracker-block). **The revision masks the
+   written region out**: an `outcome` tracker's revision is its state, labels
+   and body minus the fenced region, never its `updated_at` — which the write
+   moves every tick — so the re-fire bound and the queue's dedup key both see
+   one unchanged state as one revision and a redraw dispatches no second agent
+   while the first is still pending (§forgejo/state/watermark). **The delivery
+   holds off unread**: an `issues`/`edited` delivery whose sender is the
+   account `engine_account` names holds off **before the re-fetch**, since the
+   only edit that account authors is the drawing — a re-fetch and a decision
+   that could only say "nothing moved". The guard is on the edited issue alone,
+   because that is the only delivery the mutation provokes — holding an entire
+   identity off the path would go quiet in a deployment where one account wore
+   two roles — and the sweep's own rows carry no sender to guard
+   (§forgejo/webhook/event-mapping, §forgejo/reconciliation/the-sweep).
 
 ## Inputs
 

@@ -96,9 +96,16 @@ rendered in the configured timezone (§forgejo/config/tracker-chart).
 - **The stamp moves whatever the graph does.** A tick over an unchanged forest
   rewrites the stamp and nothing else. Where the composed body is byte-identical
   to the body read — two ticks inside one minute over an unchanged graph —
-  nothing is written, so a sweep never bumps a tracker for nothing, and the
-  watermark sees no change where none happened
-  (§forgejo/reconciliation/the-state-is-the-watermark).
+  nothing is written, so a sweep never bumps a tracker for nothing. Past that
+  minute the write does move the tracker's `updated_at`, and a timestamp the
+  engine moves itself cannot be what the engine paces itself on: a tracker's
+  revision is its state, labels and body with this region masked out, so the
+  re-fire bound and the queue's dedup key both hold to one unchanged state
+  however often it is redrawn, and the delivery the write provokes is the
+  engine's own handwriting and holds off unread
+  (§forgejo/state/watermark, §forgejo/decisions/loop-prevention). A tick
+  therefore re-fires no agent that the forest's state was not already calling
+  for (§forgejo/reconciliation/the-state-is-the-watermark).
 - **No fence pair is an empty region, not an absent one.** Where a description
   carries no pair, the block is inserted as the body's first heading and the
   body found follows it in the order it was in.

@@ -155,6 +155,24 @@ func spliceStateBlock(body, block string) (string, error) {
 	return body[:start] + "\n\n" + block + "\n" + body[end:], nil
 }
 
+// outsideFence is a description with the region the engine owns masked out:
+// the fence pair and the bytes between it are the only bytes a current-state
+// write moves, and they are the bytes a revision must not be keyed on
+// (§forgejo/decisions/loop-prevention). Everything else comes back as it was
+// found — including a description whose region is too ambiguous to write to,
+// where the engine writes nothing at all and the body is the deployment's own.
+func outsideFence(body string) string {
+	if strings.Count(body, fenceBegin) != 1 || strings.Count(body, fenceEnd) != 1 {
+		return body
+	}
+	start := strings.Index(body, fenceBegin)
+	end := strings.Index(body, fenceEnd)
+	if end < start {
+		return body
+	}
+	return body[:start] + body[end+len(fenceEnd):]
+}
+
 // renderForestChart gathers one forest's graph and renders it
 // (§forgejo/renderer/the-contract). The reads are the ones the forest's own
 // relations answer — the root's row, the rows the root blocks, and each row's
