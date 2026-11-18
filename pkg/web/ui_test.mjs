@@ -1272,9 +1272,9 @@ async function testOutcomesPage(page, results) {
     'Every warning entry carries the \u26a0 marker'
   ));
   results.push(assert(
-    warned.entryTexts.some(t => t.includes('stale agentic merge') && t.includes('o/deliv#12') && t.includes('Delivery waiting unmerged'))
-      && warned.entryTexts.some(t => t.includes('human task') && t.includes('o/out#6') && t.includes('Claimed by a person')),
-    `The two kinds render distinctly with their references (got: ${warned.entryTexts.join(' | ')})`
+    warned.entryTexts.some(t => t.includes('stale_agentic_merge') && t.includes('o/deliv#12') && t.includes('Delivery waiting unmerged'))
+      && warned.entryTexts.some(t => t.includes('human_task_blocking') && t.includes('o/out#6') && t.includes('Claimed by a person')),
+    `The two kinds render distinctly in the payload's own words, with their references (got: ${warned.entryTexts.join(' | ')})`
   ));
   results.push(assert(
     warned.entryTexts.every(t => /\d/.test(t.split('\u2014').slice(1).join('\u2014'))),

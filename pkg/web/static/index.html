@@ -771,30 +771,21 @@
             return `<div class="meta-item"><span class="meta-label">${escapeHtml(label)}</span><span class="meta-value">${issueLink(issue)} <span class="badge ${badge}">${escapeHtml(issue.state)}</span></span></div>`;
         }
 
-        // warningKindLabels gives a warning's kind the words the row
-        // prints. The kinds are the payload's fixed vocabulary
-        // (§forgejo/observability/the-warnings-a-forest-carries); an
-        // unrecognised word renders as itself rather than nothing, so
-        // a kind added engine-side still says something here.
-        const warningKindLabels = {
-            stale_agentic_merge: 'stale agentic merge',
-            human_task_blocking: 'human task',
-        };
-
         // warningsHtml renders one ⚠️ entry per warning of a forest:
         // the reference the payload names — never built from the row's
         // own fields — through the page's one link discipline
-        // (issueLink), its kind, and the age of the condition. Every
-        // field is text its authors wrote, inserted as text and never
-        // as markup
-        // (§forgejo/observability/the-warnings-a-forest-carries). A
-        // forest with no warnings renders nothing: the honest empty
-        // carries no marker.
+        // (issueLink), the payload's own kind word, and the age of
+        // the condition. Every field is text its authors wrote,
+        // inserted as text and never as markup
+        // (§forgejo/observability/the-warnings-a-forest-carries). The
+        // page translates the kind word into nothing: printing the
+        // payload's field directly is what lets the row's words be
+        // the walk's words. A forest with no warnings renders
+        // nothing: the honest empty carries no marker.
         function warningsHtml(warnings) {
             return (warnings ?? []).map(w => {
-                const kind = warningKindLabels[w.kind] ?? String(w.kind ?? '');
                 const age = formatDuration(Math.round((w.age_seconds ?? 0) * 1000));
-                return `<div class="outcomes-warning">\u26a0\ufe0f ${issueLink(w)} \u2014 ${escapeHtml(kind)} \u00b7 ${escapeHtml(age)}</div>`;
+                return `<div class="outcomes-warning">\u26a0\ufe0f ${issueLink(w)} \u2014 ${escapeHtml(String(w.kind ?? ''))} \u00b7 ${escapeHtml(age)}</div>`;
             }).join('');
         }
 
