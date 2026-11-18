@@ -111,6 +111,12 @@ rendered in the configured timezone (§forgejo/config/tracker-chart).
   (§forgejo/state/watermark, §forgejo/decisions/loop-prevention). A tick
   therefore re-fires no agent that the forest's state was not already calling
   for (§forgejo/reconciliation/the-state-is-the-watermark).
+- **The write says so.** A tracker whose block landed is named at `Info` in
+  the log, as every other side effect the engine has is, so a description that
+  changed at an odd hour is attributable to the engine rather than to an agent;
+  a tracker whose composed body was already there is named at `Debug`, so
+  "nothing needed writing" never reads as "this forest was never reached"
+  (§forgejo/observability/the-decision-log).
 - **No fence pair is an empty region, not an absent one.** Where a description
   carries no pair, the block is inserted as the body's first heading and the
   body found follows it in the order it was in.

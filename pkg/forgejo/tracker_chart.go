@@ -119,11 +119,21 @@ func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
 		return fmt.Errorf("%s: %w", ref, err)
 	}
 	if body == tracker.Body {
+		// "Nothing was written" is not "nothing was done": the difference
+		// between a converged tick and a forest the tick never reached is
+		// what an operator reads at Debug (§forgejo/observability/the-decision-log).
+		e.log.Debug("tracker current-state block unchanged; nothing written", "tracker", ref)
 		return nil
 	}
 	if err := e.api.UpdateIssueBody(owner, name, tracker.Number, body); err != nil {
 		return fmt.Errorf("writing %s: %w", ref, err)
 	}
+	// The engine's one mutation says so when it lands, as every other side
+	// effect it has does: the question six months out is why a description
+	// changed at 03:12, and the forge's revision history alone cannot answer
+	// whether it was the engine or an agent
+	// (§forgejo/observability/the-decision-log).
+	e.log.Info("tracker current-state block written", "tracker", ref)
 	return nil
 }
 

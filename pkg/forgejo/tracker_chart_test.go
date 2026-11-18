@@ -96,7 +96,7 @@ func chartForestQueue(t *testing.T, trackerBody string) (*Engine, *fakeAPI, *fak
 	t.Helper()
 	eng, api, q, _ := newTestEngine(t)
 	var log bytes.Buffer
-	eng.log = slog.New(slog.NewJSONHandler(&log, nil))
+	eng.log = slog.New(slog.NewJSONHandler(&log, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	chartWire(api, trackerBody)
 	return eng, api, q, &log
 }
@@ -163,9 +163,15 @@ func chartForests() []Forest {
 // every byte outside it survives the write unchanged
 // (§forgejo/reconciliation/the-tracker-block).
 func TestTrackerBlock_WritesIntoFencePair(t *testing.T) {
-	eng, api, _ := chartForestEngine(t, chartFenced())
+	eng, api, log := chartForestEngine(t, chartFenced())
 	if err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
 		t.Fatalf("writeTrackerBlock: %v", err)
+	}
+	// The engine's one mutation is logged when it lands, so a description
+	// that changed at an odd hour can be attributed to the engine rather
+	// than to an agent (§forgejo/observability/the-decision-log).
+	if !strings.Contains(log.String(), "tracker current-state block written") || !strings.Contains(log.String(), "o/out#2") {
+		t.Errorf("log = %s, want the write logged with the tracker", log.String())
 	}
 
 	written := mustWritten(t, api, "out", 2)
@@ -260,12 +266,18 @@ func TestTrackerBlock_StampMovesWhileGraphStands(t *testing.T) {
 // changes nothing sends nothing — a tick must not bump a tracker for nothing
 // (§forgejo/reconciliation/the-tracker-block).
 func TestTrackerBlock_UnchangedBodyIsNotWritten(t *testing.T) {
-	eng, api, _ := chartForestEngine(t, chartFenced())
+	eng, api, log := chartForestEngine(t, chartFenced())
 	eng.writeTrackerBlocks(chartForests(), chartAt)
+	log.Reset()
 	eng.writeTrackerBlocks(chartForests(), chartAt)
 
 	if got := api.callCount("UpdateIssueBody:out/2"); got != 1 {
 		t.Errorf("wrote the tracker %d times, want the second pass to send nothing", got)
+	}
+	// "Nothing written" says so, rather than reading as a forest the tick
+	// never reached.
+	if !strings.Contains(log.String(), "unchanged") || !strings.Contains(log.String(), "o/out#2") {
+		t.Errorf("log = %s, want the converged tick to say it wrote nothing", log.String())
 	}
 }
 
