@@ -107,7 +107,12 @@ func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
 		return fmt.Errorf("scope of %s: %w", forest.Tracker.Repository, err)
 	}
 	if !admits {
-		e.log.Info("reconciliation: tracker lives in a repository no maitred role names; nothing written",
+		// Debug, the level the row skip three functions below and every other
+		// cross-repository hop already use for this sentence: where a deployment
+		// intends the tracker to stay unwritten, this is one line per forest per
+		// tick forever, not an event worth reading (§forgejo/webhook/repository-roles,
+		// §forgejo/observability/the-decision-log).
+		e.log.Debug("reconciliation: tracker lives in a repository no maitred role names; nothing written",
 			"tracker", ref)
 		return nil
 	}

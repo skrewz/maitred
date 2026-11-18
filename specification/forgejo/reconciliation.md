@@ -105,10 +105,15 @@ rendered in the configured timezone (§forgejo/config/tracker-chart).
   (§forgejo/webhook/repository-roles): the enumeration's own repository is
   admitted by the enumeration, every other only where a maitred role names it. A
   tracker in a repository no role names is neither read nor written and the log
-  names the repository refused; a row no role admits draws no node, contributes
-  no title to a body the outcomes view publishes, and has no edges read. An
-  unknown scope fails closed, naming the failure rather than reading as a
-  repository holding no role (§forgejo/webhook/the-scope-cache).
+  names the repository refused at Debug, the level the engine's other
+  cross-repository hops use for the sentence; a row no role admits draws no
+  node, contributes no title to a body the outcomes view publishes, and has no
+  edges read. The forest's actionable-state digest is the reader that pays no
+  such test, folding every row a blocking edge reaches, so where an edge leaves
+  the roles a chart shows less than the state decided
+  (§forgejo/decisions/actionable-state-digest). An unknown scope fails closed,
+  naming the failure rather than reading as a repository holding no role
+  (§forgejo/webhook/the-scope-cache).
 - **The stamp moves whatever the graph does.** A tick over an unchanged forest
   rewrites the stamp and nothing else. Where the composed body is byte-identical
   to the body read — two ticks inside one minute over an unchanged graph —
