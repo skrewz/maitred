@@ -92,10 +92,11 @@ type ForestWarning struct {
 // engine has not checked, the mistake the outcomes view refuses on every
 // other path (§forgejo/observability/the-outcomes-view,
 // §forgejo/decisions/actionable-state-digest). The states that are an
-// ordinary answer rather than a failure — a repository outside the
-// remit, one whose pull requests unit is off — are settled before the
-// read, so what is left to fail is a read the engine should have been
-// able to pay and could not.
+// ordinary answer rather than a failure — a repository outside the remit,
+// one whose pull requests unit is off, a delivery whose body asks for more
+// references than the read budget pays — are settled before the read or
+// hold their warning back, so what is left to fail is a read the engine
+// should have been able to pay and could not.
 func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) ([]ForestWarning, error) {
 	warnings := []ForestWarning{}
 	seen := map[string]bool{}
@@ -140,11 +141,11 @@ func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) (
 			continue // nothing here can wait on a person
 		}
 		repo := rowRepository(member, rootRepo)
-		scope, err := e.repoRoles(repo)
+		inRemit, err := e.repoInRemit(repo)
 		if err != nil {
 			return nil, fmt.Errorf("scope of %s: %w", repo, err)
 		}
-		if !scope.any() {
+		if !inRemit {
 			// Outside the engine's remit: neither read nor warned
 			// on, as the walk's note above states once
 			// (§forgejo/webhook/repository-roles).
@@ -153,21 +154,21 @@ func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) (
 				"member", repo+"#"+strconv.Itoa(member.Number))
 			continue
 		}
-		owner, name := splitRepo(repo)
-		// One blockers read answers both predicates: the human task
-		// asks whether any work order still stands, the stale merge
-		// asks the same question as the merge gate does
-		// (§forgejo/decisions/merge-gate).
-		rows, err := e.api.IssueDependencies(owner, name, member.Number)
-		if err != nil {
-			return nil, fmt.Errorf("blockers of %s#%d: %w", repo, member.Number, err)
-		}
-		work := workOrders(rows, repo, gates)
 		if claimed {
-			add(humanTaskWarning(member, repo, work, now))
+			// A human task waits on the member's own work orders —
+			// the question the delivery's wait does not ask, since a
+			// delivery whose connected issues hold open work is the
+			// stale predicate's to hold back on
+			// (§forgejo/observability/the-warnings-a-forest-carries).
+			owner, name := splitRepo(repo)
+			rows, err := e.api.IssueDependencies(owner, name, member.Number)
+			if err != nil {
+				return nil, fmt.Errorf("blockers of %s#%d: %w", repo, member.Number, err)
+			}
+			add(humanTaskWarning(member, repo, workOrders(rows, repo, gates), now))
 		}
 		if landing {
-			warn, err := e.staleMergeWarning(member, repo, work, gates, listings, now)
+			warn, err := e.staleMergeWarning(member, repo, gates, listings, now)
 			if err != nil {
 				return nil, err
 			}
@@ -175,6 +176,20 @@ func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) (
 		}
 	}
 	return warnings, nil
+}
+
+// repoInRemit reports whether a repository is one the engine may read at
+// all — the admission test every cross-repository read pays, asked of
+// the scope cache so it costs no forge read (§forgejo/webhook/repository-roles,
+// §forgejo/webhook/re-fetch). A non-nil error means the scope is unknown
+// and the caller must hold off naming the failure; a false answer means a
+// repository no maitred role names.
+func (e *Engine) repoInRemit(repo string) (bool, error) {
+	roles, err := e.repoRoles(repo)
+	if err != nil {
+		return false, err
+	}
+	return roles.any(), nil
 }
 
 // staleMergeWarning asks whether the member's delivering pull request is
@@ -189,29 +204,25 @@ func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) (
 // holds the next paragraph names — except the forest's own membership
 // edge, which the walk sets aside and the spec accounts for.
 //
-// work is the member's work-order blockers, forest rows and deliveries
-// aside. An open one holds the warning back because the merge gate holds
-// the merge off on it: the forest waits on that work, not on a reviewer
-// or an operator (§forgejo/decisions/merge-gate). So does an open work
-// order of a sibling the delivery's body also names, because the gate
-// asks the blockers of every issue the delivery names — the ⚠️ may not
-// claim a person is the wait while the gate waits on that work. A
-// sibling whose repository the remit will not admit cannot be checked,
-// and an unchecked wait is not asserted. The forest's own rows are the
-// one hold the walk sets aside even where the gate counts it, and why
-// the ⚠️ may fire while the gate waits on the membership edge is the
-// spec's (§forgejo/observability/the-warnings-a-forest-carries). A
-// member of an open landing set holds the warning back for the gate's
-// own reason, stated the other way: landing a set is the set's decision
-// and never the individual pull request's, so an approved member whose
-// set has not landed waits on the set's other members
-// (§forgejo/decisions/sync-set).
-func (e *Engine) staleMergeWarning(member *Issue, repo string, work []Issue, gates map[string]bool, listings map[string][]PullRequest, now time.Time) (*ForestWarning, error) {
-	for _, b := range work {
-		if b.State == "open" {
-			return nil, nil // the wait is the open work order, not a person
-		}
-	}
+// Whether anything but a person stands on the head is the merge gate's
+// question, so it is asked the gate's way: through the connected-issues
+// read the gate reads (§forgejo/webhook/re-fetch), whose open blockers
+// the gate's own mergeGateOpenBlockers names and whose landing-set
+// membership its syncMemberSetHoldOff names. The ⚠️ therefore does not
+// keep a second copy of "stale" that a change to the gate could silently
+// strand — it asks the gate whether the gate would fire, and says nothing
+// while the gate waits on work (§forgejo/decisions/merge-gate,
+// §forgejo/decisions/sync-set). Two answers the gate path forces on a
+// merge are turned the other way here, because the view has no merge to
+// protect and an unchecked wait is not asserted: a body that asks for
+// more references than the read budget pays, and a reference into a
+// repository outside the remit, hold the warning back rather than failing
+// the whole view (§forgejo/webhook/re-fetch,
+// §forgejo/webhook/repository-roles). The forest's own rows are the one
+// hold the walk sets aside even where the gate counts it, and why the ⚠️
+// may fire while the gate waits on the membership edge is the spec's
+// (§forgejo/observability/the-warnings-a-forest-carries).
+func (e *Engine) staleMergeWarning(member *Issue, repo string, gates map[string]bool, listings map[string][]PullRequest, now time.Time) (*ForestWarning, error) {
 	pr, reviews, err := e.deliveryPR(member, repo, listings)
 	if err != nil {
 		return nil, err
@@ -237,45 +248,13 @@ func (e *Engine) staleMergeWarning(member *Issue, repo string, work []Issue, gat
 	if age <= e.cfg.staleMergeThreshold() {
 		return nil, nil
 	}
-	// The delivery's co-members are part of the same wait: the gate
-	// asks the blockers of every issue the delivery's body names, not
-	// only this member's, so the walk asks them the same way before it
-	// asserts a person is the wait (§forgejo/decisions/merge-gate).
-	for _, ref := range autoCloseRefs(pr.Body, repo) {
-		if warningKey(ref.repo, ref.number) == warningKey(repo, member.Number) {
-			continue // the member's own blockers are already asked
-		}
-		scope, err := e.repoRoles(ref.repo)
-		if err != nil {
-			return nil, fmt.Errorf("scope of %s: %w", ref.repo, err)
-		}
-		if !scope.any() {
-			return nil, nil // an unchecked sibling's wait is not asserted
-		}
-		owner, name := splitRepo(ref.repo)
-		rows, err := e.api.IssueDependencies(owner, name, ref.number)
-		if err != nil {
-			return nil, fmt.Errorf("blockers of %s#%d: %w", ref.repo, ref.number, err)
-		}
-		for _, b := range workOrders(rows, ref.repo, gates) {
-			if b.State == "open" {
-				return nil, nil // the wait is the sibling's open work
-			}
-		}
-	}
-	// The reads beyond the head's own — the co-members' blockers, the
-	// set's membership — are the last things asked, paid for only by a
-	// wait that would already warn. A member of an open landing set is
-	// the gate's own hold-off stated the other way: the set's landing,
-	// not a person (§forgejo/decisions/sync-set).
-	if hasLabel(member, LabelAgenticSyncMerge) {
-		inSet, err := e.inOpenSyncSet(member, repo)
-		if err != nil {
-			return nil, err
-		}
-		if inSet {
-			return nil, nil // the wait is the set's landing, not a person
-		}
+	// Everything beyond the head — the blockers of every issue the
+	// delivery connects, the landing set whose landing it waits on — is
+	// the last thing asked, paid for only by a wait that would already
+	// warn.
+	holds, err := e.gateHoldsDeliveryOff(pr, repo, gates)
+	if err != nil || holds {
+		return nil, err
 	}
 	return &ForestWarning{
 		Kind:       WarningStaleAgenticMerge,
@@ -285,6 +264,102 @@ func (e *Engine) staleMergeWarning(member *Issue, repo string, work []Issue, gat
 		HTMLURL:    pr.HTMLURL,
 		AgeSeconds: age.Seconds(),
 	}, nil
+}
+
+// gateHoldsDeliveryOff asks a delivery the two questions that hold the
+// merge gate off — the open blockers of its connected issues
+// (§forgejo/decisions/merge-gate) and membership of an open landing set
+// (§forgejo/decisions/sync-set) — through the gate's own readings, so
+// "the gate would fire at this head" is one implementation's answer and
+// not two that must be kept alike. A true answer says the wait is that
+// work or that set, not a person, and the ⚠️ says nothing.
+//
+// The delivery's body chooses which issues the ask reaches, so it is
+// screened against the two bounds the gate's resolving loop carries —
+// the read budget and the remit — before anything is read, and a body
+// that cannot be read completely holds the warning back rather than
+// buying reads or failing the view (§forgejo/webhook/re-fetch,
+// §forgejo/webhook/repository-roles, §forgejo/observability/the-warnings-a-forest-carries).
+// What the screen admits is then resolved the way the gate resolves it,
+// so the states the forge itself ignores — a dangling reference, a
+// reference naming a pull request — arrive as the same ordinary answers
+// here as they do there (§forgejo/webhook/re-fetch).
+func (e *Engine) gateHoldsDeliveryOff(pr *PullRequest, repo string, gates map[string]bool) (bool, error) {
+	askable, err := e.refsAreAskable(pr, repo)
+	if err != nil {
+		return false, err
+	}
+	if !askable {
+		return true, nil
+	}
+	owner, name := splitRepo(repo)
+	connected, err := e.connectedIssues(owner, name, pr.Number, pr.Body)
+	if err != nil {
+		return false, fmt.Errorf("delivery %s#%d: %w", repo, pr.Number, err)
+	}
+	st := State{ConnectedIssues: connected}
+	// The landing set's membership comes from the rows this read already
+	// holds — an open grouping issue the delivery itself blocks — and from
+	// one membership edge per connected member, the read the approval
+	// path makes the same way (§forgejo/decisions/sync-set,
+	// §forgejo/webhook/re-fetch).
+	if err := e.fetchSyncSets(owner, name, pr.Number, &st); err != nil {
+		return false, err
+	}
+	if _, held := syncMemberSetHoldOff(pr, repo, st); held {
+		return true, nil // the wait is the set's landing, not a person
+	}
+	open := mergeGateOpenBlockers(Event{Kind: KindPR, Repo: repo, Number: pr.Number}, st)
+	for i := range open {
+		if gates[warningKey(rowRepository(&open[i], repo), open[i].Number)] {
+			continue // the forest's own rows are membership, not a wait
+		}
+		return true, nil // the wait is that open work, not a person
+	}
+	return false, nil
+}
+
+// refsAreAskable reports whether a delivery's body can be read completely
+// within the bounds the resolving loop carries: no more references than the
+// read budget pays, no reference whose repository names a path segment, and
+// no reference into a repository the engine's remit will not admit. A false
+// answer does not say the delivery is healthy — it says the wait cannot be
+// established, which is the one thing a warning may not paper over, and it
+// leaves the line every other dropped relation leaves
+// (§forgejo/webhook/re-fetch, §forgejo/webhook/repository-roles,
+// §forgejo/observability/the-warnings-a-forest-carries). The test costs no
+// forge read: the grammar is in memory and the remit test is the scope
+// cache's. Unknown scope is the one answer that is not a hold-off but an
+// error — scope the engine cannot establish fails the walk rather than
+// reading on, here as everywhere else (§forgejo/webhook/the-scope-cache).
+func (e *Engine) refsAreAskable(pr *PullRequest, prRepo string) (bool, error) {
+	delivery := prRepo + "#" + strconv.Itoa(pr.Number)
+	refs := autoCloseRefs(pr.Body, prRepo)
+	if len(refs) > maxAutoCloseRefs {
+		e.log.Debug("forest warnings: holding a stale warning back: the body names more references than the read budget pays",
+			"delivery", delivery, "references", len(refs))
+		return false, nil
+	}
+	for _, ref := range refs {
+		if !validRepoRef(ref.repo) {
+			e.log.Debug("forest warnings: holding a stale warning back: a reference names a path segment",
+				"delivery", delivery)
+			return false, nil
+		}
+		if strings.EqualFold(ref.repo, prRepo) {
+			continue // the walk has admitted the delivery's own repository
+		}
+		inRemit, err := e.repoInRemit(ref.repo)
+		if err != nil {
+			return false, fmt.Errorf("scope of %s: %w", ref.repo, err)
+		}
+		if !inRemit {
+			e.log.Debug("forest warnings: holding a stale warning back: a reference names a repository outside the engine's remit",
+				"delivery", delivery, "reference", ref.repo+"#"+strconv.Itoa(ref.number))
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // humanTaskWarning states that an open member claimed by a human is what
@@ -335,27 +410,6 @@ func workOrders(rows []Issue, entered string, gates map[string]bool) []Issue {
 		work = append(work, *b)
 	}
 	return work
-}
-
-// inOpenSyncSet reports whether a member stands in an open landing set —
-// the membership edge the approval path's hold-off reads, taken the same
-// way it is read on the event path: an open grouping issue the member
-// blocks (§forgejo/decisions/sync-set, §forgejo/webhook/re-fetch). A
-// member of no open set is a stale label the decomposer left behind, not
-// a set to wait on, and so answers false here as it does there.
-func (e *Engine) inOpenSyncSet(member *Issue, repo string) (bool, error) {
-	owner, name := splitRepo(repo)
-	rows, err := e.api.IssueBlocks(owner, name, member.Number)
-	if err != nil {
-		return false, fmt.Errorf("sync sets of %s#%d: %w", repo, member.Number, err)
-	}
-	for i := range rows {
-		b := &rows[i]
-		if !b.IsPull && b.State == "open" && hasLabel(b, LabelSync) {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // rowRepository is the repository a blocks or dependencies row lives in,

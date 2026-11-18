@@ -319,33 +319,43 @@ warning back (§forgejo/decisions/actions).
   forest's own rows are set aside, and holding nothing else off
   (§forgejo/decisions/merge-gate, §forgejo/decisions/sync-set): still
   open, still mergeable, approved at head by every lens with no
-  non-approval above it, no open work order of the member — nor of a
-  sibling the delivery's body also names — ahead of it, and — for a
-  member of a landing set — no open set whose landing it waits on. The
-  sibling question is the gate's own, asked of every issue the delivery
-  names; a sibling whose repository the remit will not admit holds the
-  warning back, because what the walk may not read it does not assert
-  (§forgejo/webhook/repository-roles). Each of those holds is the merge
-  gate waiting on work rather than on a person, and so warns nothing:
-  the ⚠️ asserts that a human is the remaining wait and must not fire
-  where the gate is waiting on work. The forest's own rows are the one
-  carve-out, under the argument the next bullet gives for the human
-  task's: the root's membership edge is open for as long as the forest
-  is, so a stale warning that counted it could never fire on a live
-  forest at all (§forgejo/decisions/commissioning). Where that edge is
-  a delivery's only remaining hold, the wait is the forest's closing,
-  and closing the root is a person's act — the ⚠️ still says a person
-  is what remains, even where the merge gate counts the edge and holds
-  the merge until the forest closes
-  (§forgejo/decisions/merge-gate). It warns once the shape has held
-  longer than the **stale-merge threshold**, the `stale_merge_threshold`
-  config option, one hour where the config says nothing
-  (§forgejo/config/validation). The wait is dated from the verdict that
-  satisfied the chain — the latest of the standing approvals — so an
-  approval a moment old is not stale and a head that has since moved is
-  not approved at all. A verdict that carries no moment dates nothing, and
-  the walk says nothing rather than borrowing another object's timestamp
-  for it; a Forgejo review always carries one.
+  non-approval above it, no open blocker of any issue the delivery
+  connects — those its body names and those its blocking edges name —
+  ahead of it, and no open landing set whose landing it waits on.
+  That question is the merge gate's, so it is asked the gate's way:
+  through the connected-issues read the gate reads, whose open blockers
+  the gate names and whose landing-set membership the gate names
+  (§forgejo/webhook/re-fetch). The view keeps no second definition of
+  "stale" for a change to the gate to strand — a warning that asked its
+  own list of rows would be a promise two files had to keep alike — and
+  each of those holds is the gate waiting on work rather than on a
+  person, so the ⚠️ that asserts a human is the remaining wait says
+  nothing. Two answers the gate path forces on a merge are turned the
+  other way here, because the view has no merge to protect and an
+  unchecked wait is not asserted: a reference into a repository the
+  remit will not admit, and a body naming more references than the read
+  budget pays, hold the warning back rather than failing the view
+  (§forgejo/webhook/repository-roles, §forgejo/webhook/re-fetch). What
+  the screen admits is resolved as the gate resolves it, so the answers
+  the forge itself ignores — a dangling reference, a reference naming a
+  pull request — are ordinary here too, connecting nothing rather than
+  answering an outage. The forest's own rows are the one carve-out,
+  under the argument the next bullet gives for the human task's: the
+  root's membership edge is open for as long as the forest is, so a
+  stale warning that counted it could never fire on a live forest at all
+  (§forgejo/decisions/commissioning). Where that edge is a delivery's
+  only remaining hold, the wait is the forest's closing, and closing the
+  root is a person's act — the ⚠️ still says a person is what remains,
+  even where the merge gate counts the edge and holds the merge until
+  the forest closes (§forgejo/decisions/merge-gate). It warns once the
+  shape has held longer than the **stale-merge threshold**, the
+  `stale_merge_threshold` config option, one hour where the config says
+  nothing (§forgejo/config/validation). The wait is dated from the
+  verdict that satisfied the chain — the latest of the standing
+  approvals — so an approval a moment old is not stale and a head that
+  has since moved is not approved at all. A verdict that carries no
+  moment dates nothing, and the walk says nothing rather than borrowing
+  another object's timestamp for it; a Forgejo review always carries one.
 - **`human_task_blocking`** — an open member carrying `human-task`
   (§forgejo/decisions/transition-table) whose blockers are all closed,
   so nothing stands between the person and the ticket. The forest's own
@@ -372,23 +382,25 @@ a human has been unnecessary, not whether the engine has acted
 (§forgejo/state/watermark).
 
 A blocking-edge row names whichever repository its author had in mind, so
-the walk admits a member's repository the way every other
-cross-repository read admits one: the scope test runs before anything is
-read there (§forgejo/webhook/repository-roles,
-§forgejo/webhook/re-fetch). A row whose repository holds no maitred role
-is read nowhere and warns nothing — an authored edge must not direct the
-engine's token into a repository no role names and publish what it finds
-on this unauthenticated port — and scope the engine cannot establish
-fails the walk rather than reading on. A repository whose pull requests
+the walk admits a member's repository the way every other cross-repository
+read admits one: the scope test runs before anything is read there
+(§forgejo/webhook/repository-roles, §forgejo/webhook/re-fetch). A row
+whose repository holds no maitred role is read nowhere and warns nothing
+— an authored edge must not direct the engine's token into a repository
+no role names and publish what it finds on this unauthenticated port —
+and scope the engine cannot establish fails the walk rather than reading
+on. A delivery's body chooses which issues the stale question reaches, so
+its references pay the same test and the same read cap before anything is
+resolved (§forgejo/webhook/re-fetch). A repository whose pull requests
 unit is off is not asked, the way the sweep does not ask it
 (§forgejo/reconciliation/the-sweep): it holds no delivery, which is an
-ordinary state and not a failed read. A member's blockers are read once
-and answer both predicates — the human task's "every work order closed"
-and the merge gate's "nothing open ahead of this head" are the same
-question — and a landing-set member costs one further membership read,
-paid only for a wait that would otherwise warn. The pull-request listing
-is shared per repository, the sharing the landing-set predicate already
-applies (§forgejo/decisions/sync-set).
+ordinary state and not a failed read. The two predicates ask
+different questions and pay for them separately: a human task reads the
+member's own blockers, and a stalled delivery costs the connected-issues
+read the gate pays, bounded by the cap that bounds the gate's. Both are
+paid only for a wait that would otherwise warn, after the head's own
+checks. The pull-request listing is shared per repository, the sharing
+the landing-set predicate already applies (§forgejo/decisions/sync-set).
 
 What is left to fail is a read the engine should have been able to pay,
 and one such failure fails the whole enumeration: the endpoint answers

@@ -704,7 +704,7 @@ func isNotFound(err error) bool {
 
 // maxAutoCloseRefs caps the number of references connectedIssues
 // resolves. The authoring contract needs one or two; the cap bounds
-// the per-reference fan-out the approval path pays (one issue read and
+// the per-reference fan-out that resolving pays (one issue read and
 // one blockers row per resolved reference) against a body written to
 // cost the engine the delivery (§forgejo/webhook/re-fetch). It is
 // charged where that fan-out happens — beside the issue read — so a
@@ -714,10 +714,16 @@ func isNotFound(err error) bool {
 // refusal and test but meets the cap marks the read as incomplete,
 // and the re-fetch fails on it rather than answering with the rows
 // it happened to collect: which references survive must never be
-// decided by the body being read. The cap belongs to that resolving
-// loop, not to the grammar: the predicate's read of the same body is
-// pure in-memory matching that costs nothing per reference, and #180
-// asks nothing of it.
+// decided by the body being read.
+//
+// The cap belongs to that resolving loop, not to the grammar, and every
+// caller that resolves pays it: the re-fetch, whose overflow is a hold-off
+// naming the incompleteness, and the outcomes walk of a stalled delivery,
+// which screens its body against the same budget before it reads anything
+// (§forgejo/observability/the-warnings-a-forest-carries). What costs
+// nothing per reference is the grammar alone — the delivery relation's
+// match and the walk's screening are in-memory reads of the same body, and
+// #180 asks nothing of them.
 const maxAutoCloseRefs = 8
 
 // autoCloseRefs lists the issues a pull request body auto-closes, in

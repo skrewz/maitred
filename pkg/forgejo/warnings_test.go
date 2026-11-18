@@ -16,13 +16,16 @@ import (
 
 // warningsForest loads api with a forest whose root is 51, whose tracker
 // is 71, and whose single open member is member, and returns the member
-// so the case can place its labels.
+// so the case can place its labels. The member is registered where the
+// connected-issues read resolves a closing reference — the way the forge
+// answers one that names an issue that exists (§forgejo/webhook/re-fetch).
 func warningsForest(api *fakeAPI, member Issue) {
 	api.repos = []Repository{testRepo("o/r"), outcomesRepo("o/out")}
 	root := outcomesRoot(51, "UI for human review")
 	tracker := outcomesTracker(71, "forest tracker")
 	api.openIssues["out"] = []Issue{root, tracker}
 	api.blocks[51] = []Issue{tracker, member}
+	api.issues[member.Number] = &member
 }
 
 // warningsMember builds an open member of o/r carrying the given labels.
@@ -340,6 +343,7 @@ func TestForestWarnings_FailedReadFailsTheEnumeration(t *testing.T) {
 		{"blocker read", func(f *fakeAPI) { f.issueDepsErr = errWarnFixture }},
 		{"pull request read", func(f *fakeAPI) { f.pullErr = errWarnFixture }},
 		{"membership read", func(f *fakeAPI) { f.issueBlocksErrOn = map[int]error{22: errWarnFixture} }},
+		{"connected-issues read", func(f *fakeAPI) { f.issueBlocksErrOn = map[int]error{922: errWarnFixture} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			eng, api, _, _ := newTestEngine(t)
@@ -358,6 +362,178 @@ func TestForestWarnings_FailedReadFailsTheEnumeration(t *testing.T) {
 }
 
 var errWarnFixture = &APIError{StatusCode: 500, Message: "read failed"}
+
+// TestForestWarnings_ConnectedEdgeBlockerHoldsOffDoesNotWarn: the gate
+// asks the blockers of every issue the delivery connects — those its body
+// names and those its blocking edges name — so an open blocker of an issue
+// the delivery merely blocks holds the ⚠️ back too, whichever direction
+// the relation ran through (§forgejo/decisions/merge-gate,
+// §forgejo/webhook/re-fetch).
+func TestForestWarnings_ConnectedEdgeBlockerHoldsOffDoesNotWarn(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(40, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	connected := Issue{Number: 41, Title: "edge", State: "open", Repository: "o/r", UpdatedAt: testUpdatedAt}
+	api.blocks[pr.Number] = []Issue{connected}
+	api.deps[41] = []Issue{{
+		Number: 42, Title: "the edge's work", State: "open", Repository: "o/r",
+		UpdatedAt: testUpdatedAt,
+	}}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests[0].Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none while an issue the delivery blocks has work open", forests[0].Warnings)
+	}
+}
+
+// TestForestWarnings_DirectSetMembershipHoldsOffDoesNotWarn: a delivery
+// that blocks the grouping issue **directly** is a member whose delivery is
+// itself, and the gate holds such a set's delivery off (§decisions/sync-set
+// reads the row both ways). The grouping issue's only open blocker is the
+// delivery itself, which the gate excludes, so it is the set membership —
+// read from the row the connected-issues read already holds — that keeps
+// the ⚠️ from claiming a person is the wait (§forgejo/decisions/sync-set).
+func TestForestWarnings_DirectSetMembershipHoldsOffDoesNotWarn(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(43, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	set := Issue{Number: 44, Title: "grouping", State: "open", Repository: "o/r", Labels: []string{LabelSync}}
+	api.blocks[pr.Number] = []Issue{set}
+	api.deps[44] = []Issue{{
+		Number: pr.Number, Title: "pr", State: "open", Repository: "o/r", IsPull: true,
+		UpdatedAt: testUpdatedAt,
+	}}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests[0].Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none while the delivery is a member of an open set", forests[0].Warnings)
+	}
+}
+
+// TestForestWarnings_SiblingOutOfRemitHoldsOffDoesNotWarn: a co-delivered
+// sibling in a repository no role names cannot be read, and what the walk
+// may not read it does not assert — the sibling holds the warning back, and
+// the repository costs no read, because a body reference must not direct
+// the engine's token wherever the author pointed it
+// (§forgejo/webhook/repository-roles, §forgejo/webhook/re-fetch,
+// §forgejo/observability/the-warnings-a-forest-carries).
+func TestForestWarnings_SiblingOutOfRemitHoldsOffDoesNotWarn(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(45, LabelAgenticAutoMerge)
+	sibling := warningsMember(46, LabelAgenticAutoMerge)
+	sibling.Repository = "archive/r"
+	warningsForest(api, member)
+	api.repos = append(api.repos, testRepoDisabled("archive/r"))
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	pr.Body += " and Fixes " + sibling.Repository + "#" + strconv.Itoa(sibling.Number)
+	api.openPulls["r"] = []PullRequest{pr}
+	api.pulls[pr.Number] = &pr
+	api.deps[sibling.Number] = []Issue{{
+		Number: 47, State: "closed", Repository: "archive/r", UpdatedAt: testUpdatedAt,
+	}}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests[0].Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none from a sibling the remit will not let the walk read", forests[0].Warnings)
+	}
+	for _, op := range []string{"GetIssue:archive", "IssueDependencies:archive"} {
+		if n := api.callCount(op); n != 0 {
+			t.Errorf("%s paid %d time(s); an out-of-remit reference must cost no read", op, n)
+		}
+	}
+}
+
+// TestForestWarnings_PathSegmentReferenceHoldsOffDoesNotWarn: the closing
+// grammar's character class admits dots, so a body can name `../x#5`. The
+// walk refuses the shape before any URL is built, as the resolving loop
+// does, rather than leaning on what the scope cache happens to hold
+// (§forgejo/webhook/re-fetch).
+func TestForestWarnings_PathSegmentReferenceHoldsOffDoesNotWarn(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(48, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	pr.Body += " and Fixes ../x#5"
+	api.openPulls["r"] = []PullRequest{pr}
+	api.pulls[pr.Number] = &pr
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests[0].Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none from a reference that names no repository", forests[0].Warnings)
+	}
+	if n := api.callCount("GetIssue:x"); n != 0 {
+		t.Errorf("GetIssue:x paid %d time(s); the reference names a path segment", n)
+	}
+}
+
+// TestForestWarnings_BeyondTheReadCapHoldsOffDoesNotWarn: the body is the
+// author's, so it must not choose how many reads the sweep pays. A body
+// naming more references than the resolving budget pays costs no read at
+// all and asserts no wait — and above all does not fail the view, which is
+// what the re-fetch does when it has a merge to protect
+// (§forgejo/webhook/re-fetch, §forgejo/observability/the-warnings-a-forest-carries).
+func TestForestWarnings_BeyondTheReadCapHoldsOffDoesNotWarn(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(49, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	for i := 0; i <= maxAutoCloseRefs; i++ {
+		pr.Body += " Fixes o/r#" + strconv.Itoa(200+i)
+	}
+	api.openPulls["r"] = []PullRequest{pr}
+	api.pulls[pr.Number] = &pr
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests[0].Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none from a body the read budget cannot finish", forests[0].Warnings)
+	}
+	if n := api.callCount("GetIssue"); n != 0 {
+		t.Errorf("GetIssue paid %d time(s); a body beyond the cap must cost no resolving read", n)
+	}
+}
+
+// TestForestWarnings_DanglingReferenceIsNotAnOutage: a closing reference
+// whose issue is not there is the answer the forge itself ignores, so it
+// connects nothing here as it does for the gate — it must not answer 500
+// for every forest in the organisation until somebody edits the body
+// (§forgejo/webhook/re-fetch, §forgejo/observability/the-outcomes-view).
+func TestForestWarnings_DanglingReferenceIsNotAnOutage(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(50, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	pr.Body += " and Fixes o/r#9999999"
+	api.openPulls["r"] = []PullRequest{pr}
+	api.pulls[pr.Number] = &pr
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v; a reference the forge ignores must not fail the view", err)
+	}
+	if len(forests[0].Warnings) != 1 || forests[0].Warnings[0].Kind != WarningStaleAgenticMerge {
+		t.Fatalf("warnings = %+v, want the stale ⚠️ the member's shape carries", forests[0].Warnings)
+	}
+	if n := api.callCount("IssueDependencies:r/50"); n != 1 {
+		t.Errorf("the member's blockers read paid %d time(s), want 1: the dangling reference must not skip the wait it names", n)
+	}
+}
 
 // TestForestWarnings_MergeGateBlockerHoldsOffDoesNotWarn: the merge gate
 // holds an approved head off on an open blocker of the issue it delivers,
@@ -396,6 +572,7 @@ func TestForestWarnings_CoDeliveredSiblingHoldsOffDoesNotWarn(t *testing.T) {
 	warningsForest(api, member) // the walk visits only the member
 	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
 	pr.Body += " and Fixes " + sibling.Repository + "#" + strconv.Itoa(sibling.Number)
+	api.issues[sibling.Number] = &sibling
 	api.openPulls["r"] = []PullRequest{pr}
 	api.pulls[pr.Number] = &pr
 	api.deps[sibling.Number] = []Issue{{
