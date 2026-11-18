@@ -687,11 +687,16 @@ func stageForest(api *fakeAPI, root, tracker Issue) {
 	api.blocks[root.Number] = []Issue{tracker}
 }
 
-// TestForests_ChartIsScrapedFromTheTrackersBody: the forest carries the
-// Mermaid source of its tracker's current-state block and that block's
-// recency stamp as separate fields, and every ragged edge publishes
-// nothing rather than a guessed picture
-// (§forgejo/observability/the-outcomes-view).
+// TestForests_ChartIsScrapedFromTheTrackersBody: one table of tracker
+// descriptions, each stating the picture it publishes and the line it
+// leaves in the log. The two fields are the payload's two statements,
+// refused per field rather than per region, and every ragged edge publishes
+// nothing rather than a guessed picture. An empty why is the assertion that
+// the enumeration stayed silent — how "nothing was written yet" reads, at
+// every level — and a why is the rule a region that was there refused by,
+// named once per tick at Debug so a marker that drifted away from what the
+// curating agent writes reads differently from a forest nobody has
+// catalogued (§forgejo/observability/the-outcomes-view).
 func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 	const stamp = "2026-11-16 09:12 AEDT"
 	cases := []struct {
@@ -699,6 +704,7 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 		body      string
 		wantChart string
 		wantStamp string
+		why       string
 	}{
 		{
 			name:      "one pair, block and stamp",
@@ -707,68 +713,84 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 			wantStamp: stamp,
 		},
 		{
-			name:      "no fence pair at all",
-			body:      "## Outcome\n\nNothing was ever delimited here.\n",
-			wantChart: "",
-			wantStamp: "",
+			name:      "a CET stamp is carried as written",
+			body:      currentStateBlock("2026-11-16 09:12 CET", mermaidBlock()),
+			wantChart: forestChartSource,
+			wantStamp: "2026-11-16 09:12 CET",
+		},
+		{
+			// The view's first silence: a description nobody has delimited
+			// is an uncatalogued forest, an ordinary state.
+			name: "no fence pair at all",
+			body: "## Outcome\n\nNothing was ever delimited here.\n",
+		},
+		{
+			// The view's other silence: the label the writer's template
+			// carries, with no value yet — the stamp unwritten, the picture
+			// beside it standing.
+			name:      "a stamp line carrying nothing",
+			body:      currentStateBlock("", mermaidBlock()),
+			wantChart: forestChartSource,
 		},
 		{
 			name: "two fence pairs are ambiguous",
 			body: currentStateBlock(stamp, mermaidBlock()) + "\n" +
 				currentStateBlock("2025-01-01 00:00 AEDT", mermaidBlock()),
-			wantChart: "",
-			wantStamp: "",
+			why: "the fence pair is not exactly one begin and one end",
 		},
 		{
-			name:      "the end marker precedes the begin marker",
-			body:      forestFenceEnd + "\n```mermaid\n" + forestChartSource + "\n```\n" + forestFenceBegin,
-			wantChart: "",
-			wantStamp: "",
+			name: "the end marker precedes the begin marker",
+			body: forestFenceEnd + "\n```mermaid\n" + forestChartSource + "\n```\n" + forestFenceBegin,
+			why:  "the end marker sits before the begin marker",
 		},
 		{
 			name:      "the pair holds prose but no Mermaid fence",
 			body:      currentStateBlock(stamp, "The graph would go here, but none was written."),
-			wantChart: "",
 			wantStamp: stamp,
-		},
-		{
-			name:      "the block carries no stamp",
-			body:      forestFenceBegin + "\n\n" + mermaidBlock() + "\n\n" + forestFenceEnd,
-			wantChart: forestChartSource,
-			wantStamp: "",
-		},
-		{
-			name:      "the Mermaid fence is never closed",
-			body:      forestFenceBegin + "\n```mermaid\n" + forestChartSource + "\n" + forestFenceEnd,
-			wantChart: "",
-			wantStamp: "",
-		},
-		{
-			// A block completed above a dangling opener is a description
-			// mid-edit, and which of the two is current is not guessable:
-			// the region publishes nothing for the picture it half-holds.
-			name:      "a complete block above an unclosed fence",
-			body:      currentStateBlock(stamp, mermaidBlock()+"\n\n"+"```mermaid\n\tmore"),
-			wantChart: "",
-			wantStamp: stamp,
+			why:       "the region holds no closed Mermaid block",
 		},
 		{
 			name:      "the pair holds two Mermaid blocks",
 			body:      currentStateBlock(stamp, mermaidBlock()+"\n\n"+mermaidBlock()),
-			wantChart: "",
 			wantStamp: stamp,
+			why:       "the region holds more than one Mermaid block",
+		},
+		{
+			name:      "the Mermaid fence is never closed",
+			body:      currentStateBlock(stamp, "```mermaid\n"+forestChartSource),
+			wantStamp: stamp,
+			why:       "the region holds an unclosed Mermaid fence",
+		},
+		{
+			// A block completed above a dangling opener is a description
+			// mid-edit, and which of the two is the current one is no more
+			// guessable than which of two fence pairs is.
+			name:      "a complete block above an unclosed fence",
+			body:      currentStateBlock(stamp, mermaidBlock()+"\n\n```mermaid\n\tmore"),
+			wantStamp: stamp,
+			why:       "the region holds an unclosed Mermaid fence",
 		},
 		{
 			name:      "a second opener appears before the first block closes",
 			body:      currentStateBlock(stamp, "```mermaid\n"+forestChartSource+"\n```mermaid\n\tmore\n```"),
-			wantChart: "",
 			wantStamp: stamp,
+			why:       "the region holds an unclosed Mermaid fence",
+		},
+		{
+			// The line is the evidence the region was written to the
+			// contract at all, so its absence is drift rather than the
+			// unwritten stamp above it, and this is the one state whose
+			// picture publishes while the log speaks.
+			name:      "the region holds no stamp line",
+			body:      forestFenceBegin + "\n\n" + mermaidBlock() + "\n\n" + forestFenceEnd,
+			wantChart: forestChartSource,
+			why:       "the region holds no stamp line",
 		},
 		{
 			name:      "the pair holds two stamp lines",
 			body:      currentStateBlock(stamp+"\n\nLast revisited: 2025-01-01 00:00 AEDT", mermaidBlock()),
 			wantChart: forestChartSource,
-			wantStamp: "",
+			why:       "the region holds more than one stamp line",
 		},
 		{
 			// The label is what is counted, not the value: an unwritten
@@ -777,18 +799,14 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 			name:      "a stamp line carrying nothing then one carrying the stamp",
 			body:      currentStateBlock("\n\nLast revisited: "+stamp, mermaidBlock()),
 			wantChart: forestChartSource,
-			wantStamp: "",
-		},
-		{
-			name:      "a CET stamp is carried as written",
-			body:      currentStateBlock("2026-11-16 09:12 CET", mermaidBlock()),
-			wantChart: forestChartSource,
-			wantStamp: "2026-11-16 09:12 CET",
+			why:       "the region holds more than one stamp line",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			eng, api, _, _ := newTestEngine(t)
+			var log bytes.Buffer
+			eng, api, _, _ := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log,
+				&slog.HandlerOptions{Level: slog.LevelDebug})))
 			api.repos = []Repository{outcomesRepo("o/out")}
 			root := outcomesRoot(51, "root")
 			tracker := outcomesTracker(71, "tracker")
@@ -808,118 +826,19 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 			if forests[0].ChartRevisited != tc.wantStamp {
 				t.Errorf("chart_revisited = %q, want %q", forests[0].ChartRevisited, tc.wantStamp)
 			}
-		})
-	}
-}
-
-// TestForests_ARefusedRegionSaysWhichRuleRefused: a region that was there
-// and was refused leaves one Debug line naming the tracker and the rule,
-// so a marker that drifted away from what the curating agent writes reads
-// differently from a forest nobody has catalogued yet
-// (§forgejo/observability/the-outcomes-view).
-func TestForests_ARefusedRegionSaysWhichRuleRefused(t *testing.T) {
-	cases := []struct {
-		name string
-		body string
-		why  string
-	}{
-		{
-			name: "a second fence pair",
-			body: currentStateBlock("2026-11-16 09:12 AEDT", mermaidBlock()) + "\n" +
-				currentStateBlock("2025-01-01 00:00 AEDT", mermaidBlock()),
-			why: "the fence pair is not exactly one begin and one end",
-		},
-		{
-			name: "an end marker before its begin",
-			body: forestFenceEnd + "\n" + mermaidBlock() + "\n" + forestFenceBegin,
-			why:  "the end marker sits before the begin marker",
-		},
-		{
-			name: "two pictures in one region",
-			body: currentStateBlock("2026-11-16 09:12 AEDT", mermaidBlock()+"\n\n"+mermaidBlock()),
-			why:  "the region holds more than one Mermaid block",
-		},
-		{
-			name: "two stamps in one region",
-			body: currentStateBlock("2026-11-16 09:12 AEDT\n\nLast revisited: 2025-01-01 00:00 AEDT", mermaidBlock()),
-			why:  "the region holds more than one stamp line",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var log bytes.Buffer
-			eng, api, _, _ := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log,
-				&slog.HandlerOptions{Level: slog.LevelDebug})))
-			api.repos = []Repository{outcomesRepo("o/out")}
-			root := outcomesRoot(51, "root")
-			tracker := outcomesTracker(71, "tracker")
-			tracker.Body = tc.body
-			stageForest(api, root, tracker)
-
-			if _, err := eng.enumerateForests(); err != nil {
-				t.Fatalf("enumerateForests: %v", err)
+			if tc.why == "" {
+				if out := log.String(); out != "" {
+					t.Errorf("the enumeration logged %q, want silence: nothing written yet is not a fault", out)
+				}
+				return
 			}
 			line := findEntry(t, parseLogLines(t, log.Bytes()),
 				"outcomes: a tracker's current-state region refused; publishing nothing for the refused field")
 			if line["why"] != tc.why {
-				t.Errorf("why = %v, want %q", line["why"], tc.why)
+				t.Errorf("why = %v, want %q: the line names the rule that refused", line["why"], tc.why)
 			}
 			if line["tracker"] != "o/out#71" {
 				t.Errorf("tracker = %v, want o/out#71: a refusal names whose description refused", line["tracker"])
-			}
-		})
-	}
-}
-
-// TestForests_NoPictureWrittenYetStaysSilent: the states that mean "the
-// picture has not been written yet" — a description carrying neither
-// marker, and a region whose stamp line is still the empty placeholder —
-// publish nothing for what they leave unwritten and say nothing at any
-// level, because an uncatalogued forest is an ordinary state and a sentence
-// per tick would bury the failures the log is for
-// (§forgejo/observability/the-outcomes-view).
-func TestForests_NoPictureWrittenYetStaysSilent(t *testing.T) {
-	cases := []struct {
-		name      string
-		body      string
-		wantChart string
-	}{
-		{
-			name:      "no fence pair at all",
-			body:      "## Outcome\n\nNothing was ever delimited here.\n",
-			wantChart: "",
-		},
-		{
-			// The picture this region holds is untouched by a stamp the
-			// writer never filled in: the refusal is per field.
-			name:      "a stamp line carrying nothing",
-			body:      currentStateBlock("", mermaidBlock()),
-			wantChart: forestChartSource,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var log bytes.Buffer
-			eng, api, _, _ := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log,
-				&slog.HandlerOptions{Level: slog.LevelDebug})))
-			api.repos = []Repository{outcomesRepo("o/out")}
-			root := outcomesRoot(51, "root")
-			tracker := outcomesTracker(71, "tracker")
-			tracker.Body = tc.body
-			stageForest(api, root, tracker)
-
-			forests, err := eng.enumerateForests()
-			if err != nil {
-				t.Fatalf("enumerateForests: %v", err)
-			}
-			if len(forests) != 1 || forests[0].ChartRevisited != "" {
-				t.Fatalf("forests = %+v, want the one forest with its stamp empty", forests)
-			}
-			if forests[0].Chart != tc.wantChart {
-				t.Errorf("chart = %q, want %q: an unwritten stamp is the stamp's own absence, not the picture's", forests[0].Chart, tc.wantChart)
-			}
-			if out := log.String(); out != "" {
-				t.Errorf("the enumeration logged %q, want silence: nothing written yet is not a fault", out)
 			}
 		})
 	}
