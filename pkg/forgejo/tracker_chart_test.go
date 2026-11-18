@@ -462,6 +462,12 @@ func TestTrackerBlock_SweepWritesTheBlock(t *testing.T) {
 	if got := api.writeCount(); got != 1 {
 		t.Errorf("the sweep wrote %d issues, want the one tracker", got)
 	}
+	// The drawing is the tick's last step: nothing the walk reads may come
+	// after the write, or a slow forge would stand between the sweep and its
+	// first decision (§forgejo/reconciliation/the-sweep).
+	if last := api.calls[len(api.calls)-1]; !strings.HasPrefix(last, "UpdateIssueBody") {
+		t.Errorf("the sweep's last call was %s, want the tracker write to come after the walk", last)
+	}
 
 	// The forest has not moved and the tick below lands the same minute,
 	// so the second sweep converges rather than rewriting what it just

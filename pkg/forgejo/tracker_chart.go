@@ -61,9 +61,11 @@ var errFenceAmbiguous = errors.New("the tracker's fence pair is ambiguous")
 // §forgejo/reconciliation/the-tracker-block). Each forest stands or falls on its
 // own: a read that fails, a graph the renderer refuses and a write the forge
 // refuses are logged naming that forest and skipped, so one ragged forest costs
-// the others nothing and the tick carries on to the walk. at is the moment the
-// stamp carries; it is a parameter rather than a clock read here so a test can
-// watch the stamp move while the graph stands still.
+// the others nothing. The walk has already decided and dispatched by the time
+// this runs — the drawing is the tick's last step, never a decision's
+// predecessor. at is the moment the stamp carries; it is a parameter rather
+// than a clock read here so a test can watch the stamp move while the graph
+// stands still.
 func (e *Engine) writeTrackerBlocks(forests []Forest, at time.Time) {
 	for _, forest := range forests {
 		// A forest whose tracker is missing states its absence through the
@@ -233,6 +235,12 @@ func (e *Engine) renderForestChart(forest Forest) (string, error) {
 // business, not the chart's — and the renderer refuses an edge naming no node on
 // either side, so filtering here is what keeps one wide blocking edge from
 // failing the whole forest.
+//
+// The listing is read again rather than handed down from the enumeration that
+// paired the root with its tracker: the walk runs between the two, so the
+// drawing depicts the graph as it stands when it is drawn rather than rows
+// remembered from before the decisions the same tick made
+// (§forgejo/reconciliation/the-sweep).
 func (e *Engine) forestGraph(root *Issue) ([]Issue, []renderer.Edge, error) {
 	blocked, err := e.rowsBlocked(root)
 	if err != nil {

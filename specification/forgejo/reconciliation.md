@@ -42,14 +42,7 @@ created while the engine was down.
    from the engine's start. Where a walk does overrun one, the set ages
    out while that walk runs, which is the one-interval bound holding
    rather than a hole in it.
-3. **Write the trackers' current-state blocks.** For every forest the
-   step above enumerated, render its graph and land the drawing on that
-   forest's tracker (§forgejo/reconciliation/the-tracker-block). Like
-   step 2 this is the tick paying so no request path has to: the chart
-   is as current as the forest set the outcomes view is served from.
-   A forest whose write fails is reported and skipped — it neither
-   stops the walk below nor fails the tick.
-4. **Enumerate the objects.** For each such repository, list **all**
+3. **Enumerate the objects.** For each such repository, list **all**
    open issues and all open pull requests
    (§forgejo/client/operations). The issue list includes pull requests
    (Forgejo represents them as issues); the sweep skips the ones marked
@@ -62,12 +55,23 @@ created while the engine was down.
    into an error line and no pull-request decision can come of it
    (§forgejo/client/operations). Issues are still listed and decided as
    usual.
-5. **Decide and dispatch.** For each listed object, feed the synthetic
+4. **Decide and dispatch.** For each listed object, feed the synthetic
    `reconcile` event (§forgejo/decisions/inputs) through the **same
    pipeline as the event path** (§forgejo/webhook/the-pipeline):
    re-fetch, decide, dispatch, watermark — serialised on the watermark
    store's per-key lock (§forgejo/state/concurrency). The sweep shares
    the decision function and the event path; no logic is duplicated.
+5. **Write the trackers' current-state blocks.** For every forest step 2
+   enumerated, render its graph and land the drawing on that forest's
+   tracker (§forgejo/reconciliation/the-tracker-block). Like step 2 this is
+   the tick paying so no request path has to: the chart is as current as the
+   forest set the outcomes view is served from. It comes **last** because it
+   is the step that changes nothing the tick decides: a forge that has gone
+   slow must not put the drawing between the sweep and a decision, and
+   nothing downstream needs the block written first — the digest excludes a
+   tracker's body and its `updated_at`
+   (§forgejo/decisions/actionable-state-digest). A forest whose write fails
+   is reported and skipped: it neither fails the tick nor delays a decision.
 
 The synthetic event carries no sender.
 
