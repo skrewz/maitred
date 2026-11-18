@@ -835,6 +835,27 @@ func TestRevisionFacts_NamesWhatTheDigestHides(t *testing.T) {
 	}
 }
 
+// TestTrackerBlock_BoundReFireNamesTheFolds: the line a bounded wrap-up re-fire
+// leaves is the one an operator reads when a tracker seems not to wake an agent,
+// and a tracker's revision is a digest — so that third quote names the facts
+// behind it, as the two rows that dispatch do (§forgejo/state/watermark,
+// §forgejo/observability/the-decision-log).
+func TestTrackerBlock_BoundReFireNamesTheFolds(t *testing.T) {
+	eng, _, log := chartForestEngine(t, chartFenced())
+	eng.Reconcile()
+	eng.Reconcile()
+
+	reason := lastReasonFor(t, log, "o/out/issue/2")
+	if !strings.Contains(reason, "re-fire is bounded") {
+		t.Fatalf("reason %q, want the second sweep's bounded wrap-up re-fire", reason)
+	}
+	for _, want := range []string{"state open", "label " + LabelOutcome, "body "} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("reason %q names no %q: the revision was quoted as a bare digest", reason, want)
+		}
+	}
+}
+
 // TestSpliceStateBlock covers the region rules directly, including the two
 // ragged shapes a hand-authored tracker can have
 // (§forgejo/reconciliation/the-tracker-block).

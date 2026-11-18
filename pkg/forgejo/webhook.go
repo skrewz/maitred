@@ -1331,9 +1331,25 @@ func (e *Engine) boundReFire(key Key, ev Event, st State, d Decision) Decision {
 	}
 	rev := revisionFor(ev, st)
 	if e.reFiredRecently(key, d.Action, rev) {
-		return holdOffReFireBound(d.Action, rev, e.cfg.ReconcileInterval)
+		return holdOffReFireBound(d.Action, revisionWords(st.Issue, rev), e.cfg.ReconcileInterval)
 	}
 	return d
+}
+
+// revisionWords is the revision a bounded re-fire quotes in the words an
+// operator can line up against the forge's history: an `outcome` tracker's
+// revision is a digest no timestamp moves, so the line names the facts behind it
+// here as the rows that dispatch do (§forgejo/state/watermark,
+// §forgejo/observability/the-decision-log). Every other revision — an
+// `updated_at`, a pull request's head sha, a landing set's digest of its
+// grouping issue — is already a fact an operator can read, and the guard on a
+// digest that is not the tracker's own keeps a set revision, which describes
+// more than the one row, from being quoted as though it did not.
+func revisionWords(issue *Issue, quoted string) string {
+	if issue != nil && isTracker(issue) && quoted == issueRevision(issue) {
+		return revisionFacts(issue)
+	}
+	return quoted
 }
 
 // reFiredRecently reports whether this action's own stamp for key still
