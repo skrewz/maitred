@@ -363,6 +363,45 @@ func TestForestWarnings_FailedReadFailsTheEnumeration(t *testing.T) {
 
 var errWarnFixture = &APIError{StatusCode: 500, Message: "read failed"}
 
+// TestForestWarnings_ForestOwnRowsDoNotHoldTheStaleWarningBack: the root's
+// membership edge stands while the forest lives and the tracker is a gate for
+// the same reason, so a stalled delivery whose only remaining open blocker is
+// the root — or the tracker — still says a person is what remains, even where
+// the merge gate counts that edge and holds the merge off. Without the
+// carve-out no live forest would ever warn
+// (§forgejo/decisions/commissioning,
+// §forgejo/observability/the-warnings-a-forest-carries).
+func TestForestWarnings_ForestOwnRowsDoNotHoldTheStaleWarningBack(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		row  Issue
+	}{
+		{"the root's membership edge", outcomesRoot(51, "UI for human review")},
+		{"the forest's tracker", outcomesTracker(71, "forest tracker")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, _, _ := newTestEngine(t)
+			member := warningsMember(52, LabelAgenticAutoMerge)
+			warningsForest(api, member)
+			approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+			// The forest's own row reaches the ask the way the gate reads
+			// it: as an open blocker of the issue the delivery connects.
+			row := tc.row
+			row.Repository = "o/out"
+			api.deps[member.Number] = []Issue{row}
+
+			forests, err := eng.enumerateForests()
+			if err != nil {
+				t.Fatalf("enumerateForests: %v", err)
+			}
+			warns := forests[0].Warnings
+			if len(warns) != 1 || warns[0].Kind != WarningStaleAgenticMerge {
+				t.Fatalf("warnings = %+v, want the stale ⚠️ the forest's own row must not hold back", warns)
+			}
+		})
+	}
+}
+
 // TestForestWarnings_EdgeRowOutOfRemitHoldsOffDoesNotWarn: a blocking-edge row
 // names whichever repository its author had in mind, and the walk lists those
 // rows before it reads a reference, so a row pays the same admission test the
