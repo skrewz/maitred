@@ -394,7 +394,9 @@ its references pay the same test and the same read cap before anything is
 resolved (§forgejo/webhook/re-fetch). A repository whose pull requests
 unit is off is not asked, the way the sweep does not ask it
 (§forgejo/reconciliation/the-sweep): it holds no delivery, which is an
-ordinary state and not a failed read. The two predicates ask
+ordinary state and not a failed read — and *delivers nothing* is a state
+the engine says out loud, since it is also what a repository the snapshot
+does not know means (§forgejo/decisions/sync-set). The two predicates ask
 different questions and pay for them separately: a human task reads the
 member's own blockers, and a stalled delivery costs the connected-issues
 read the gate pays, bounded by the cap that bounds the gate's. Both are

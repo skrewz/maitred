@@ -963,14 +963,22 @@ func (e *Engine) syncMembers(blockers []Issue) ([]SyncMember, error) {
 // is not asked, the way the sweep does not ask it: the refusal is an
 // ordinary state, not a failed read (§forgejo/reconciliation/the-sweep).
 // A nil pull request, with no reviews and no error, says the member
-// delivers nothing.
+// delivers nothing — and says so in a line, the way every other dropped
+// relation does, because *delivers nothing* is also what a repository whose
+// pull requests unit is off answers, and what a repository a fresh snapshot
+// does not know answers, and a set that never lands wants to be diagnosable
+// rather than silent (§forgejo/decisions/sync-set,
+// §forgejo/webhook/the-scope-cache).
 func (e *Engine) deliveryPR(member *Issue, repo string, listings map[string][]PullRequest) (*PullRequest, []Review, error) {
 	owner, name := splitRepo(repo)
 	hasPulls, err := e.repoHasPullRequests(repo)
 	if err != nil {
 		return nil, nil, err
 	}
+	memberRef := repo + "#" + strconv.Itoa(member.Number)
 	if !hasPulls {
+		e.log.Debug("member delivers nothing: its repository holds no pull request",
+			"member", memberRef)
 		return nil, nil, nil
 	}
 	pulls, ok := listings[repo]
@@ -997,6 +1005,8 @@ func (e *Engine) deliveryPR(member *Issue, repo string, listings map[string][]Pu
 		}
 		return pr, reviews, nil
 	}
+	e.log.Debug("member delivers nothing: no open pull request auto-closes it",
+		"member", memberRef)
 	return nil, nil, nil
 }
 
