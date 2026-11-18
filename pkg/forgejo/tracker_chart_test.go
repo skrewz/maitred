@@ -450,7 +450,7 @@ func TestTrackerBlock_FailedReadWritesNothing(t *testing.T) {
 	if got := api.writeCount(); got != 0 {
 		t.Errorf("wrote %d issues, want none after a read failed", got)
 	}
-	if !strings.Contains(log.String(), "tracker read") {
+	if !strings.Contains(log.String(), "forge is unreachable") {
 		t.Errorf("log = %s, want the failed read named", log.String())
 	}
 }
@@ -575,6 +575,39 @@ func wrapUpTask(t *testing.T, q *fakeQueue) *queue.Task {
 		t.Fatal("the queue holds no wrap-up dispatch")
 	}
 	return last
+}
+
+// TestTrackerBlock_TrackerIsReadAtTheMomentItIsWritten: the description is
+// spliced against the body as it stands when the block is composed, not
+// against one read before a forest's worth of graph reads — otherwise a human
+// editing the prose outside the pair during the gather would have that edit
+// overwritten by the write that follows it
+// (§forgejo/reconciliation/the-tracker-block).
+func TestTrackerBlock_TrackerIsReadAtTheMomentItIsWritten(t *testing.T) {
+	eng, api, _ := chartForestEngine(t, chartFenced())
+	if err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
+		t.Fatalf("writeTrackerBlock: %v", err)
+	}
+
+	trackerRead, lastEdgeRead, write := -1, -1, -1
+	for i, call := range api.calls {
+		switch {
+		case strings.HasPrefix(call, "GetIssue:out/2"):
+			trackerRead = i
+		case strings.HasPrefix(call, "IssueBlocks:"):
+			lastEdgeRead = i
+		case strings.HasPrefix(call, "UpdateIssueBody:"):
+			write = i
+		}
+	}
+	switch {
+	case trackerRead < 0 || write < 0:
+		t.Fatalf("the tick made no tracker read or no write: %v", api.calls)
+	case trackerRead < lastEdgeRead:
+		t.Errorf("the tracker was read before the graph it is drawn from (%v)", api.calls)
+	case write != trackerRead+1:
+		t.Errorf("the write at %d did not follow the read at %d directly: %v", write, trackerRead, api.calls)
+	}
 }
 
 // TestTrackerBlock_BlocksReadFailureWritesNothing: an edge read that fails is the

@@ -95,16 +95,24 @@ func trackerRef(forest Forest) string {
 func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
 	owner, name := splitRepo(forest.Tracker.Repository)
 	ref := trackerRef(forest)
+	source, err := e.renderForestChart(forest)
+	if err != nil {
+		return fmt.Errorf("rendering %s: %w", ref, err)
+	}
+	// The description is read here, at the one moment the splice needs it,
+	// rather than before the gather that follows no longer exists: the window
+	// in which a human's edit outside the pair could be overwritten is then a
+	// request rather than a forest's worth of reads. The forge offers no
+	// conditional body write — this endpoint's parameters are the owner, the
+	// repository, the number and the body — so the race is narrowed, not
+	// closed, and inside one request the last writer still wins
+	// (§forgejo/client/the-one-mutation).
 	tracker, err := e.api.GetIssue(owner, name, forest.Tracker.Number)
 	if err != nil {
 		return fmt.Errorf("tracker read %s: %w", ref, err)
 	}
 	if tracker == nil {
 		return fmt.Errorf("tracker read %s: no issue returned", ref)
-	}
-	source, err := e.renderForestChart(forest)
-	if err != nil {
-		return fmt.Errorf("rendering %s: %w", ref, err)
 	}
 	body, err := spliceStateBlock(tracker.Body, stateBlock(source, at, e.cfg.ChartLocation()))
 	if err != nil {

@@ -92,7 +92,12 @@ rendered in the configured timezone (§forgejo/config/tracker-chart).
   decision through its digest (§forgejo/decisions/sync-set), so a stamp written
   there would re-dispatch a merge. The digest excludes a tracker's body and its
   `updated_at` for the mirror reason — the engine rewrites that region every
-  tick (§forgejo/decisions/actionable-state-digest).
+  tick (§forgejo/decisions/actionable-state-digest). The description is read at
+  the moment the block is spliced, not before the graph is gathered, so the
+  window in which an edit outside the pair could be lost is one request rather
+  than a forest's worth of reads; the body-write endpoint carries no conditional
+  write, so within that one request the last writer wins and the next tick
+  re-reads whatever it landed.
 - **The stamp moves whatever the graph does.** A tick over an unchanged forest
   rewrites the stamp and nothing else. Where the composed body is byte-identical
   to the body read — two ticks inside one minute over an unchanged graph —
