@@ -674,7 +674,7 @@ func mermaidBlock() string {
 // line and the given fenced block, with prose outside the pair
 // (§forgejo/observability/the-outcomes-view).
 func currentStateBlock(stamp, block string) string {
-	region := forestFenceBegin + "\n\n## Current state\n\nLast revisited: " + stamp + "\n\n" + block + "\n\n" + forestFenceEnd
+	region := fenceBegin + "\n\n## Current state\n\nLast revisited: " + stamp + "\n\n" + block + "\n\n" + fenceEnd
 	return "## Outcome\n\nThe prose a human wrote.\n\n" + region + "\n\nA footnote outside the pair.\n"
 }
 
@@ -740,7 +740,7 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 		},
 		{
 			name: "the end marker precedes the begin marker",
-			body: forestFenceEnd + "\n```mermaid\n" + forestChartSource + "\n```\n" + forestFenceBegin,
+			body: fenceEnd + "\n```mermaid\n" + forestChartSource + "\n```\n" + fenceBegin,
 			why:  "the end marker sits before the begin marker",
 		},
 		{
@@ -782,7 +782,7 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 			// unwritten stamp above it, and this is the one state whose
 			// picture publishes while the log speaks.
 			name:      "the region holds no stamp line",
-			body:      forestFenceBegin + "\n\n" + mermaidBlock() + "\n\n" + forestFenceEnd,
+			body:      fenceBegin + "\n\n" + mermaidBlock() + "\n\n" + fenceEnd,
 			wantChart: forestChartSource,
 			why:       "the region holds no stamp line",
 		},
@@ -876,7 +876,7 @@ func TestForests_AbsentTrackerPublishesNoPictureAndIsNotRead(t *testing.T) {
 // §forgejo/observability/the-outcomes-view).
 func TestForests_ChartComesFromTheTrackersRow(t *testing.T) {
 	eng, api, _, _ := newTestEngine(t)
-	api.repos = []Repository{outcomesRepo("o/out")}
+	api.repos = []Repository{outcomesRepo("o/out"), testRepo("o/elsewhere")}
 	root := outcomesRoot(51, "root")
 	tracker := outcomesTracker(71, "cross-repo tracker")
 	tracker.Repository = "o/elsewhere"
@@ -893,5 +893,66 @@ func TestForests_ChartComesFromTheTrackersRow(t *testing.T) {
 	}
 	if n := api.callCount("GetIssue:"); n != 0 {
 		t.Errorf("the walk made %d issue read(s), want none: the picture is scraped from the row the blocks read returned", n)
+	}
+}
+
+// TestForests_PicturePaysTheAdmissionTest: the scraped region is the
+// engine's own drawing, so the read half of the tracker block pays the
+// admission test the write half pays — a tracker in a repository a maitred
+// role names brings its picture, one no role names stays paired with the
+// picture withheld, so a repository outside the remit authors nothing the
+// unauthenticated view publishes as the engine's current state; the
+// refusal is Debug, the level every other cross-repository hop uses for
+// this sentence (§forgejo/webhook/repository-roles,
+// §forgejo/reconciliation/the-tracker-block,
+// §forgejo/observability/the-outcomes-view).
+func TestForests_PicturePaysTheAdmissionTest(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, _, _ := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log,
+		&slog.HandlerOptions{Level: slog.LevelDebug})))
+	api.repos = []Repository{outcomesRepo("o/out"), testRepo("o/elsewhere")}
+	root := outcomesRoot(51, "root")
+	admitted := outcomesTracker(71, "tracker in an admitted repository")
+	admitted.Repository = "o/elsewhere"
+	admitted.Body = currentStateBlock("2026-11-16 09:12 AEDT", mermaidBlock())
+	rootTwo := outcomesRoot(52, "second root")
+	refused := outcomesTracker(72, "tracker in an unadmitted repository")
+	refused.Repository = "o/archive"
+	refused.Body = currentStateBlock("2026-11-16 09:12 AEDT", mermaidBlock())
+	api.openIssues["out"] = []Issue{root, rootTwo}
+	api.blocks[51] = []Issue{admitted}
+	api.blocks[52] = []Issue{refused}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests) != 2 {
+		t.Fatalf("forests = %d, want 2", len(forests))
+	}
+	for _, f := range forests {
+		if f.Tracker == nil {
+			t.Fatalf("forest %+v has no tracker: both roots pair their tracker", f)
+		}
+		switch f.Tracker.Number {
+		case 71:
+			if f.Chart != forestChartSource || f.ChartRevisited == "" {
+				t.Errorf("admitted tracker published chart %q stamp %q, want the picture it carries", f.Chart, f.ChartRevisited)
+			}
+		case 72:
+			if f.Chart != "" || f.ChartRevisited != "" {
+				t.Errorf("unadmitted tracker published chart %q stamp %q, want both empty: the region of a repository no role admits is not the engine's to publish", f.Chart, f.ChartRevisited)
+			}
+		default:
+			t.Errorf("unexpected tracker %d", f.Tracker.Number)
+		}
+	}
+	line := findEntry(t, parseLogLines(t, log.Bytes()),
+		"outcomes: tracker lives in a repository no maitred role names; publishing no picture")
+	if line["tracker"] != "o/archive#72" {
+		t.Errorf("tracker = %v, want o/archive#72: the refusal names the repository it refused", line["tracker"])
+	}
+	if n := api.callCount("UpdateIssueBody:"); n != 0 {
+		t.Errorf("the enumeration wrote %d issue bodies, want none: the view reads", n)
 	}
 }

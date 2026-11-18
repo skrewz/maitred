@@ -574,7 +574,7 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 			}
 			return holdOff(fmt.Sprintf("issue %d is an open %s tracker whose forest the digest gate assembled no observation of: nothing dispatches on a missing digest", issue.Number, LabelOutcome))
 		}
-		return stateGoverned(dispatch(ActionWrapUp, fmt.Sprintf("issue %d is an open, fully unblocked %s tracker; the state calls for wrap-up regardless of revision %s", issue.Number, LabelOutcome, issueRevision(issue))))
+		return stateGoverned(dispatch(ActionWrapUp, fmt.Sprintf("issue %d is an open, fully unblocked %s tracker; the state calls for wrap-up regardless of revision %s", issue.Number, LabelOutcome, revisionFacts(issue, issueRevision(issue)))))
 	}
 	return decideIssueOpened(e, s, w)
 }
@@ -696,7 +696,7 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	}
 	rev := issueRevision(issue)
 	if alreadyDispatched(w, ActionReassess, rev) {
-		return holdOff(fmt.Sprintf("reassess already dispatched at revision %s", rev))
+		return holdOff(fmt.Sprintf("reassess already dispatched at revision %s", revisionFacts(issue, rev)))
 	}
 	return dispatch(ActionReassess, fmt.Sprintf("issue %d: %s", issue.Number, e.Type))
 }
@@ -1907,10 +1907,11 @@ func considerSyncIssue(issue *Issue, members []SyncMember, lenses []ReviewLens, 
 // body itself and not the grouping issue's updated_at, which moves on a
 // comment, a title fix or an unrelated label toggle: for the members the
 // same narrowing was argued as "activity is not readiness", and the
-// lever this section names is a restatement, not a touch.
+// lever this section names is a restatement, not a touch
+// (§forgejo/decisions/sync-set).
 func syncSetRevision(issue *Issue, members []SyncMember, lenses []ReviewLens) string {
 	lines := make([]string, 0, len(members)+1)
-	lines = append(lines, fmt.Sprintf("set %s#%d body=%s", issue.Repository, issue.Number, bodyRevision(issue)))
+	lines = append(lines, fmt.Sprintf("set %s#%d body=%s", issue.Repository, issue.Number, digestRevision(issue.Body)))
 	for i := range members {
 		m := &members[i]
 		line := fmt.Sprintf("%s#%d state=%s %s=%t", m.Issue.Repository, m.Issue.Number, m.Issue.State, LabelAgenticSyncMerge, hasLabel(&m.Issue, LabelAgenticSyncMerge))
@@ -2038,17 +2039,79 @@ func prOpen(pr *PullRequest) bool {
 }
 
 // issueRevision is the issue's activity revision: its updated_at in
-// RFC 3339 (§forgejo/state/watermark).
+// RFC 3339 (§forgejo/state/watermark) — except for an outcome tracker, whose
+// revision is the same facts with the region the engine owns masked out.
+// updated_at cannot serve a tracker because the current-state write moves it
+// on every tick, and a revision the engine moves itself is a revision no
+// guard can pace (§forgejo/reconciliation/the-tracker-block,
+// §forgejo/decisions/loop-prevention).
 func issueRevision(issue *Issue) string {
+	if isTracker(issue) {
+		return trackerRevision(issue)
+	}
 	return issue.UpdatedAt.UTC().Format(time.RFC3339)
 }
 
-// bodyRevision is the grouping issue's body as the set revision digests
-// it: the text the landing prompt must honour, not the moment it was
-// last touched — a comment or a label toggle moves updated_at and says
-// nothing about the order (§forgejo/decisions/sync-set).
-func bodyRevision(issue *Issue) string {
-	sum := sha256.Sum256([]byte(issue.Body))
+// trackerRevision is a tracker's revision: the facts trackerFacts folds,
+// hashed. The digest folds no tracker body at all for the mirror reason — the
+// engine rewrites that region every tick, and a fact the engine moves by
+// writing it cannot be the fact that decides whether to dispatch
+// (§forgejo/decisions/actionable-state-digest). Everything a decision reads
+// about a tracker still moves this revision: closing it, labelling it, and an
+// edit to the outcome prose. The drawing never does.
+func trackerRevision(issue *Issue) string {
+	h := sha256.New()
+	for _, fact := range trackerFacts(issue) {
+		fmt.Fprintf(h, "%d:%s\n", len(fact), fact)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// trackerFacts are the facts an `outcome` tracker's revision folds, in the order
+// the digest hashes them: the issue's state, one line per label in sorted order
+// so a label toggle moves the digest whichever way the forge lists them, and the
+// description outside the fence pair as a digest, so the folded input is bounded
+// whatever the description holds. This is the one statement of that set: the
+// digest hashes these strings and the reason lines render them, so a fact added
+// to the revision cannot fail to appear in the log line that explains it
+// (§forgejo/state/watermark, §forgejo/observability/the-decision-log).
+func trackerFacts(issue *Issue) []string {
+	labels := append([]string(nil), issue.Labels...)
+	sort.Strings(labels)
+	folded := []string{"state " + issue.State}
+	for _, label := range labels {
+		folded = append(folded, "label "+label)
+	}
+	return append(folded, "body "+digestRevision(outsideFence(issue.Body)))
+}
+
+// revisionFacts is a revision in the words a reason line carries: the strings
+// trackerFacts folds, joined, for an `outcome` tracker whose revision is a digest
+// the current-state write cannot move, and the revision as quoted for every row
+// the engine never writes. A bare digest tells an operator nothing they can line
+// up against the forge's history when the question is why a tracker woke an agent
+// at an odd hour (§forgejo/state/watermark, §forgejo/observability/the-decision-log).
+// The equality leg is the landing set's exception: where the revision quoted is a
+// digest of a whole set rather than of the row in hand, more than one issue lies
+// behind it, and naming one row's facts for it would be a guess. A tracker's
+// reasons reach this from the wrap-up row and from the re-fire bound; the reassess
+// row's guard is reached only by rows a tracker's reserved labels hold off first.
+func revisionFacts(issue *Issue, quoted string) string {
+	if issue == nil || !isTracker(issue) || quoted != issueRevision(issue) {
+		return quoted
+	}
+	return strings.Join(trackerFacts(issue), ", ")
+}
+
+// digestRevision is a fact too long, or too little its own, to quote whole — a
+// description, a landing prompt — as the hex the revision digests it to: one
+// change anywhere inside it moves the digest, and its length says nothing about
+// its content. A grouping issue's body reaches it as the text the landing prompt
+// must honour, not the moment it was last touched, since a comment or a label
+// toggle moves updated_at and says nothing about the order (§forgejo/state/watermark,
+// §forgejo/decisions/sync-set).
+func digestRevision(fact string) string {
+	sum := sha256.Sum256([]byte(fact))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -2244,4 +2307,16 @@ func holdOffForestSeeding(number int, label string) Decision {
 // (§forgejo/webhook/the-scope-cache, §forgejo/observability/the-decision-log).
 func holdOffScopeUnknown(repo string, err error) Decision {
 	return holdOff(fmt.Sprintf("scope of repo %s unknown: repository listing failed: %v", repo, err))
+}
+
+// holdOffEngineAuthoredEdit is the self-authored edit guard: the delivery is the
+// engine's own handwriting, not a fact. It is the edited issue alone, not the
+// identity: a whole login held off the path would go quiet in a deployment where
+// one account wore two roles, and the sweep's own rows carry no sender at all
+// (§forgejo/decisions/loop-prevention, §forgejo/reconciliation/the-sweep). The
+// config refuses `engine_account` to name an actor or a lens so the login this
+// compares against names one account and nothing else
+// (§forgejo/config/identity-collapse).
+func holdOffEngineAuthoredEdit(repo string, number int, account string) Decision {
+	return holdOff(fmt.Sprintf("%s#%d was edited by %s, the engine's own account: a current-state write is the engine's own side effect and carries no fact, so it is not re-fetched and dispatches nothing", repo, number, account))
 }

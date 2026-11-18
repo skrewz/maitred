@@ -47,8 +47,9 @@ type Forest struct {
 	// over (§forgejo/observability/the-outcomes-view).
 	Tracker *ForestIssue `json:"tracker"`
 	// Chart is the Mermaid source of the tracker's current-state block,
-	// carried verbatim from between the fences the curating agent wrote it
-	// inside — never composed, repaired or guessed here, and empty
+	// carried verbatim from between the fences the engine writes it
+	// inside, opened by whichever writer came first — never composed,
+	// repaired or guessed here, and empty
 	// wherever a description says nothing; the ragged edges are enumerated
 	// once, in §forgejo/observability/the-outcomes-view. It is text this
 	// engine does not own: a description is editable by anyone with write
@@ -71,15 +72,12 @@ type Forest struct {
 	Warnings []ForestWarning `json:"warnings"`
 }
 
-// The delimiters of a tracker's current-state block, and the two things
-// the outcomes view reads inside them. The fence pair is the one the
-// curating agent writes into a tracker's description; the view reads it
-// and writes no description of anyone else's issue
-// (§forgejo/observability/the-outcomes-view).
+// The two things the outcomes view reads inside the fence pair this package
+// declares once in tracker_chart.go (fenceBegin and fenceEnd): the view reads
+// the region the sweep writes, and writing no description of anyone else's
+// issue is what keeps the two halves honest
+// (§forgejo/observability/the-outcomes-view, §forgejo/reconciliation/the-tracker-block).
 const (
-	forestFenceBegin = "<!-- maitred:forest:begin -->"
-	forestFenceEnd   = "<!-- maitred:forest:end -->"
-
 	mermaidFenceOpen  = "```mermaid"
 	mermaidFenceClose = "```"
 
@@ -106,8 +104,8 @@ const (
 // even when the other field published, and the walk says so at Debug
 // (§forgejo/observability/the-outcomes-view).
 func scrapeForestChart(body string) (chart, revisited, refused string) {
-	begins := strings.Count(body, forestFenceBegin)
-	ends := strings.Count(body, forestFenceEnd)
+	begins := strings.Count(body, fenceBegin)
+	ends := strings.Count(body, fenceEnd)
 	switch {
 	case begins == 0 && ends == 0:
 		// No fence pair at all: the one silence the view keeps even at
@@ -119,8 +117,8 @@ func scrapeForestChart(body string) (chart, revisited, refused string) {
 		// without its pair is a description mid-edit at best.
 		return "", "", "the fence pair is not exactly one begin and one end"
 	}
-	begin := strings.Index(body, forestFenceBegin) + len(forestFenceBegin)
-	end := strings.Index(body, forestFenceEnd)
+	begin := strings.Index(body, fenceBegin) + len(fenceBegin)
+	end := strings.Index(body, fenceEnd)
 	if end < begin {
 		return "", "", "the end marker sits before the begin marker"
 	}
@@ -239,9 +237,9 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 // Each tracker found brings its picture: the description of the row the
 // blocks read already holds is scraped for the forest's chart and stamp,
 // and nothing is ever written back (§forgejo/observability/the-outcomes-view,
-// §forgejo/client/operations).
-// A root whose tracker is missing is listed with the absence stated; an
-// outcome issue no open root blocks is not a forest and is not listed.
+// §forgejo/client/operations). A root whose tracker is missing is
+// listed with the absence stated; an outcome issue no open root blocks
+// is not a forest and is not listed.
 // Pull requests carry no forest. Each forest additionally carries its
 // warnings, walked from the same rows the pairing reads: one blockers
 // read per member either kind concerns, one membership read per
@@ -296,7 +294,21 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 				// does, body included, so scraping it costs no read; and
 				// because the row *is* the tracker's, a tracker living in
 				// another repository brings its own picture rather than the
-				// root's (§forgejo/client/operations).
+				// root's (§forgejo/client/operations). The region is the
+				// engine's own drawing now, so the read half pays the
+				// admission test the write half pays: the view publishes no
+				// picture scraped from a repository no maitred role admits
+				// (§forgejo/webhook/repository-roles,
+				// §forgejo/reconciliation/the-tracker-block).
+				admits, err := e.remitAdmits(tracker.Repository, entered)
+				if err != nil {
+					return nil, fmt.Errorf("forgejo: outcomes: scope of %s: %w", tracker.Repository, err)
+				}
+				if !admits {
+					e.log.Debug("outcomes: tracker lives in a repository no maitred role names; publishing no picture",
+						"tracker", forestRef(tracker.Repository, tracker.Number))
+					break
+				}
 				chart, revisited, refused := scrapeForestChart(b.Body)
 				forest.Chart, forest.ChartRevisited = chart, revisited
 				if refused != "" {
@@ -400,8 +412,12 @@ func (e *Engine) Forests() ([]Forest, error) {
 // function's. The scope cache is refreshed by the sweep
 // itself just before, so the walk rides the listing the sweep already
 // made fresh and costs no organisation listing of its own
-// (§forgejo/webhook/the-scope-cache).
-func (e *Engine) recordForests() {
+// (§forgejo/webhook/the-scope-cache). The set and the error are reported
+// to the caller as well as recorded: the sweep's next step writes each
+// forest it enumerated to that forest's tracker, and a forest the
+// enumeration did not name is never written to
+// (§forgejo/reconciliation/the-tracker-block).
+func (e *Engine) recordForests() ([]Forest, error) {
 	forests, err := e.enumerateForests()
 	if err != nil {
 		e.log.Error("reconciliation: forest enumeration failed; the outcomes view will say so until a sweep succeeds",
@@ -414,4 +430,5 @@ func (e *Engine) recordForests() {
 		e.forestsSnap, e.forestsAt, e.forestsErr = forests, time.Now(), nil
 	}
 	e.forestsMu.Unlock()
+	return forests, err
 }

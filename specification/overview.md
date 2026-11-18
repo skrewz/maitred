@@ -86,9 +86,13 @@ HTTP queue system.
 - **Not a general workflow engine.** There are no dependency graphs, DAGs, or
   multi-step task orchestration; a trigger produces at most one task per
   firing.
-- **No Forgejo mutation.** The Forgejo engine will talk to Forgejo through a
-  read-only client; its side effects will be dispatched tasks, never direct
-  writes to Forgejo.
+- **One Forgejo mutation, and one only.** The Forgejo engine talks to Forgejo
+  through a client whose side effects are dispatched tasks. The one direct write
+  it makes is an outcome tracker's current-state block: the bytes between that
+  tracker's own fence pair, and nothing outside them
+  (§forgejo/reconciliation/the-tracker-block). The write draws a chart, so it
+  decides nothing — the decision loop stays a decision loop rather than becoming
+  a task runner.
 - **No built-in secrets management.** Tokens and certificates come from the
   environment or the filesystem (e.g. via s-puppet), not from maitred.
 

@@ -61,8 +61,111 @@ created while the engine was down.
    re-fetch, decide, dispatch, watermark — serialised on the watermark
    store's per-key lock (§forgejo/state/concurrency). The sweep shares
    the decision function and the event path; no logic is duplicated.
+5. **Write the trackers' current-state blocks.** For every forest step 2
+   enumerated, render its graph and land the drawing on that forest's
+   tracker (§forgejo/reconciliation/the-tracker-block). Like step 2 this is
+   the tick paying so no request path has to: the chart is as current as the
+   forest set the outcomes view is served from. It comes **last** because it
+   is the step that changes nothing the tick decides: a forge that has gone
+   slow must not put the drawing between the sweep and a decision, and
+   nothing downstream needs the block written first — the digest excludes a
+   tracker's body and its `updated_at`
+   (§forgejo/decisions/actionable-state-digest). A forest whose write fails
+   is reported and skipped: it neither fails the tick nor delays a decision.
 
 The synthetic event carries no sender.
+
+## The tracker block
+
+An outcome tracker's description carries its forest's drawing between a pair of
+HTML comments — `<!-- maitred:forest:begin -->` and `<!-- maitred:forest:end -->`
+— under a `## Current state` heading. On every tick the engine writes that
+region for every forest it enumerated (§forgejo/reconciliation/the-sweep): it
+gathers the graph, renders it (§forgejo/renderer/the-contract), and splices the
+source under a `Last revisited: <YYYY-MM-DD HH:MM> <TZ>` stamp, the time
+rendered in the configured timezone (§forgejo/config/tracker-chart).
+
+- **The fence bounds the write.** Only a tracker's description is written, and
+  only the bytes between one opener and its closer. The outcome prose around
+  them, a member's body and a grouping issue's body are outside the region and
+  stay byte-for-byte as found: a grouping issue's body drives a landing
+  decision through its digest (§forgejo/decisions/sync-set), so a stamp written
+  there would re-dispatch a merge. The digest excludes a tracker's body and its
+  `updated_at` for the mirror reason — the engine rewrites that region every
+  tick (§forgejo/decisions/actionable-state-digest). The description is read at
+  the moment the block is spliced, not before the graph is gathered, so the
+  window in which an edit outside the pair could be lost is one request rather
+  than a forest's worth of reads; the body-write endpoint carries no conditional
+  write, so within that one request the last writer wins and the next tick
+  re-reads whatever it landed.
+- **The write goes where a role admits it.** Which repository holds a tracker,
+  and which repositories the graph's rows live in, is forge data the root's
+  blocking edges name rather than configuration, so all three readers — the
+  write, the draw and the pairing's scrape — pay the admission test every
+  other cross-repository hop pays
+  (§forgejo/webhook/repository-roles): the enumeration's own repository is
+  admitted by the enumeration, every other only where a maitred role names it. A
+  tracker in a repository no role names is neither written nor scraped — the
+  write skips it and the pairing publishes no chart and no stamp from it, the
+  tracker row itself standing — and the log names the repository refused at
+  Debug, the level the engine's other cross-repository hops use for the
+  sentence; a row no role admits draws no node, contributes no title to a body
+  the outcomes view publishes, and has no edges read. One reader does not:
+  the forest's actionable-state digest folds every row and comment body a
+  blocking edge reaches, wherever the edge points, so where an edge leaves the
+  roles the digest decides on rows the chart neither draws nor publishes
+  (§forgejo/decisions/actionable-state-digest). An unknown scope fails closed,
+  naming the failure rather than reading as a repository holding no role
+  (§forgejo/webhook/the-scope-cache).
+- **The stamp moves whatever the graph does.** A tick over an unchanged forest
+  rewrites the stamp and nothing else. Where the composed body is byte-identical
+  to the body read — two ticks inside one minute over an unchanged graph —
+  nothing is written, so a sweep never bumps a tracker for nothing. Past that
+  minute the write does move the tracker's `updated_at`, and a timestamp the
+  engine moves itself cannot be what the engine paces itself on: §forgejo/state/watermark
+  states the digest that replaces it, and here that means the re-fire bound and
+  the queue's dedup key both hold to one unchanged state however often the forest
+  is redrawn, while the delivery the write provokes is the engine's own
+  handwriting and holds off unread (§forgejo/decisions/loop-prevention). A tick
+  therefore re-fires no agent that the forest's state was not already calling
+  for (§forgejo/reconciliation/the-state-is-the-watermark).
+- **The write says so.** A tracker whose block landed is named at `Info` in
+  the log, as every other side effect the engine has is, so a description that
+  changed at an odd hour is attributable to the engine rather than to an agent;
+  a tracker whose composed body was already there is named at `Debug`, so
+  "nothing needed writing" never reads as "this forest was never reached"
+  (§forgejo/observability/the-decision-log).
+- **No fence pair is an empty region, not an absent one.** Where a description
+  carries no pair, the block is inserted as the body's first heading and the
+  body found follows it in the order it was in.
+- **More than one pair is an ambiguity, not a choice.** Which region belongs to
+  which forest is not guessable, so the engine writes nothing to that tracker
+  and the log names it; a chart landing in the wrong region is worse than a
+  stale one.
+- **The graph is gathered each tick, never remembered.** The rows are the root,
+  the rows the root blocks — trackers included, the same reading the digest and
+  the cascade apply (§forgejo/decisions/actionable-state-digest) — and the edges
+  are the blocking edges found between those rows, read as the root's and each
+  row's blocks. A row that is a pull request is a delivery, not a member: it
+  draws no node and no edge (§forgejo/renderer/edge-classes). A closed row
+  carries the close time the forge reports (§forgejo/client/operations), never
+  its `updated_at`.
+- **The strokes come from the forge's own labels.** `root` takes the colour of
+  the `ideation` label on the root, `tracker` the colour of the `outcome` label
+  on the tracker (§forgejo/renderer/classes-and-strokes). No label names the
+  `member` class or the `closed` dim, so those two travel with the engine as the
+  house hexes the drawing was converted from — `#6b7a8c` and `#3fb950` — which
+  is the only colouring the engine owns. Where a role label's colour cannot be
+  read, nothing is written rather than a chart drawn in invented hexes.
+- **A failure is one forest's own.** A read that fails, a graph the renderer
+  refuses, a ceiling the source will not fit even collapsed
+  (§forgejo/renderer/collapsing) and a write the forge refuses are each logged
+  naming the forest and skipped: no partial region is ever written, and one
+  ragged forest costs nothing to the others.
+
+The block carries no verdict and no instruction, which is why writing it makes
+the engine no less a decision loop than a task runner: it changes what a human
+sees, never what the next tick decides (§overview/non-goals).
 
 ## Scheduling
 

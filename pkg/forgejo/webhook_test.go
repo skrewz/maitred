@@ -170,6 +170,15 @@ type fakeAPI struct {
 	comments    map[int][]Comment
 	commentsErr error
 
+	// writes holds the body of every issue the engine wrote, keyed
+	// "repo/number", and writeErr, when set, fails every write the way a
+	// forge whose identity may not edit an issue body does. The engine's
+	// one mutation is the tracker's current-state block
+	// (§forgejo/client/the-one-mutation,
+	// §forgejo/reconciliation/the-tracker-block).
+	writes   map[string]string
+	writeErr error
+
 	// pullErr, when set, fails only GetPullRequest — so a test can
 	// break the cascade's PR re-fetch without breaking the event's
 	// reads (§forgejo/decisions/unblock-cascade).
@@ -180,6 +189,12 @@ type fakeAPI struct {
 	// without breaking the object re-fetches
 	// (§forgejo/webhook/re-fetch, s-git/maitred#180).
 	getIssueErr error
+
+	// getIssueErrOn, when it holds an error for an issue number, fails only
+	// that issue's GetIssue — so a test can break one object's read while
+	// every other read in the same walk still answers
+	// (§forgejo/reconciliation/the-tracker-block).
+	getIssueErrOn map[int]error
 
 	// GetIssue blocking hooks for the concurrency tests: GetIssue
 	// closes getIssueEntered (once) on entry, then waits on
@@ -205,6 +220,7 @@ func newFakeAPI() *fakeAPI {
 		openPulls:     map[string][]PullRequest{},
 		listIssuesErr: map[string]error{},
 		listPullsErr:  map[string]error{},
+		writes:        map[string]string{},
 		// The org's repositories default to the one the fixtures live
 		// in, maitred-enabled, so the event path's scope test passes
 		// unless a test restates the listing (§forgejo/webhook/the-scope-cache).
@@ -264,6 +280,9 @@ func (f *fakeAPI) GetIssue(owner, repo string, number int) (*Issue, error) {
 	if f.getIssueErr != nil {
 		return nil, f.getIssueErr
 	}
+	if err := f.getIssueErrOn[number]; err != nil {
+		return nil, err
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -272,6 +291,13 @@ func (f *fakeAPI) GetIssue(owner, repo string, number int) (*Issue, error) {
 		return nil, &APIError{StatusCode: http.StatusNotFound, Message: "issue not found"}
 	}
 	filled := withIssueURL(owner, repo, *issue)
+	// A body the engine wrote is the body a later read returns, the way
+	// the forge does it, so a second sweep finds the block already in
+	// place rather than rewriting it forever
+	// (§forgejo/reconciliation/the-tracker-block).
+	if body, ok := f.writtenBody(repo, number); ok {
+		filled.Body = body
+	}
 	return &filled, nil
 }
 
@@ -390,6 +416,44 @@ func (f *fakeAPI) ListIssueComments(owner, repo string, number int) ([]Comment, 
 		return nil, f.err
 	}
 	return f.comments[number], nil
+}
+
+// UpdateIssueBody is the engine's one mutation: the fake records the body it
+// was handed under "repo/number" and lands it on the row a later GetIssue
+// returns, the way the forge does, so a test can watch a second sweep find the
+// block already in place (§forgejo/reconciliation/the-tracker-block).
+func (f *fakeAPI) UpdateIssueBody(owner, repo string, number int, body string) error {
+	f.record("UpdateIssueBody:" + repo + "/" + strconv.Itoa(number))
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.writeErr != nil {
+		return f.writeErr
+	}
+	if f.err != nil {
+		return f.err
+	}
+	if f.writes == nil {
+		f.writes = map[string]string{}
+	}
+	f.writes[repo+"/"+strconv.Itoa(number)] = body
+	return nil
+}
+
+// writtenBody is the body the fake last landed on an issue, and whether any
+// write reached it at all.
+func (f *fakeAPI) writtenBody(repo string, number int) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	body, ok := f.writes[repo+"/"+strconv.Itoa(number)]
+	return body, ok
+}
+
+// writeCount is how many issues the engine wrote — one per tracker, and per
+// nothing else (§forgejo/reconciliation/the-tracker-block).
+func (f *fakeAPI) writeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.writes)
 }
 
 // fakeQueue is a fake queue provider for the webhook tests.
@@ -2061,7 +2125,7 @@ func TestHandler_IssueClosed_CascadeWrapUpWatermarkHolds(t *testing.T) {
 	api.blocks[7] = []Issue{*tracker}
 	api.deps[10] = []Issue{*testIssue(7, "closed")}
 	if err := store.Save(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 10},
-		Watermark{Action: string(ActionWrapUp), Revision: testUpdatedAt.UTC().Format(time.RFC3339)}); err != nil {
+		Watermark{Action: string(ActionWrapUp), Revision: issueRevision(tracker)}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -2114,7 +2178,7 @@ func TestHandler_IssueClosed_CascadeBlockedTrackerNamesBlockers(t *testing.T) {
 	if d.State != "open" {
 		t.Errorf("record state = %q, want open (the tracker's own state)", d.State)
 	}
-	if want := testUpdatedAt.UTC().Format(time.RFC3339); d.Revision != want {
+	if want := issueRevision(tracker); d.Revision != want {
 		t.Errorf("record revision = %q, want %s (the tracker's own revision)", d.Revision, want)
 	}
 	// o/r holds only the work-item role, so the record must not promise a

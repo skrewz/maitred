@@ -20,10 +20,11 @@ const maitredOutcomesTopic = "maitred-outcomes-repo"
 // for pull requests at all), and feeds each a synthetic reconcile event
 // through the same pipeline as the event path — re-fetch, decide,
 // dispatch, watermark, serialised on the watermark store's per-key lock.
-// A sweep that starts while another is in flight is skipped
-// (§forgejo/reconciliation/scheduling). The tick also records the
-// forest set the outcomes view is served from
-// (§forgejo/observability/the-outcomes-view).
+// Before the walk it records the forest set the outcomes view is served
+// from (§forgejo/observability/the-outcomes-view); after the walk it
+// lands each forest's drawing on its tracker
+// (§forgejo/reconciliation/the-tracker-block). A sweep that starts while
+// another is in flight is skipped (§forgejo/reconciliation/scheduling).
 func (e *Engine) Reconcile() {
 	if !e.sweeping.CompareAndSwap(false, true) {
 		e.log.Info("reconciliation already in flight; skipping")
@@ -41,8 +42,10 @@ func (e *Engine) Reconcile() {
 	e.refreshScopeCache(repos)
 	// The tick records the forest set before the walk below dispatches
 	// any event (§forgejo/reconciliation/the-sweep,
-	// §forgejo/observability/the-outcomes-view).
-	e.recordForests()
+	// §forgejo/observability/the-outcomes-view). The same set is what the
+	// trackers' current-state blocks are written from — step 5 below,
+	// after the walk (§forgejo/reconciliation/the-tracker-block).
+	forests, enumErr := e.recordForests()
 	for i := range repos {
 		repo := &repos[i]
 		// The sweep visits the union of both role sets, so a missed
@@ -81,6 +84,16 @@ func (e *Engine) Reconcile() {
 				e.HandleEvent(Event{Type: EventReconcile, Repo: repo.FullName, Kind: KindPR, Number: pulls[j].Number})
 			}
 		}
+	}
+	// Step 5: the tick pays for the drawings so no request path does
+	// (§forgejo/reconciliation/the-tracker-block). The walk comes first
+	// because the drawing is the one step no decision waits on: on a forge
+	// that has gone slow, gathering N forests' graphs — one blocks read per
+	// row, each behind the client's timeout — must not stand between the
+	// sweep and its first decision. A forest whose write fails is logged and
+	// skipped, never fatal to the tick.
+	if enumErr == nil {
+		e.writeTrackerBlocks(forests, time.Now())
 	}
 }
 

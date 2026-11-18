@@ -220,6 +220,39 @@ func TestLoadConfigEngineAccountRequired(t *testing.T) {
 	}
 }
 
+// TestLoadConfigEngineAccountNamesOneAccountOnly: the guards that read a
+// delivery's sender — the digest's exclusion of the engine's own comments and
+// the hold-off on the tick's own edit of a tracker — both read
+// `engine_account` as a fact about who authored the delivery. A config that
+// names the same login as an actor or a lens would therefore have that
+// account's own work dropped before the re-fetch, so the reuse is a load error
+// rather than a deployment-wide coincidence (§forgejo/config/identity-collapse,
+// §forgejo/config/engine-account, §forgejo/decisions/loop-prevention).
+func TestLoadConfigEngineAccountNamesOneAccountOnly(t *testing.T) {
+	tests := []struct {
+		name string
+		was  string
+	}{
+		{"an actor's login", "implementer"},
+		{"a review lens's login", "reviewer-security"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			yaml := strings.Replace(validConfigYAML, "engine_account: maitred-bot",
+				"engine_account: "+tt.was, 1)
+			_, err := LoadConfig(writeConfig(t, t.TempDir(), "forgejoeng.yaml", yaml))
+			if err == nil || !strings.Contains(err.Error(), "engine_account") {
+				t.Fatalf("LoadConfig with engine_account naming %s: err = %v, want the reuse named",
+					tt.name, err)
+			}
+		})
+	}
+
+	if _, err := LoadConfig(writeConfig(t, t.TempDir(), "forgejoeng.yaml", validConfigYAML)); err != nil {
+		t.Errorf("LoadConfig with the engine's own login named nowhere else: %v, want it to load", err)
+	}
+}
+
 // TestLoadConfigMissingFile reports an error for a path that does not
 // exist (§forgejo/config/loading).
 func TestLoadConfigMissingFile(t *testing.T) {
@@ -1069,4 +1102,126 @@ func TestConfig_StaleMergeThreshold(t *testing.T) {
 			t.Errorf("staleMergeThreshold() = %s, want the 90m one file named", got)
 		}
 	})
+}
+
+// The tracker chart's two keys (§forgejo/config/tracker-chart): both are inert
+// when unset, both are load errors when set to something the engine cannot act
+// on, and in a directory merge files that set either must agree.
+
+// TestLoadConfigTrackerChartUnsetIsInert: a config that says nothing about the
+// chart still yields a chart — stamped in UTC and collapsed past the default
+// ceiling — because the write is not something a deployment has to opt into
+// (§forgejo/config/tracker-chart).
+func TestLoadConfigTrackerChartUnsetIsInert(t *testing.T) {
+	cfg := loadValid(t)
+	if cfg.TrackerTimezone != "" {
+		t.Errorf("tracker_timezone = %q, want the key absent from the fixture", cfg.TrackerTimezone)
+	}
+	if got := cfg.ChartLocation(); got != time.UTC {
+		t.Errorf("ChartLocation = %s, want UTC when the key is unset", got)
+	}
+	if got := cfg.ChartCeiling(); got != DefaultMermaidMaxSourceCharacters {
+		t.Errorf("ChartCeiling = %d, want the default %d", got, DefaultMermaidMaxSourceCharacters)
+	}
+}
+
+// TestLoadConfigTrackerChartKeys: both keys parse, the zone names the one the
+// stamps are rendered in, and the ceiling is the renderer's
+// (§forgejo/config/tracker-chart).
+func TestLoadConfigTrackerChartKeys(t *testing.T) {
+	dir := t.TempDir()
+	yaml := strings.Replace(validConfigYAML, "engine_account: maitred-bot\n",
+		"engine_account: maitred-bot\ntracker_timezone: Australia/Sydney\nmermaid_max_source_characters: 12000\n", 1)
+	cfg, err := LoadConfig(writeConfig(t, dir, "forgejoeng.yaml", yaml))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.TrackerTimezone != "Australia/Sydney" {
+		t.Errorf("tracker_timezone = %q", cfg.TrackerTimezone)
+	}
+	loc := cfg.ChartLocation()
+	if loc.String() != "Australia/Sydney" {
+		t.Errorf("ChartLocation = %s, want Australia/Sydney", loc)
+	}
+	if got := cfg.ChartCeiling(); got != 12000 {
+		t.Errorf("ChartCeiling = %d, want 12000", got)
+	}
+}
+
+// TestLoadConfigTrackerChartValidation: a zone the system cannot load and a
+// ceiling no graph can fit are both load errors, never a silent fall back to a
+// default the deployment did not ask for (§forgejo/config/validation,
+// §forgejo/config/tracker-chart).
+func TestLoadConfigTrackerChartValidation(t *testing.T) {
+	tests := []struct {
+		name  string
+		extra string
+		want  string
+	}{
+		{"zone that will not load", "tracker_timezone: Mars/Olympus\n", "tracker_timezone"},
+		{"ceiling that is not positive", "mermaid_max_source_characters: -1\n", "mermaid_max_source_characters"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			yaml := strings.Replace(validConfigYAML, "engine_account: maitred-bot\n",
+				"engine_account: maitred-bot\n"+tt.extra, 1)
+			_, err := LoadConfig(writeConfig(t, dir, "forgejoeng.yaml", yaml))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("LoadConfig: error = %v, want it to name %s", err, tt.want)
+			}
+		})
+	}
+}
+
+// TestLoadConfigTrackerChartZeroCeilingIsTheDefault: zero is the same as saying
+// nothing, since YAML gives a key no other shape
+// (§forgejo/config/tracker-chart).
+func TestLoadConfigTrackerChartZeroCeilingIsTheDefault(t *testing.T) {
+	dir := t.TempDir()
+	yaml := strings.Replace(validConfigYAML, "engine_account: maitred-bot\n",
+		"engine_account: maitred-bot\nmermaid_max_source_characters: 0\n", 1)
+	cfg, err := LoadConfig(writeConfig(t, dir, "forgejoeng.yaml", yaml))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if got := cfg.ChartCeiling(); got != DefaultMermaidMaxSourceCharacters {
+		t.Errorf("ChartCeiling = %d, want the default", got)
+	}
+}
+
+// TestLoadConfigTrackerChartDirectoryConflicts: two files that disagree about
+// either key are the same conflict the org and the identities refuse
+// (§forgejo/config/loading, §forgejo/config/tracker-chart).
+func TestLoadConfigTrackerChartDirectoryConflicts(t *testing.T) {
+	tests := []struct {
+		name     string
+		first    string
+		second   string
+		contains string
+	}{
+		{
+			name:     "timezone",
+			first:    "tracker_timezone: Australia/Sydney\n",
+			second:   "tracker_timezone: Europe/Berlin\n",
+			contains: "tracker_timezone",
+		},
+		{
+			name:     "ceiling",
+			first:    "mermaid_max_source_characters: 5000\n",
+			second:   "mermaid_max_source_characters: 9000\n",
+			contains: "mermaid_max_source_characters",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeConfig(t, dir, "01-a.yaml", "org: example-org\nengine_account: maitred-bot\nactions: {}\n"+tt.first)
+			writeConfig(t, dir, "02-b.yaml", "org: example-org\nengine_account: maitred-bot\nactions: {}\n"+tt.second)
+			_, err := LoadConfig(dir)
+			if err == nil || !strings.Contains(err.Error(), tt.contains) {
+				t.Fatalf("LoadConfig: error = %v, want the %s conflict named", err, tt.contains)
+			}
+		})
+	}
 }

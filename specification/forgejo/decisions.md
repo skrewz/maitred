@@ -335,7 +335,7 @@ non-PR issues it blocks
 (§forgejo/webhook/re-fetch). The blocking edges among them are
 **recorded** relationships. Forgejo creates no PR→issue dependency from a
 `Fixes #NN`
-keyword in a PR body, and the engine's client is read-only
+keyword in a PR body, and the engine's client writes no edges
 (§forgejo/client/operations), so an edge must be recorded when
 the PR is opened: the workflow the `implement` prompt dispatches — the
 `/issue-implementer` invocation (§forgejo/config/canned-prompts) —
@@ -678,7 +678,7 @@ proceed while this is open* — and the edge that would make a pull
 request *deliver* an issue is one no implementer records and no
 author is meant to hand-author; a predicate gated on it strands
 every set in silence (s-git/maitred#171). The instance's configured
-keyword set is a known limitation of a read-only client: the engine
+keyword set is a known limitation of what the API reports: the engine
 mirrors the forge's defaults. A member delivers through **one** open
 pull request — the authoring contract the decomposer keeps. Where a
 member nonetheless stands with several auto-closing open pull
@@ -883,7 +883,7 @@ staying silent (§forgejo/decisions/sync-set).
 
 ## Loop prevention
 
-Five mechanisms, in this order:
+Six mechanisms, in this order:
 
 1. **The machine is terminating.** Each action's side-effect maps to
    the *next* transition, never a re-run of the same one: a review
@@ -892,7 +892,9 @@ Five mechanisms, in this order:
 2. **Idempotency + watermark.** The same `(event, state, revision)`
    does not re-dispatch the same action: when the watermark already
    records the action at the current revision (the PR head sha, or the
-   issue's `updated_at`), the decision holds off. The guard is
+   issue's `updated_at` — a tracker's revision being its state, labels and
+   body outside the current-state region, §forgejo/state/watermark), the
+   decision holds off. The guard is
    revision-keyed on every path, and for the review fan-out it is
    **subject-keyed** as well: each lens is guarded by its own slot at
    the revision, so three lenses dispatched at one head are three
@@ -1004,6 +1006,24 @@ Five mechanisms, in this order:
    the gate inert. This is a PR-side ownership read, not the retired
    issue-side authorship guard (s-git/maitred#136): it asks who *owns
    the pull request*, not who opened the issue.
+6. **The self-authored side-effect guard**, the mirror of the digest's
+   exclusion of the engine's own comments, and read in two halves because the
+   engine's one mutation is a write to an issue the engine also decides on
+   (§forgejo/reconciliation/the-tracker-block). **The revision masks the
+   written region out**, so one unchanged state is one revision however often
+   the forest is redrawn and a drawing dispatches no second agent while the
+   first is still pending; what that digest folds is §forgejo/state/watermark's
+   to state. **The delivery
+   holds off unread**: an `issues`/`edited` delivery whose sender is the
+   account `engine_account` names holds off **before the re-fetch**, since the
+   only edit that account authors is the drawing — a re-fetch and a decision
+   that could only say "nothing moved". The guard is on the edited issue alone,
+   because that is the only delivery the mutation provokes — holding an entire
+   identity off the path would go quiet in a deployment where one account wore
+   two roles — and the sweep's own rows carry no sender to guard
+   (§forgejo/webhook/event-mapping, §forgejo/reconciliation/the-sweep). That the
+   login names one account and nothing else is a load-time rule, stated once at
+   §forgejo/config/engine-account.
 
 ## Inputs
 

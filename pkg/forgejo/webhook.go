@@ -176,6 +176,14 @@ func (e *Engine) HandleEvent(ev Event) {
 		e.recordDecision(key, ev, State{}, holdOffOutOfRemit(ev.Repo))
 		return
 	}
+	// The self-authored edit guard — holdOffEngineAuthoredEdit states what it
+	// answers — sits before the re-fetch deliberately: the delivery is the
+	// bytes the tick drew itself, so reading it would spend a request to
+	// restate a fact the sweep had already acted on.
+	if ev.Type == EventIssueEdited && ev.Sender != "" && ev.Sender == e.cfg.EngineAccount {
+		e.recordDecision(key, ev, State{}, holdOffEngineAuthoredEdit(ev.Repo, ev.Number, ev.Sender))
+		return
+	}
 	e.store.WithKeyLock(key, func() {
 		ev, st, err := e.refetch(ev)
 		if err != nil {
@@ -1059,7 +1067,7 @@ func (e *Engine) deliveryPR(member *Issue, repo string, listings map[string][]Pu
 // whitespace and the pair would resolve to one. The engine mirrors the
 // forge's **default** keyword set: an instance that reconfigures the
 // keywords reads differently than the predicate does — a known
-// limitation of a read-only client (§forgejo/decisions/sync-set).
+// limitation of what the API reports (§forgejo/decisions/sync-set).
 var closeKeywordRef = regexp.MustCompile(
 	`(?i)(?:\s|^|\(|\[)(?:closed|closes|close|fixed|fixes|fix|resolved|resolves|resolve):? (?:([0-9a-zA-Z-_.]+/[0-9a-zA-Z-_.]+))?#([0-9]+)([^0-9A-Za-z]|$)`)
 
@@ -1323,7 +1331,7 @@ func (e *Engine) boundReFire(key Key, ev Event, st State, d Decision) Decision {
 	}
 	rev := revisionFor(ev, st)
 	if e.reFiredRecently(key, d.Action, rev) {
-		return holdOffReFireBound(d.Action, rev, e.cfg.ReconcileInterval)
+		return holdOffReFireBound(d.Action, revisionFacts(st.Issue, rev), e.cfg.ReconcileInterval)
 	}
 	return d
 }

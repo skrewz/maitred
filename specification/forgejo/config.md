@@ -201,6 +201,8 @@ collision needed two coincidences to matter; with one name that is
 simultaneously what the decisions compare review authors against and the
 persona the task is materialised with, one mistyped lens entry would hand the
 implementing account a gate whose whole job is to be somebody else's verdict.
+The reasoning holds for `engine_account` too, whose own rule belongs to
+§forgejo/config/engine-account.
 
 **The name travels, so the pairing downstream must fail closed.** The
 persona name the queue system receives is read off a key the operator
@@ -323,6 +325,46 @@ reproducible diagnosis in the decision log rather than a silent loop
 it names no persona that runs a task: the queue resolves the actions'
 and lenses' identities, never this one (§forgejo/config/identity-collapse).
 
+It must also name **no login the config declares elsewhere**: the key is
+refused at load if it equals any action's or lens's `identity`, or either
+scalar identity. Both guards that read a delivery's sender — the digest's
+exclusion of the engine's own comments and the hold-off on the current-state
+edit the tick provokes (§forgejo/decisions/loop-prevention) — read this login
+as a fact about *who authored the delivery*, so a config that named an
+implementing account here would drop that account's own edits before the
+re-fetch, quietly discarding the prose change the tracker's revision exists to
+capture. Those two comparisons, like every comparison of a declared identity,
+are by exact, case-sensitive equality (§forgejo/config/decomposer-identity,
+§forgejo/config/review-lenses), so the key must be spelled as the forge spells
+the account: a differently-cased spelling leaves the guard fail-open, and the
+churn is what shows in the decision log. Load-time is the only place the
+property can be established: the sender alone cannot tell the engine's
+handwriting from an agent's (§forgejo/config/identity-collapse).
+
+## Tracker chart
+
+The engine writes one thing to the forge: a tracker's current-state block
+(§forgejo/reconciliation/the-tracker-block). Two optional keys shape what that
+block says, and neither opens a door: the write itself is authored by the
+account `engine_account` names under the token its reads already use, so no
+key here is a secret and no second identity exists for it (§forgejo/config/engine-account,
+§forgejo/client/the-one-mutation).
+
+| Key | Required | Value |
+|---|---|---|
+| `tracker_timezone` | no | the zone the block's stamps are rendered in — the `Last revisited:` line and a closed member's `closed` line alike. An IANA name (`Australia/Sydney`); unset means UTC |
+| `mermaid_max_source_characters` | no | the ceiling past which a rendered source collapses to one node per repository (§forgejo/renderer/collapsing). Unset means `50000`, the length the forge's own Mermaid renderer draws by default — the collapse threshold is worth no more than what the forge will actually draw |
+
+Both keys are inert when unset — the zone is then UTC and the ceiling the
+default above — and never a load failure on their own. A timezone that will not
+load and a negative ceiling are load errors (§forgejo/config/validation): a
+stamp rendered in a zone the deployment did not ask for, and a ceiling no graph
+can fit, are both a deployment that believes it configured something. A ceiling
+of zero is the same as saying nothing, since YAML gives a key no other shape.
+
+In a directory merge, files that set either key must agree, exactly as with
+the org, the interval and the identity keys: a conflict is a load error.
+
 ## Placeholders
 
 Prompt templates are Go `text/template` templates. The engine fills the
@@ -370,6 +412,12 @@ Loading **fails at load time** — mirroring the trigger `Validate()` — when:
 - the engine's own account (`engine_account`) is missing: the digest
   gate cannot exclude the engine's own comments without it
   (§forgejo/config/engine-account),
+- `engine_account` names a login the config declares elsewhere: the guards
+  that read a delivery's sender would hold that account's own work off unread
+  (§forgejo/config/engine-account),
+- `tracker_timezone` is set to a zone that will not load, or
+  `mermaid_max_source_characters` is set to something that is not positive
+  (§forgejo/config/tracker-chart),
 - a directory's files define the same action twice.
 
 The lens list is validated with the actions: it must hold at least one

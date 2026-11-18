@@ -88,11 +88,14 @@ On each `POST`:
    (§forgejo/webhook/repository-roles).
 4. **Re-fetch the state.** The affected issue/PR — plus what the
    transition needs (reviews, blockers, connected PRs, blocker graph) — is
-   re-fetched from Forgejo through the read-only client
+   re-fetched from Forgejo through the client
    (§forgejo/client/operations). The event's own claims are never trusted.
    A `pull_request` delivery with action `closed` is refined by the
    re-fetch: a merged PR is a PR-merged event, an unmerged one a
-   PR-closed event.
+   PR-closed event. One delivery never reaches this step: an issue edit
+   whose sender is the engine's own account holds off ahead of the read,
+   because that edit is the current-state block the engine itself wrote
+   (§forgejo/decisions/loop-prevention, §forgejo/reconciliation/the-tracker-block).
 5. **Decide.** `Decide(event, state, watermark)`
    (§forgejo/decisions/the-decision-function) — the re-fetched state wins
    over the event.
@@ -135,7 +138,8 @@ On each `POST`:
    the `vip` label's doing alone: unset unless a carrier wears that label,
    per §forgejo/webhook/vip-priority.
 7. **Watermark.** A dispatch records its watermark — the action and the
-   revision (the PR head sha, or the issue's `updated_at`) — in the store
+   revision (the PR head sha, the issue's `updated_at`, or, for a tracker, the
+   digest §forgejo/state/watermark describes) — in the store
    (§forgejo/state/watermark); a hold-off records nothing. Each key of the
    unblock cascade (§forgejo/decisions/unblock-cascade) has its own
    watermark applied before its dispatch, so an already-dispatched
@@ -469,7 +473,8 @@ For each decision event, the re-fetch assembles the state
   on. The same answer arrives from a **repository the token cannot
   read** — Forgejo guards private repositories with a 404 — so a
   reference into such a repository reads as connecting nothing. That is
-  a defensible reading for a read-only client, but it is the case where
+  a defensible reading for a client whose one write is an issue body, but
+  it is the case where
   a real relation goes unseen, so every drop — a skip, a refusal, a
   truncation — leaves a debug line naming the resolved repository and
   number — identifiers only, never the body. A cross-repository

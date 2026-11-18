@@ -11,7 +11,13 @@ A watermark records, for one issue or pull request:
 - the last dispatched **action** (the named action from the decision
   function), and
 - the **revision/activity** it was dispatched at (e.g. the PR head sha, or
-  the issue's `updated_at`).
+  the issue's `updated_at`). An `outcome` tracker's revision is the exception:
+  a **digest** of its state, its labels and its body **with the current-state
+  region masked out**, because the engine rewrites that region itself every tick
+  and a revision the engine moves by writing it is a revision no guard can pace
+  (§forgejo/reconciliation/the-tracker-block, §forgejo/decisions/loop-prevention).
+  What a reason line makes of that digest belongs to
+  §forgejo/observability/the-decision-log.
 
 The revision records *what the engine last reacted to*, never whether an
 object is actionable: eligibility is a predicate over re-fetched state

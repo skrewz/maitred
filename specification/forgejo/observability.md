@@ -13,7 +13,12 @@ watermark key, §forgejo/state/storage). The log entry is
 decision (dispatch or hold-off), the dispatched action, the reason, and
 the revision the decision was made at are discrete fields, so a human
 or a tool can filter the log per object and follow the engine's
-reasoning.
+reasoning. Where a reason quotes a revision, it names the facts behind it — the
+instant a row keyed on `updated_at` carries, or the state, labels and masked-body
+digest an `outcome` tracker's revision folds — so a line stays readable against
+the forge's history; a revision that describes more than the row in hand, such as
+a landing set's, is quoted as it stands (§forgejo/state/watermark,
+§forgejo/decisions/sync-set).
 
 The event path and the reconciliation sweep log their decisions alike:
 the sweep feeds the same decision function through the same pipeline
@@ -172,15 +177,18 @@ walk already holds — the listing and the single-issue read answer with
 the same model and fill `body` the same way, so scraping the row costs
 no second read of an issue the enumeration is already holding
 (§forgejo/client/operations). The region scraped is the one the
-curating agent delimits with the HTML-comment fence pair
+engine delimits with the HTML-comment fence pair
 `<!-- maitred:forest:begin -->` and `<!-- maitred:forest:end -->` — the
-view reads that pair and writes nothing: the client it reads through
-carries no mutation at all, so the tracker's description is left
-byte-for-byte as found (§forgejo/client/operations). Within the
-region the view carries two things and nothing else: the fenced `mermaid`
-block between its fences, **verbatim** — never re-indented, repaired, or
-completed in code — and the `Last revisited: <YYYY-MM-DD HH:MM> <TZ>`
-line, whose value is carried **as written**, so a UI states how recent
+view reads that pair and writes nothing: this path makes no mutation, so
+the tracker's description is left byte-for-byte as found
+(§forgejo/client/operations, §forgejo/client/the-one-mutation). The
+region is the engine's own drawing, so the scrape pays the admission test
+the write pays (§forgejo/reconciliation/the-tracker-block). Within the
+region the view carries two things and nothing else: the fenced
+`mermaid` block between its fences, **verbatim** — never re-indented,
+repaired, or completed in code — and the
+`Last revisited: <YYYY-MM-DD HH:MM> <TZ>` line, whose value is carried
+**as written**, so a UI states how recent
 the picture is without parsing prose and an abbreviation of `CET` reads
 exactly as the agent wrote it. Neither field is parsed further: the
 stamp is a string the view does not interpret.

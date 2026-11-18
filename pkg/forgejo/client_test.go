@@ -629,17 +629,24 @@ func TestError_NonJSONBody(t *testing.T) {
 }
 
 func TestAuthHeader_AllOperations(t *testing.T) {
-	ops := []func(c *Client) error{
-		func(c *Client) error { _, err := c.ListOrgRepositories("acme"); return err },
-		func(c *Client) error { _, err := c.ListOpenIssues("acme", "maitred"); return err },
-		func(c *Client) error { _, err := c.ListOpenPullRequests("acme", "maitred"); return err },
-		func(c *Client) error { _, err := c.GetIssue("acme", "maitred", 1); return err },
-		func(c *Client) error { _, err := c.GetPullRequest("acme", "maitred", 1); return err },
-		func(c *Client) error { _, err := c.IssueBlocks("acme", "maitred", 1); return err },
-		func(c *Client) error { _, err := c.IssueDependencies("acme", "maitred", 1); return err },
-		func(c *Client) error { _, err := c.ListPullRequestReviews("acme", "maitred", 1); return err },
+	// Every operation reads but the one mutation, which is a PATCH of an
+	// issue's body (§forgejo/client/the-one-mutation).
+	ops := []struct {
+		name   string
+		method string
+		call   func(c *Client) error
+	}{
+		{"ListOrgRepositories", http.MethodGet, func(c *Client) error { _, err := c.ListOrgRepositories("acme"); return err }},
+		{"ListOpenIssues", http.MethodGet, func(c *Client) error { _, err := c.ListOpenIssues("acme", "maitred"); return err }},
+		{"ListOpenPullRequests", http.MethodGet, func(c *Client) error { _, err := c.ListOpenPullRequests("acme", "maitred"); return err }},
+		{"GetIssue", http.MethodGet, func(c *Client) error { _, err := c.GetIssue("acme", "maitred", 1); return err }},
+		{"GetPullRequest", http.MethodGet, func(c *Client) error { _, err := c.GetPullRequest("acme", "maitred", 1); return err }},
+		{"IssueBlocks", http.MethodGet, func(c *Client) error { _, err := c.IssueBlocks("acme", "maitred", 1); return err }},
+		{"IssueDependencies", http.MethodGet, func(c *Client) error { _, err := c.IssueDependencies("acme", "maitred", 1); return err }},
+		{"ListPullRequestReviews", http.MethodGet, func(c *Client) error { _, err := c.ListPullRequestReviews("acme", "maitred", 1); return err }},
+		{"UpdateIssueBody", http.MethodPatch, func(c *Client) error { return c.UpdateIssueBody("acme", "maitred", 1, "body") }},
 	}
-	for i, op := range ops {
+	for _, op := range ops {
 		srv, rec := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 			// Single-object endpoints (issues/N, pulls/N) take an object;
 			// list endpoints take an array.
@@ -655,14 +662,14 @@ func TestAuthHeader_AllOperations(t *testing.T) {
 			_, _ = w.Write([]byte(`{}`))
 		})
 		c := New(srv.URL, "secret-token", nil)
-		if err := op(c); err != nil {
-			t.Fatalf("op %d: %v", i, err)
+		if err := op.call(c); err != nil {
+			t.Fatalf("%s: %v", op.name, err)
 		}
 		if rec.auth != "Bearer secret-token" {
-			t.Errorf("op %d: Authorization = %q, want Bearer secret-token", i, rec.auth)
+			t.Errorf("%s: Authorization = %q, want Bearer secret-token", op.name, rec.auth)
 		}
-		if rec.method != http.MethodGet {
-			t.Errorf("op %d: method = %q, want GET (read-only client)", i, rec.method)
+		if rec.method != op.method {
+			t.Errorf("%s: method = %q, want %s", op.name, rec.method, op.method)
 		}
 	}
 }
@@ -683,6 +690,7 @@ func TestAllOperations_SurfaceAPIError(t *testing.T) {
 		"IssueBlocks":            func() error { _, err := c.IssueBlocks("acme", "maitred", 1); return err },
 		"IssueDependencies":      func() error { _, err := c.IssueDependencies("acme", "maitred", 1); return err },
 		"ListPullRequestReviews": func() error { _, err := c.ListPullRequestReviews("acme", "maitred", 1); return err },
+		"UpdateIssueBody":        func() error { return c.UpdateIssueBody("acme", "maitred", 1, "body") },
 	}
 	for name, op := range ops {
 		err := op()
@@ -903,5 +911,151 @@ func TestNewClient_MTLS_PresentsCertificate(t *testing.T) {
 	}
 	if presented.Subject.CommonName != "maitred-client" {
 		t.Errorf("presented CN = %q, want maitred-client", presented.Subject.CommonName)
+	}
+}
+
+// TestUpdateIssueBody is the one mutation the client carries: a PATCH whose
+// payload is the body and nothing else, so no other field of the issue can
+// change (§forgejo/client/the-one-mutation).
+func TestUpdateIssueBody(t *testing.T) {
+	var body map[string]any
+	srv, rec := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode payload: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"number": 7}`))
+	})
+	c := New(srv.URL, "test-token", nil)
+	if err := c.UpdateIssueBody("acme", "outcomes", 7, "## Current state\n\nbody\n"); err != nil {
+		t.Fatalf("UpdateIssueBody: %v", err)
+	}
+	if rec.method != http.MethodPatch {
+		t.Errorf("method = %q, want PATCH", rec.method)
+	}
+	if rec.path != "/api/v1/repos/acme/outcomes/issues/7" {
+		t.Errorf("path = %q, want /api/v1/repos/acme/outcomes/issues/7", rec.path)
+	}
+	if rec.auth != "Bearer test-token" {
+		t.Errorf("Authorization = %q, want the bearer token", rec.auth)
+	}
+	keys := make([]string, 0, len(body))
+	for k := range body {
+		keys = append(keys, k)
+	}
+	if len(keys) != 1 || keys[0] != "body" {
+		t.Errorf("payload keys = %v, want only \"body\": a field the engine has no business changing must not be sent", keys)
+	}
+	if body["body"] != "## Current state\n\nbody\n" {
+		t.Errorf("payload body = %v, want the bytes handed over", body["body"])
+	}
+}
+
+// TestUpdateIssueBody_RefusalNamesTheStatus: a forge that will not let this
+// identity edit an issue body is reported with its status code, which is how the
+// deployment learns the write is beyond the account
+// (§forgejo/client/errors, §forgejo/reconciliation/the-tracker-block).
+func TestUpdateIssueBody_RefusalNamesTheStatus(t *testing.T) {
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"must have Write Issues Unit"}`))
+	})
+	c := New(srv.URL, "test-token", nil)
+	err := c.UpdateIssueBody("acme", "outcomes", 7, "body")
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("err = %v, want *APIError", err)
+	}
+	if apiErr.StatusCode != http.StatusForbidden {
+		t.Errorf("StatusCode = %d, want 403", apiErr.StatusCode)
+	}
+}
+
+// TestGetIssue_ClosedAt: the close time the forge reports is the time a chart
+// stamps a closed member with; updated_at is never read in its place
+// (§forgejo/client/operations, §forgejo/renderer/closed-members).
+func TestGetIssue_ClosedAt(t *testing.T) {
+	rows := issueJSON(9, "acme/maitred")
+	rows["state"] = "closed"
+	rows["closed_at"] = "2026-10-05T12:00:00Z"
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(rows)
+	})
+	c := New(srv.URL, "test-token", nil)
+	issue, err := c.GetIssue("acme", "maitred", 9)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	want := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	if !issue.ClosedAt.Equal(want) {
+		t.Errorf("ClosedAt = %s, want %s", issue.ClosedAt, want)
+	}
+
+	open, err := func() (*Issue, error) {
+		rows["state"] = "open"
+		delete(rows, "closed_at")
+		return c.GetIssue("acme", "maitred", 9)
+	}()
+	if err != nil {
+		t.Fatalf("GetIssue(open): %v", err)
+	}
+	if !open.ClosedAt.IsZero() {
+		t.Errorf("an open issue's ClosedAt = %s, want the zero time", open.ClosedAt)
+	}
+}
+
+// TestGetIssue_LabelColours: the colour the forge reports for each label is the
+// stroke hex a chart's class carries, normalised so an agent's or a forge's
+// spelling of the same colour is one colour (§forgejo/client/operations,
+// §forgejo/renderer/classes-and-strokes).
+func TestGetIssue_LabelColours(t *testing.T) {
+	rows := issueJSON(11, "acme/maitred")
+	rows["labels"] = []map[string]any{
+		{"name": "ideation", "color": "5319E7"},
+		{"name": "outcome", "color": "#1d76db"},
+		{"name": "no-colour"},
+		{"name": "ragged", "color": "zzzzzz"},
+	}
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(rows)
+	})
+	c := New(srv.URL, "test-token", nil)
+	issue, err := c.GetIssue("acme", "maitred", 11)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	for name, want := range map[string]string{"ideation": "#5319e7", "outcome": "#1d76db"} {
+		if got := issue.LabelColours[name]; got != want {
+			t.Errorf("LabelColours[%q] = %q, want %q", name, got, want)
+		}
+	}
+	for _, name := range []string{"no-colour", "ragged"} {
+		if got, ok := issue.LabelColours[name]; ok {
+			t.Errorf("LabelColours[%q] = %q, want the label left out rather than mapped to a colour the forge never reported", name, got)
+		}
+	}
+}
+
+// TestStrokeHex covers the normalisation the strokes pass through: the forge's
+// spelling without the '#', an upper-case spelling, and what is no colour at all
+// (§forgejo/client/operations).
+func TestStrokeHex(t *testing.T) {
+	tests := []struct {
+		in     string
+		want   string
+		wantOK bool
+	}{
+		{"0e8a16", "#0e8a16", true},
+		{"#0E8A16", "#0e8a16", true},
+		{" 0e8a16 ", "#0e8a16", true},
+		{"", "", false},
+		{"#0e8a1", "", false},
+		{"0e8a166", "", false},
+		{"gggggg", "", false},
+	}
+	for _, tt := range tests {
+		got, ok := strokeHex(tt.in)
+		if got != tt.want || ok != tt.wantOK {
+			t.Errorf("strokeHex(%q) = %q, %v, want %q, %v", tt.in, got, ok, tt.want, tt.wantOK)
+		}
 	}
 }

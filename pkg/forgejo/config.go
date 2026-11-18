@@ -132,6 +132,21 @@ type Config struct {
 	// (§forgejo/decisions/actionable-state-digest, s-git/maitred#209).
 	// Unset is a load error, never a silently inert gate.
 	EngineAccount string `yaml:"engine_account"`
+	// TrackerTimezone names the zone the tracker's current-state block
+	// is stamped in — both its `Last revisited:` line and a closed
+	// member's `closed` line — spelled as an IANA name such as
+	// "UTC" (§forgejo/config/tracker-chart). Unset means UTC; a name
+	// that will not load is a load error (§forgejo/config/validation),
+	// so a running engine never stamps in a zone nobody configured
+	// without saying so.
+	TrackerTimezone string `yaml:"tracker_timezone"`
+	// MermaidMaxSourceCharacters is the ceiling past which a rendered
+	// chart collapses to one node per repository
+	// (§forgejo/renderer/collapsing, §forgejo/config/tracker-chart).
+	// Unset — or zero, which YAML gives no other shape — means
+	// DefaultMermaidMaxSourceCharacters; a negative ceiling is a load
+	// error, since a ceiling below zero fits no graph at all.
+	MermaidMaxSourceCharacters int `yaml:"mermaid_max_source_characters"`
 	// Actions maps each action the decision function references to its
 	// canned prompt.
 	Actions map[string]PromptConfig `yaml:"actions"`
@@ -140,6 +155,41 @@ type Config struct {
 	// extending or contracting the chain is a config edit. At least one
 	// lens is required (§forgejo/config/validation).
 	Reviews []ReviewLens `yaml:"reviews"`
+}
+
+// DefaultMermaidMaxSourceCharacters is the ceiling a config that says nothing
+// gives the renderer. It is the length the forge's own Mermaid renderer draws
+// by default (Gitea's `MERMAID_MAX_SOURCE_CHARACTERS`, which Forgejo inherits:
+// https://github.com/go-gitea/gitea/blob/main/modules/setting/markup.go), so
+// the collapse threshold is never worth more than what the forge will actually
+// draw — a chart past the forge's own ceiling renders as text
+// (§forgejo/config/tracker-chart).
+const DefaultMermaidMaxSourceCharacters = 50000
+
+// ChartLocation is the zone the tracker's current-state block is stamped in,
+// UTC when the config names none (§forgejo/config/tracker-chart). It assumes a
+// config that came through Load, whose Validate rejects a name the system
+// cannot load (§forgejo/config/validation), so the sweep never has to answer
+// that question. A Config assembled by hand and never validated is answered
+// with UTC — what an unset key means — rather than with a zone guessed at.
+func (c *Config) ChartLocation() *time.Location {
+	if c.TrackerTimezone == "" {
+		return time.UTC
+	}
+	loc, err := time.LoadLocation(c.TrackerTimezone)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}
+
+// ChartCeiling is the character ceiling the renderer collapses past, the
+// default when the config names none (§forgejo/config/tracker-chart).
+func (c *Config) ChartCeiling() int {
+	if c.MermaidMaxSourceCharacters <= 0 {
+		return DefaultMermaidMaxSourceCharacters
+	}
+	return c.MermaidMaxSourceCharacters
 }
 
 // Placeholders are the values the engine fills into a prompt template at
@@ -209,11 +259,22 @@ func (c *Config) Validate() error {
 	if c.EngineAccount == "" {
 		return fmt.Errorf("engine_account is required: the digest gate cannot tell the engine's own comments from a human's without it (§forgejo/config/engine-account)")
 	}
+	if err := c.validateEngineAccount(); err != nil {
+		return err
+	}
 	if c.ReconcileInterval <= 0 {
 		return fmt.Errorf("reconcile_interval must be positive")
 	}
 	if c.StaleMergeThreshold < 0 {
 		return fmt.Errorf("stale_merge_threshold must not be negative; leave it unset for the %s default", DefaultStaleMergeThreshold)
+	}
+	if c.TrackerTimezone != "" {
+		if _, err := time.LoadLocation(c.TrackerTimezone); err != nil {
+			return fmt.Errorf("tracker_timezone %q is not a zone the engine can load: %w", c.TrackerTimezone, err)
+		}
+	}
+	if c.MermaidMaxSourceCharacters < 0 {
+		return fmt.Errorf("mermaid_max_source_characters must be positive when set, got %d", c.MermaidMaxSourceCharacters)
 	}
 	for _, a := range AllActions {
 		pc, ok := c.Actions[string(a)]
@@ -285,6 +346,24 @@ func (c *Config) validateReviewLenses() error {
 		}
 		if _, err := (&PromptConfig{Prompt: lens.Prompt}).Render(Placeholders{}); err != nil {
 			return fmt.Errorf("reviews %q: %w", lens.Identity, err)
+		}
+	}
+	return nil
+}
+
+// validateEngineAccount is the load-time half of the two guards that read an
+// event's sender: `engine_account` names one account and nothing else, so a
+// config that also declares that login as an actor or a lens is refused rather
+// than trusted with a guard whose premise is a coincidence. §forgejo/config/engine-account
+// states the rule and why load time is the only place it can be established
+// (§forgejo/config/identity-collapse, §forgejo/decisions/loop-prevention).
+func (c *Config) validateEngineAccount() error {
+	if c.actorIdentities()[c.EngineAccount] {
+		return fmt.Errorf("engine_account %q is also declared as an actor: the guards that read a delivery's sender would hold that account's own work off unread (§forgejo/config/identity-collapse)", c.EngineAccount)
+	}
+	for _, lens := range c.Reviews {
+		if lens.Identity == c.EngineAccount {
+			return fmt.Errorf("engine_account %q is also a review lens identity: the guards that read a delivery's sender would hold that account's own work off unread (§forgejo/config/identity-collapse)", c.EngineAccount)
 		}
 	}
 	return nil
@@ -478,6 +557,18 @@ func loadConfigDir(dir string) (*Config, error) {
 		}
 		if cfg.EngineAccount != "" {
 			merged.EngineAccount = cfg.EngineAccount
+		}
+		if cfg.TrackerTimezone != "" && merged.TrackerTimezone != "" && cfg.TrackerTimezone != merged.TrackerTimezone {
+			return nil, fmt.Errorf("config %q: tracker_timezone %q conflicts with %q", name, cfg.TrackerTimezone, merged.TrackerTimezone)
+		}
+		if cfg.TrackerTimezone != "" {
+			merged.TrackerTimezone = cfg.TrackerTimezone
+		}
+		if cfg.MermaidMaxSourceCharacters > 0 && merged.MermaidMaxSourceCharacters > 0 && cfg.MermaidMaxSourceCharacters != merged.MermaidMaxSourceCharacters {
+			return nil, fmt.Errorf("config %q: mermaid_max_source_characters %d conflicts with %d", name, cfg.MermaidMaxSourceCharacters, merged.MermaidMaxSourceCharacters)
+		}
+		if cfg.MermaidMaxSourceCharacters > 0 {
+			merged.MermaidMaxSourceCharacters = cfg.MermaidMaxSourceCharacters
 		}
 		if merged.Actions == nil {
 			merged.Actions = make(map[string]PromptConfig)

@@ -323,9 +323,22 @@ root and its tracker with their states, and stating plainly when the
 engine is off or there are no forests instead of rendering an empty
 rectangle.
 
+The same tick lands each forest's drawing on its own tracker: the engine
+renders the forest into Mermaid and rewrites only the region of that tracker's
+description held between the `<!-- maitred:forest:begin -->` and
+`<!-- maitred:forest:end -->` markers, under a `Last revisited:` stamp rendered
+in `tracker_timezone`. That region is the one thing the engine writes to
+Forgejo; an issue's title, state and labels, and every other issue's body — a
+member's, or a grouping issue's whose body drives a landing decision — stay as
+they were found. See `specification/forgejo/reconciliation.md` and
+`specification/forgejo/config.md`.
+
 The dashboard has no authentication of its own: like the trigger cards'
 fire-now and pause/resume controls, the sweep trigger is reachable by anyone
-who can reach the web port, which binds every interface. It is therefore
+who can reach the web port, which binds every interface — and a sweep fired
+from there now writes to the forge with the engine's own token, since landing
+the current-state block is the tick's last step, not only its queueing of
+decisions. It is therefore
 meant to sit on a trusted network or behind a reverse proxy that authenticates
 before forwarding — the port must not be reachable from networks the operator
 does not trust, including indirectly: a script on any web page open in a

@@ -101,6 +101,13 @@ func (s *stubForgejoAPI) ListPullRequestReviews(string, string, int) ([]forgejo.
 	return nil, nil
 }
 
+// UpdateIssueBody is the engine's one mutation. The web tests do not study the
+// drawing it lands, so the stub answers and lands nothing
+// (§forgejo/reconciliation/the-tracker-block).
+func (s *stubForgejoAPI) UpdateIssueBody(string, string, int, string) error {
+	return nil
+}
+
 // newForgejoEngine builds an engine over the given API stub, without
 // handling any event.
 func newForgejoEngine(t *testing.T, api *stubForgejoAPI) *forgejo.Engine {

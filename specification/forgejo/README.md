@@ -14,7 +14,7 @@ Specifications that have landed:
 
 | File | Reference |
 |---|---|
-| `client.md` | the read-only Forgejo API client — §forgejo/client/operations |
+| `client.md` | the Forgejo API client, and the one mutation it carries — §forgejo/client/operations |
 | `state.md` | the per-issue/PR watermark store — §forgejo/state/watermark |
 | `decisions.md` | the decision function (state machine) — §forgejo/decisions/the-decision-function |
 | `config.md` | the canned-prompt config — §forgejo/config/canned-prompts |

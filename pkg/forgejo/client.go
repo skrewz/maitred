@@ -1,12 +1,15 @@
-// Package forgejo provides a read-only client for the Forgejo REST API v1.
+// Package forgejo provides the client for the Forgejo REST API v1.
 //
 // The client exposes exactly the operations the Forgejo engine's decision
 // function and event/reconciliation paths need (§forgejo/client/operations).
-// It has no mutation operations: the engine's side effects are dispatched
-// tasks, never direct writes to Forgejo (§overview/non-goals).
+// It carries one mutation — the issue-body write that lands a tracker's
+// current-state block (§forgejo/client/the-one-mutation, §forgejo/reconciliation/the-tracker-block);
+// every other side effect the engine has is a dispatched task
+// (§overview/non-goals).
 package forgejo
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -52,6 +55,20 @@ type Issue struct {
 	State string
 	// Labels are the issue's label names.
 	Labels []string
+	// LabelColours maps each label name to the colour the forge reports
+	// for it, normalised to a lowercase `#rrggbb`: the chart's strokes
+	// read a role label's colour from here, which is what makes a label
+	// recoloured in the forge show in the next chart
+	// (§forgejo/renderer/classes-and-strokes, §forgejo/client/operations).
+	// A label the response reports no usable colour for is absent rather
+	// than blank, so a caller cannot read a blank as a colour.
+	LabelColours map[string]string
+	// ClosedAt is the moment the issue closed, as the forge reports it,
+	// and is zero while the issue is open. A rendered chart stamps a
+	// closed member with it (§forgejo/renderer/closed-members):
+	// UpdatedAt never stands in, because the last edit to a closed
+	// issue is not the moment it closed (§forgejo/client/operations).
+	ClosedAt time.Time
 	// Author is the login of the user who opened the issue. It is
 	// carried on the model and read by nothing in the engine:
 	// authorship gates nothing — the forest-seeding label gates a
@@ -158,7 +175,7 @@ type Comment struct {
 	Body string
 }
 
-// API is the read-only Forgejo surface the engine depends on
+// API is the Forgejo surface the engine depends on
 // (§forgejo/client/operations). It is an interface so the decision
 // function, webhook handler, and reconciliation sweep can be tested
 // against a fake.
@@ -191,9 +208,17 @@ type API interface {
 	// decomposer identity as triggers
 	// (§forgejo/decisions/actionable-state-digest).
 	ListIssueComments(owner, repo string, number int) ([]Comment, error)
+	// UpdateIssueBody replaces an issue's description. It is the one
+	// mutation the engine makes, and it is narrow by construction: the
+	// payload carries the body and nothing else, so no title, state,
+	// label, milestone or assignment travels with it, and the write
+	// cannot reopen or close what it rewrites. The sweep addresses only
+	// a forest's tracker with it
+	// (§forgejo/client/the-one-mutation, §forgejo/reconciliation/the-tracker-block).
+	UpdateIssueBody(owner, repo string, number int, body string) error
 }
 
-// Client is a read-only client for the Forgejo REST API v1.
+// Client is the client for the Forgejo REST API v1.
 type Client struct {
 	baseURL string
 	token   string
@@ -401,6 +426,18 @@ func (c *Client) ListIssueComments(owner, repo string, number int) ([]Comment, e
 	return comments, nil
 }
 
+// UpdateIssueBody implements API. It is the one mutation the client carries:
+// the PATCH carries `body` and nothing else, so the fields the engine has no
+// business changing are never sent, and a body is the only thing the forge may
+// change (§forgejo/client/the-one-mutation). It travels the same transport
+// every read travels — the auth header and the non-2xx rule live in
+// doJSON alone, so a second operation cannot drift away from them
+// (§forgejo/client/errors).
+func (c *Client) UpdateIssueBody(owner, repo string, number int, body string) error {
+	_, err := c.doJSON(http.MethodPatch, repoPath(owner, repo)+"/issues/"+strconv.Itoa(number), map[string]any{"body": body})
+	return err
+}
+
 // repoPath builds the escaped "/repos/{owner}/{repo}" path prefix.
 func repoPath(owner, repo string) string {
 	return "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo)
@@ -431,30 +468,54 @@ func listAll[T any](c *Client, path string, params ...string) ([]T, error) {
 	}
 }
 
-// getJSON performs an authenticated GET on path (relative to the "/api/v1"
-// prefix of the base URL) and decodes the JSON response into out.
-// Non-2xx responses are returned as *APIError.
-func (c *Client) getJSON(out any, path string) error {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, c.baseURL+"/api/v1"+path, nil)
+// doJSON is this file's one transport: an authenticated request with method
+// on path (relative to the "/api/v1" prefix of the base URL), whose non-nil
+// payload is sent as a JSON body, whose response body it returns, and whose
+// non-2xx answer is an *APIError. Every operation here — each read and the
+// engine's one mutation — goes through it, so the auth header, the response
+// ceiling and the non-2xx rule are stated once and a new operation cannot
+// drift away from them (§forgejo/client/operations, §forgejo/client/errors).
+func (c *Client) doJSON(method, path string, payload any) ([]byte, error) {
+	var reqBody io.Reader
+	if payload != nil {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("forgejo: encode request for %s: %w", path, err)
+		}
+		reqBody = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), method, c.baseURL+"/api/v1"+path, reqBody)
 	if err != nil {
-		return fmt.Errorf("forgejo: %w", err)
+		return nil, fmt.Errorf("forgejo: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/json")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("forgejo: GET %s: %w", path, err)
+		return nil, fmt.Errorf("forgejo: %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
-		return fmt.Errorf("forgejo: read response from %s: %w", path, err)
+		return nil, fmt.Errorf("forgejo: read response from %s: %w", path, err)
 	}
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &APIError{StatusCode: resp.StatusCode, Message: apiErrorMessage(body)}
+		return nil, &APIError{StatusCode: resp.StatusCode, Message: apiErrorMessage(body)}
+	}
+	return body, nil
+}
+
+// getJSON performs an authenticated GET on path and decodes the JSON
+// response into out (§forgejo/client/operations).
+func (c *Client) getJSON(out any, path string) error {
+	body, err := c.doJSON(http.MethodGet, path, nil)
+	if err != nil {
+		return err
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("forgejo: decode response from %s: %w", path, err)
@@ -485,7 +546,8 @@ type wireUser struct {
 }
 
 type wireLabel struct {
-	Name string `json:"name"`
+	Name  string `json:"name"`
+	Color string `json:"color"` // the hex the forge draws the label with, sans '#'
 }
 
 type wireRepository struct {
@@ -508,6 +570,7 @@ type wireIssue struct {
 	Labels    []wireLabel `json:"labels"`
 	User      wireUser    `json:"user"` // the issue's author (§forgejo/decisions/loop-prevention)
 	UpdatedAt time.Time   `json:"updated_at"`
+	ClosedAt  time.Time   `json:"closed_at"`
 	HTMLURL   string      `json:"html_url"`
 	// PullRequest is non-nil only when the issue is a pull request —
 	// the issue API's indicator (the API's PullRequestMeta object,
@@ -564,15 +627,17 @@ func toRepository(w wireRepository) Repository {
 
 func toIssue(w wireIssue) Issue {
 	issue := Issue{
-		Number:    w.Number,
-		Title:     w.Title,
-		Body:      w.Body,
-		State:     w.State,
-		Labels:    labelNames(w.Labels),
-		Author:    w.User.Login,
-		UpdatedAt: w.UpdatedAt,
-		HTMLURL:   w.HTMLURL,
-		IsPull:    w.PullRequest != nil,
+		Number:       w.Number,
+		Title:        w.Title,
+		Body:         w.Body,
+		State:        w.State,
+		Labels:       labelNames(w.Labels),
+		LabelColours: labelColours(w.Labels),
+		Author:       w.User.Login,
+		UpdatedAt:    w.UpdatedAt,
+		ClosedAt:     w.ClosedAt,
+		HTMLURL:      w.HTMLURL,
+		IsPull:       w.PullRequest != nil,
 	}
 	if w.Repository != nil {
 		issue.Repository = w.Repository.FullName
@@ -615,4 +680,43 @@ func labelNames(labels []wireLabel) []string {
 		names[i] = l.Name
 	}
 	return names
+}
+
+// labelColours maps each label name to the colour the forge reports for it,
+// normalised to the `#rrggbb` a chart's stroke must be
+// (§forgejo/renderer/classes-and-strokes). The forge reports the hex without
+// its '#'; a label whose colour is absent or is no six-digit hex is left out
+// rather than mapped to something a chart could draw with, because a missing
+// colour reads as a missing stroke and stops the write
+// (§forgejo/reconciliation/the-tracker-block).
+func labelColours(labels []wireLabel) map[string]string {
+	var colours map[string]string
+	for _, l := range labels {
+		hex, ok := strokeHex(l.Color)
+		if !ok {
+			continue
+		}
+		if colours == nil {
+			colours = make(map[string]string, len(labels))
+		}
+		colours[l.Name] = hex
+	}
+	return colours
+}
+
+// strokeHex normalises a hex the forge reports for a label to `#rrggbb`, and
+// reports whether anything usable was there: upper- and lower-case spellings
+// become one, a leading '#' is accepted and always emitted.
+func strokeHex(colour string) (string, bool) {
+	hex := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(colour), "#"))
+	if len(hex) != 6 {
+		return "", false
+	}
+	for _, r := range hex {
+		if r >= '0' && r <= '9' || r >= 'a' && r <= 'f' {
+			continue
+		}
+		return "", false
+	}
+	return "#" + hex, true
 }

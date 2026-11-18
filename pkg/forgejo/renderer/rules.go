@@ -17,12 +17,18 @@ func bareName(repository string) string {
 	return trimmed
 }
 
-// sameRepository reports whether two spellings name one repository. The drawing
+// SameRepository reports whether two spellings name one repository. The drawing
 // keeps only the bare name, but the forge addresses a repository by owner and
 // name case-insensitively, so two spellings of one owner/repo are one repository
 // while two repositories that share a name under different owners are not
 // (§forgejo/renderer/identifiers-and-shapes).
-func sameRepository(a, b string) bool {
+//
+// It is exported because the engine's own graph gathering must agree with the
+// collapsed view this package produces: an edge the drawing would fold to one
+// repository must not reach a node the drawing names by another, and one rule
+// stated twice is a rule that can disagree
+// (§forgejo/reconciliation/the-tracker-block).
+func SameRepository(a, b string) bool {
 	return strings.EqualFold(strings.TrimRight(a, "/"), strings.TrimRight(b, "/"))
 }
 
