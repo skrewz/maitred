@@ -75,7 +75,7 @@ created while the engine was down.
 
 The synthetic event carries no sender.
 
-## The tracker's current-state block
+## The tracker block
 
 An outcome tracker's description carries its forest's drawing between a pair of
 HTML comments — `<!-- maitred:forest:begin -->` and `<!-- maitred:forest:end -->`
