@@ -283,9 +283,11 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 					// state a drifted marker leaves behind, so it says so
 					// once per tick at Debug — the level the uncatalogued
 					// forest never reaches, which is what keeps the
-					// silence above it intact
+					// silence above it intact. The refusal is per field, so
+					// the line says which field refused rather than claiming
+					// the region published nothing at all
 					// (§forgejo/observability/the-outcomes-view).
-					e.log.Debug("outcomes: a tracker's current-state region refused; publishing nothing",
+					e.log.Debug("outcomes: a tracker's current-state region refused; publishing nothing for the refused field",
 						"tracker", tracker.Repository+"#"+strconv.Itoa(tracker.Number),
 						"why", refused)
 				}

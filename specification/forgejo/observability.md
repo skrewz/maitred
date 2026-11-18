@@ -224,8 +224,9 @@ leaves no trace at any level, because repeating the same sentence for it
 on every tick would bury the failures the log is for: a read that broke,
 which fails the enumeration and reaches the log loudly. A lone `Last
 revisited:` line carrying the label and no value belongs to that family
-seen from the field side: the stamp has not been written yet, so nothing
-is published and nothing is said. A region that was
+seen from the field side: the stamp has not been written yet, so the stamp
+publishes nothing and nothing is said — the picture the same region holds
+still stands in the payload. A region that was
 there and was refused is the other family, the one a fence pair drifting
 away from what the curating agent writes lands in, and it says so once
 per tick at `Debug`: the tracker, and the rule that refused. Debug rather

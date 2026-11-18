@@ -860,7 +860,7 @@ func TestForests_ARefusedRegionSaysWhichRuleRefused(t *testing.T) {
 				t.Fatalf("enumerateForests: %v", err)
 			}
 			line := findEntry(t, parseLogLines(t, log.Bytes()),
-				"outcomes: a tracker's current-state region refused; publishing nothing")
+				"outcomes: a tracker's current-state region refused; publishing nothing for the refused field")
 			if line["why"] != tc.why {
 				t.Errorf("why = %v, want %q", line["why"], tc.why)
 			}
@@ -874,22 +874,27 @@ func TestForests_ARefusedRegionSaysWhichRuleRefused(t *testing.T) {
 // TestForests_NoPictureWrittenYetStaysSilent: the states that mean "the
 // picture has not been written yet" — a description carrying neither
 // marker, and a region whose stamp line is still the empty placeholder —
-// publish empty fields and say nothing at any level, because an
-// uncatalogued forest is an ordinary state and a sentence per tick would
-// bury the failures the log is for
+// publish nothing for what they leave unwritten and say nothing at any
+// level, because an uncatalogued forest is an ordinary state and a sentence
+// per tick would bury the failures the log is for
 // (§forgejo/observability/the-outcomes-view).
 func TestForests_NoPictureWrittenYetStaysSilent(t *testing.T) {
 	cases := []struct {
-		name string
-		body string
+		name      string
+		body      string
+		wantChart string
 	}{
 		{
-			name: "no fence pair at all",
-			body: "## Outcome\n\nNothing was ever delimited here.\n",
+			name:      "no fence pair at all",
+			body:      "## Outcome\n\nNothing was ever delimited here.\n",
+			wantChart: "",
 		},
 		{
-			name: "a stamp line carrying nothing",
-			body: currentStateBlock("", mermaidBlock()),
+			// The picture this region holds is untouched by a stamp the
+			// writer never filled in: the refusal is per field.
+			name:      "a stamp line carrying nothing",
+			body:      currentStateBlock("", mermaidBlock()),
+			wantChart: forestChartSource,
 		},
 	}
 	for _, tc := range cases {
@@ -909,6 +914,9 @@ func TestForests_NoPictureWrittenYetStaysSilent(t *testing.T) {
 			}
 			if len(forests) != 1 || forests[0].ChartRevisited != "" {
 				t.Fatalf("forests = %+v, want the one forest with its stamp empty", forests)
+			}
+			if forests[0].Chart != tc.wantChart {
+				t.Errorf("chart = %q, want %q: an unwritten stamp is the stamp's own absence, not the picture's", forests[0].Chart, tc.wantChart)
 			}
 			if out := log.String(); out != "" {
 				t.Errorf("the enumeration logged %q, want silence: nothing written yet is not a fault", out)
