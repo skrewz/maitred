@@ -98,6 +98,17 @@ rendered in the configured timezone (§forgejo/config/tracker-chart).
   than a forest's worth of reads; the body-write endpoint carries no conditional
   write, so within that one request the last writer wins and the next tick
   re-reads whatever it landed.
+- **The write goes where a role admits it.** Which repository holds a tracker,
+  and which repositories the graph's rows live in, is forge data the root's
+  blocking edges name rather than configuration, so both ends pay the admission
+  test every other cross-repository hop pays
+  (§forgejo/webhook/repository-roles): the enumeration's own repository is
+  admitted by the enumeration, every other only where a maitred role names it. A
+  tracker in a repository no role names is neither read nor written and the log
+  names the repository refused; a row no role admits draws no node, contributes
+  no title to a body the outcomes view publishes, and has no edges read. An
+  unknown scope fails closed, naming the failure rather than reading as a
+  repository holding no role (§forgejo/webhook/the-scope-cache).
 - **The stamp moves whatever the graph does.** A tick over an unchanged forest
   rewrites the stamp and nothing else. Where the composed body is byte-identical
   to the body read — two ticks inside one minute over an unchanged graph —

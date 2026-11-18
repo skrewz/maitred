@@ -94,6 +94,23 @@ func trackerRef(forest Forest) string {
 func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
 	owner, name := splitRepo(forest.Tracker.Repository)
 	ref := trackerRef(forest)
+	// Which repository holds a tracker is forge data, not configuration: the
+	// root's blocking edges name it, and a tracker may live elsewhere
+	// (§forgejo/observability/the-outcomes-view). So the one mutation the
+	// engine makes asks the admission test every other cross-repository hop
+	// pays before it reads or writes that repository — the enumeration's own
+	// repository admitted by the enumeration, every other one only if a
+	// maitred role names it (§forgejo/webhook/repository-roles,
+	// §forgejo/reconciliation/the-tracker-block).
+	admits, err := e.remitAdmits(forest.Tracker.Repository, forest.Root.Repository)
+	if err != nil {
+		return fmt.Errorf("scope of %s: %w", forest.Tracker.Repository, err)
+	}
+	if !admits {
+		e.log.Info("reconciliation: tracker lives in a repository no maitred role names; nothing written",
+			"tracker", ref)
+		return nil
+	}
 	source, err := e.renderForestChart(forest)
 	if err != nil {
 		return fmt.Errorf("rendering %s: %w", ref, err)
@@ -269,7 +286,10 @@ func (e *Engine) renderForestChart(forest Forest) (string, error) {
 // drawing — a member blocking a ticket no forest names is that ticket's
 // business, not the chart's — and the renderer refuses an edge naming no node on
 // either side, so filtering here is what keeps one wide blocking edge from
-// failing the whole forest.
+// failing the whole forest. Which repositories the edges name is forge data, so
+// the same filter drops a row no maitred role admits before it is drawn, before
+// its title reaches a tracker body the outcomes view publishes, and before its
+// own blocks are read (§forgejo/webhook/repository-roles).
 //
 // The listing is read again rather than handed down from the enumeration that
 // paired the root with its tracker: the walk runs between the two, so the
@@ -287,10 +307,29 @@ func (e *Engine) forestGraph(root *Issue) ([]Issue, []renderer.Edge, error) {
 		if row.IsPull {
 			continue
 		}
-		if row.Repository == "" {
-			row.Repository = root.Repository
+		home := row.Repository
+		if home == "" {
+			home = root.Repository
 		}
-		rows = append(rows, *row)
+		// A blocking edge names its far end, so which repositories this
+		// gather reads is forge data too. The admission test every other
+		// cross-repository read pays is paid here, before the row becomes a
+		// node and before its own blocks are read: a row no maitred role
+		// admits draws nothing, and its title reaches no tracker body
+		// (§forgejo/webhook/repository-roles,
+		// §forgejo/reconciliation/the-tracker-block).
+		admits, err := e.remitAdmits(home, root.Repository)
+		if err != nil {
+			return nil, nil, fmt.Errorf("scope of %s: %w", home, err)
+		}
+		if !admits {
+			e.log.Debug("reconciliation: drawing omits a row in a repository no maitred role names",
+				"row", forestRef(home, row.Number))
+			continue
+		}
+		drawn := *row
+		drawn.Repository = home
+		rows = append(rows, drawn)
 	}
 
 	peers := make([]Issue, 0, len(rows)+1)

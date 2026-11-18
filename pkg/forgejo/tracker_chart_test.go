@@ -359,6 +359,78 @@ func TestTrackerBlock_WriteFailureIsReported(t *testing.T) {
 	}
 }
 
+// TestTrackerBlock_TrackerOutsideRemitIsNotWritten: which repository holds a
+// tracker comes from the root's blocking edges, not from configuration, so the
+// engine's one mutation pays the admission test every other cross-repository hop
+// pays before it reads or writes that repository — a tracker no maitred role
+// admits is left alone, unread and unwritten
+// (§forgejo/webhook/repository-roles,
+// §forgejo/reconciliation/the-tracker-block).
+func TestTrackerBlock_TrackerOutsideRemitIsNotWritten(t *testing.T) {
+	eng, api, log := chartForestEngine(t, chartFenced())
+	forest := chartForests()[0]
+	forest.Tracker.Repository = "o/archive"
+	root := chartRoot()
+	for i := range api.blocks[root.Number] {
+		if api.blocks[root.Number][i].Number == 2 {
+			api.blocks[root.Number][i].Repository = "o/archive"
+		}
+	}
+
+	eng.writeTrackerBlocks([]Forest{forest}, chartAt)
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("wrote %d issues, want none: no maitred role names o/archive", got)
+	}
+	if got := api.callCount("GetIssue:archive/2"); got != 0 {
+		t.Errorf("read the tracker %d times, want it not read at all", got)
+	}
+	if !strings.Contains(log.String(), "o/archive") {
+		t.Errorf("log = %s, want the refusal to name the repository it refused", log.String())
+	}
+}
+
+// TestTrackerBlock_RowOutsideRemitDrawsNothing: a blocking edge into a repository
+// no maitred role names must not put that row's title into a tracker body the
+// outcomes view publishes, nor make the engine read that row's own edges
+// (§forgejo/webhook/repository-roles, §forgejo/renderer/identifiers-and-shapes).
+func TestTrackerBlock_RowOutsideRemitDrawsNothing(t *testing.T) {
+	eng, api, _ := chartForestEngine(t, chartFenced())
+	root := chartRoot()
+	outside := Issue{
+		Number: 99, Title: "another team's ticket", State: "open",
+		Repository: "o/archive", UpdatedAt: testUpdatedAt,
+		HTMLURL: "https://forge.example.com/o/archive/issues/99",
+	}
+	api.blocks[root.Number] = append(append([]Issue{}, api.blocks[root.Number]...), outside)
+
+	if err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
+		t.Fatalf("writeTrackerBlock: %v", err)
+	}
+	region := regionOf(mustWritten(t, api, "out", 2))
+	if strings.Contains(region, "i_archive_99") || strings.Contains(region, "another team's ticket") {
+		t.Errorf("the source drew a row no maitred role admits:\n%s", region)
+	}
+	if got := api.callCount("IssueBlocks:archive/99"); got != 0 {
+		t.Errorf("read the omitted row's edges %d times, want the row dropped before it is read", got)
+	}
+}
+
+// TestTrackerBlock_UnknownScopeWritesNothing: an unknown scope fails closed —
+// the remit test's failure is reported naming the failure, never read as a
+// repository holding no role (§forgejo/webhook/the-scope-cache).
+func TestTrackerBlock_UnknownScopeWritesNothing(t *testing.T) {
+	eng, api, log := chartForestEngine(t, chartFenced())
+	api.listReposErr = errors.New("the org listing failed")
+
+	eng.writeTrackerBlocks(chartForests(), chartAt)
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("wrote %d issues, want none while the scope is unknown", got)
+	}
+	if !strings.Contains(log.String(), "scope of o/work") {
+		t.Errorf("log = %s, want the unknown scope named with its failure", log.String())
+	}
+}
+
 // TestTrackerBlock_DrawsTheGraphItGathers: the roles, the closed stamp, the work
 // order and the exclusion of a delivery all reach the source — gathering the
 // graph is the work the renderer never does for itself
