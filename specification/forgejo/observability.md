@@ -177,24 +177,18 @@ walk already holds — the listing and the single-issue read answer with
 the same model and fill `body` the same way, so scraping the row costs
 no second read of an issue the enumeration is already holding
 (§forgejo/client/operations). The region scraped is the one the
-curating agent delimits with the HTML-comment fence pair
+engine delimits with the HTML-comment fence pair
 `<!-- maitred:forest:begin -->` and `<!-- maitred:forest:end -->` — the
 view reads that pair and writes nothing: this path makes no mutation, so
 the tracker's description is left byte-for-byte as found
 (§forgejo/client/operations, §forgejo/client/the-one-mutation). The
 region is the engine's own drawing, so the scrape pays the admission test
-the write pays: a tracker in a repository no maitred role names stays
-paired — the honest row the blocks read carried — but publishes neither
-chart nor stamp, since a repository outside the remit must not author
-what the view presents as the engine's current state
-(§forgejo/webhook/repository-roles,
-§forgejo/reconciliation/the-tracker-block); the refusal reads at Debug,
-the level every other cross-repository hop uses for the sentence. Within
-the region the view carries two things and nothing else: the fenced
-`mermaid`
-block between its fences, **verbatim** — never re-indented, repaired, or
-completed in code — and the `Last revisited: <YYYY-MM-DD HH:MM> <TZ>`
-line, whose value is carried **as written**, so a UI states how recent
+the write pays (§forgejo/reconciliation/the-tracker-block). Within the
+region the view carries two things and nothing else: the fenced
+`mermaid` block between its fences, **verbatim** — never re-indented,
+repaired, or completed in code — and the
+`Last revisited: <YYYY-MM-DD HH:MM> <TZ>` line, whose value is carried
+**as written**, so a UI states how recent
 the picture is without parsing prose and an abbreviation of `CET` reads
 exactly as the agent wrote it. Neither field is parsed further: the
 stamp is a string the view does not interpret.

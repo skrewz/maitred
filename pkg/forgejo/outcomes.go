@@ -47,8 +47,9 @@ type Forest struct {
 	// over (§forgejo/observability/the-outcomes-view).
 	Tracker *ForestIssue `json:"tracker"`
 	// Chart is the Mermaid source of the tracker's current-state block,
-	// carried verbatim from between the fences the curating agent wrote it
-	// inside — never composed, repaired or guessed here, and empty
+	// carried verbatim from between the fences the engine writes it
+	// inside, opened by whichever writer came first — never composed,
+	// repaired or guessed here, and empty
 	// wherever a description says nothing; the ragged edges are enumerated
 	// once, in §forgejo/observability/the-outcomes-view. It is text this
 	// engine does not own: a description is editable by anyone with write
@@ -236,12 +237,9 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 // Each tracker found brings its picture: the description of the row the
 // blocks read already holds is scraped for the forest's chart and stamp,
 // and nothing is ever written back (§forgejo/observability/the-outcomes-view,
-// §forgejo/client/operations). The region is the engine's own drawing, so
-// the scrape pays the same admission test the write pays: a tracker in a
-// repository no maitred role names stays paired but pictureless, and an
-// unknown scope fails the enumeration like every other failed read.
-// A root whose tracker is missing is listed with the absence stated; an
-// outcome issue no open root blocks is not a forest and is not listed.
+// §forgejo/client/operations). A root whose tracker is missing is
+// listed with the absence stated; an outcome issue no open root blocks
+// is not a forest and is not listed.
 // Pull requests carry no forest. Each forest additionally carries its
 // warnings, walked from the same rows the pairing reads: one blockers
 // read per member either kind concerns, one membership read per
@@ -307,10 +305,6 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 					return nil, fmt.Errorf("forgejo: outcomes: scope of %s: %w", tracker.Repository, err)
 				}
 				if !admits {
-					// The tracker stands, honestly paired; only the
-					// picture is withheld, at the level every other
-					// cross-repository hop uses for this sentence
-					// (§forgejo/observability/the-decision-log).
 					e.log.Debug("outcomes: tracker lives in a repository no maitred role names; publishing no picture",
 						"tracker", forestRef(tracker.Repository, tracker.Number))
 					break

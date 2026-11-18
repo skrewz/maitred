@@ -100,8 +100,9 @@ rendered in the configured timezone (§forgejo/config/tracker-chart).
   re-reads whatever it landed.
 - **The write goes where a role admits it.** Which repository holds a tracker,
   and which repositories the graph's rows live in, is forge data the root's
-  blocking edges name rather than configuration, so both ends pay the admission
-  test every other cross-repository hop pays
+  blocking edges name rather than configuration, so all three readers — the
+  write, the draw and the pairing's scrape — pay the admission test every
+  other cross-repository hop pays
   (§forgejo/webhook/repository-roles): the enumeration's own repository is
   admitted by the enumeration, every other only where a maitred role names it. A
   tracker in a repository no role names is neither written nor scraped — the
@@ -109,8 +110,7 @@ rendered in the configured timezone (§forgejo/config/tracker-chart).
   tracker row itself standing — and the log names the repository refused at
   Debug, the level the engine's other cross-repository hops use for the
   sentence; a row no role admits draws no node, contributes no title to a body
-  the outcomes view publishes, and has no edges read. Three readers thus pay
-  the test — the write, the draw and the pairing's scrape — and one does not:
+  the outcomes view publishes, and has no edges read. One reader does not:
   the forest's actionable-state digest folds every row and comment body a
   blocking edge reaches, wherever the edge points, so where an edge leaves the
   roles the digest decides on rows the chart neither draws nor publishes
