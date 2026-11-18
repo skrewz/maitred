@@ -1277,8 +1277,8 @@ async function testOutcomesPage(page, results) {
     `The two kinds render distinctly in the payload's own words, with their references (got: ${warned.entryTexts.join(' | ')})`
   ));
   results.push(assert(
-    warned.entryTexts.every(t => /\d/.test(t.split('\u2014').slice(1).join('\u2014'))),
-    `A warning entry states the age of the condition (got: ${warned.entryTexts.join(' | ')})`
+    warned.entryTexts.some(t => t.includes('2h 5m')) && warned.entryTexts.some(t => t.includes('2m 0s')),
+    `A warning entry converts the payload's seconds to a duration (7500s renders 2h 5m, 120s renders 2m 0s; got: ${warned.entryTexts.join(' | ')})`
   ));
   results.push(assert(
     warned.entryHrefs.includes('https://forge.example.com/o/deliv/pulls/12')
@@ -1288,6 +1288,33 @@ async function testOutcomesPage(page, results) {
   results.push(assert(
     warned.quietEntries === 0 && !warned.quietText.includes('\u26a0'),
     `A forest with no warnings shows no marker (entries: ${warned.quietEntries})`
+  ));
+
+  // A warning whose condition the payload does not date states
+  // nothing about its age rather than rendering a default as a fact:
+  // the entry carries no age clause at all when age_seconds is
+  // absent, and likewise no kind word when the payload names no
+  // kind (§forgejo/observability/the-warnings-a-forest-carries).
+  const undated = await page.evaluate(() => {
+    renderOutcomes({
+      engine_status: 'enabled',
+      forests: [
+        {
+          repository: 'o/out',
+          root: { number: 10, repository: 'o/out', title: 'Root', state: 'open', html_url: 'https://forge.example.com/o/out/issues/10' },
+          tracker: { number: 11, repository: 'o/out', title: 'Tracker', state: 'open', html_url: 'https://forge.example.com/o/out/issues/11' },
+          warnings: [
+            { repository: 'o/out', number: 12, title: 'No kind, no date', html_url: 'https://forge.example.com/o/out/issues/12' },
+          ],
+        },
+      ],
+    });
+    const entries = [...document.querySelectorAll('#outcomes-list .outcomes-warning')];
+    return { count: entries.length, text: entries[0]?.textContent ?? '' };
+  });
+  results.push(assert(
+    undated.count === 1 && !undated.text.includes('0s') && !undated.text.includes('\u00b7'),
+    `A warning with no kind and no age states neither as a default (got: "${undated.text}")`
   ));
 
   // safeUrl is the guard between a forge-supplied html_url and an

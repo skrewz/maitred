@@ -784,8 +784,10 @@
         // nothing: the honest empty carries no marker.
         function warningsHtml(warnings) {
             return (warnings ?? []).map(w => {
-                const age = formatDuration(Math.round((w.age_seconds ?? 0) * 1000));
-                return `<div class="outcomes-warning">\u26a0\ufe0f ${issueLink(w)} \u2014 ${escapeHtml(String(w.kind ?? ''))} \u00b7 ${escapeHtml(age)}</div>`;
+                // An undated warning drops the age clause: printing
+                // 0s would state a wait of no duration as a fact.
+                const age = w.age_seconds == null ? '' : ` \u00b7 ${escapeHtml(formatDuration(Math.round(w.age_seconds * 1000)))}`;
+                return `<div class="outcomes-warning">\u26a0\ufe0f ${issueLink(w)} \u2014 ${escapeHtml(String(w.kind ?? ''))}${age}</div>`;
             }).join('');
         }
 
