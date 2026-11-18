@@ -399,10 +399,12 @@ delivery whose graph reaches past the budget costs no blocker read and asserts
 no wait: which rows the hop reads is graph state an author chooses, and where
 the merge path pays one read per row the delivery states, the walk — which
 pays the same hop on every tick, for every stalled delivery — will not pay past
-the count (§forgejo/webhook/re-fetch). The screen pays the one blocking-edge
-read the ask then pays again: the alternative, hoisting that read above the
-gate's own assembly, is a second assembly able to drift, and one read per
-stalled delivery per tick is the smaller price. A repository whose pull requests
+the count (§forgejo/webhook/re-fetch). The listing the screen reads is the
+listing the assembly pays: the screened rows are handed to the gate's own
+assembly rather than the hop being read a second time inside it, so one
+listing is read per stalled delivery per tick, an edge an author churns
+between two listings can never be paid for unscreened, and no second
+assembly stands ready to drift. A repository whose pull requests
 unit is off is not asked, the way the sweep does not ask it
 (§forgejo/reconciliation/the-sweep): it holds no delivery, which is an
 ordinary state and not a failed read — and *delivers nothing* is a state

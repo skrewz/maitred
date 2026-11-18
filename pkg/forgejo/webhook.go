@@ -563,20 +563,34 @@ func (e *Engine) refreshForestDigest(st State) {
 // in-memory read, and the cap prices this loop alone: the blocking-edge
 // hop above it costs one read per row the delivery states, bounded by
 // that graph rather than this charge, and the outcomes walk — which
-// pays the same hop from the sweep, every tick — screens those rows
-// against the budget before reading any of them
-// (§forgejo/observability/the-warnings-a-forest-carries). Every drop — a
-// skip, a refusal, the cap's
+// pays the same hop from the sweep, every tick — screens that listing
+// against the budget before reading a row of it, and hands the screened
+// rows to the assembly, so the listing it pays for is the listing it
+// admitted (§forgejo/observability/the-warnings-a-forest-carries). Every
+// drop — a skip, a refusal, the cap's
 // overflow — leaves a debug line naming the resolved reference, so a
 // dropped relation is visible rather than silent. A pull request is
 // never a connected issue: it is a delivery, so a reference naming
 // one is skipped.
 func (e *Engine) connectedIssues(owner, name string, number int, body string) ([]ConnectedIssue, error) {
-	prRepo := owner + "/" + name
 	blocks, err := e.api.IssueBlocks(owner, name, number)
 	if err != nil {
 		return nil, err
 	}
+	return e.connectedIssuesWithEdges(owner, name, number, body, blocks)
+}
+
+// connectedIssuesWithEdges is connectedIssues with the delivery's
+// blocking-edge listing already read. The outcomes walk reads that
+// listing, screens it against the remit and the read budget, and hands
+// the screened rows here, so the rows the walk pays for are the rows it
+// admitted — one listing per stalled delivery per tick, and no second
+// listing an author can slip an unscreened edge between
+// (§forgejo/observability/the-warnings-a-forest-carries). The gate's own
+// path reaches the loop through connectedIssues, which pays for the
+// listing there.
+func (e *Engine) connectedIssuesWithEdges(owner, name string, number int, body string, blocks []Issue) ([]ConnectedIssue, error) {
+	prRepo := owner + "/" + name
 	var connected []ConnectedIssue
 	seen := make(map[Key]bool)
 	for i := range blocks {
@@ -845,7 +859,20 @@ func isRefLead(b byte) bool {
 // edge hop it always did (§forgejo/webhook/re-fetch,
 // §forgejo/decisions/sync-set, §forgejo/decisions/unblock-cascade).
 func (e *Engine) fetchPRSetState(owner, name string, number int, st *State) error {
-	connected, err := e.connectedIssues(owner, name, number, st.PR.Body)
+	blocks, err := e.api.IssueBlocks(owner, name, number)
+	if err != nil {
+		return err
+	}
+	return e.fetchPRSetStateWithEdges(owner, name, number, st, blocks)
+}
+
+// fetchPRSetStateWithEdges is fetchPRSetState with the delivery's
+// blocking-edge listing already read, for the caller that screens that
+// listing before paying for it and must pay for the rows it admitted
+// and not a second reading of the graph
+// (§forgejo/observability/the-warnings-a-forest-carries).
+func (e *Engine) fetchPRSetStateWithEdges(owner, name string, number int, st *State, edges []Issue) error {
+	connected, err := e.connectedIssuesWithEdges(owner, name, number, st.PR.Body, edges)
 	if err != nil {
 		return err
 	}

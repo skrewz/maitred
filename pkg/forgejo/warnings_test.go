@@ -344,8 +344,8 @@ func TestForestWarnings_FailedReadFailsTheEnumeration(t *testing.T) {
 		{"pull request read", func(f *fakeAPI) { f.pullErr = errWarnFixture }},
 		{"membership read", func(f *fakeAPI) { f.issueBlocksErrOn = map[int]error{22: errWarnFixture} }},
 		{"delivery's edge listing read", func(f *fakeAPI) { f.issueBlocksErrOn = map[int]error{922: errWarnFixture} }},
-		// The screen reads the delivery's own listing before the assembly
-		// does, so this case fails a read only the assembly makes: the
+		// The delivery's own listing is read once and shared, so this case
+		// fails the read only the assembly makes past it: the
 		// blocking-edge row's own listing, reached through the connected
 		// issue's landing-set hop. Let the assembly swallow a failed read
 		// and this case is the one that says so
@@ -903,6 +903,39 @@ func TestForestWarnings_EdgeRowAndReferenceIsOneObject(t *testing.T) {
 	}
 	if n := api.callCount("GetIssue:r/" + strconv.Itoa(member.Number)); n != 0 {
 		t.Errorf("GetIssue of the member paid %d time(s); the edge row already carries it", n)
+	}
+}
+
+// TestForestWarnings_StaleAskPaysTheScreenedListingOnce: the screen and
+// the assembly ask for the same blocking-edge listing, so the walk reads
+// it once per stalled delivery and hands the screened rows to the gate's
+// own assembly — the listing paid for is the listing admitted. Two
+// listings would leave a window an author could churn an edge into, its
+// repository then read untested by the remit and uncounted against the
+// budget, and would price the same hop twice on every tick
+// (§forgejo/observability/the-warnings-a-forest-carries,
+// §forgejo/webhook/re-fetch).
+func TestForestWarnings_StaleAskPaysTheScreenedListingOnce(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(77, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	api.blocks[pr.Number] = []Issue{{
+		Number: 78, Title: "edge", State: "open", Repository: "o/r", UpdatedAt: testUpdatedAt,
+	}}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests[0].Warnings) != 1 || forests[0].Warnings[0].Kind != WarningStaleAgenticMerge {
+		t.Fatalf("warnings = %+v, want the stale ⚠️ a screened edge row must not hold back", forests[0].Warnings)
+	}
+	if n := api.callCount("IssueBlocks:r/" + strconv.Itoa(pr.Number)); n != 1 {
+		t.Errorf("the delivery's blocking-edge listing was read %d time(s), want 1: the screen and the assembly pay one listing", n)
+	}
+	if n := api.callCount("IssueDependencies:r/78"); n != 1 {
+		t.Errorf("the screened row's blockers were read %d time(s), want 1: the rows paid for are the rows admitted", n)
 	}
 }
 

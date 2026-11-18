@@ -494,8 +494,10 @@ For each decision event, the re-fetch assembles the state
   blocking-edge hop the same walk makes first costs one read per row the
   delivery states and is bounded by that graph rather than by the count —
   a caller that pays the hop repeatedly, as the outcomes walk does on
-  every sweep tick, screens those rows against the same budget before
-  reading any of them (§forgejo/observability/the-warnings-a-forest-carries).
+  every sweep tick, screens that listing against the same budget before
+  reading a row of it, and hands the screened rows to the loop, so the
+  listing paid for is the listing admitted
+  (§forgejo/observability/the-warnings-a-forest-carries).
   The budget is charged beside the call it bounds,
   so a reference that costs no read — deduped against a blocking-edge
   row, refused as a path segment, turned away by the remit test —

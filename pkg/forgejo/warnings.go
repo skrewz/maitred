@@ -303,7 +303,7 @@ func (e *Engine) staleMergeWarning(member *Issue, repo string, gates map[string]
 // wait is that work or that set, not a person — or that the wait cannot
 // be established, which warns nothing for the same reason.
 func (e *Engine) gateHoldsDeliveryOff(pr *PullRequest, repo string, gates map[string]bool) (bool, error) {
-	askable, err := e.graphIsAskable(pr, repo)
+	rows, askable, err := e.graphIsAskable(pr, repo)
 	if err != nil {
 		return false, err
 	}
@@ -316,9 +316,12 @@ func (e *Engine) gateHoldsDeliveryOff(pr *PullRequest, repo string, gates map[st
 	// landing-set membership those rows imply — the call the approval path
 	// makes, so a field the assembly grows cannot be present for a merge
 	// and zero for the walk (§forgejo/webhook/re-fetch,
-	// §forgejo/decisions/sync-set).
+	// §forgejo/decisions/sync-set). The blocking-edge listing is the one
+	// the screen above admitted, handed in rather than read again, so the
+	// rows the assembly pays are the rows the screen screened
+	// (§forgejo/observability/the-warnings-a-forest-carries).
 	st := State{PR: pr}
-	if err := e.fetchPRSetState(owner, name, pr.Number, &st); err != nil {
+	if err := e.fetchPRSetStateWithEdges(owner, name, pr.Number, &st, rows); err != nil {
 		return false, fmt.Errorf("delivery %s#%d: %w", repo, pr.Number, err)
 	}
 	if _, held := syncMemberSetHoldOff(pr, repo, st); held {
@@ -355,40 +358,47 @@ func (e *Engine) gateHoldsDeliveryOff(pr *PullRequest, repo string, gates map[st
 // leaves the line every other dropped relation leaves. Unknown scope is the one
 // answer that is not a hold-off but an error — scope the engine cannot
 // establish fails the walk rather than reading on, here as everywhere else
-// (§forgejo/webhook/the-scope-cache). Listing the edges costs the one read the
-// ask then pays again inside the assembly: hoisting that read above the gate's
-// own assembly would mean a second assembly able to drift, and one read per
-// stalled delivery per tick is the smaller price.
-func (e *Engine) graphIsAskable(pr *PullRequest, prRepo string) (bool, error) {
+// (§forgejo/webhook/the-scope-cache).
+//
+// A true answer carries the blocking-edge listing it screened: that listing
+// is the one read the ask pays, handed to the gate's own assembly rather
+// than re-read inside it. A listing read twice is a graph screened once and
+// paid twice, and an edge appearing between the two readings would be paid
+// for untested and uncounted; the rows the walk reads are therefore the
+// rows the walk admitted, one listing per stalled delivery per tick. The
+// hand-off goes into the gate's assembly rather than a walk-side copy, so
+// no second assembly stands ready to drift
+// (§forgejo/observability/the-warnings-a-forest-carries).
+func (e *Engine) graphIsAskable(pr *PullRequest, prRepo string) (rows []Issue, askable bool, err error) {
 	delivery := prRepo + "#" + strconv.Itoa(pr.Number)
 	refs := autoCloseRefs(pr.Body, prRepo)
 	if len(refs) > maxAutoCloseRefs {
 		e.log.Debug("forest warnings: holding a stale warning back: the body names more references than the read budget pays",
 			"delivery", delivery, "references", len(refs))
-		return false, nil
+		return nil, false, nil
 	}
 	seen := make(map[Key]bool, len(refs))
 	for _, ref := range refs {
 		if !validRepoRef(ref.repo) {
 			e.log.Debug("forest warnings: holding a stale warning back: a reference names a path segment",
 				"delivery", delivery)
-			return false, nil
+			return nil, false, nil
 		}
 		seen[ref.key()] = true
 		admits, err := e.remitAdmits(ref.repo, prRepo)
 		if err != nil {
-			return false, fmt.Errorf("scope of %s: %w", ref.repo, err)
+			return nil, false, fmt.Errorf("scope of %s: %w", ref.repo, err)
 		}
 		if !admits {
 			e.log.Debug("forest warnings: holding a stale warning back: a reference names a repository outside the engine's remit",
 				"delivery", delivery, "reference", ref.repo+"#"+strconv.Itoa(ref.number))
-			return false, nil
+			return nil, false, nil
 		}
 	}
 	owner, name := splitRepo(prRepo)
-	rows, err := e.api.IssueBlocks(owner, name, pr.Number)
+	rows, err = e.api.IssueBlocks(owner, name, pr.Number)
 	if err != nil {
-		return false, fmt.Errorf("blocking edges of %s#%d: %w", prRepo, pr.Number, err)
+		return nil, false, fmt.Errorf("blocking edges of %s#%d: %w", prRepo, pr.Number, err)
 	}
 	for i := range rows {
 		if rows[i].IsPull {
@@ -403,19 +413,19 @@ func (e *Engine) graphIsAskable(pr *PullRequest, prRepo string) (bool, error) {
 		if len(seen) > maxAutoCloseRefs {
 			e.log.Debug("forest warnings: holding a stale warning back: the graph reaches more objects than the read budget pays",
 				"delivery", delivery, "objects", len(seen))
-			return false, nil
+			return nil, false, nil
 		}
 		admits, err := e.remitAdmits(repo, prRepo)
 		if err != nil {
-			return false, fmt.Errorf("scope of %s: %w", repo, err)
+			return nil, false, fmt.Errorf("scope of %s: %w", repo, err)
 		}
 		if !admits {
 			e.log.Debug("forest warnings: holding a stale warning back: a blocking edge names a repository outside the engine's remit",
 				"delivery", delivery, "reference", repo+"#"+strconv.Itoa(rows[i].Number))
-			return false, nil
+			return nil, false, nil
 		}
 	}
-	return true, nil
+	return rows, true, nil
 }
 
 // humanTaskWarning states that an open member claimed by a human is what
