@@ -343,7 +343,20 @@ func TestForestWarnings_FailedReadFailsTheEnumeration(t *testing.T) {
 		{"blocker read", func(f *fakeAPI) { f.issueDepsErr = errWarnFixture }},
 		{"pull request read", func(f *fakeAPI) { f.pullErr = errWarnFixture }},
 		{"membership read", func(f *fakeAPI) { f.issueBlocksErrOn = map[int]error{22: errWarnFixture} }},
-		{"connected-issues read", func(f *fakeAPI) { f.issueBlocksErrOn = map[int]error{922: errWarnFixture} }},
+		{"delivery's edge listing read", func(f *fakeAPI) { f.issueBlocksErrOn = map[int]error{922: errWarnFixture} }},
+		// The screen reads the delivery's own listing before the assembly
+		// does, so this case fails a read only the assembly makes: the
+		// blocking-edge row's own listing, reached through the connected
+		// issue's landing-set hop. Let the assembly swallow a failed read
+		// and this case is the one that says so
+		// (§forgejo/webhook/re-fetch).
+		{"blocking-edge row read", func(f *fakeAPI) {
+			f.blocks[922] = append(f.blocks[922], Issue{
+				Number: 611, Title: "edge", State: "open", Repository: "o/r",
+				Labels: []string{LabelAgenticSyncMerge}, UpdatedAt: testUpdatedAt,
+			})
+			f.issueBlocksErrOn = map[int]error{611: errWarnFixture}
+		}},
 		// The same concern one read further in: the blockers of an issue
 		// the delivery blocks are read by the assembly alone, so this is
 		// the case that names the connected issue's own read — the one
@@ -854,6 +867,42 @@ func TestForestWarnings_EdgeRowNamingNoRepositoryIsReadAtTheDelivery(t *testing.
 	}
 	if n := api.callCount("IssueDependencies:r/65"); n != 1 {
 		t.Errorf("IssueDependencies:r/65 paid %d time(s), want 1: the delivery's repository is where the row lives", n)
+	}
+}
+
+// TestForestWarnings_EdgeRowAndReferenceIsOneObject: an issue the body
+// names and the delivery also blocks is one object, read once — the
+// blocking-edge row first — and counted once against the budget the way
+// the resolving loop deduplicates
+// (§forgejo/webhook/re-fetch, §forgejo/observability/the-warnings-a-forest-carries).
+// Without the dedup the object arrives twice: a second read, and a graph
+// pushed past a budget it fits — which would silence the very ⚠️ this
+// shape carries.
+func TestForestWarnings_EdgeRowAndReferenceIsOneObject(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(67, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	// The member's issue arrives both ways: named on the body by the
+	// delivery relation, and stated as the delivery's blocking edge.
+	api.blocks[pr.Number] = []Issue{{
+		Number: member.Number, Title: member.Title, State: "open",
+		Repository: member.Repository, Labels: member.Labels, UpdatedAt: testUpdatedAt,
+	}}
+	api.deps[member.Number] = nil
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests[0].Warnings) != 1 || forests[0].Warnings[0].Kind != WarningStaleAgenticMerge {
+		t.Fatalf("warnings = %+v, want the stale ⚠️ a deduplicated graph still carries", forests[0].Warnings)
+	}
+	if n := api.callCount("IssueDependencies:r/" + strconv.Itoa(member.Number)); n != 1 {
+		t.Errorf("the member's blockers read paid %d time(s), want 1: one object, one read", n)
+	}
+	if n := api.callCount("GetIssue:r/" + strconv.Itoa(member.Number)); n != 0 {
+		t.Errorf("GetIssue of the member paid %d time(s); the edge row already carries it", n)
 	}
 }
 

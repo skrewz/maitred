@@ -158,6 +158,12 @@ type fakeAPI struct {
 	// (§forgejo/webhook/re-fetch).
 	issueDepsErr error
 
+	// issueDepsErrOn, when it holds an error for an issue number, fails
+	// only that issue's IssueDependencies read — so a test can break the
+	// blockers of one connected issue while a member's own blocker read
+	// still answers (§forgejo/webhook/re-fetch).
+	issueDepsErrOn map[int]error
+
 	// comments holds issue comments by issue number, and commentsErr,
 	// when set, fails only ListIssueComments — the digest's comment
 	// reads (§forgejo/decisions/actionable-state-digest).
@@ -362,6 +368,9 @@ func (f *fakeAPI) IssueDependencies(owner, repo string, number int) ([]Issue, er
 	f.record("IssueDependencies:" + repo + "/" + strconv.Itoa(number))
 	if f.issueDepsErr != nil {
 		return nil, f.issueDepsErr
+	}
+	if err := f.issueDepsErrOn[number]; err != nil {
+		return nil, err
 	}
 	if f.err != nil {
 		return nil, f.err
