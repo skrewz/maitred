@@ -106,6 +106,7 @@
         .outcomes-repo { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 1rem; color: #a78bfa; margin-bottom: 0.75rem; }
         .outcomes-row a { color: #38bdf8; text-decoration: none; }
         .outcomes-row a:hover { text-decoration: underline; }
+        .outcomes-warning { margin-top: 0.75rem; font-size: 0.8rem; color: #fde68a; }
         .modal-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.8); display: flex; align-items: center; justify-content: center; z-index: 100; }
         .modal { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; padding: 1.5rem; max-width: 480px; }
         .modal h2 { font-size: 1rem; color: #fde68a; margin-bottom: 0.75rem; }
@@ -759,6 +760,38 @@
             return `<div class="meta-item"><span class="meta-label">${escapeHtml(label)}</span><span class="meta-value">${link} <span class="badge ${badge}">${escapeHtml(issue.state)}</span></span></div>`;
         }
 
+        // warningKindLabels gives a warning's kind the words the row
+        // prints. The kinds are the payload's fixed vocabulary
+        // (§forgejo/observability/the-warnings-a-forest-carries); an
+        // unrecognised word renders as itself rather than nothing, so
+        // a kind added engine-side still says something here.
+        const warningKindLabels = {
+            stale_agentic_merge: 'stale agentic merge',
+            human_task_blocking: 'human task',
+        };
+
+        // warningsHtml renders one ⚠️ entry per warning of a forest:
+        // the reference the payload names — never built from the row's
+        // own fields — its kind, and the age of the condition. The
+        // link is the warning's own html_url through safeUrl, and
+        // every field is text its authors wrote, inserted as text and
+        // never as markup
+        // (§forgejo/observability/the-warnings-a-forest-carries). A
+        // forest with no warnings renders nothing: the honest empty
+        // carries no marker.
+        function warningsHtml(warnings) {
+            return (warnings ?? []).map(w => {
+                const kind = warningKindLabels[w.kind] ?? String(w.kind ?? '');
+                const text = `${escapeHtml(w.repository)}#${escapeHtml(String(w.number ?? ''))} \u2014 ${escapeHtml(w.title ?? '')}`;
+                const href = safeUrl(w.html_url);
+                // rel="noreferrer" as in issueCell: the click leaks no
+                // origin to the forge.
+                const link = href ? `<a href="${escapeHtml(href)}" rel="noreferrer">${text}</a>` : `<span>${text}</span>`;
+                const age = formatDuration(Math.round((w.age_seconds ?? 0) * 1000));
+                return `<div class="outcomes-warning">\u26a0\ufe0f ${link} \u2014 ${escapeHtml(kind)} \u00b7 ${escapeHtml(age)}</div>`;
+            }).join('');
+        }
+
         // renderOutcomes renders the outcomes view
         // (§forgejo/observability/the-outcomes-view): one tall row per
         // current forest, each linking out to its ideation root and
@@ -804,6 +837,7 @@
                         ${issueCell('Ideation', f.root, 'no open ideation root')}
                         ${issueCell('Tracker', f.tracker, 'no tracker \u2014 this root blocks no outcome issue')}
                     </div>
+                    ${warningsHtml(f.warnings)}
                 </div>
             `).join('');
         }
