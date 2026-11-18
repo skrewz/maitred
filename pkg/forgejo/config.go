@@ -259,6 +259,9 @@ func (c *Config) Validate() error {
 	if c.EngineAccount == "" {
 		return fmt.Errorf("engine_account is required: the digest gate cannot tell the engine's own comments from a human's without it (§forgejo/config/engine-account)")
 	}
+	if err := c.validateEngineAccount(); err != nil {
+		return err
+	}
 	if c.ReconcileInterval <= 0 {
 		return fmt.Errorf("reconcile_interval must be positive")
 	}
@@ -343,6 +346,27 @@ func (c *Config) validateReviewLenses() error {
 		}
 		if _, err := (&PromptConfig{Prompt: lens.Prompt}).Render(Placeholders{}); err != nil {
 			return fmt.Errorf("reviews %q: %w", lens.Identity, err)
+		}
+	}
+	return nil
+}
+
+// validateEngineAccount is the identity-collapse rule the two guards that read
+// an event's sender depend on: `engine_account` names one account and nothing
+// else. The self-authored edit guard holds off every delivery whose sender is
+// that login, and the digest folds no comment it authored — both read the login
+// as a fact about *who wrote this*, so a config that also names it as an actor
+// or a lens would have that account's own edits dropped before the re-fetch, and
+// a guard whose premise is a coincidence is no guard at all. The rule is
+// load-time or it is nothing (§forgejo/config/identity-collapse,
+// §forgejo/decisions/loop-prevention).
+func (c *Config) validateEngineAccount() error {
+	if c.actorIdentities()[c.EngineAccount] {
+		return fmt.Errorf("engine_account %q is also declared as an actor: the guards that read a delivery's sender would hold that account's own work off unread (§forgejo/config/identity-collapse)", c.EngineAccount)
+	}
+	for _, lens := range c.Reviews {
+		if lens.Identity == c.EngineAccount {
+			return fmt.Errorf("engine_account %q is also a review lens identity: the guards that read a delivery's sender would hold that account's own work off unread (§forgejo/config/identity-collapse)", c.EngineAccount)
 		}
 	}
 	return nil

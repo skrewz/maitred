@@ -2280,9 +2280,21 @@ func holdOffScopeUnknown(repo string, err error) Decision {
 // authored by the account the engine itself runs as, and the only edit that
 // account sends is a tracker's current-state block — the engine's own
 // handwriting, not a fact (§forgejo/decisions/loop-prevention,
-// §forgejo/reconciliation/the-tracker-block). The reason names the account and
-// the object, so the decision log distinguishes the engine's own write from a
-// hold-off that means something did not line up.
+// §forgejo/reconciliation/the-tracker-block). The digest excludes this
+// account's comments for the same reason (§forgejo/decisions/actionable-state-digest),
+// and the revision a tracker is keyed on masks the same region out
+// (§forgejo/state/watermark), so nothing dispatches either way: what this guard
+// removes is the churn — every tracker of every forest, every tick, re-fetched
+// and re-decided.
+//
+// It is the edit alone, not the identity: a whole login held off the path would
+// go quiet in a deployment where one account wore two roles, and the sweep's own
+// rows carry no sender at all (§forgejo/reconciliation/the-sweep). The config
+// refuses `engine_account` to name an actor or a lens for the same reason
+// (§forgejo/config/identity-collapse).
+//
+// The reason names the account and the object, so the decision log distinguishes
+// the engine's own write from a hold-off that means something did not line up.
 func holdOffEngineAuthoredEdit(repo string, number int, account string) Decision {
 	return holdOff(fmt.Sprintf("%s#%d was edited by %s, the engine's own account: a current-state write is the engine's own side effect and carries no fact, so it is not re-fetched and dispatches nothing", repo, number, account))
 }

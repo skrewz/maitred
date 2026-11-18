@@ -220,6 +220,39 @@ func TestLoadConfigEngineAccountRequired(t *testing.T) {
 	}
 }
 
+// TestLoadConfigEngineAccountNamesOneAccountOnly: the guards that read a
+// delivery's sender — the digest's exclusion of the engine's own comments and
+// the hold-off on the tick's own edit of a tracker — both read
+// `engine_account` as a fact about who authored the delivery. A config that
+// names the same login as an actor or a lens would therefore have that
+// account's own work dropped before the re-fetch, so the reuse is a load error
+// rather than a deployment-wide coincidence (§forgejo/config/identity-collapse,
+// §forgejo/config/engine-account, §forgejo/decisions/loop-prevention).
+func TestLoadConfigEngineAccountNamesOneAccountOnly(t *testing.T) {
+	tests := []struct {
+		name string
+		was  string
+	}{
+		{"an actor's login", "implementer"},
+		{"a review lens's login", "reviewer-security"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			yaml := strings.Replace(validConfigYAML, "engine_account: maitred-bot",
+				"engine_account: "+tt.was, 1)
+			_, err := LoadConfig(writeConfig(t, t.TempDir(), "forgejoeng.yaml", yaml))
+			if err == nil || !strings.Contains(err.Error(), "engine_account") {
+				t.Fatalf("LoadConfig with engine_account naming %s: err = %v, want the reuse named",
+					tt.name, err)
+			}
+		})
+	}
+
+	if _, err := LoadConfig(writeConfig(t, t.TempDir(), "forgejoeng.yaml", validConfigYAML)); err != nil {
+		t.Errorf("LoadConfig with the engine's own login named nowhere else: %v, want it to load", err)
+	}
+}
+
 // TestLoadConfigMissingFile reports an error for a path that does not
 // exist (§forgejo/config/loading).
 func TestLoadConfigMissingFile(t *testing.T) {

@@ -1022,7 +1022,12 @@ Six mechanisms, in this order:
    because that is the only delivery the mutation provokes — holding an entire
    identity off the path would go quiet in a deployment where one account wore
    two roles — and the sweep's own rows carry no sender to guard
-   (§forgejo/webhook/event-mapping, §forgejo/reconciliation/the-sweep).
+   (§forgejo/webhook/event-mapping, §forgejo/reconciliation/the-sweep). That the
+   login names one account and nothing else is a load-time rule rather than a
+   deployment-wide hope: `Validate` refuses a config whose `engine_account`
+   also names an actor or a lens, since such an account's real edits to a
+   tracker's prose would be dropped here before the re-fetch
+   (§forgejo/config/engine-account, §forgejo/config/identity-collapse).
 
 ## Inputs
 

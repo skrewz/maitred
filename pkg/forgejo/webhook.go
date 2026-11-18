@@ -148,10 +148,7 @@ func NewEngine(api API, store *Store, cfg *Config, q queue.TaskQueueProvider, lo
 // cascade (§forgejo/webhook/repository-roles,
 // §forgejo/decisions/unblock-cascade). A re-fetch failure holds off: the
 // reconciliation sweep re-derives from the source of truth
-// (§forgejo/webhook/the-pipeline). An issue edit the engine's own account
-// authored holds off ahead of all of this: it is the current-state block the
-// tick wrote, not a fact that moved
-// (§forgejo/decisions/loop-prevention).
+// (§forgejo/webhook/the-pipeline).
 func (e *Engine) HandleEvent(ev Event) {
 	key := ev.KeyOf()
 	r, err := e.repoRoles(ev.Repo)
@@ -179,19 +176,10 @@ func (e *Engine) HandleEvent(ev Event) {
 		e.recordDecision(key, ev, State{}, holdOffOutOfRemit(ev.Repo))
 		return
 	}
-	// The self-authored edit guard: the delivery the engine's own write
-	// provokes carries no fact, only the bytes the tick drew, so reading it
-	// would spend a re-fetch and a decision to say nothing. The digest
-	// excludes this account's comments for the same reason
-	// (§forgejo/decisions/loop-prevention,
-	// §forgejo/decisions/actionable-state-digest). The revision a tracker is
-	// keyed on masks the same region out, so nothing dispatches either way;
-	// what this guard removes is the churn — every tracker of every forest,
-	// every tick, re-fetched and re-decided. The edit is the only delivery
-	// the mutation provokes, so the guard is on the edit alone: a whole
-	// identity held off the path would go quiet in a deployment where one
-	// account wore two roles, and the sweep's own rows carry no sender at all
-	// (§forgejo/reconciliation/the-sweep).
+	// The self-authored edit guard — holdOffEngineAuthoredEdit states what it
+	// answers — sits before the re-fetch deliberately: the delivery is the
+	// bytes the tick drew itself, so reading it would spend a request to
+	// restate a fact the sweep had already acted on.
 	if ev.Type == EventIssueEdited && ev.Sender != "" && ev.Sender == e.cfg.EngineAccount {
 		e.recordDecision(key, ev, State{}, holdOffEngineAuthoredEdit(ev.Repo, ev.Number, ev.Sender))
 		return
