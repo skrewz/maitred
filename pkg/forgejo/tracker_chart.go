@@ -107,10 +107,10 @@ func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
 		return fmt.Errorf("scope of %s: %w", forest.Tracker.Repository, err)
 	}
 	if !admits {
-		// Debug, the level the row skip three functions below and every other
-		// cross-repository hop already use for this sentence: where a deployment
-		// intends the tracker to stay unwritten, this is one line per forest per
-		// tick forever, not an event worth reading (§forgejo/webhook/repository-roles,
+		// Debug, the level every other cross-repository hop uses for this
+		// sentence: where a deployment intends the tracker to stay unwritten,
+		// this is one line per forest per tick forever, not an event worth
+		// reading (§forgejo/webhook/repository-roles,
 		// §forgejo/observability/the-decision-log).
 		e.log.Debug("reconciliation: tracker lives in a repository no maitred role names; nothing written",
 			"tracker", ref)
@@ -120,10 +120,9 @@ func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
 	if err != nil {
 		return fmt.Errorf("rendering %s: %w", ref, err)
 	}
-	// The description is read here, at the one moment the splice needs it,
-	// rather than before the gather that follows no longer exists: the window
-	// in which a human's edit outside the pair could be overwritten is then a
-	// request rather than a forest's worth of reads. The forge offers no
+	// The description is read here, at the one moment the splice needs it: the
+	// window in which a human's edit outside the pair could be overwritten is
+	// then a request rather than a forest's worth of reads. The forge offers no
 	// conditional body write — this endpoint's parameters are the owner, the
 	// repository, the number and the body — so the race is narrowed, not
 	// closed, and inside one request the last writer still wins
