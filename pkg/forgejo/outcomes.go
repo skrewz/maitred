@@ -139,6 +139,13 @@ func scrapeForestChart(body string) (chart, revisited, refused string) {
 	case 1:
 		revisited = stamp
 	case 0:
+		// Why this state speaks while a label carrying no value stays
+		// silent: the line is the evidence that the region was written to
+		// the contract at all. The template the curating agent writes
+		// carries the label, so a region holding none was written by
+		// something else — the drift the Debug line exists to name — where
+		// a label with nothing after it is the same recency left unwritten
+		// (§forgejo/observability/the-outcomes-view).
 		reasons = append(reasons, "the region holds no stamp line")
 	default:
 		reasons = append(reasons, "the region holds more than one stamp line")

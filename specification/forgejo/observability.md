@@ -207,7 +207,12 @@ a region holding no fenced Mermaid block or more than one, a Mermaid
 fence never closed, and a region carrying no stamp line or more than one.
 A `Last revisited:` line carrying the label and no value counts as one of
 those lines rather than as an absence, so a placeholder above the stamp
-the agent later wrote publishes nothing. An empty field is a statement
+the agent later wrote publishes nothing. The two ways a region says nothing
+about recency are told apart by whether the line is there at all: the
+template the curating agent writes carries the label, so a line with nothing
+after it is a recency not yet written, while a region holding no such line
+was written by something other than that template — the contract drifting,
+which the log says and silence would hide. An empty field is a statement
 about the tracker's description, never about a read that broke: the
 description came from a read that succeeded, since a blocks read that
 fails fails the enumeration the way every other failed read does,
