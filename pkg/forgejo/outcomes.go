@@ -71,15 +71,12 @@ type Forest struct {
 	Warnings []ForestWarning `json:"warnings"`
 }
 
-// The delimiters of a tracker's current-state block, and the two things
-// the outcomes view reads inside them. The fence pair is the one the
-// curating agent writes into a tracker's description; the view reads it
-// and writes no description of anyone else's issue
-// (§forgejo/observability/the-outcomes-view).
+// The two things the outcomes view reads inside the fence pair this package
+// declares once in tracker_chart.go (fenceBegin and fenceEnd): the view reads
+// the region the sweep writes, and writing no description of anyone else's
+// issue is what keeps the two halves honest
+// (§forgejo/observability/the-outcomes-view, §forgejo/reconciliation/the-tracker-block).
 const (
-	forestFenceBegin = "<!-- maitred:forest:begin -->"
-	forestFenceEnd   = "<!-- maitred:forest:end -->"
-
 	mermaidFenceOpen  = "```mermaid"
 	mermaidFenceClose = "```"
 
@@ -106,8 +103,8 @@ const (
 // even when the other field published, and the walk says so at Debug
 // (§forgejo/observability/the-outcomes-view).
 func scrapeForestChart(body string) (chart, revisited, refused string) {
-	begins := strings.Count(body, forestFenceBegin)
-	ends := strings.Count(body, forestFenceEnd)
+	begins := strings.Count(body, fenceBegin)
+	ends := strings.Count(body, fenceEnd)
 	switch {
 	case begins == 0 && ends == 0:
 		// No fence pair at all: the one silence the view keeps even at
@@ -119,8 +116,8 @@ func scrapeForestChart(body string) (chart, revisited, refused string) {
 		// without its pair is a description mid-edit at best.
 		return "", "", "the fence pair is not exactly one begin and one end"
 	}
-	begin := strings.Index(body, forestFenceBegin) + len(forestFenceBegin)
-	end := strings.Index(body, forestFenceEnd)
+	begin := strings.Index(body, fenceBegin) + len(fenceBegin)
+	end := strings.Index(body, fenceEnd)
 	if end < begin {
 		return "", "", "the end marker sits before the begin marker"
 	}

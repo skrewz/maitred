@@ -215,7 +215,7 @@ func checkCollapsible(nodes []*node) error {
 	folded := map[string]string{}
 	for _, n := range nodes {
 		key := foldName(n.repo())
-		if seen, ok := folded[key]; ok && !sameRepository(seen, n.ref.Repository) {
+		if seen, ok := folded[key]; ok && !SameRepository(seen, n.ref.Repository) {
 			return fmt.Errorf("renderer: repositories %q and %q fold to one identifier %q, which the collapsed view cannot tell apart",
 				seen, n.ref.Repository, repoID(n.ref.Repository))
 		}

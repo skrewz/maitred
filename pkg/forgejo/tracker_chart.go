@@ -22,10 +22,13 @@ import (
 // addresses no issue but a forest's tracker, and it sends no field but the body
 // (§forgejo/client/the-one-mutation).
 const (
-	// fenceBegin opens the region the engine owns.
+	// fenceBegin and fenceEnd open and close the region the engine owns.
+	// They are the pair the outcomes view scrapes (outcomes.go) and the
+	// pair this file writes, stated once so the region the engine draws
+	// inside can never drift from the region the view reads
+	// (§forgejo/observability/the-outcomes-view).
 	fenceBegin = "<!-- maitred:forest:begin -->"
-	// fenceEnd closes it.
-	fenceEnd = "<!-- maitred:forest:end -->"
+	fenceEnd   = "<!-- maitred:forest:end -->"
 	// stateHeading is the heading the block stands under when a tracker's
 	// description carries no fence pair yet and the block is inserted as
 	// the body's first heading.
@@ -275,7 +278,10 @@ func (e *Engine) rowsBlocked(row *Issue) ([]Issue, error) {
 
 // drawnEdges keeps, from one row's blocks listing, the edges whose far end is a
 // row this forest holds — a listing reports no repository of its own for a row
-// that lives where the read was made (§forgejo/client/operations).
+// that lives where the read was made (§forgejo/client/operations). One
+// repository is the renderer's own test (§forgejo/renderer/identifiers-and-shapes),
+// so an edge this gathering builds can never name two nodes the drawing itself
+// would fold into one.
 func drawnEdges(peers []Issue, from Issue, blocked []Issue) []renderer.Edge {
 	edges := []renderer.Edge{}
 	for i := range blocked {
@@ -288,7 +294,7 @@ func drawnEdges(peers []Issue, from Issue, blocked []Issue) []renderer.Edge {
 			home = from.Repository
 		}
 		for _, row := range peers {
-			if row.Number == to.Number && sameRepo(row.Repository, home) {
+			if row.Number == to.Number && renderer.SameRepository(row.Repository, home) {
 				edges = append(edges, renderer.Edge{
 					From: renderer.Ref{Repository: from.Repository, Number: from.Number},
 					To:   renderer.Ref{Repository: home, Number: to.Number},
@@ -367,9 +373,4 @@ func labelColour(issue *Issue, label string) (string, bool) {
 	return "", false
 }
 
-// sameRepo reports whether two spellings name one repository, the way the
-// renderer's own collapsed view does: case-insensitively on the full
-// "owner/repo" (§forgejo/renderer/identifiers-and-shapes).
-func sameRepo(a, b string) bool {
-	return strings.EqualFold(strings.TrimRight(a, "/"), strings.TrimRight(b, "/"))
-}
+// labelColour is the stroke hex a role label gives a node: the colour the forge

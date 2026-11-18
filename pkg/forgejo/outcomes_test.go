@@ -674,7 +674,7 @@ func mermaidBlock() string {
 // line and the given fenced block, with prose outside the pair
 // (§forgejo/observability/the-outcomes-view).
 func currentStateBlock(stamp, block string) string {
-	region := forestFenceBegin + "\n\n## Current state\n\nLast revisited: " + stamp + "\n\n" + block + "\n\n" + forestFenceEnd
+	region := fenceBegin + "\n\n## Current state\n\nLast revisited: " + stamp + "\n\n" + block + "\n\n" + fenceEnd
 	return "## Outcome\n\nThe prose a human wrote.\n\n" + region + "\n\nA footnote outside the pair.\n"
 }
 
@@ -740,7 +740,7 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 		},
 		{
 			name: "the end marker precedes the begin marker",
-			body: forestFenceEnd + "\n```mermaid\n" + forestChartSource + "\n```\n" + forestFenceBegin,
+			body: fenceEnd + "\n```mermaid\n" + forestChartSource + "\n```\n" + fenceBegin,
 			why:  "the end marker sits before the begin marker",
 		},
 		{
@@ -782,7 +782,7 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 			// unwritten stamp above it, and this is the one state whose
 			// picture publishes while the log speaks.
 			name:      "the region holds no stamp line",
-			body:      forestFenceBegin + "\n\n" + mermaidBlock() + "\n\n" + forestFenceEnd,
+			body:      fenceBegin + "\n\n" + mermaidBlock() + "\n\n" + fenceEnd,
 			wantChart: forestChartSource,
 			why:       "the region holds no stamp line",
 		},
