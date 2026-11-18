@@ -141,7 +141,7 @@ func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) (
 			continue // nothing here can wait on a person
 		}
 		repo := rowRepository(member, rootRepo)
-		inRemit, err := e.repoInRemit(repo)
+		inRemit, err := e.remitAdmits(repo, rootRepo)
 		if err != nil {
 			return nil, fmt.Errorf("scope of %s: %w", repo, err)
 		}
@@ -190,6 +190,22 @@ func (e *Engine) repoInRemit(repo string) (bool, error) {
 		return false, err
 	}
 	return roles.any(), nil
+}
+
+// remitAdmits is the remit test every cross-repository read of the
+// warnings pays, stated once so the rule cannot update one walk's loop
+// and miss another: the repository the walk entered is admitted by the
+// walk itself — the enumeration read the forest there — and every other
+// repository must be one a maitred role names
+// (§forgejo/webhook/repository-roles, §forgejo/webhook/re-fetch). A
+// non-nil error means the scope is unknown, which is the caller's
+// failure to name, not a hold-off; a false answer is the caller's
+// ordinary silence to log in its own words.
+func (e *Engine) remitAdmits(repo, entered string) (bool, error) {
+	if strings.EqualFold(repo, entered) {
+		return true, nil // the walk's own repository is admitted already
+	}
+	return e.repoInRemit(repo)
 }
 
 // staleMergeWarning asks whether the member's delivering pull request is
@@ -360,14 +376,11 @@ func (e *Engine) graphIsAskable(pr *PullRequest, prRepo string) (bool, error) {
 			return false, nil
 		}
 		seen[ref.key()] = true
-		if strings.EqualFold(ref.repo, prRepo) {
-			continue // the walk has admitted the delivery's own repository
-		}
-		inRemit, err := e.repoInRemit(ref.repo)
+		admits, err := e.remitAdmits(ref.repo, prRepo)
 		if err != nil {
 			return false, fmt.Errorf("scope of %s: %w", ref.repo, err)
 		}
-		if !inRemit {
+		if !admits {
 			e.log.Debug("forest warnings: holding a stale warning back: a reference names a repository outside the engine's remit",
 				"delivery", delivery, "reference", ref.repo+"#"+strconv.Itoa(ref.number))
 			return false, nil
@@ -393,14 +406,11 @@ func (e *Engine) graphIsAskable(pr *PullRequest, prRepo string) (bool, error) {
 				"delivery", delivery, "objects", len(seen))
 			return false, nil
 		}
-		if strings.EqualFold(repo, prRepo) {
-			continue // the walk has admitted the delivery's own repository
-		}
-		inRemit, err := e.repoInRemit(repo)
+		admits, err := e.remitAdmits(repo, prRepo)
 		if err != nil {
 			return false, fmt.Errorf("scope of %s: %w", repo, err)
 		}
-		if !inRemit {
+		if !admits {
 			e.log.Debug("forest warnings: holding a stale warning back: a blocking edge names a repository outside the engine's remit",
 				"delivery", delivery, "reference", repo+"#"+strconv.Itoa(rows[i].Number))
 			return false, nil
