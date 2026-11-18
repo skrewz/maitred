@@ -744,6 +744,15 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 			wantStamp: "",
 		},
 		{
+			// A block completed above a dangling opener is a description
+			// mid-edit, and which of the two is current is not guessable:
+			// the region publishes nothing for the picture it half-holds.
+			name:      "a complete block above an unclosed fence",
+			body:      currentStateBlock(stamp, mermaidBlock()+"\n\n"+"```mermaid\n\tmore"),
+			wantChart: "",
+			wantStamp: stamp,
+		},
+		{
 			name:      "the pair holds two Mermaid blocks",
 			body:      currentStateBlock(stamp, mermaidBlock()+"\n\n"+mermaidBlock()),
 			wantChart: "",

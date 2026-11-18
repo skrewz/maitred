@@ -93,12 +93,13 @@ const (
 // further: the stamp's abbreviation is whatever the agent wrote.
 //
 // The third answer names the rule that refused, so a reader can tell "the
-// scrape contract broke" from "nothing was written yet": it is empty for
-// the description that carries neither marker, which is a tracker whose
-// picture has not been written yet — an ordinary state rather than a
-// fault — and empty whenever a field was published from the region that
-// held it. Otherwise it states the rule that refused, and the walk says
-// so at Debug (§forgejo/observability/the-outcomes-view).
+// scrape contract broke" from "nothing was written yet": it is empty only
+// where nothing was refused — a description carrying neither marker, which
+// is a tracker whose picture has not been written yet, a region whose every
+// field published, or the lone `Last revisited:` line still carrying no
+// value. Any other region that was there and was refused states its rule,
+// even when the other field published, and the walk says so at Debug
+// (§forgejo/observability/the-outcomes-view).
 func scrapeForestChart(body string) (chart, revisited, refused string) {
 	begins := strings.Count(body, forestFenceBegin)
 	ends := strings.Count(body, forestFenceEnd)
@@ -125,10 +126,12 @@ func scrapeForestChart(body string) (chart, revisited, refused string) {
 	// states when it was last revisited
 	// (§forgejo/observability/the-outcomes-view).
 	var reasons []string
-	switch blocks := mermaidBlocks(region); len(blocks) {
-	case 1:
+	switch blocks, dangling := mermaidBlocks(region); {
+	case dangling:
+		reasons = append(reasons, "the region holds an unclosed Mermaid fence")
+	case len(blocks) == 1:
 		chart = blocks[0]
-	case 0:
+	case len(blocks) == 0:
 		reasons = append(reasons, "the region holds no closed Mermaid block")
 	default:
 		reasons = append(reasons, "the region holds more than one Mermaid block")
@@ -145,11 +148,12 @@ func scrapeForestChart(body string) (chart, revisited, refused string) {
 }
 
 // mermaidBlocks returns each fenced Mermaid block of the region, its
-// lines joined as found. A fence opened and never closed holds no block:
-// there is nothing verbatim to carry from an unfinished one.
-func mermaidBlocks(region string) []string {
-	var blocks, current []string
-	open := false
+// lines joined as found, and whether the region leaves a fence open. A
+// region that does holds no current picture: the description is mid-edit,
+// and which of the blocks above the dangling opener is the live one is not
+// guessable — so no block comes back, complete ones included.
+func mermaidBlocks(region string) (blocks []string, open bool) {
+	var current []string
 	for _, line := range strings.Split(region, "\n") {
 		switch trimmed := strings.TrimSpace(line); {
 		case !open && trimmed == mermaidFenceOpen:
@@ -158,14 +162,17 @@ func mermaidBlocks(region string) []string {
 			blocks = append(blocks, strings.Join(current, "\n"))
 			open = false
 		case open && trimmed == mermaidFenceOpen:
-			// A second opener before the first block closed: the region
-			// holds no well-formed block at all.
-			return nil
+			// A second opener before the first block closed: the first
+			// fence is the dangling one, and no well-formed block follows.
+			return nil, true
 		case open:
 			current = append(current, line)
 		}
 	}
-	return blocks
+	if open {
+		return nil, true
+	}
+	return blocks, false
 }
 
 // revisitedStamp returns the region's `Last revisited:` value as written
