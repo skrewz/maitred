@@ -461,15 +461,24 @@ type fakeQueue struct {
 	mu    sync.Mutex
 	tasks []*queue.Task
 	err   error
+	// onAdd, when set, runs once a task has been queued — so a test
+	// can snapshot the state of the world at the moment of queueing,
+	// such as how far the engine's API calls had reached
+	// (s-git/maitred#232).
+	onAdd func()
 }
 
 func (q *fakeQueue) AddTask(task *queue.Task) error {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	if q.err != nil {
+		q.mu.Unlock()
 		return q.err
 	}
 	q.tasks = append(q.tasks, task)
+	q.mu.Unlock()
+	if q.onAdd != nil {
+		q.onAdd()
+	}
 	return nil
 }
 

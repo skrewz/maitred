@@ -80,7 +80,9 @@ The synthetic event carries no sender.
 An outcome tracker's description carries its forest's drawing between a pair of
 HTML comments — `<!-- maitred:forest:begin -->` and `<!-- maitred:forest:end -->`
 — under a `## Current state` heading. On every tick the engine writes that
-region for every forest it enumerated (§forgejo/reconciliation/the-sweep): it
+region for every forest it enumerated (§forgejo/reconciliation/the-sweep), and
+ahead of every `wrap-up` dispatch it writes that one tracker's region once
+more (§forgejo/decisions/actions): it
 gathers the graph, renders it (§forgejo/renderer/the-contract), and splices the
 source under a `Last revisited: <YYYY-MM-DD HH:MM> <TZ>` stamp, the time
 rendered in the configured timezone (§forgejo/config/tracker-chart).
@@ -135,6 +137,18 @@ rendered in the configured timezone (§forgejo/config/tracker-chart).
   a tracker whose composed body was already there is named at `Debug`, so
   "nothing needed writing" never reads as "this forest was never reached"
   (§forgejo/observability/the-decision-log).
+- **`wrap-up` draws before it queues.** The dispatch of `wrap-up` is this
+  block's second call site, and the same function rather than a second
+  renderer: before the task is queued it redraws that tracker's region from
+  the graph, so the picture a finished forest leaves behind — every member
+  struck through with its close stamp — is the one the wrap-up describes and
+  the outcomes view publishes, not whatever the last pass happened to draw
+  (§forgejo/observability/the-outcomes-view). The root comes from the tracker's
+  blocker rows the dispatch already holds, and a tracker gated by no `ideation`
+  issue has no forest to draw: it says so at `Debug` and queues regardless. A
+  draw that fails — a refused write, an ambiguous fence pair, an unreadable
+  graph — is logged naming the tracker, and the wrap-up dispatches anyway:
+  the chart is UX, and the wrap-up is the work (s-git/maitred#232).
 - **No fence pair is an empty region, not an absent one.** Where a description
   carries no pair, the block is inserted as the body's first heading and the
   body found follows it in the order it was in.

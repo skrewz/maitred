@@ -86,6 +86,40 @@ func trackerRef(forest Forest) string {
 	return forestRef(forest.Tracker.Repository, forest.Tracker.Number)
 }
 
+// drawTrackerBeforeWrapUp is the wrap-up path's call to the tracker block:
+// the same write the tick makes, at the one moment a finished forest would
+// otherwise be left holding a stale drawing (§forgejo/reconciliation/the-tracker-block,
+// s-git/maitred#232). The root comes from the blocker rows the dispatch
+// already holds — the gate relation is the one every other walk of the graph
+// reads — and a tracker gated by no ideation issue, never commissioned, has
+// no forest to draw and says so quietly. The write addresses the tracker
+// alone: an issue that is not a tracker — a grouping issue's body drives a
+// landing decision and is never touched — is left entirely unwritten. A
+// failure is logged naming the tracker and costs the dispatch nothing: the
+// chart is UX, the wrap-up is the work.
+func (e *Engine) drawTrackerBeforeWrapUp(tracker *Issue, blockers []Issue, foundIn string) {
+	if tracker == nil || !isTracker(tracker) {
+		return
+	}
+	home := tracker.Repository
+	if home == "" {
+		home = foundIn // a single-object read may name no repository of its own (§forgejo/client/operations)
+	}
+	ref := forestRef(home, tracker.Number)
+	root := ideationGate(blockers)
+	if root == nil {
+		e.log.Debug("wrap-up: tracker is gated by no ideation issue; nothing to draw", "tracker", ref)
+		return
+	}
+	rootRow := forestIssue(*root, home)
+	trackerRow := forestIssue(*tracker, rootRow.Repository)
+	forest := Forest{Repository: rootRow.Repository, Root: rootRow, Tracker: &trackerRow}
+	if err := e.writeTrackerBlock(forest, e.now()); err != nil {
+		e.log.Error("wrap-up: tracker current-state block not written",
+			"tracker", ref, "error", err)
+	}
+}
+
 // writeTrackerBlock renders one forest and lands its block on that forest's
 // tracker, which the caller has established the forest has. Where the body the
 // composition produced is the body already there — two ticks inside one minute

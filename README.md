@@ -332,7 +332,11 @@ description held between the `<!-- maitred:forest:begin -->` and
 in `tracker_timezone`. That region is the one thing the engine writes to
 Forgejo; an issue's title, state and labels, and every other issue's body — a
 member's, or a grouping issue's whose body drives a landing decision — stay as
-they were found. See `specification/forgejo/reconciliation.md` and
+they were found. A `wrap-up` dispatch also redraws its tracker's region once,
+before queueing the task, so a finished forest's chart shows every member
+closed rather than whatever the last sweep happened to draw; a redraw that
+fails is logged and never holds the wrap-up up. See
+`specification/forgejo/reconciliation.md` and
 `specification/forgejo/config.md`.
 
 The dashboard has no authentication of its own: like the trigger cards'
