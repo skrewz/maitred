@@ -324,11 +324,17 @@ enumeration cost and audience are spelled out where the view is
 specified (see `specification/forgejo/observability.md`). The dashboard
 also serves that view as a page at `/outcomes` (reachable from the
 header): one tall row per current forest, linking out to its ideation
-root and its tracker with their states, marking each forest the payload
-says is waiting on a person with one ⚠️ entry per warning linking to
-the issue or pull request holding it up, and stating plainly when the
-engine is off or there are no forests instead of rendering an empty
-rectangle.
+root and its tracker with their states, drawing each forest's picture —
+the Mermaid source the payload carries — underneath those links with the
+region's recency stamp beneath it, where a click of the drawing opens it
+full screen (Escape or a click outside closes it) and a source that will
+not parse falls back to the source as text. The Mermaid runtime that
+draws it is vendored into the page's own assets and served by the server,
+so the page needs no network beyond the server itself to render. Each
+forest the payload says is waiting on a person is marked with one ⚠️
+entry per warning linking to the issue or pull request holding it up,
+and the page states plainly when the engine is off or there are no
+forests instead of rendering an empty rectangle.
 
 The same tick lands each forest's drawing on its own tracker: the engine
 renders the forest into Mermaid and rewrites only the region of that tracker's

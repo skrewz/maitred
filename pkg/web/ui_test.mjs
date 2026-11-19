@@ -1404,6 +1404,253 @@ async function testOutcomesPage(page, results) {
   await page.waitForLoadState('networkidle').catch(() => {});
 }
 
+// testOutcomesChart covers the forest picture on the /outcomes page
+// (§forgejo/observability/the-outcomes-view): each row draws the
+// Mermaid source the payload carries underneath its links, with the
+// region's recency stamp printed verbatim below it; a click of the
+// drawing opens a full-screen overlay of the same drawing, which
+// Escape or a click of its backdrop closes; and a source that will
+// not parse falls back to the raw source as text rather than nothing.
+// The runtime is the page's own vendored copy — the suite fails if
+// the page reaches beyond the server to draw itself.
+async function testOutcomesChart(page, results) {
+  console.log('  Outcomes forest chart');
+
+  await page.goto(`${baseUrl}/outcomes`);
+  await page.waitForLoadState('networkidle').catch(() => {});
+  // The poll's 5-second timer would otherwise answer the live
+  // instance's empty forest list over a synthetic render mid-suite.
+  await page.evaluate(() => { if (refreshInterval) clearInterval(refreshInterval); });
+
+  // The page draws itself from a runtime it serves itself: the one
+  // script it loads is same-origin, and that path answers with real
+  // JavaScript rather than the SPA's index.html
+  // (§forgejo/observability/the-outcomes-view).
+  const runtime = await page.evaluate(async () => {
+    const res = await fetch('/mermaid.min.js');
+    return {
+      cdn: [...document.scripts].filter(s => s.src).map(s => new URL(s.src).origin).filter(o => o !== location.origin),
+      status: res.status,
+      type: res.headers.get('content-type') ?? '',
+      bytes: (await res.text()).length,
+      global: typeof mermaid,
+    };
+  });
+  results.push(assert(
+    runtime.cdn.length === 0,
+    `The page loads no runtime from a CDN (external scripts: ${runtime.cdn.join(', ') || 'none'})`
+  ));
+  results.push(assert(
+    runtime.status === 200 && /javascript/.test(runtime.type) && runtime.bytes > 1000000 && runtime.global === 'object',
+    `The vendored runtime is served same-origin as JavaScript (${runtime.status}, ${runtime.type}, ${runtime.bytes} bytes, global: ${runtime.global})`
+  ));
+
+  // One row drawing its picture, one stamping a source that will not
+  // parse, one stating nothing: the three states the picture can
+  // arrive in, exercised through the page's own renderer because the
+  // mock organisation holds no outcomes repository and so cannot
+  // produce a forest here.
+  const chartSource = 'flowchart TD\n  A["Ideation root #5"] --> B["Tracker #6"]';
+  const painted = await page.evaluate((source) => {
+    renderOutcomes({
+      engine_status: 'enabled',
+      forests: [
+        {
+          repository: 'o/out',
+          root: { number: 5, repository: 'o/out', title: 'Ideation root', state: 'open', html_url: 'https://forge.example.com/o/out/issues/5' },
+          tracker: { number: 6, repository: 'o/out', title: 'Outcome tracker', state: 'open', html_url: 'https://forge.example.com/o/out/issues/6' },
+          chart: source,          chart_revisited: '2026-11-16 09:12 AEDT',
+        },
+        {
+          repository: 'r/ragged',
+          root: { number: 1, repository: 'r/ragged', title: 'Ragged root', state: 'open', html_url: 'https://forge.example.com/r/ragged/issues/1' },
+          tracker: { number: 2, repository: 'r/ragged', title: 'Ragged tracker', state: 'open', html_url: 'https://forge.example.com/r/ragged/issues/2' },
+          chart: 'flowchart TD\n  A --< this will not parse',
+          chart_revisited: '2026-11-02 18:40 CET',
+        },
+        {
+          repository: 'e/empty',
+          root: { number: 9, repository: 'e/empty', title: 'Root with no picture', state: 'open', html_url: 'https://forge.example.com/e/empty/issues/9' },
+          tracker: { number: 10, repository: 'e/empty', title: 'Tracker with no block', state: 'open', html_url: 'https://forge.example.com/e/empty/issues/10' },
+          chart: '',
+          chart_revisited: '',
+        },
+      ],
+    });
+    return [...document.querySelectorAll('#outcomes-list .outcomes-row')].length;
+  }, chartSource);
+  results.push(assert(painted === 3, `Three forest rows rendered (got: ${painted})`));
+
+  await page.waitForFunction(() => {
+    const cells = document.querySelectorAll('#outcomes-list .outcomes-chart');
+    return cells.length === 2 && [...cells].every(c => c.classList.contains('drawn') || c.classList.contains('fallback'));
+  }, null, { timeout: 30000 }).catch(() => {});
+
+  const drawn = await page.evaluate((source) => {
+    const rows = [...document.querySelectorAll('#outcomes-list .outcomes-row')];    const cells = [...document.querySelectorAll('#outcomes-list .outcomes-chart')];
+    const preOf = (row) => row.querySelector('.outcomes-chart-source');
+    return {
+      cellCount: cells.length,
+      firstHasSvg: !!rows[0]?.querySelector('.outcomes-chart-svg svg'),
+      firstSvgText: rows[0]?.querySelector('.outcomes-chart-svg svg')?.textContent ?? '',
+      firstPreShown: !!preOf(rows[0]) && getComputedStyle(preOf(rows[0])).display !== 'none',
+      firstSourceHeld: preOf(rows[0])?.textContent === source,
+      fallbackHasSvg: !!rows[1]?.querySelector('.outcomes-chart-svg svg'),
+      fallbackShown: !!preOf(rows[1]) && getComputedStyle(preOf(rows[1])).display !== 'none',
+      fallbackText: preOf(rows[1])?.textContent ?? '',
+      thirdHasCell: !!rows[2]?.querySelector('.outcomes-chart'),
+      // A refused render must leave no error drawing of Mermaid's own
+      // anywhere on the page.
+      strayErrors: document.querySelectorAll('svg.error').length
+        + [...document.querySelectorAll('body > div')].filter(d => /forest-chart-\d+$/.test(d.id)).length,
+      stamps: rows.map(r => r.querySelector('.outcomes-stamp')?.textContent ?? ''),
+      // The picture sits underneath the links and the stamp
+      // underneath the picture; a cell's drawn/fallback mark is
+      // rendering state, not structure, so it is dropped here.
+      firstOrder: [...rows[0]?.children ?? []].map(c => c.className.split(' ')[0]),
+    };
+  }, chartSource);
+  results.push(assert(drawn.cellCount === 2, `A row with a picture builds one chart cell (cells: ${drawn.cellCount} of 3 rows)`));
+  results.push(assert(
+    drawn.firstHasSvg && drawn.firstSourceHeld && !drawn.firstPreShown,
+    `A parsable source draws as a graph (svg: ${drawn.firstHasSvg}, verbatim source: ${drawn.firstSourceHeld})`
+  ));
+  results.push(assert(
+    /Tracker #6/.test(drawn.firstSvgText),
+    `The drawing carries the source's own labels (svg text: "${drawn.firstSvgText.trim().slice(0, 60)}")`
+  ));
+  results.push(assert(
+    !drawn.fallbackHasSvg && drawn.fallbackShown,
+    `An unparsable source falls back to text rather than nothing (svg: ${drawn.fallbackHasSvg}, text shown: ${drawn.fallbackShown})`
+  ));
+  results.push(assert(
+    drawn.fallbackText.includes('this will not parse'),
+    `The fallback states the source verbatim (got: "${drawn.fallbackText.trim().slice(0, 60)}")`
+  ));
+  results.push(assert(
+    !drawn.thirdHasCell,
+    'A row carrying no picture builds no chart cell'
+  ));
+  results.push(assert(
+    drawn.strayErrors === 0,
+    `A refused drawing leaves no error bomb on the page (strays: ${drawn.strayErrors})`
+  ));
+  results.push(assert(
+    drawn.stamps[0] === '2026-11-16 09:12 AEDT' && drawn.stamps[1] === '2026-11-02 18:40 CET' && drawn.stamps[2] === '',
+    `The recency stamp prints verbatim beneath the picture (got: ${JSON.stringify(drawn.stamps)})`
+  ));
+  results.push(assert(
+    drawn.firstOrder.join('>') === 'outcomes-repo>trigger-meta>outcomes-chart>outcomes-stamp',
+    `The row is repository, links, picture, stamp (got: ${drawn.firstOrder.join(' > ')})`
+  ));
+
+  // The source is text a stranger could have written, so it reaches
+  // the page as escaped text and never as markup.
+  const escaped = await page.evaluate(() => chartHtml('<img src=x onerror="alert(1)">'));
+  const injected = await page.evaluate(() => {
+    renderOutcomes({
+      engine_status: 'enabled',
+      forests: [{
+        repository: 'x/inject',
+        root: { number: 1, repository: 'x/inject', title: 'Root', state: 'open', html_url: 'https://forge.example.com/x/inject/issues/1' },
+        tracker: null,
+        chart: '<img src=x onerror="alert(1)">',
+        chart_revisited: '<b>just now</b>',
+      }],
+    });
+    return {
+      imgs: document.querySelectorAll('#outcomes-list img').length,
+      bolds: document.querySelectorAll('#outcomes-list .outcomes-stamp b').length,
+      text: document.querySelector('#outcomes-list .outcomes-chart-source')?.textContent ?? '',
+    };
+  });
+  results.push(assert(
+    escaped.includes('&lt;img') && !escaped.includes('<img'),
+    `A source carrying markup is escaped (got: "${escaped.slice(0, 60)}")`
+  ));
+  results.push(assert(
+    injected.imgs === 0 && injected.bolds === 0 && injected.text.includes('<img'),
+    `A hostile source and stamp render as text, never as markup (imgs: ${injected.imgs}, bolds: ${injected.bolds})`
+  ));
+
+  // The click-out: a click of the drawing opens a full-screen copy of
+  // it, Escape closes it, and a click of the backdrop closes it too.
+  await page.evaluate((source) => {
+    renderOutcomes({
+      engine_status: 'enabled',
+      forests: [{
+        repository: 'o/out',
+        root: { number: 5, repository: 'o/out', title: 'Ideation root', state: 'open', html_url: 'https://forge.example.com/o/out/issues/5' },
+        tracker: { number: 6, repository: 'o/out', title: 'Outcome tracker', state: 'open', html_url: 'https://forge.example.com/o/out/issues/6' },
+        chart: source,
+        chart_revisited: '2026-11-16 09:12 AEDT',
+      }],
+    });
+  }, chartSource);
+  await page.waitForSelector('#outcomes-list .outcomes-chart.drawn svg', { timeout: 30000 }).catch(() => {});
+
+  const overlay = page.locator('#chart-overlay');
+  results.push(assert(
+    !(await overlay.isVisible()),
+    'No overlay is open before the click'
+  ));
+  await page.locator('#outcomes-list .outcomes-chart svg').first().click();
+  await overlay.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+  results.push(assert(await overlay.isVisible(), 'Clicking the drawing opens the full-screen overlay'));
+  const enlarged = await page.evaluate(() => ({
+    svg: !!document.querySelector('#chart-overlay-body svg'),
+    covering: (() => {
+      const box = document.getElementById('chart-overlay').getBoundingClientRect();
+      return box.width >= window.innerWidth && box.height >= window.innerHeight;
+    })(),
+  }));
+  results.push(assert(
+    enlarged.svg && enlarged.covering,
+    `The overlay shows the same drawing full screen (svg: ${enlarged.svg}, covering the viewport: ${enlarged.covering})`
+  ));
+
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  results.push(assert(!(await overlay.isVisible()), 'Escape closes the overlay'));
+
+  await page.locator('#outcomes-list .outcomes-chart').first().click();
+  await overlay.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+  await page.mouse.click(4, 4);  await page.waitForTimeout(200);
+  results.push(assert(!(await overlay.isVisible()), 'A click outside the drawing closes the overlay'));
+
+  // A drawing whose source will not parse still clicks out, to the
+  // same text the row states.
+  await page.evaluate(() => {
+    renderOutcomes({
+      engine_status: 'enabled',
+      forests: [{
+        repository: 'r/ragged',
+        root: { number: 1, repository: 'r/ragged', title: 'Ragged root', state: 'open', html_url: 'https://forge.example.com/r/ragged/issues/1' },
+        tracker: { number: 2, repository: 'r/ragged', title: 'Ragged tracker', state: 'open', html_url: 'https://forge.example.com/r/ragged/issues/2' },
+        chart: 'flowchart TD\n  A --< this will not parse',
+        chart_revisited: '2026-11-02 18:40 CET',
+      }],
+    });
+  });
+  await page.waitForSelector('#outcomes-list .outcomes-chart.fallback .outcomes-chart-source', { timeout: 30000 }).catch(() => {});
+  await page.locator('#outcomes-list .outcomes-chart.fallback').first().click();
+  await overlay.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+  const enlargedText = await page.evaluate(() => ({
+    text: document.querySelector('#chart-overlay-body')?.textContent ?? '',
+    svg: !!document.querySelector('#chart-overlay-body svg'),
+  }));
+  results.push(assert(
+    !enlargedText.svg && enlargedText.text.includes('this will not parse'),
+    `The overlay of a fallen-back picture states its text (svg: ${enlargedText.svg})`
+  ));
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+
+  // Return to the main instance for anything that follows.
+  await page.goto(baseUrl);
+  await page.waitForLoadState('networkidle').catch(() => {});
+}
+
 // ─── Main ────────────────────────────────────────────────────────────
 
 async function main() {
@@ -1450,6 +1697,7 @@ async function main() {
   await testForgejoTracking(page, results);
   await testSweepTriggering(page, results);
   await testOutcomesPage(page, results);
+  await testOutcomesChart(page, results);
   if (faultUrl && unconfiguredUrl) {
     await testForgejoEngineStates(page, results);
   }
