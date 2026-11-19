@@ -816,12 +816,12 @@ func TestForests_PictureTravelsAcrossTheTick(t *testing.T) {
 }
 
 // TestForests_ChartIsDrawnFromTheGraph: one table of tracker
-// descriptions — well-formed but stale, ragged in every way the scrape
-// ever refused, and absent outright, the chart never written to its
-// tracker — and every row carries the same payload picture: the source
-// the tick drew from the forest's graph, stamped at the moment that
-// drawing was made. What a description claims about the graph moves no
-// field (§forgejo/observability/the-outcomes-view,
+// descriptions — well-formed but stale, ragged in every way a picture has
+// ever refused to be read off a description, and absent outright, the chart
+// never written to its tracker — and every row carries the same payload
+// picture: the source the tick drew from the forest's graph, stamped at the
+// moment that drawing was made. What a description claims about the graph
+// moves no field (§forgejo/observability/the-outcomes-view,
 // §forgejo/reconciliation/the-tracker-block).
 func TestForests_ChartIsDrawnFromTheGraph(t *testing.T) {
 	const stamp = "2026-11-16 09:12 AEDT"
@@ -834,8 +834,9 @@ func TestForests_ChartIsDrawnFromTheGraph(t *testing.T) {
 			body: currentStateBlock(stamp, "```mermaid\nflowchart TD\n%% stale\n```"),
 		},
 		{
-			// The case the scrape left empty for the whole of a young
-			// forest's life: nobody has written its tracker a chart yet.
+			// The case a picture taken from a description would have left
+			// empty for the whole of a young forest's life: nobody has
+			// written its tracker a chart yet.
 			name: "no fence pair — the chart was never written to the tracker",
 			body: "## Outcome\n\nNothing was ever delimited here.\n",
 		},
