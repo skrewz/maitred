@@ -700,6 +700,103 @@ func stageForest(api *fakeAPI, root, tracker Issue) {
 	api.issues[tracker.Number] = &tracker
 }
 
+// TestForests_PictureTravelsAcrossTheTick: the set a tick records at its head
+// carries each forest's picture pair across from the set it replaces, so the
+// walk never leaves the view answering an empty picture; step 5 replaces every
+// pair, so a carried pair is never the view's last word, and a forest the head
+// records for the first time carries the honest empty until the tick draws it
+// (§forgejo/observability/the-outcomes-view,
+// §forgejo/reconciliation/the-tracker-block,
+// §forgejo/reconciliation/the-sweep).
+func TestForests_PictureTravelsAcrossTheTick(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	chartWire(api, chartFenced())
+
+	// Step 2 of the first tick: there is no earlier set to carry a pair from,
+	// so the pair is the honest empty.
+	first, err := eng.recordForests()
+	if err != nil || len(first) != 1 {
+		t.Fatalf("forests = %+v, %v", first, err)
+	}
+	if first[0].Chart != "" || first[0].ChartRevisited != "" {
+		t.Errorf("a forest recorded for the first time carries chart %q under stamp %q, want both fields empty",
+			first[0].Chart, first[0].ChartRevisited)
+	}
+
+	// Step 5 draws it, and the pair becomes the view's answer.
+	eng.writeTrackerBlocks(first, chartAt)
+	drawn, err := eng.Forests()
+	if err != nil || len(drawn) != 1 {
+		t.Fatalf("forests = %+v, %v", drawn, err)
+	}
+	if drawn[0].Chart == "" || drawn[0].ChartRevisited == "" {
+		t.Fatalf("the tick recorded chart %q under stamp %q, want the drawing and its moment", drawn[0].Chart, drawn[0].ChartRevisited)
+	}
+	want := drawn[0]
+
+	// A second forest joins the organisation: the next head records it, and
+	// nothing carries a pair across for it.
+	rootTwo := chartRoot()
+	rootTwo.Number = 8
+	rootTwo.HTMLURL = "https://forge.example.com/o/out/issues/8"
+	trackerTwo := chartTracker(chartFenced())
+	trackerTwo.Number = 9
+	trackerTwo.HTMLURL = "https://forge.example.com/o/out/issues/9"
+	api.mu.Lock()
+	api.issues[rootTwo.Number] = &rootTwo
+	api.issues[trackerTwo.Number] = &trackerTwo
+	api.blocks[rootTwo.Number] = []Issue{trackerTwo}
+	api.openIssues["out"] = append(api.openIssues["out"], rootTwo, trackerTwo)
+	api.mu.Unlock()
+
+	// Step 2 of the next tick on its own: the walk has not run and nothing has
+	// been drawn, yet the view still answers the forest it knew with the pair
+	// it had — the same chart under the same stamp, never a blank and never
+	// half a pair — and the forest it has never seen with the empty.
+	second, err := eng.recordForests()
+	if err != nil || len(second) != 2 {
+		t.Fatalf("forests = %+v, %v", second, err)
+	}
+	held, err := eng.Forests()
+	if err != nil || len(held) != 2 {
+		t.Fatalf("forests = %+v, %v", held, err)
+	}
+	for _, forest := range held {
+		switch forest.Root.Number {
+		case want.Root.Number:
+			if forest.Chart != want.Chart || forest.ChartRevisited != want.ChartRevisited {
+				t.Errorf("between the tick's head and its drawing the view answers chart %q under stamp %q, want the pair it held: chart %q under stamp %q",
+					forest.Chart, forest.ChartRevisited, want.Chart, want.ChartRevisited)
+			}
+		case rootTwo.Number:
+			if forest.Chart != "" || forest.ChartRevisited != "" {
+				t.Errorf("a forest recorded for the first time carries chart %q under stamp %q, want both fields empty",
+					forest.Chart, forest.ChartRevisited)
+			}
+		default:
+			t.Errorf("unexpected forest %s#%d", forest.Repository, forest.Root.Number)
+		}
+	}
+
+	// Step 5 of that tick replaces every pair: the carried one is overwritten
+	// by this tick's drawing under this tick's stamp, and the new forest's
+	// empty gives way to its own picture.
+	eng.writeTrackerBlocks(second, chartAt.Add(time.Hour))
+	now, err := eng.Forests()
+	if err != nil || len(now) != 2 {
+		t.Fatalf("forests = %+v, %v", now, err)
+	}
+	for _, forest := range now {
+		if forest.Chart == "" {
+			t.Errorf("forest %s#%d carries no chart after the tick drew it", forest.Repository, forest.Root.Number)
+		}
+		if forest.ChartRevisited == "" || forest.ChartRevisited == want.ChartRevisited {
+			t.Errorf("forest %s#%d carries stamp %q, want this tick's drawing moment rather than the carried one",
+				forest.Repository, forest.Root.Number, forest.ChartRevisited)
+		}
+	}
+}
+
 // TestForests_ChartIsDrawnFromTheGraph: one table of tracker
 // descriptions — well-formed but stale, ragged in every way the scrape
 // ever refused, and absent outright, the chart never written to its

@@ -363,6 +363,55 @@ func TestTrackerBlock_WriteFailureIsReported(t *testing.T) {
 	}
 }
 
+// TestTrackerBlock_AWriteOnlyFailureStillPublishesTheDrawing: the payload's
+// picture is the drawing, not the splice. Where the drawing was made and only
+// the write failed — the forge refuses the body, or the tracker read the splice
+// needs comes back broken — the outcomes payload still carries this tick's
+// chart under this tick's stamp while the tracker's region keeps the bytes of
+// the tick before. A fence pair too ambiguous to splice into is the same case
+// and is pinned by name in the payload's own table
+// (§forgejo/reconciliation/the-tracker-block,
+// §forgejo/observability/the-outcomes-view).
+func TestTrackerBlock_AWriteOnlyFailureStillPublishesTheDrawing(t *testing.T) {
+	cases := []struct {
+		name string
+		fail func(*fakeAPI)
+	}{
+		{
+			name: "the forge refuses the body",
+			fail: func(api *fakeAPI) {
+				api.writeErr = &APIError{StatusCode: 403, Message: "must have Write Issues Unit"}
+			},
+		},
+		{
+			name: "the tracker read the splice needs fails",
+			fail: func(api *fakeAPI) {
+				api.getIssueErrOn = map[int]error{2: errors.New("issue not found")}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, _ := chartForestEngine(t, chartFenced())
+			tc.fail(api)
+			eng.Reconcile()
+
+			forests, err := eng.Forests()
+			if err != nil || len(forests) != 1 {
+				t.Fatalf("forests = %+v, %v", forests, err)
+			}
+			forest := forests[0]
+			if forest.Chart == "" || forest.ChartRevisited == "" {
+				t.Errorf("chart = %q under stamp %q, want the drawing this tick made even though the write failed",
+					forest.Chart, forest.ChartRevisited)
+			}
+			if got := api.writeCount(); got != 0 {
+				t.Errorf("wrote %d bodies, want none: the description keeps the bytes of the tick before", got)
+			}
+		})
+	}
+}
+
 // TestTrackerBlock_TrackerOutsideRemitIsNotWritten: which repository holds a
 // tracker comes from the root's blocking edges, not from configuration, so the
 // engine's one mutation pays the admission test every other cross-repository hop

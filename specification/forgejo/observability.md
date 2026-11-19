@@ -141,9 +141,10 @@ it lives rather than inheriting the root's address
 (§forgejo/client/operations) — or the honest absence of one, spelled as
 a `null` tracker so the field is always present. Each forest carries the
 **picture of the forest** alongside its rows as two further fields, both
-always present: **`chart`**, the Mermaid source the engine drew from the
-forest's graph when the set was recorded, and **`chart_revisited`**, that
-rendering's recency stamp, both drawn as described below — and its
+always present: **`chart`**, the Mermaid source the engine last drew from
+the forest's graph, and **`chart_revisited`**, that drawing's recency
+stamp — a pair, drawn as described below, that always travels as one —
+and its
 **warnings**, the ⚠️
 marks saying whether the forest is waiting on a person, an empty list
 when it is not
@@ -202,19 +203,40 @@ rendering instant, spelled in the configured timezone
 (§forgejo/config/tracker-chart), the same instant the block's stamp
 states for that tick. It is a string the view does not interpret. The
 recency is honest because it belongs to the drawing: the payload's
-picture was rendered when the payload's set was recorded, not when some
-agent last wrote a description, and no stamp is ever dressed over a
-remembered picture — a forest the tick did not draw carries **both**
-fields empty for that tick, never yesterday's chart with today's stamp.
+picture carries the stamp of the tick that rendered it, not the moment
+some agent last wrote a description, and no stamp is ever dressed over a
+remembered picture — the pair is written together or erased together, so
+a forest a tick drew nothing for carries **both** fields empty once that
+tick is done, never yesterday's chart with today's stamp.
 
-An empty field is therefore a statement about this tick's drawing, never
-about anyone's prose. A forest whose tracker is absent publishes both
-fields empty and reads no further (§forgejo/client/operations). A forest
-whose drawing failed — a read that broke, a graph the renderer refused,
-or a tracker in a repository no maitred role admits — publishes both
-fields empty too; the failure is one forest's own, the tick logs it
+**The pair travels as one.** The sweep records the forest set at its head
+and makes its drawings after the walk, at step 5
+(§forgejo/reconciliation/the-sweep), so the two halves of a tick would
+otherwise leave the view answering every forest's picture empty for as
+long as that walk runs. It does not: the set the head records carries
+each forest's **previous** pair — the last drawing the engine recorded
+and the stamp belonging to it — and step 5 replaces every pair in it.
+Inside that window the view therefore shows the previous tick's drawing
+under the previous tick's stamp, which is what makes an empty picture
+honest rather than a half-written record; a forest the head records for
+the first time carries both fields empty until step 5 draws it. A carried
+pair is never the view's last word: step 5 states what this tick drew.
+
+An empty field is therefore a statement about the engine's drawing,
+never about anyone's prose. A forest whose tracker is absent publishes
+both fields empty and reads no further (§forgejo/client/operations). A
+forest whose **drawing** failed — a read the drawing itself needs (the
+root's row, a row's blocks), a graph the renderer refused, or a tracker
+in a repository no maitred role admits — publishes both fields empty
+too; the failure is one forest's own, the tick logs it
 naming that forest, and the others cost nothing
 (§forgejo/reconciliation/the-tracker-block, §forgejo/webhook/repository-roles).
+A drawing that was made but found no body to splice into — a fence pair
+too ambiguous to write between, a tracker read that broke after the
+drawing succeeded, a forge that refused the write — still stands in the
+payload, since it states what the graph holds even where the description
+keeps the bytes of the tick before
+(§forgejo/reconciliation/the-tracker-block).
 What once emptied a picture — a ragged tracker description — empties
 nothing now: a forest whose chart was never written to its tracker
 carries the tick's drawing from the graph all the same.

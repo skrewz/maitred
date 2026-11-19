@@ -72,6 +72,10 @@ created while the engine was down.
    tracker's body and its `updated_at`
    (§forgejo/decisions/actionable-state-digest). A forest whose write fails
    is reported and skipped: it neither fails the tick nor delays a decision.
+   The drawings it records replace every picture pair in the set step 2
+   published; between the two steps the view serves the pairs that set
+   carried across, never an empty one it has drawn no conclusion from
+   (§forgejo/observability/the-outcomes-view).
 
 The synthetic event carries no sender.
 
@@ -88,7 +92,8 @@ source under a `Last revisited: <YYYY-MM-DD HH:MM> <TZ>` stamp, the time
 rendered in the configured timezone (§forgejo/config/tracker-chart). The same
 rendering is recorded onto the forest set the outcomes view serves, so the
 payload carries the bytes this tick drew alongside the block they were spliced
-into (§forgejo/observability/the-outcomes-view): one drawing per forest per
+into — and carries them even where the splice found no region to land in
+(§forgejo/observability/the-outcomes-view): one drawing per forest per
 tick, feeding both sinks.
 
 - **The fence bounds the write.** Only a tracker's description is written, and
@@ -185,10 +190,17 @@ tick, feeding both sinks.
 - **A failure is one forest's own.** A read that fails, a graph the renderer
   refuses, a ceiling the source will not fit even collapsed
   (§forgejo/renderer/collapsing) and a write the forge refuses are each logged
-  naming the forest and skipped: no partial region is ever written, the forest's
-  picture fields in the outcomes payload stand empty for that tick
-  (§forgejo/observability/the-outcomes-view), and one ragged forest costs
-  nothing to the others.
+  naming the forest and skipped: no partial region is ever written, and one
+  ragged forest costs nothing to the others. What a failure does to the
+  forest's picture fields in the outcomes payload follows what it broke
+  (§forgejo/observability/the-outcomes-view): a failure of the **drawing** — a
+  read the gathering needs, a graph refused, a role label colour that cannot be
+  read, a ceiling the collapsed source will not fit, a tracker in a repository
+  no maitred role admits — leaves **both** fields empty for that tick, while a
+  failure of the **write** alone — the tracker read the splice needs, a fence
+  pair too ambiguous to write between, a forge that refuses the body — leaves
+  this tick's drawing in the payload under this tick's stamp, the description
+  keeping the bytes of the tick before.
 
 The block carries no verdict and no instruction, which is why writing it makes
 the engine no less a decision loop than a task runner: it changes what a human

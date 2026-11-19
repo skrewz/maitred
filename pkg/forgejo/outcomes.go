@@ -53,7 +53,9 @@ type Forest struct {
 	// §forgejo/observability/the-outcomes-view). It is empty wherever the
 	// tick drew nothing: no tracker, a graph the renderer refused, a
 	// repository no role admits — and never a remembered picture dressed
-	// in a newer stamp.
+	// in a newer stamp. While a tick's walk is still running, the pair a
+	// forest carries is the previous tick's, stamp and all
+	// (carryDrawnPictures).
 	Chart string `json:"chart"`
 	// ChartRevisited is the moment that drawing was made, spelled as the
 	// current-state block's stamp spells it — the same instant, in the
@@ -79,6 +81,59 @@ type Forest struct {
 // out of the picture's chain of command — the fence pair the write half
 // splices into is declared once, in tracker_chart.go.
 
+// picture is one forest's picture pair: the drawing the engine made and the
+// moment it made it. The two travel together or not at all, which is what
+// keeps a remembered chart from ever arriving under a newer stamp.
+type picture struct {
+	chart string
+	stamp string
+}
+
+// pictureKey identifies a forest across two recorded sets: the repository its
+// root grew in and the root's own number. A tracker may be replaced by another
+// outcome issue between ticks; the forest is still the same forest.
+type pictureKey struct {
+	repository string
+	root       int
+}
+
+func keyOf(forest Forest) pictureKey {
+	return pictureKey{forest.Repository, forest.Root.Number}
+}
+
+// carryDrawnPictures moves each forest's picture pair from the set being
+// replaced onto its successor, so the view keeps a picture between the moment
+// the tick records the set at its head and the moment its step-5 drawing
+// replaces every pair in it (recordForestCharts,
+// §forgejo/reconciliation/the-tracker-block). Without it the set the tick
+// publishes would answer every forest's picture empty until step 5 ran, and
+// the page would lose its charts for as long as the tick's walk takes — one
+// re-fetch per open row in every repository holding a role
+// (§forgejo/reconciliation/the-sweep). The scrape never had that gap, since it
+// filled both fields inside the enumeration.
+//
+// The pair only travels as one, so a remembered chart never meets a newer
+// stamp; a forest the new set holds and the old one did not — one this tick
+// found for the first time — carries both fields empty, the honest empty
+// §forgejo/observability/the-outcomes-view states. And a carried pair is never
+// the view's last word: the step-5 fold overwrites every pair in the set it
+// lands on, so a forest this tick drew nothing for still ends the tick with
+// both fields empty.
+func carryDrawnPictures(previous, next []Forest) {
+	if len(previous) == 0 {
+		return
+	}
+	drawn := make(map[pictureKey]picture, len(previous))
+	for _, forest := range previous {
+		drawn[keyOf(forest)] = picture{forest.Chart, forest.ChartRevisited}
+	}
+	for i, forest := range next {
+		if old, ok := drawn[keyOf(forest)]; ok {
+			next[i].Chart, next[i].ChartRevisited = old.chart, old.stamp
+		}
+	}
+}
+
 // recordForestCharts folds the tick's drawings onto the recorded forest set
 // so the outcomes payload carries the picture the same tick drew for the
 // trackers' blocks — one drawing, two sinks
@@ -86,19 +141,18 @@ type Forest struct {
 // §forgejo/observability/the-outcomes-view). The sources are the drawings
 // writeTrackerBlocks made walking the set in order; an empty source is
 // a forest the tick drew nothing for, and both of its picture fields go
-// empty rather than keeping an earlier tick's chart under this tick's
-// stamp — the pair is written together or erased together, which is what
-// states that, and it needs no check that the drawing belongs to the
-// snapshot it lands on: one tick runs at a time, and recordForests is the
-// only writer of the set this folds onto. The set is replaced whole,
-// never mutated in place — the discipline Forests' snapshot contract
-// rests on.
+// empty rather than keeping the pair the set arrived with under this tick's
+// stamp. The set is replaced whole, never mutated in place — the discipline
+// Forests' snapshot contract rests on.
 func (e *Engine) recordForestCharts(forests []Forest, sources []string, at time.Time) {
 	stamp := stampAt(at, e.cfg.ChartLocation())
 	e.forestsMu.Lock()
 	defer e.forestsMu.Unlock()
 	updated := make([]Forest, len(forests))
 	for i, forest := range forests {
+		// The pair is written together or erased together: this is where a
+		// pair carried onto the set (carryDrawnPictures) stops being the
+		// view's answer, whether or not this tick had a drawing for it.
 		if sources[i] == "" {
 			forest.Chart, forest.ChartRevisited = "", ""
 		} else {
@@ -289,7 +343,10 @@ func (e *Engine) Forests() ([]Forest, error) {
 // to the caller as well as recorded: the sweep's next step writes each
 // forest it enumerated to that forest's tracker, and a forest the
 // enumeration did not name is never written to
-// (§forgejo/reconciliation/the-tracker-block).
+// (§forgejo/reconciliation/the-tracker-block). The picture pair each forest
+// carries travels across from the set this one replaces
+// (carryDrawnPictures), so the view holds a picture for as long as the tick's
+// walk runs before step 5 draws the next one.
 func (e *Engine) recordForests() ([]Forest, error) {
 	forests, err := e.enumerateForests()
 	if err != nil {
@@ -300,6 +357,7 @@ func (e *Engine) recordForests() ([]Forest, error) {
 	if err != nil {
 		e.forestsErr = err
 	} else {
+		carryDrawnPictures(e.forestsSnap, forests)
 		e.forestsSnap, e.forestsAt, e.forestsErr = forests, time.Now(), nil
 	}
 	e.forestsMu.Unlock()
