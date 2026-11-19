@@ -1204,6 +1204,71 @@ func TestForests_PicturePaysTheAdmissionTest(t *testing.T) {
 	if paired != 1 {
 		t.Fatalf("%d forests carry root 51, want exactly 1: at zero the re-pairing case above asserts nothing at all", paired)
 	}
+
+	// The mirrored re-pairing: the destination is refused while the origin is
+	// admitted. Drawing the pair fresh from o/legacy, the tracker is then
+	// re-paired into o/archive — a repository no role names — while the role
+	// the drawing came from stands. Keeping only the second answer would let
+	// the origin's admission overwrite the refused destination and publish the
+	// pair into an unadmitted repository; both answers must count, so the head
+	// empties both fields and the Debug line names the refused destination
+	// (§forgejo/webhook/repository-roles,
+	// §forgejo/observability/the-outcomes-view).
+	api.mu.Lock()
+	api.repos = []Repository{outcomesRepo("o/out"), testRepoDisabled("o/elsewhere"), testRepo("o/legacy")}
+	api.blocks[51] = []Issue{legacy}
+	api.openIssues["out"] = []Issue{root, rootTwo}
+	api.mu.Unlock()
+	eng.scopeAt = time.Time{}
+	if _, err := eng.recordForests(); err != nil {
+		t.Fatalf("recordForests: %v", err)
+	}
+	eng.writeTrackerBlocks(mustForests(t, eng), chartAt.Add(2*time.Hour))
+	drawn, err := eng.Forests()
+	if err != nil {
+		t.Fatalf("Forests: %v", err)
+	}
+	for _, f := range drawn {
+		if f.Root.Number == 51 && (f.Tracker == nil || f.Tracker.Repository != "o/legacy" || f.Chart == "") {
+			t.Fatalf("root 51 = %+v, want its picture drawn from admitted o/legacy before the mirroring", f)
+		}
+	}
+	api.mu.Lock()
+	archive := outcomesTracker(76, "tracker in an unadmitted repository")
+	archive.Repository = "o/archive"
+	api.issues[76] = &archive
+	api.blocks[51] = []Issue{archive}
+	api.mu.Unlock()
+	eng.scopeAt = time.Time{}
+	written = log.Len()
+	if _, err := eng.recordForests(); err != nil {
+		t.Fatalf("recordForests: %v", err)
+	}
+	mirrored, err := eng.Forests()
+	if err != nil || len(mirrored) != 2 {
+		t.Fatalf("forests = %+v, %v", mirrored, err)
+	}
+	refusedInto := 0
+	for _, f := range mirrored {
+		if f.Root.Number != 51 {
+			continue
+		}
+		refusedInto++
+		if f.Tracker == nil || f.Tracker.Repository != "o/archive" {
+			t.Fatalf("root 51 = %+v, want its tracker re-paired into o/archive", f)
+		}
+		if f.Chart != "" || f.ChartRevisited != "" {
+			t.Errorf("a picture travelled into a refused repository carrying chart %q under stamp %q, want both fields empty: the destination's refusal is not advisory",
+				f.Chart, f.ChartRevisited)
+		}
+		if line := findEntry(t, parseLogLines(t, log.Bytes()[written:]),
+			"outcomes: nothing carried; the picture's repository is not admitted"); line["tracker"] != "o/archive#76" {
+			t.Errorf("tracker = %v, want o/archive#76: the drop names the repository it refused", line["tracker"])
+		}
+	}
+	if refusedInto != 1 {
+		t.Fatalf("%d forests carry root 51, want exactly 1: at zero the mirrored case above asserts nothing at all", refusedInto)
+	}
 }
 
 // mustForests is the view's set, failed loudly.

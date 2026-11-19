@@ -92,11 +92,14 @@ type picture struct {
 }
 
 // carried is a pair as the carry reads it: the picture and the repository that
-// drawing came from. The repository travels with it because the pair was drawn
-// from the tracker the previous tick paired the root with, which a re-pairing
-// can leave behind — and a picture the view may publish is evidence about the
-// repository it was drawn from, not only the one it now travels to
-// (§forgejo/webhook/repository-roles).
+// drawing came from, read off the previous set's tracker row — safe because the
+// set the carry reads is the one step 5 of the same sweep folded onto, so a
+// non-empty pair beside that row was drawn against it moments earlier. The
+// repository travels with it because the pair was drawn from the tracker the
+// previous tick paired the root with, which a re-pairing can leave behind — and
+// a picture the view may publish is evidence about the repository it was drawn
+// from, not only the one it now travels to
+// (§forgejo/webhook/repository-roles, §forgejo/reconciliation/the-sweep).
 type carried struct {
 	picture
 	from string
@@ -171,13 +174,17 @@ func (e *Engine) carryDrawnPictures(next []Forest) {
 		if !ok || forest.Tracker == nil {
 			continue
 		}
-		// Both ends of the pair pay the test: the repository the tracker stands
-		// in now, and the one the drawing came from — which the same
-		// remitAdmits would answer trivially admitted when the two are one, so
-		// asking only the first leaves a re-paired picture's own repository
-		// unasked (§forgejo/webhook/repository-roles).
+		// Both ends of the pair pay the test and both answers count: the
+		// repository the tracker stands in now, and the one the drawing came
+		// from, because a re-pairing can move a picture between repositories
+		// and either end can have withdrawn since the drawing
+		// (§forgejo/webhook/repository-roles). The second question is asked
+		// only while the first still admits, and is skipped when the two
+		// repositories are one because the line above then already asked the
+		// identical question — remitAdmits' trivial admission for the walk's
+		// own repository is not what makes the equal case safe.
 		admits, err := e.remitAdmits(forest.Tracker.Repository, forest.Root.Repository)
-		if err == nil && !strings.EqualFold(pair.from, forest.Tracker.Repository) {
+		if err == nil && admits && !strings.EqualFold(pair.from, forest.Tracker.Repository) {
 			admits, err = e.remitAdmits(pair.from, forest.Root.Repository)
 		}
 		if err != nil {
