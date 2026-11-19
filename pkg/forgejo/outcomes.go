@@ -107,8 +107,7 @@ func keyOf(forest Forest) Key {
 // publishes would answer every forest's picture empty until step 5 ran, and
 // the page would lose its charts for as long as the tick's walk takes — one
 // re-fetch per open row in every repository holding a role
-// (§forgejo/reconciliation/the-sweep). The scrape never had that gap, since it
-// filled both fields inside the enumeration.
+// (§forgejo/reconciliation/the-sweep).
 //
 // The pair only travels as one, so a remembered chart never meets a newer
 // stamp; a forest the new set holds and the old one did not — one this tick
@@ -142,6 +141,10 @@ func carryDrawnPictures(previous, next []Forest) {
 // empty rather than keeping the pair the set arrived with under this tick's
 // stamp. The set is replaced whole, never mutated in place — the discipline
 // Forests' snapshot contract rests on.
+//
+// The set folded onto is the one step 2 of this same tick published: Reconcile
+// admits one sweep at a time, so no newer enumeration exists for this replace
+// to roll back (§forgejo/reconciliation/the-sweep).
 func (e *Engine) recordForestCharts(forests []Forest, sources []string, at time.Time) {
 	stamp := stampAt(at, e.cfg.ChartLocation())
 	e.forestsMu.Lock()

@@ -669,9 +669,9 @@ func TestForests_RecordedEmptyIsHonest(t *testing.T) {
 // §forgejo/reconciliation/the-tracker-block).
 
 // forestChartSource is the Mermaid source a tracker's description may
-// claim between its fences. The payload no longer reads it: wherever a
-// test says "stale", this is the chart the description holds and the
-// payload must not publish.
+// claim between its fences. The payload publishes none of what the
+// description claims: wherever a test says "stale", this is the chart the
+// description holds and the payload must not publish.
 const forestChartSource = "flowchart TD\n\tr51[root #51] --> t71[tracker #71]"
 
 // mermaidBlock is that source as a fenced Mermaid block.
