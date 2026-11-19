@@ -46,23 +46,27 @@ type Forest struct {
 	// root blocks no outcome issue — the absence stated, not papered
 	// over (§forgejo/observability/the-outcomes-view).
 	Tracker *ForestIssue `json:"tracker"`
-	// Chart is the Mermaid source of the tracker's current-state block,
-	// carried verbatim from between the fences the engine writes it
-	// inside, opened by whichever writer came first — never composed,
-	// repaired or guessed here, and empty
-	// wherever a description says nothing; the ragged edges are enumerated
-	// once, in §forgejo/observability/the-outcomes-view. It is text this
-	// engine does not own: a description is editable by anyone with write
-	// access to the tracker's repository, so whatever draws this field
-	// treats it as untrusted input
-	// (§forgejo/observability/the-outcomes-view).
+	// Chart is the Mermaid source the engine drew from the forest's graph
+	// when the last sweep tick recorded this set — the same drawing that
+	// splices into the tracker's current-state block, carried verbatim
+	// and never composed, repaired or guessed here
+	// (§forgejo/reconciliation/the-tracker-block,
+	// §forgejo/observability/the-outcomes-view). It is empty wherever the
+	// tick drew nothing: no tracker, a graph the renderer refused, a
+	// repository no role admits — and never a remembered picture dressed
+	// in a newer stamp. While a tick's walk is still running, the pair a
+	// forest carries is the previous tick's, stamp and all — and never a
+	// pair from a repository the remit has since withdrawn
+	// (carryDrawnPictures).
 	Chart string `json:"chart"`
-	// ChartRevisited is the current-state region's `Last revisited:` stamp,
-	// carried as the agent wrote it so a reader states the picture's
-	// recency without parsing prose — a CET stamp reads as CET. It is the
-	// region's stamp rather than the block's, so it is refused
-	// independently of Chart: a recency can arrive with no picture beside
-	// it (§forgejo/observability/the-outcomes-view).
+	// ChartRevisited is the moment that drawing was made, spelled as the
+	// current-state block's stamp spells it — the same instant, in the
+	// configured zone — so a reader states the picture's recency without
+	// parsing prose. It is the drawing's stamp rather than anything a
+	// description claims, and it travels with Chart: where Chart is empty
+	// the stamp is empty too
+	// (§forgejo/config/tracker-chart,
+	// §forgejo/observability/the-outcomes-view).
 	ChartRevisited string `json:"chart_revisited"`
 	// Warnings are the forest's ⚠️ marks: the reasons the forest is
 	// waiting on a person, each stated as a reference
@@ -72,137 +76,174 @@ type Forest struct {
 	Warnings []ForestWarning `json:"warnings"`
 }
 
-// The two things the outcomes view reads inside the fence pair this package
-// declares once in tracker_chart.go (fenceBegin and fenceEnd): the view reads
-// the region the sweep writes, and writing no description of anyone else's
-// issue is what keeps the two halves honest
-// (§forgejo/observability/the-outcomes-view, §forgejo/reconciliation/the-tracker-block).
-const (
-	mermaidFenceOpen  = "```mermaid"
-	mermaidFenceClose = "```"
+// The view draws rather than scrapes: the picture fields are filled by the
+// sweep tick's one drawing, recorded onto the set this file's reader serves
+// (recordForestCharts, §forgejo/reconciliation/the-tracker-block,
+// §forgejo/observability/the-outcomes-view). The tracker's description is
+// out of the picture's chain of command — the fence pair the write half
+// splices into is declared once, in tracker_chart.go.
 
-	// stampLabel prefixes the recency line the block carries:
-	// `Last revisited: <YYYY-MM-DD HH:MM> <TZ>`.
-	stampLabel = "Last revisited:"
-)
+// picture is one forest's picture pair: the drawing the engine made and the
+// moment it made it. The two travel together or not at all, which is what
+// keeps a remembered chart from ever arriving under a newer stamp.
+type picture struct {
+	chart string
+	stamp string
+}
 
-// scrapeForestChart reads the picture out of a tracker's description: the
-// fenced Mermaid block inside the fence pair, verbatim, and the region's
-// recency stamp as written. Every ragged edge answers with nothing rather
-// than a guess — which is why each rule below says "publish nothing"
-// rather than "pick the best candidate" — and the edges themselves are
-// enumerated once, in §forgejo/observability/the-outcomes-view, so the
-// rules and this function cannot drift apart. Neither field is parsed
-// further: the stamp's abbreviation is whatever the agent wrote.
+// carried is a pair as the carry reads it: the picture and the repository that
+// drawing came from, read off the previous set's tracker row — safe because the
+// set the carry reads is the one step 5 of the same sweep folded onto, so a
+// non-empty pair beside that row was drawn against it moments earlier. The
+// repository travels with it because the pair was drawn from the tracker the
+// previous tick paired the root with, which a re-pairing can leave behind — and
+// a picture the view may publish is evidence about the repository it was drawn
+// from, not only the one it now travels to
+// (§forgejo/webhook/repository-roles, §forgejo/reconciliation/the-sweep).
+type carried struct {
+	picture
+	from string
+}
+
+// keyOf names the forest a picture pair belongs to across two recorded sets.
+// It is the store's own forest key (ForestKey, §forgejo/state/forest-digest):
+// a forest is the ideation root it grew from, so a tracker replaced by another
+// outcome issue between ticks leaves the forest — and the pair it carries —
+// the same. Reusing the store's spelling is what keeps "which forest is the
+// same forest" written down once.
+func keyOf(forest Forest) Key {
+	return ForestKey(forest.Repository, forest.Root.Number)
+}
+
+// carryDrawnPictures moves each forest's picture pair from the set the tick is
+// replacing onto its successor, so the view keeps a picture between the moment
+// the tick records the set at its head and the moment its step-5 drawing
+// replaces every pair in it (recordForestCharts,
+// §forgejo/reconciliation/the-tracker-block). Without it the set the tick
+// publishes would answer every forest's picture empty until step 5 ran, and
+// the page would lose its charts for as long as the tick's walk takes — one
+// re-fetch per open row in every repository holding a role
+// (§forgejo/reconciliation/the-sweep).
 //
-// The third answer names the rule that refused, so a reader can tell "the
-// scrape contract broke" from "nothing was written yet": it is empty only
-// where nothing was refused — a description carrying neither marker, which
-// is a tracker whose picture has not been written yet, a region whose every
-// field published, or the lone `Last revisited:` line still carrying no
-// value. Any other region that was there and was refused states its rule,
-// even when the other field published, and the walk says so at Debug
-// (§forgejo/observability/the-outcomes-view).
-func scrapeForestChart(body string) (chart, revisited, refused string) {
-	begins := strings.Count(body, fenceBegin)
-	ends := strings.Count(body, fenceEnd)
-	switch {
-	case begins == 0 && ends == 0:
-		// No fence pair at all: the one silence the view keeps even at
-		// Debug, because an uncatalogued forest is what a young
-		// organisation looks like from the outside.
-		return "", "", ""
-	case begins != 1 || ends != 1:
-		// Which region belongs to whom is not guessable, and one marker
-		// without its pair is a description mid-edit at best.
-		return "", "", "the fence pair is not exactly one begin and one end"
-	}
-	begin := strings.Index(body, fenceBegin) + len(fenceBegin)
-	end := strings.Index(body, fenceEnd)
-	if end < begin {
-		return "", "", "the end marker sits before the begin marker"
-	}
-	region := body[begin:end]
-
-	// The two fields are refused independently: the stamp describes the
-	// region, not the block, so a region holding two pictures still
-	// states when it was last revisited
-	// (§forgejo/observability/the-outcomes-view).
-	var reasons []string
-	switch blocks, dangling := mermaidBlocks(region); {
-	case dangling:
-		reasons = append(reasons, "the region holds an unclosed Mermaid fence")
-	case len(blocks) == 1:
-		chart = blocks[0]
-	case len(blocks) == 0:
-		reasons = append(reasons, "the region holds no closed Mermaid block")
-	default:
-		reasons = append(reasons, "the region holds more than one Mermaid block")
-	}
-	switch stamp, found := revisitedStamp(region); found {
-	case 1:
-		revisited = stamp
-	case 0:
-		// Why this state speaks while a label carrying no value stays
-		// silent: the line is the evidence that the region was written to
-		// the contract at all. The template the curating agent writes
-		// carries the label, so a region holding none was written by
-		// something else — the drift the Debug line exists to name — where
-		// a label with nothing after it is the same recency left unwritten
-		// (§forgejo/observability/the-outcomes-view).
-		reasons = append(reasons, "the region holds no stamp line")
-	default:
-		reasons = append(reasons, "the region holds more than one stamp line")
-	}
-	return chart, revisited, strings.Join(reasons, "; ")
-}
-
-// mermaidBlocks returns each fenced Mermaid block of the region, its
-// lines joined as found, and whether the region leaves a fence open. A
-// region that does holds no current picture: the description is mid-edit,
-// and which of the blocks above the dangling opener is the live one is not
-// guessable — so no block comes back, complete ones included.
-func mermaidBlocks(region string) (blocks []string, open bool) {
-	var current []string
-	for _, line := range strings.Split(region, "\n") {
-		switch trimmed := strings.TrimSpace(line); {
-		case !open && trimmed == mermaidFenceOpen:
-			open, current = true, nil
-		case open && trimmed == mermaidFenceClose:
-			blocks = append(blocks, strings.Join(current, "\n"))
-			open = false
-		case open && trimmed == mermaidFenceOpen:
-			// A second opener before the first block closed: the first
-			// fence is the dangling one, and no well-formed block follows.
-			return nil, true
-		case open:
-			current = append(current, line)
+// The pair only travels as one, so a remembered chart never meets a newer
+// stamp; a forest the new set holds and the old one did not — one this tick
+// found for the first time — carries both fields empty, the honest empty
+// §forgejo/observability/the-outcomes-view states. And a carried pair is never
+// the view's last word: the step-5 fold overwrites every pair in the set it
+// lands on, so a forest this tick drew nothing for still ends the tick with
+// both fields empty.
+//
+// A remembered picture travels only while both the repository it was drawn
+// from and the one its tracker now stands in are still admitted. The pair is
+// the last drawing the engine made, so a role withdrawn since then must not
+// keep feeding the unauthenticated view for the length of the walk: the carry
+// pays the same admission test the drawing pays (writeTrackerBlock,
+// §forgejo/webhook/repository-roles), and pays it of the drawing's own
+// repository as well — the forest's tracker is forge data, so a re-pairing can
+// move a picture to a repository whose remit says nothing about the bytes it
+// carries. A scope the carry cannot read empties
+// the pair too — a remembered drawing whose remit is unknown is no evidence
+// the view may publish — and a forest this tick names no tracker for carries
+// nothing at all, the absence the view states
+// (§forgejo/observability/the-outcomes-view, §forgejo/webhook/the-scope-cache).
+func (e *Engine) carryDrawnPictures(next []Forest) {
+	e.forestsMu.Lock()
+	previous := e.forestsSnap
+	e.forestsMu.Unlock()
+	// The remit is asked outside forestsMu, because a scope the cache cannot
+	// answer is refreshed there and the request path must never wait on a forge
+	// read (Forests, §forgejo/observability/the-outcomes-view). Reading the set
+	// the previous tick published is safe for as long as a recorded set is
+	// replaced whole rather than mutated in place.
+	carry := make(map[Key]carried, len(previous))
+	for _, forest := range previous {
+		if forest.Chart == "" && forest.ChartRevisited == "" {
+			continue // a forest holding no pair has nothing to carry
+		}
+		from := ""
+		if forest.Tracker != nil {
+			from = forest.Tracker.Repository
+		}
+		carry[keyOf(forest)] = carried{
+			picture: picture{forest.Chart, forest.ChartRevisited},
+			from:    from,
 		}
 	}
-	if open {
-		return nil, true
+	for i, forest := range next {
+		pair, ok := carry[keyOf(forest)]
+		if !ok || forest.Tracker == nil {
+			continue
+		}
+		// Both ends of the pair pay the test and both answers count: the
+		// repository the tracker stands in now, and the one the drawing came
+		// from, because a re-pairing can move a picture between repositories
+		// and either end can have withdrawn since the drawing
+		// (§forgejo/webhook/repository-roles). The second question is asked
+		// only while the first still admits, and is skipped when the two
+		// repositories are one because the line above then already asked the
+		// identical question — remitAdmits' trivial admission for the walk's
+		// own repository is not what makes the equal case safe.
+		admits, err := e.remitAdmits(forest.Tracker.Repository, forest.Root.Repository)
+		if err == nil && admits && !strings.EqualFold(pair.from, forest.Tracker.Repository) {
+			admits, err = e.remitAdmits(pair.from, forest.Root.Repository)
+		}
+		if err != nil {
+			// An unknown scope is a read that broke, not the remit's
+			// ordinary silence, so it is named as one — the level the scope
+			// test itself reports a broken listing at — rather than being
+			// recorded as a refusal the remit never made
+			// (§forgejo/webhook/the-scope-cache, §forgejo/webhook/repository-roles).
+			e.log.Warn("outcomes: cannot tell whether the picture's repository is admitted; nothing carried",
+				"forest", forestRef(forest.Repository, forest.Root.Number),
+				"tracker", forestRef(forest.Tracker.Repository, forest.Tracker.Number),
+				"drawn", pair.from,
+				"error", err)
+			continue
+		}
+		if !admits {
+			e.log.Debug("outcomes: nothing carried; the picture's repository is not admitted",
+				"forest", forestRef(forest.Repository, forest.Root.Number),
+				"tracker", forestRef(forest.Tracker.Repository, forest.Tracker.Number),
+				"drawn", pair.from)
+			continue
+		}
+		next[i].Chart, next[i].ChartRevisited = pair.chart, pair.stamp
 	}
-	return blocks, false
 }
 
-// revisitedStamp returns the region's `Last revisited:` value as written
-// and how many lines carried the label. The count travels with the value
-// so the scrape can say which rule refused a region rather than only that
-// it refused one: what is counted is the label, not its value, so a line
-// carrying the label and nothing after it is one of those lines rather
-// than an absence. Only a count of one publishes anything — two stamps
-// leave the block's recency as unguessable as two charts.
-func revisitedStamp(region string) (stamp string, found int) {
-	for _, line := range strings.Split(region, "\n") {
-		if value, ok := strings.CutPrefix(strings.TrimSpace(line), stampLabel); ok {
-			found++
-			stamp = strings.TrimSpace(value)
+// recordForestCharts folds the tick's drawings onto the recorded forest set
+// so the outcomes payload carries the picture the same tick drew for the
+// trackers' blocks — one drawing, two sinks
+// (§forgejo/reconciliation/the-tracker-block,
+// §forgejo/observability/the-outcomes-view). The sources are the drawings
+// writeTrackerBlocks made walking the set in order; an empty source is
+// a forest the tick drew nothing for, and both of its picture fields go
+// empty rather than keeping the pair the set arrived with under this tick's
+// stamp. The set is replaced whole, never mutated in place — the discipline
+// Forests' snapshot contract rests on. sources is indexed by position: the
+// one caller, writeTrackerBlocks, builds one source per forest of the set it
+// hands over, so the two slices are equal-length by construction.
+//
+// The set folded onto is the one step 2 of this same tick published: Reconcile
+// admits one sweep at a time, so no newer enumeration exists for this replace
+// to roll back (§forgejo/reconciliation/the-sweep).
+func (e *Engine) recordForestCharts(forests []Forest, sources []string, at time.Time) {
+	stamp := stampAt(at, e.cfg.ChartLocation())
+	e.forestsMu.Lock()
+	defer e.forestsMu.Unlock()
+	updated := make([]Forest, len(forests))
+	for i, forest := range forests {
+		// The pair is written together or erased together: this is where a
+		// pair carried onto the set (carryDrawnPictures) stops being the
+		// view's answer, whether or not this tick had a drawing for it.
+		if sources[i] == "" {
+			forest.Chart, forest.ChartRevisited = "", ""
+		} else {
+			forest.Chart, forest.ChartRevisited = sources[i], stamp
 		}
+		updated[i] = forest
 	}
-	if found != 1 {
-		return "", found
-	}
-	return stamp, found
+	e.forestsSnap = updated
 }
 
 // forestIssue slims an issue to its row in the view. The row names the
@@ -234,12 +275,12 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 // reads as a tracker — isTracker's one reading, the one the cascade and
 // the teardown apply (Client.IssueBlocks, the same read the cascade
 // follows, §forgejo/client/operations, §forgejo/decisions/unblock-cascade).
-// Each tracker found brings its picture: the description of the row the
-// blocks read already holds is scraped for the forest's chart and stamp,
-// and nothing is ever written back (§forgejo/observability/the-outcomes-view,
-// §forgejo/client/operations). A root whose tracker is missing is
-// listed with the absence stated; an outcome issue no open root blocks
-// is not a forest and is not listed.
+// Each tracker found brings its rows; the picture the payload carries is not
+// read from the tracker's description — the sweep tick draws it once from
+// the graph and records it onto the set (recordForestCharts,
+// §forgejo/reconciliation/the-tracker-block). A root whose tracker is
+// missing is listed with the absence stated; an outcome issue no open root
+// blocks is not a forest and is not listed.
 // Pull requests carry no forest. Each forest additionally carries its
 // warnings, walked from the same rows the pairing reads: one blockers
 // read per member either kind concerns, one membership read per
@@ -289,41 +330,10 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 				}
 				tracker := forestIssue(*b, root.Repository)
 				forest.Tracker = &tracker
-				// The picture comes from the row already in hand. The blocks
-				// read answers with the same issue model a single-issue read
-				// does, body included, so scraping it costs no read; and
-				// because the row *is* the tracker's, a tracker living in
-				// another repository brings its own picture rather than the
-				// root's (§forgejo/client/operations). The region is the
-				// engine's own drawing now, so the read half pays the
-				// admission test the write half pays: the view publishes no
-				// picture scraped from a repository no maitred role admits
-				// (§forgejo/webhook/repository-roles,
-				// §forgejo/reconciliation/the-tracker-block).
-				admits, err := e.remitAdmits(tracker.Repository, entered)
-				if err != nil {
-					return nil, fmt.Errorf("forgejo: outcomes: scope of %s: %w", tracker.Repository, err)
-				}
-				if !admits {
-					e.log.Debug("outcomes: tracker lives in a repository no maitred role names; publishing no picture",
-						"tracker", forestRef(tracker.Repository, tracker.Number))
-					break
-				}
-				chart, revisited, refused := scrapeForestChart(b.Body)
-				forest.Chart, forest.ChartRevisited = chart, revisited
-				if refused != "" {
-					// A region that was there and was refused is the one
-					// state a drifted marker leaves behind, so it says so
-					// once per tick at Debug — the level the uncatalogued
-					// forest never reaches, which is what keeps the
-					// silence above it intact. The refusal is per field, so
-					// the line says which field refused rather than claiming
-					// the region published nothing at all
-					// (§forgejo/observability/the-outcomes-view).
-					e.log.Debug("outcomes: a tracker's current-state region refused; publishing nothing for the refused field",
-						"tracker", forestRef(tracker.Repository, tracker.Number),
-						"why", refused)
-				}
+				// The pairing reads no picture from the row: the tick draws
+				// it once, after the walk, and records it onto this set
+				// (recordForestCharts, §forgejo/reconciliation/the-tracker-block,
+				// §forgejo/reconciliation/the-sweep).
 				break
 			}
 			// The same rows say whether the forest is waiting on a
@@ -416,12 +426,21 @@ func (e *Engine) Forests() ([]Forest, error) {
 // to the caller as well as recorded: the sweep's next step writes each
 // forest it enumerated to that forest's tracker, and a forest the
 // enumeration did not name is never written to
-// (§forgejo/reconciliation/the-tracker-block).
+// (§forgejo/reconciliation/the-tracker-block). The picture pair each forest
+// carries travels across from the set this one replaces
+// (carryDrawnPictures), so the view holds a picture for as long as the tick's
+// walk runs before step 5 draws the next one. The carry is the tick's own
+// remit test for a remembered picture, paid here rather than at step 5
+// (carryDrawnPictures, §forgejo/webhook/repository-roles).
 func (e *Engine) recordForests() ([]Forest, error) {
 	forests, err := e.enumerateForests()
 	if err != nil {
 		e.log.Error("reconciliation: forest enumeration failed; the outcomes view will say so until a sweep succeeds",
 			"error", err)
+	} else {
+		// The carry fills the new set before it is published, so a pair only
+		// ever lands on bytes no reader can see yet.
+		e.carryDrawnPictures(forests)
 	}
 	e.forestsMu.Lock()
 	if err != nil {

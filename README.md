@@ -308,7 +308,8 @@ unnecessary before anything runs. The same can be driven over the API:
 skipped, as with a scheduled sweep), and `GET /api/forgejo/outcomes`
 lists the current forests — each open `ideation` root in the outcomes
 repositories paired with the `outcome` tracker it blocks, each forest
-carrying the picture scraped from that tracker's current-state block, and
+carrying the picture the engine drew from that forest's graph on the
+last sweep tick, and
 the **warnings** saying whether the forest is waiting on a person: an
 approved, mergeable pull request that the merge gate would fire at and
 holds nothing else off, which has sat unmerged past a threshold

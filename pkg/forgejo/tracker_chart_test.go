@@ -168,7 +168,7 @@ func chartForests() []Forest {
 // (§forgejo/reconciliation/the-tracker-block).
 func TestTrackerBlock_WritesIntoFencePair(t *testing.T) {
 	eng, api, log := chartForestEngine(t, chartFenced())
-	if err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
+	if _, err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
 		t.Fatalf("writeTrackerBlock: %v", err)
 	}
 	// The engine's one mutation is logged when it lands, so a description
@@ -209,7 +209,7 @@ func TestTrackerBlock_WritesIntoFencePair(t *testing.T) {
 func TestTrackerBlock_NoFencePairInsertsFirstHeading(t *testing.T) {
 	body := "## Outcome\n\nWe will ship the purge.\n\n## Notes\n\nnothing yet\n"
 	eng, api, _ := chartForestEngine(t, body)
-	if err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
+	if _, err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
 		t.Fatalf("writeTrackerBlock: %v", err)
 	}
 	written := mustWritten(t, api, "out", 2)
@@ -228,7 +228,7 @@ func TestTrackerBlock_NoFencePairInsertsFirstHeading(t *testing.T) {
 func TestTrackerBlock_TwoFencePairsWriteNothingAndSaySo(t *testing.T) {
 	body := chartFenced() + "\n" + fenceBegin + "\n\nanother forest\n\n" + fenceEnd + "\n"
 	eng, api, log := chartForestEngine(t, body)
-	err := eng.writeTrackerBlock(chartForests()[0], chartAt)
+	_, err := eng.writeTrackerBlock(chartForests()[0], chartAt)
 	if !errors.Is(err, errFenceAmbiguous) {
 		t.Fatalf("writeTrackerBlock = %v, want it to report the ambiguity", err)
 	}
@@ -246,13 +246,13 @@ func TestTrackerBlock_TwoFencePairsWriteNothingAndSaySo(t *testing.T) {
 // (§forgejo/reconciliation/the-tracker-block, §forgejo/renderer/determinism).
 func TestTrackerBlock_StampMovesWhileGraphStands(t *testing.T) {
 	eng, api, _ := chartForestEngine(t, chartFenced())
-	if err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
+	if _, err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
 		t.Fatalf("first writeTrackerBlock: %v", err)
 	}
 	first := mustWritten(t, api, "out", 2)
 
 	later := chartAt.Add(time.Minute)
-	if err := eng.writeTrackerBlock(chartForests()[0], later); err != nil {
+	if _, err := eng.writeTrackerBlock(chartForests()[0], later); err != nil {
 		t.Fatalf("second writeTrackerBlock: %v", err)
 	}
 	second := mustWritten(t, api, "out", 2)
@@ -363,6 +363,55 @@ func TestTrackerBlock_WriteFailureIsReported(t *testing.T) {
 	}
 }
 
+// TestTrackerBlock_AWriteOnlyFailureStillPublishesTheDrawing: the payload's
+// picture is the drawing, not the splice. Where the drawing was made and only
+// the write failed — the forge refuses the body, or the tracker read the splice
+// needs comes back broken — the outcomes payload still carries this tick's
+// chart under this tick's stamp while the tracker's region keeps the bytes of
+// the tick before. A fence pair too ambiguous to splice into is the same case
+// and is pinned by name in the payload's own table
+// (§forgejo/reconciliation/the-tracker-block,
+// §forgejo/observability/the-outcomes-view).
+func TestTrackerBlock_AWriteOnlyFailureStillPublishesTheDrawing(t *testing.T) {
+	cases := []struct {
+		name string
+		fail func(*fakeAPI)
+	}{
+		{
+			name: "the forge refuses the body",
+			fail: func(api *fakeAPI) {
+				api.writeErr = &APIError{StatusCode: 403, Message: "must have Write Issues Unit"}
+			},
+		},
+		{
+			name: "the tracker read the splice needs fails",
+			fail: func(api *fakeAPI) {
+				api.getIssueErrOn = map[int]error{2: errors.New("issue not found")}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, _ := chartForestEngine(t, chartFenced())
+			tc.fail(api)
+			eng.Reconcile()
+
+			forests, err := eng.Forests()
+			if err != nil || len(forests) != 1 {
+				t.Fatalf("forests = %+v, %v", forests, err)
+			}
+			forest := forests[0]
+			if forest.Chart == "" || forest.ChartRevisited == "" {
+				t.Errorf("chart = %q under stamp %q, want the drawing this tick made even though the write failed",
+					forest.Chart, forest.ChartRevisited)
+			}
+			if got := api.writeCount(); got != 0 {
+				t.Errorf("wrote %d bodies, want none: the description keeps the bytes of the tick before", got)
+			}
+		})
+	}
+}
+
 // TestTrackerBlock_TrackerOutsideRemitIsNotWritten: which repository holds a
 // tracker comes from the root's blocking edges, not from configuration, so the
 // engine's one mutation pays the admission test every other cross-repository hop
@@ -408,7 +457,7 @@ func TestTrackerBlock_RowOutsideRemitDrawsNothing(t *testing.T) {
 	}
 	api.blocks[root.Number] = append(append([]Issue{}, api.blocks[root.Number]...), outside)
 
-	if err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
+	if _, err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
 		t.Fatalf("writeTrackerBlock: %v", err)
 	}
 	region := regionOf(mustWritten(t, api, "out", 2))
@@ -442,7 +491,7 @@ func TestTrackerBlock_UnknownScopeWritesNothing(t *testing.T) {
 // (§forgejo/renderer/identifiers-and-shapes, §forgejo/renderer/edge-classes).
 func TestTrackerBlock_DrawsTheGraphItGathers(t *testing.T) {
 	eng, api, _ := chartForestEngine(t, chartFenced())
-	if err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
+	if _, err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
 		t.Fatalf("writeTrackerBlock: %v", err)
 	}
 	region := regionOf(mustWritten(t, api, "out", 2))
@@ -481,7 +530,7 @@ func TestTrackerBlock_StampIsRenderedInTheConfiguredZone(t *testing.T) {
 	}
 	eng, api, _ := chartForestEngine(t, chartFenced())
 	eng.cfg.TrackerTimezone = "Australia/Sydney"
-	if err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
+	if _, err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
 		t.Fatalf("writeTrackerBlock: %v", err)
 	}
 	region := regionOf(mustWritten(t, api, "out", 2))
@@ -498,7 +547,7 @@ func TestTrackerBlock_StampIsRenderedInTheConfiguredZone(t *testing.T) {
 func TestTrackerBlock_CeilingCollapsesPastTheCeiling(t *testing.T) {
 	eng, api, _ := chartForestEngine(t, chartFenced())
 	eng.cfg.MermaidMaxSourceCharacters = 600
-	if err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
+	if _, err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
 		t.Fatalf("writeTrackerBlock: %v", err)
 	}
 	region := regionOf(mustWritten(t, api, "out", 2))
@@ -618,6 +667,37 @@ func stampLine(body string) string {
 	return ""
 }
 
+// TestTrackerBlock_SweepRecordsThePayloadPicture: one tick draws once and
+// feeds both sinks — the bytes spliced between the tracker's fences are
+// the bytes the outcomes payload carries, under the same stamp, so the
+// page and the description can never state two pictures for one graph
+// (§forgejo/reconciliation/the-tracker-block,
+// §forgejo/observability/the-outcomes-view).
+func TestTrackerBlock_SweepRecordsThePayloadPicture(t *testing.T) {
+	eng, api, _ := chartForestEngine(t, chartFenced())
+	eng.Reconcile()
+
+	forests, err := eng.Forests()
+	if err != nil || len(forests) != 1 {
+		t.Fatalf("forests = %+v, %v", forests, err)
+	}
+	forest := forests[0]
+	if forest.Chart == "" || forest.ChartRevisited == "" {
+		t.Fatalf("the sweep recorded chart %q under stamp %q, want the tick's drawing and its moment", forest.Chart, forest.ChartRevisited)
+	}
+	body, ok := api.writtenBody("out", 2)
+	if !ok {
+		t.Fatal("the sweep wrote no tracker block")
+	}
+	region := regionOf(body)
+	if !strings.Contains(region, forest.Chart) {
+		t.Errorf("the written region does not carry the payload's chart:\nregion:\n%s\nchart:\n%s", region, forest.Chart)
+	}
+	if want := stampLabel + " " + forest.ChartRevisited; !strings.Contains(region, want) {
+		t.Errorf("the region states no %q: one drawing, one stamp, two sinks", want)
+	}
+}
+
 // TestTrackerBlock_WriteDoesNotRefireAStateGovernedRow: the tick's write moves
 // the tracker's updated_at, and that timestamp is what both the re-fire bound
 // and the queue's dedup key are keyed on — so a redraw would hand the engine a
@@ -715,7 +795,7 @@ func wrapUpTask(t *testing.T, q *fakeQueue) *queue.Task {
 // (§forgejo/reconciliation/the-tracker-block).
 func TestTrackerBlock_TrackerIsReadAtTheMomentItIsWritten(t *testing.T) {
 	eng, api, _ := chartForestEngine(t, chartFenced())
-	if err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
+	if _, err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
 		t.Fatalf("writeTrackerBlock: %v", err)
 	}
 
@@ -768,7 +848,7 @@ func TestTrackerBlock_RowNamingNoRepositoryStillDraws(t *testing.T) {
 		rows[i].Repository = ""
 	}
 
-	if err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
+	if _, err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
 		t.Fatalf("writeTrackerBlock: %v", err)
 	}
 	region := regionOf(mustWritten(t, api, "out", 2))
@@ -1121,7 +1201,7 @@ func TestWrapUpDispatchSharesTheSweepRenderer(t *testing.T) {
 	// render function, whichever path calls it. Whether the two stamps fall
 	// inside one minute of the wall clock is not what this pins — the
 	// property is that a drawn forest gains no bytes beyond the stamp.
-	if err := eng.writeTrackerBlock(chartForests()[0], time.Now()); err != nil {
+	if _, err := eng.writeTrackerBlock(chartForests()[0], time.Now()); err != nil {
 		t.Fatalf("writeTrackerBlock: %v", err)
 	}
 	switch writes := api.callCount("UpdateIssueBody:out/2"); writes {
@@ -1215,7 +1295,7 @@ func TestWrapUpDrawMovesOnlyTheStampOnACurrentBlock(t *testing.T) {
 	// The block is current but for an hour-old stamp, which is what the
 	// dispatch's own reading of the clock will move: the draw cannot be
 	// accused of redrawing anything but the stamp.
-	if err := eng.writeTrackerBlock(chartForests()[0], time.Now().Add(-time.Hour)); err != nil {
+	if _, err := eng.writeTrackerBlock(chartForests()[0], time.Now().Add(-time.Hour)); err != nil {
 		t.Fatalf("writeTrackerBlock: %v", err)
 	}
 	first := mustWritten(t, api, "out", 2)

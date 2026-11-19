@@ -312,10 +312,9 @@ func (s *Server) handleForgejo(w http.ResponseWriter, r *http.Request) {
 // handleForgejoOutcomes serves the outcomes view: the current forests —
 // each open ideation root in an outcomes repository paired with the
 // outcome tracker it blocks, or the honest absence of one, each forest
-// carrying the picture scraped from its tracker's current-state block —
-// the Mermaid source between its fences and that region's stamp, both
-// refused field by field and neither drawn here — and the warnings
-// saying whether it is waiting on a person
+// carrying the picture the sweep tick drew from its graph — the Mermaid
+// source and that drawing's stamp, neither composed here — and the
+// warnings saying whether it is waiting on a person
 // (§forgejo/observability/the-outcomes-view). The set is the one the
 // last sweep tick recorded: like the tracked view this answers from
 // memory, and a request costs no forge read

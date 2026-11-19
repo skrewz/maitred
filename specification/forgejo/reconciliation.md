@@ -72,6 +72,10 @@ created while the engine was down.
    tracker's body and its `updated_at`
    (§forgejo/decisions/actionable-state-digest). A forest whose write fails
    is reported and skipped: it neither fails the tick nor delays a decision.
+   The drawings it records replace every picture pair in the set step 2
+   published; between the two steps the view serves the pairs that set
+   carried across, never an empty one it has drawn no conclusion from
+   (§forgejo/observability/the-outcomes-view).
 
 The synthetic event carries no sender.
 
@@ -85,7 +89,15 @@ ahead of every `wrap-up` dispatch it writes that one tracker's region once more
 (§forgejo/decisions/actions): it gathers the graph, renders it
 (§forgejo/renderer/the-contract), and splices the
 source under a `Last revisited: <YYYY-MM-DD HH:MM> <TZ>` stamp, the time
-rendered in the configured timezone (§forgejo/config/tracker-chart).
+rendered in the configured timezone (§forgejo/config/tracker-chart). The tick's
+rendering is recorded onto the forest set the outcomes view serves too, so the
+payload carries the bytes it drew alongside the block they were spliced into —
+and carries them even where the splice found no region to land in
+(§forgejo/observability/the-outcomes-view): one drawing per forest per tick,
+feeding both sinks. The `wrap-up` drawing is the exception: it feeds the block
+alone, and the payload catches up with it at the next tick's step 5, so between
+an event-path wrap-up and that tick the two sinks of one forest state two
+instants — the block the wrap-up's, the picture the last tick's.
 
 - **The fence bounds the write.** Only a tracker's description is written, and
   only the bytes between one opener and its closer. The outcome prose around
@@ -102,17 +114,17 @@ rendered in the configured timezone (§forgejo/config/tracker-chart).
   re-reads whatever it landed.
 - **The write goes where a role admits it.** Which repository holds a tracker,
   and which repositories the graph's rows live in, is forge data the root's
-  blocking edges name rather than configuration, so all three readers — the
-  write, the draw and the pairing's scrape — pay the admission test every
-  other cross-repository hop pays
+  blocking edges name rather than configuration, so the tick's one drawing pays
+  the admission test every other cross-repository hop pays
   (§forgejo/webhook/repository-roles): the enumeration's own repository is
   admitted by the enumeration, every other only where a maitred role names it. A
-  tracker in a repository no role names is neither written nor scraped — the
-  write skips it and the pairing publishes no chart and no stamp from it, the
-  tracker row itself standing — and the log names the repository refused at
+  tracker in a repository no role names is neither written nor drawn — the
+  tick skips it and neither sink of the drawing receives a chart or a stamp
+  from it, the tracker row itself standing — and the log names the repository
+  refused at
   Debug, the level the engine's other cross-repository hops use for the
-  sentence; a row no role admits draws no node, contributes no title to a body
-  the outcomes view publishes, and has no edges read. One reader does not:
+  sentence; a row no role admits draws no node, contributes no title to the
+  picture the outcomes view publishes, and has no edges read. One reader does not:
   the forest's actionable-state digest folds every row and comment body a
   blocking edge reaches, wherever the edge points, so where an edge leaves the
   roles the digest decides on rows the chart neither draws nor publishes
@@ -141,8 +153,9 @@ rendered in the configured timezone (§forgejo/config/tracker-chart).
   block's second call site, and the same function rather than a second
   renderer: before the task is queued it redraws that tracker's region from
   the graph, so the picture a finished forest leaves behind — every member
-  struck through with its close stamp — is the one the wrap-up describes and
-  the outcomes view publishes, not whatever the last pass happened to draw
+  struck through with its close stamp — is the one the wrap-up describes, not
+  whatever the last pass happened to draw; the outcomes view answers the same
+  picture from the next tick's step 5, since this path feeds the block alone
   (§forgejo/observability/the-outcomes-view). The root comes from the tracker's
   blocker rows the dispatch already holds. A tracker gated by no `ideation`
   issue has no forest to draw: it says so at `Debug` and queues regardless, and
@@ -182,7 +195,16 @@ rendered in the configured timezone (§forgejo/config/tracker-chart).
   refuses, a ceiling the source will not fit even collapsed
   (§forgejo/renderer/collapsing) and a write the forge refuses are each logged
   naming the forest and skipped: no partial region is ever written, and one
-  ragged forest costs nothing to the others.
+  ragged forest costs nothing to the others. What a failure does to the
+  forest's picture fields in the outcomes payload follows what it broke
+  (§forgejo/observability/the-outcomes-view): a failure of the **drawing** — a
+  read the gathering needs, a graph refused, a role label colour that cannot be
+  read, a ceiling the collapsed source will not fit, a tracker in a repository
+  no maitred role admits — leaves **both** fields empty for that tick, while a
+  failure of the **write** alone — the tracker read the splice needs, a fence
+  pair too ambiguous to write between, a forge that refuses the body — leaves
+  this tick's drawing in the payload under this tick's stamp, the description
+  keeping the bytes of the tick before.
 
 The block carries no verdict and no instruction, which is why writing it makes
 the engine no less a decision loop than a task runner: it changes what a human

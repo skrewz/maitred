@@ -141,9 +141,11 @@ it lives rather than inheriting the root's address
 (§forgejo/client/operations) — or the honest absence of one, spelled as
 a `null` tracker so the field is always present. Each forest carries the
 **picture of the forest** alongside its rows as two further fields, both
-always present: **`chart`**, the Mermaid source of the tracker's
-current-state block, and **`chart_revisited`**, that region's recency
-stamp, both scraped as described below — and its **warnings**, the ⚠️
+always present: **`chart`**, the Mermaid source the engine last drew from
+the forest's graph, and **`chart_revisited`**, that drawing's recency
+stamp — a pair, drawn as described below, that always travels as one —
+and its
+**warnings**, the ⚠️
 marks saying whether the forest is waiting on a person, an empty list
 when it is not
 (§forgejo/observability/the-warnings-a-forest-carries). Without the
@@ -170,96 +172,95 @@ port authenticates nothing
 (§forgejo/observability/why-the-engine-is-off). A method other than GET
 answers `405`.
 
-**Scraping the current-state block.** The picture is not composed by the
-engine: it is read out of the tracker's description, which is where the
-forest's picture already lives. That description is the blocks row the
-walk already holds — the listing and the single-issue read answer with
-the same model and fill `body` the same way, so scraping the row costs
-no second read of an issue the enumeration is already holding
-(§forgejo/client/operations). The region scraped is the one the
-engine delimits with the HTML-comment fence pair
-`<!-- maitred:forest:begin -->` and `<!-- maitred:forest:end -->` — the
-view reads that pair and writes nothing: this path makes no mutation, so
-the tracker's description is left byte-for-byte as found
-(§forgejo/client/operations, §forgejo/client/the-one-mutation). The
-region is the engine's own drawing, so the scrape pays the admission test
-the write pays (§forgejo/reconciliation/the-tracker-block). Within the
-region the view carries two things and nothing else: the fenced
-`mermaid` block between its fences, **verbatim** — never re-indented,
-repaired, or completed in code — and the
-`Last revisited: <YYYY-MM-DD HH:MM> <TZ>` line, whose value is carried
-**as written**, so a UI states how recent
-the picture is without parsing prose and an abbreviation of `CET` reads
-exactly as the agent wrote it. Neither field is parsed further: the
-stamp is a string the view does not interpret.
+**Drawing the picture.** The picture is not scraped out of any
+description and it is not composed per request: the sweep tick draws it
+once from the forest's graph with the engine's own renderer
+(§forgejo/renderer/the-contract), and that one drawing is the payload's
+`chart`. The same drawing is also what splices into the tracker's
+current-state block, so the payload and the tracker cannot disagree
+about what the graph looks like: the chart matches what the block would
+render from the same edges (§forgejo/reconciliation/the-tracker-block) —
+and it matches even where the write into the description is itself
+refused. A description with no fence pair, two fence pairs, or a pair
+holding no fenced Mermaid block says where the block may land; it says
+nothing about the payload. The outcomes path reads no description and
+parses no prose at all: the tracker's description is out of the
+picture's chain of command entirely.
 
-Verbatim is a promise about the text, not about its source. Whatever
-stands between the fences reaches the payload untouched, and a
-description is editable by anyone with write access to the tracker's
-repository — the fence pair is a scraping contract, never an access
-control — mirrored onto a port that authenticates nothing
-(§forgejo/observability/why-the-engine-is-off). The rendered source a
-writer splices in carries no `click`, no `subgraph` and no comment
-(§forgejo/renderer/the-source), but the view cannot tell rendered source
-from hand-written text, and Mermaid drawn at a scripting security level
-runs `click` and `link` callbacks in the viewer. So anything drawing
+The drawing is the renderer's source, **verbatim** — never re-indented,
+repaired, or completed in code — and rendered source carries no `click`,
+no `subgraph` and no comment (§forgejo/renderer/the-source). What the
+source embeds is what the graph's rows report: issue titles and forge
+URLs inside labels, and those strings are written by everyone who may
+open an issue, mirrored onto a port that authenticates nothing
+(§forgejo/observability/why-the-engine-is-off). So anything drawing
 `chart` treats it as untrusted input: render it at a non-scripting
 security level, or show it as text and never as a graph.
 
-What scraping promises is exactly one well-formed region, and every
-ragged edge publishes **nothing** rather than a guess. The refusal is
-per field, not per region: the stamp describes the **region**, so a
-region holding two pictures or none still states when it was last
-revisited, and one holding two stamps still states its picture — "last
-revisited at X, and it holds no single picture" is a thing a tracker can
-honestly be, which is why a UI printing recency above a graph must read
-the fields as two statements rather than one. The edges: no fence pair,
-two or more fence pairs (which region belongs to whom is not guessable),
-a region holding no fenced Mermaid block or more than one, a Mermaid
-fence never closed, and a region carrying no stamp line or more than one.
-A `Last revisited:` line carrying the label and no value counts as one of
-those lines rather than as an absence, so a placeholder above the stamp
-the agent later wrote publishes nothing. The two ways a region says nothing
-about recency are told apart by whether the line is there at all: the
-template the curating agent writes carries the label, so a line with nothing
-after it is a recency not yet written, while a region holding no such line
-was written by something other than that template — the contract drifting,
-which the log says and silence would hide. An empty field is a statement
-about the tracker's description, never about a read that broke: the
-description came from a read that succeeded, since a blocks read that
-fails fails the enumeration the way every other failed read does,
-answering `500` rather than publishing the empty chart a stranger would
-read as a forest with no picture. A forest whose tracker is absent
-publishes both fields empty.
+**`chart_revisited`** carries the moment of that drawing in the shape the
+current-state block's stamp line carries, `<YYYY-MM-DD HH:MM> <TZ>` — the
+rendering instant, spelled in the configured timezone
+(§forgejo/config/tracker-chart), the same instant the block's stamp
+states for that tick. It is a string the view does not interpret. The
+recency is honest because it belongs to the drawing: the payload's
+picture carries the stamp of the tick that rendered it, not the moment
+some agent last wrote a description, and no stamp is ever dressed over a
+remembered picture — the pair is written together or erased together, so
+a forest a tick drew nothing for carries **both** fields empty once that
+tick is done, never yesterday's chart with today's stamp.
 
-What the log says about an empty field is therefore the one thing a
-reader cannot see in the payload, and the two families that produce one
-are said apart. A description carrying **neither** marker is a tracker
-whose picture has not been written yet — an ordinary state rather than a
-fault, what a young organisation looks like from the outside — and it
-leaves no trace at any level, because repeating the same sentence for it
-on every tick would bury the failures the log is for: a read that broke,
-which fails the enumeration and reaches the log loudly. A lone `Last
-revisited:` line carrying the label and no value belongs to that family
-seen from the field side: the stamp has not been written yet, so the stamp
-publishes nothing and nothing is said — the picture the same region holds
-still stands in the payload. A region that was
-there and was refused is the other family, the one a fence pair drifting
-away from what the curating agent writes lands in, and it says so once
-per tick at `Debug`: the tracker, and the rule that refused. Debug rather
-than above it because the refusal is not a fault either, only a
-statement that the contract and the description have stopped agreeing —
-information for whoever is looking, noise for whoever is not. Without
-that line the two
-families are indistinguishable from outside, and the drift the marker
-contract depends on would show up as an empty picture rather than as a
-rule named.
+**The pair travels as one.** The sweep records the forest set at its head
+and makes its drawings after the walk, at step 5
+(§forgejo/reconciliation/the-sweep), so the two halves of a tick would
+otherwise leave the view answering every forest's picture empty for as
+long as that walk runs. It does not: the set the head records carries
+each forest's **previous** pair — the last drawing the engine recorded
+and the stamp belonging to it — and step 5 replaces every pair in it.
+Inside that window the view therefore shows the previous tick's drawing
+under the previous tick's stamp, which is what makes an empty picture
+honest rather than a half-written record; a forest the head records for
+the first time carries both fields empty until step 5 draws it. A carried
+pair is never the view's last word: step 5 states what this tick drew,
+with the wrap-up path's one-sink drawing accounted for where that
+exception lives (§forgejo/reconciliation/the-tracker-block). The
+carry pays the admission test the drawing pays
+(§forgejo/reconciliation/the-tracker-block), of both the repository the pair
+was drawn from and the one the tracker now stands in — the tracker is forge
+data, so a re-pairing can move a picture across repositories, and a role
+withdrawn from either empties both fields at the next tick's head
+rather than leaving the earlier drawing on the port for the length of the walk.
+Where that test cannot be answered — a repository listing the carry fails over
+— both fields go empty as well: a drawing whose remit the engine cannot vouch
+for is not one the unauthenticated view may publish
+(§forgejo/webhook/the-scope-cache), and the failed read is logged as the
+failure it is rather than as a refusal.
+
+An empty field is therefore a statement about the engine's drawing,
+never about anyone's prose. A forest whose tracker is absent publishes
+both fields empty and reads no further (§forgejo/client/operations). A
+forest whose **drawing** failed — a read the drawing itself needs (the
+root's row, a row's blocks), a graph the renderer refused, or a tracker
+in a repository no maitred role admits — publishes both fields empty
+too; the failure is one forest's own, the tick logs it
+naming that forest, and the others cost nothing
+(§forgejo/reconciliation/the-tracker-block, §forgejo/webhook/repository-roles).
+A drawing that was made but found no body to splice into — a fence pair
+too ambiguous to write between, a tracker read that broke after the
+drawing succeeded, a forge that refused the write — still stands in the
+payload, since it states what the graph holds even where the description
+keeps the bytes of the tick before
+(§forgejo/reconciliation/the-tracker-block).
+What once emptied a picture — a ragged tracker description — empties
+nothing now: a forest whose chart was never written to its tracker
+carries the tick's drawing from the graph all the same.
 
 The enumeration happens on the reconciliation sweep's tick, not on the
 request path (§forgejo/reconciliation/the-sweep): per tick it costs one
 issue listing per outcomes repository and one blocks read per open
-ideation root, on top of the sweep's own walk; the picture is scraped
-from the rows those reads return, so it adds no read of its own. The
+ideation root, on top of the sweep's own walk; the enumeration itself
+adds no read for the picture, which the tick's step-5 drawing makes for
+both of its sinks (§forgejo/reconciliation/the-tracker-block,
+§forgejo/reconciliation/the-sweep). The
 sweep's own organisation listing keeps the scope cache fresh, so the walk
 adds no listing of its own (§forgejo/webhook/the-scope-cache). That walk
 is the view's own reader rather than a pairing folded into the sweep's fourth
