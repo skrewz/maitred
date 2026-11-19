@@ -1082,6 +1082,63 @@ func TestForests_PicturePaysTheAdmissionTest(t *testing.T) {
 	}
 }
 
+// TestForests_CarryFailsClosedOnAnUnknownScope: the carry's admission test
+// is a read, and a read can break. Where the remit cannot be answered the
+// pair is dropped — a drawing whose remit is unknown is no evidence the
+// unauthenticated view may publish — and the log names the failed read at a
+// level an operator reads, rather than asserting a refusal the remit never
+// made (§forgejo/observability/the-outcomes-view,
+// §forgejo/webhook/the-scope-cache, §forgejo/webhook/repository-roles).
+func TestForests_CarryFailsClosedOnAnUnknownScope(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, _, _ := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log,
+		&slog.HandlerOptions{Level: slog.LevelInfo})))
+	api.repos = []Repository{outcomesRepo("o/out"), testRepo("o/elsewhere")}
+	root := outcomesRoot(51, "root")
+	tracker := outcomesTracker(71, "tracker in an admitted repository")
+	tracker.Repository = "o/elsewhere"
+	api.openIssues["out"] = []Issue{root}
+	api.issues[51] = &root
+	api.blocks[51] = []Issue{tracker}
+
+	eng.Reconcile()
+	drawn, err := eng.Forests()
+	if err != nil || len(drawn) != 1 {
+		t.Fatalf("forests = %+v, %v", drawn, err)
+	}
+	if drawn[0].Chart == "" {
+		t.Fatal("the first tick drew no picture into the payload")
+	}
+	// The set a tick's head publishes: Forests hands out the snapshot itself,
+	// so the carry is handed a copy of it, and a fresh enumeration carries no
+	// picture of its own — the carry is what fills it before step 5 draws.
+	next := append([]Forest{}, drawn...)
+	next[0].Chart, next[0].ChartRevisited = "", ""
+
+	// The listing breaks between the walk that enumerated this set and the
+	// carry asking it — a forge too flaky to answer the scope by the time the
+	// walk finished. Nothing is published from this set, so no reader sees the
+	// empty the carry writes into it.
+	api.mu.Lock()
+	api.listReposErr = errors.New("org listing down")
+	api.mu.Unlock()
+	eng.scopeAt = time.Time{} // the carry must find the listing, not a cached remit
+	eng.carryDrawnPictures(next)
+
+	if len(next) != 1 || next[0].Chart != "" || next[0].ChartRevisited != "" {
+		t.Errorf("carried set = %+v, want the forest listed with both picture fields empty", next)
+	}
+	line := findEntry(t, parseLogLines(t, log.Bytes()),
+		"outcomes: cannot tell whether the picture's repository is admitted; nothing carried")
+	if msg, _ := line["error"].(string); !strings.Contains(msg, "org listing down") {
+		t.Errorf("error = %v, want the failed read it stands for: a refusal is a different fact",
+			line["error"])
+	}
+	if line["tracker"] != "o/elsewhere#71" {
+		t.Errorf("tracker = %v, want o/elsewhere#71: the drop names the picture it dropped", line["tracker"])
+	}
+}
+
 // TestForests_DrawFailureEmptiesThePicture: the view never dresses a
 // fresh stamp over a remembered chart. The tick that cannot draw a
 // forest — here, a root whose role label lost its readable colour —

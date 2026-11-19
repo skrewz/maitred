@@ -123,9 +123,10 @@ func keyOf(forest Forest) Key {
 // must not keep feeding the unauthenticated view for the length of the walk:
 // the carry pays the same admission test the drawing pays (writeTrackerBlock,
 // §forgejo/webhook/repository-roles). A scope the carry cannot read empties
-// the pair too — the picture fails closed — and a forest this tick names no
-// tracker for carries nothing at all, the absence the view states
-// (§forgejo/observability/the-outcomes-view).
+// the pair too — a remembered drawing whose remit is unknown is no evidence
+// the view may publish — and a forest this tick names no tracker for carries
+// nothing at all, the absence the view states
+// (§forgejo/observability/the-outcomes-view, §forgejo/webhook/the-scope-cache).
 func (e *Engine) carryDrawnPictures(next []Forest) {
 	e.forestsMu.Lock()
 	previous := e.forestsSnap
@@ -148,7 +149,19 @@ func (e *Engine) carryDrawnPictures(next []Forest) {
 			continue
 		}
 		admits, err := e.remitAdmits(forest.Tracker.Repository, forest.Root.Repository)
-		if err != nil || !admits {
+		if err != nil {
+			// An unknown scope is a read that broke, not the remit's
+			// ordinary silence, so it is named as one — the level the scope
+			// test itself reports a broken listing at — rather than being
+			// recorded as a refusal the remit never made
+			// (§forgejo/webhook/the-scope-cache, §forgejo/webhook/repository-roles).
+			e.log.Warn("outcomes: cannot tell whether the picture's repository is admitted; nothing carried",
+				"forest", forestRef(forest.Repository, forest.Root.Number),
+				"tracker", forestRef(forest.Tracker.Repository, forest.Tracker.Number),
+				"error", err)
+			continue
+		}
+		if !admits {
 			e.log.Debug("outcomes: nothing carried; the picture's repository is not admitted",
 				"forest", forestRef(forest.Repository, forest.Root.Number),
 				"tracker", forestRef(forest.Tracker.Repository, forest.Tracker.Number))

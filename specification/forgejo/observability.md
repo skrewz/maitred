@@ -225,6 +225,11 @@ carry pays the admission test the drawing pays
 (§forgejo/reconciliation/the-tracker-block), so a role withdrawn from a
 tracker's repository between ticks empties both fields at the next tick's head
 rather than leaving the earlier drawing on the port for the length of the walk.
+Where that test cannot be answered — a repository listing the carry fails over
+— both fields go empty as well: a drawing whose remit the engine cannot vouch
+for is not one the unauthenticated view may publish
+(§forgejo/webhook/the-scope-cache), and the failed read is logged as the
+failure it is rather than as a refusal.
 
 An empty field is therefore a statement about the engine's drawing,
 never about anyone's prose. A forest whose tracker is absent publishes
