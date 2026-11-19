@@ -39,9 +39,9 @@ const (
 	// (§forgejo/observability/the-outcomes-view).
 	stampLabel = "Last revisited:"
 	// stampLayout renders the stamp's date and time half; the label is the
-	// shared stampLabel the outcomes view scrapes, and the zone abbreviation
-	// follows from the configured location
-	// (§forgejo/config/tracker-chart).
+	// shared stampLabel, and the zone abbreviation follows from the
+	// configured location (§forgejo/config/tracker-chart). stampAt spells an
+	// instant in it.
 	stampLayout = "2006-01-02 15:04 MST"
 	// strokeMemberHex and strokeClosedHex colour the two classes no role
 	// label names: a work item carries no kind label whose colour could be
@@ -243,13 +243,23 @@ func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) (string, error) 
 	return source, nil
 }
 
+// stampAt is one instant spelled the way a current-state block's stamp line
+// spells it: the moment a drawing was made, in the configured zone. Both sinks
+// of one drawing call it — the block composes its stamp line here and the
+// outcomes payload spells chart_revisited here — so the two can never drift
+// apart into two different instants for the same drawing
+// (§forgejo/observability/the-outcomes-view, §forgejo/config/tracker-chart).
+func stampAt(at time.Time, loc *time.Location) string {
+	return at.In(loc).Format(stampLayout)
+}
+
 // stateBlock is the bytes between one tracker's fence pair: the stamp and the
 // rendered source in its Mermaid fence. The renderer's source already ends in
 // one newline, so the closing fence follows it directly. The stamp carries
 // whether or not the graph moved, which is what makes a stale chart
 // distinguishable from an untouched forest.
 func stateBlock(source string, at time.Time, loc *time.Location) string {
-	return stampLabel + " " + at.In(loc).Format(stampLayout) + "\n\n" +
+	return stampLabel + " " + stampAt(at, loc) + "\n\n" +
 		"```mermaid\n" + source + "```\n"
 }
 

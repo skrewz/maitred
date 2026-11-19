@@ -92,7 +92,7 @@ type Forest struct {
 // still the set this tick recorded: drawings that arrive against a newer
 // snapshot are dropped rather than grafted onto it.
 func (e *Engine) recordForestCharts(forests []Forest, sources []string, at time.Time) {
-	stamp := at.In(e.cfg.ChartLocation()).Format(stampLayout)
+	stamp := stampAt(at, e.cfg.ChartLocation())
 	e.forestsMu.Lock()
 	defer e.forestsMu.Unlock()
 	if len(e.forestsSnap) != len(forests) {
