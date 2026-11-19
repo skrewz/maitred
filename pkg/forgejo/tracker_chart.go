@@ -118,7 +118,10 @@ func trackerRef(forest Forest) string {
 // write's own test of both ends of the forest, stated there once so every
 // caller inherits it (§forgejo/webhook/repository-roles). A failure is logged
 // naming the tracker and costs the dispatch nothing: the chart is UX, the
-// wrap-up is the work.
+// wrap-up is the work. The drawing's other sink is not fed here: step 5's fold
+// is a whole-set fold and this path holds one ad-hoc forest, so the source is
+// discarded and the payload catches up with this drawing at the next tick's
+// step 5 (§forgejo/reconciliation/the-tracker-block).
 func (e *Engine) drawTrackerBeforeWrapUp(tracker *Issue, blockers []Issue, foundIn string) {
 	if tracker == nil {
 		return
@@ -141,6 +144,8 @@ func (e *Engine) drawTrackerBeforeWrapUp(tracker *Issue, blockers []Issue, found
 	rootRow := forestIssue(*root, home)
 	trackerRow := forestIssue(*tracker, home)
 	forest := Forest{Repository: rootRow.Repository, Root: rootRow, Tracker: &trackerRow}
+	// The source is discarded on purpose — see the note above on why the
+	// wrap-up path feeds the block alone.
 	if _, err := e.writeTrackerBlock(forest, time.Now()); err != nil {
 		e.log.Error("wrap-up: tracker current-state block not written",
 			"tracker", ref, "error", err)

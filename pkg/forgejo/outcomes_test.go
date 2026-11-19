@@ -808,10 +808,17 @@ func TestForests_PictureTravelsAcrossTheTick(t *testing.T) {
 	if err != nil || len(lost) != 2 {
 		t.Fatalf("forests = %+v, %v", lost, err)
 	}
+	absent := 0
 	for _, forest := range lost {
-		if forest.Tracker == nil && (forest.Chart != "" || forest.ChartRevisited != "") {
-			t.Errorf("a forest with no tracker carries chart %q under stamp %q, want both fields empty", forest.Chart, forest.ChartRevisited)
+		if forest.Tracker == nil {
+			absent++
+			if forest.Chart != "" || forest.ChartRevisited != "" {
+				t.Errorf("a forest with no tracker carries chart %q under stamp %q, want both fields empty", forest.Chart, forest.ChartRevisited)
+			}
 		}
+	}
+	if absent != 1 {
+		t.Fatalf("%d forests carry no tracker, want exactly 1: at zero the case above asserts nothing at all", absent)
 	}
 }
 

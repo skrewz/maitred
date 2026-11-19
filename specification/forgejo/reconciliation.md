@@ -89,12 +89,15 @@ ahead of every `wrap-up` dispatch it writes that one tracker's region once more
 (§forgejo/decisions/actions): it gathers the graph, renders it
 (§forgejo/renderer/the-contract), and splices the
 source under a `Last revisited: <YYYY-MM-DD HH:MM> <TZ>` stamp, the time
-rendered in the configured timezone (§forgejo/config/tracker-chart). The same
-rendering is recorded onto the forest set the outcomes view serves, so the
-payload carries the bytes this tick drew alongside the block they were spliced
-into — and carries them even where the splice found no region to land in
-(§forgejo/observability/the-outcomes-view): one drawing per forest per
-tick, feeding both sinks.
+rendered in the configured timezone (§forgejo/config/tracker-chart). The tick's
+rendering is recorded onto the forest set the outcomes view serves too, so the
+payload carries the bytes it drew alongside the block they were spliced into —
+and carries them even where the splice found no region to land in
+(§forgejo/observability/the-outcomes-view): one drawing per forest per tick,
+feeding both sinks. The `wrap-up` drawing is the exception: it feeds the block
+alone, and the payload catches up with it at the next tick's step 5, so between
+an event-path wrap-up and that tick the two sinks of one forest state two
+instants — the block the wrap-up's, the picture the last tick's.
 
 - **The fence bounds the write.** Only a tracker's description is written, and
   only the bytes between one opener and its closer. The outcome prose around
@@ -150,8 +153,9 @@ tick, feeding both sinks.
   block's second call site, and the same function rather than a second
   renderer: before the task is queued it redraws that tracker's region from
   the graph, so the picture a finished forest leaves behind — every member
-  struck through with its close stamp — is the one the wrap-up describes and
-  the outcomes view publishes, not whatever the last pass happened to draw
+  struck through with its close stamp — is the one the wrap-up describes, not
+  whatever the last pass happened to draw; the outcomes view answers the same
+  picture from the next tick's step 5, since this path feeds the block alone
   (§forgejo/observability/the-outcomes-view). The root comes from the tracker's
   blocker rows the dispatch already holds. A tracker gated by no `ideation`
   issue has no forest to draw: it says so at `Debug` and queues regardless, and
