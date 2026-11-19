@@ -142,6 +142,21 @@ func (s *Server) registerRoutes() {
 }
 
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
+	// The page draws tracker-authored source through a vendored
+	// renderer, so the fence against every other origin rides on
+	// every static response rather than on the renderer alone:
+	// nothing loads from another host, a drawing cannot make the
+	// viewer's browser fetch a remote image, and neither forms nor
+	// a rewritten base open another way out (§forgejo/observability/
+	// the-outcomes-view). The two unsafe-inline entries are the
+	// page's own inline script, styles and attributes, and the
+	// theme CSS Mermaid injects at render time: the fence is
+	// against other origins, not against the page itself.
+	w.Header().Set("Content-Security-Policy",
+		"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "+
+			"img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+
 	// Serve static files from the embedded FS
 	path := strings.TrimPrefix(r.URL.Path, "/")
 	if path == "" {

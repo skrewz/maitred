@@ -1736,6 +1736,42 @@ async function testOutcomesChart(page, results) {
     'Escape closes what the keyboard opened'
   ));
 
+  // The `strict` security level is the sandbox the spec promises for
+  // source a stranger wrote, and the promise must survive a source
+  // that tries to take it back down: a parsable source carrying an
+  // init directive that sets securityLevel and a click to a
+  // javascript: URL still draws — and draws inert. Without this
+  // assertion a runtime bump or an options edit could retire the
+  // guard with the suite still green.
+  const downgrade = '%%{init: {"securityLevel": "loose"} }%%\nflowchart TD\n  A["Root #5"] --> B["Tracker #6"]\n  click A "javascript:window.__pwned = 1"';
+  await page.evaluate((p) => {
+    window.__pwned = 0;
+    renderOutcomes(p);
+  }, {
+    engine_status: 'enabled',
+    forests: [{
+      repository: 'd/downgrade',
+      root: { number: 5, repository: 'd/downgrade', title: 'Root', state: 'open', html_url: 'https://forge.example.com/d/downgrade/issues/5' },
+      tracker: null,
+      chart: downgrade,
+      chart_revisited: '',
+    }],
+  });
+  await page.waitForSelector('#outcomes-list .outcomes-chart svg', { timeout: 30000 }).catch(() => {});
+  await page.locator('#outcomes-list .outcomes-chart svg .node').first().click({ force: true }).catch(() => {});
+  await page.waitForTimeout(200);
+  const inert = await page.evaluate(() => ({
+    pwned: window.__pwned === 1,
+    svg: !!document.querySelector('#outcomes-list .outcomes-chart svg'),
+    fallback: !!document.querySelector('#outcomes-list .outcomes-chart.fallback'),
+  }));
+  results.push(assert(
+    !inert.pwned && inert.svg && !inert.fallback,
+    `A source that tries to downgrade strict draws, inert (script ran: ${inert.pwned}, drawn: ${inert.svg}, fell back: ${inert.fallback})`
+  ));
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+
   // Return to the main instance for anything that follows.
   await page.goto(baseUrl);
   await page.waitForLoadState('networkidle').catch(() => {});

@@ -860,3 +860,29 @@ func TestVendoredMermaidRuntimeIsServed(t *testing.T) {
 		t.Errorf("served %d bytes, want the embedded %d", rec.Body.Len(), len(data))
 	}
 }
+
+// TestStaticResponsesCarrySecurityHeaders: the fence against every
+// origin but the server's rides on every static response, not on the
+// renderer alone (§forgejo/observability/the-outcomes-view). It is
+// worth a test because a CSP fails silently: a broken policy is
+// dropped, and the page still works — unguarded — in every browser.
+func TestStaticResponsesCarrySecurityHeaders(t *testing.T) {
+	srv := New(0, nil, "test", nil, forgejo.EngineStateWord(false, nil))
+	for _, path := range []string{"/", "/outcomes", "/mermaid.min.js"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: status = %d, want 200", path, rec.Code)
+		}
+		csp := rec.Header().Get("Content-Security-Policy")
+		for _, want := range []string{"default-src 'self'", "img-src 'self' data:", "object-src 'none'", "base-uri 'none'", "form-action 'none'"} {
+			if !strings.Contains(csp, want) {
+				t.Errorf("GET %s: CSP %q lacks %s", path, csp, want)
+			}
+		}
+		if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("GET %s: X-Content-Type-Options = %q, want nosniff", path, got)
+		}
+	}
+}
