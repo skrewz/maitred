@@ -220,10 +220,9 @@ Inside that window the view therefore shows the previous tick's drawing
 under the previous tick's stamp, which is what makes an empty picture
 honest rather than a half-written record; a forest the head records for
 the first time carries both fields empty until step 5 draws it. A carried
-pair is never the view's last word: step 5 states what this tick drew — the
-one exception being a `wrap-up` drawing, which feeds the tracker's block alone
-and reaches the payload at that next step 5
-(§forgejo/reconciliation/the-tracker-block). The
+pair is never the view's last word: step 5 states what this tick drew,
+with the wrap-up path's one-sink drawing accounted for where that
+exception lives (§forgejo/reconciliation/the-tracker-block). The
 carry pays the admission test the drawing pays
 (§forgejo/reconciliation/the-tracker-block), of both the repository the pair
 was drawn from and the one the tracker now stands in — the tracker is forge
