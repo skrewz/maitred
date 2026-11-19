@@ -1069,8 +1069,14 @@ func TestForests_PicturePaysTheAdmissionTest(t *testing.T) {
 	if err != nil || len(revoked) != 2 {
 		t.Fatalf("forests = %+v, %v", revoked, err)
 	}
+	carried := 0
 	for _, f := range revoked {
-		if f.Tracker != nil && f.Tracker.Repository == "o/elsewhere" {
+		if f.Tracker == nil {
+			t.Fatalf("forest %+v has no tracker: both roots still pair their tracker", f)
+		}
+		switch f.Tracker.Repository {
+		case "o/elsewhere":
+			carried++
 			if f.Chart != "" || f.ChartRevisited != "" {
 				t.Errorf("a withdrawn remit left chart %q under stamp %q in the view, want both empty at the tick's head", f.Chart, f.ChartRevisited)
 			}
@@ -1078,7 +1084,15 @@ func TestForests_PicturePaysTheAdmissionTest(t *testing.T) {
 				"outcomes: nothing carried; the picture's repository is not admitted"); n["tracker"] != "o/elsewhere#71" {
 				t.Errorf("tracker = %v, want o/elsewhere#71: the drop names the picture it dropped", n["tracker"])
 			}
+		case "o/archive":
+			// The forest whose picture was refused on both ticks: nothing new
+			// to say about it here, only that it is still listed.
+		default:
+			t.Errorf("unexpected tracker in %s: the fixture pairs one tracker in each repository", f.Tracker.Repository)
 		}
+	}
+	if carried != 1 {
+		t.Fatalf("%d forests carry a picture out of o/elsewhere, want exactly 1: at zero the revocation case above asserts nothing at all", carried)
 	}
 }
 
