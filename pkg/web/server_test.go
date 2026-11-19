@@ -830,16 +830,12 @@ func TestForgejoOutcomesEndpoint_RecordedEmpty(t *testing.T) {
 	}
 }
 
-// TestVendoredMermaidRuntimeIsServed: the outcomes page draws the
-// forest picture from a runtime vendored into the page's own asset
-// directory, because the container has no reason to reach the public
-// internet to draw itself and a publicly mirrored repository must not
-// depend on a third-party host (§forgejo/observability/the-outcomes-view,
-// s-git/maitred#191). The assertion is worth its bytes because the
-// SPA fallback answers any unknown path with index.html at 200: a
-// runtime that never landed in the embedded filesystem would be
-// served as HTML rather than missed, and every chart would quietly
-// fall back to text.
+// TestVendoredMermaidRuntimeIsServed: the page's vendored runtime
+// is served as JavaScript (§forgejo/observability/the-outcomes-view,
+// s-git/maitred#191). It earns its keep because the SPA fallback
+// answers any unknown path with index.html at 200: this is the
+// browser-free signal that the runtime never landed in the embed,
+// where every chart would otherwise quietly fall back to text.
 func TestVendoredMermaidRuntimeIsServed(t *testing.T) {
 	data, err := staticFS.ReadFile("static/mermaid.min.js")
 	if err != nil {
@@ -850,17 +846,17 @@ func TestVendoredMermaidRuntimeIsServed(t *testing.T) {
 	}
 
 	srv := New(0, nil, "test", nil, forgejo.EngineStateWord(false, nil))
-	rec := httptest.NewRequest(http.MethodGet, "/mermaid.min.js", nil)
-	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, rec)
+	req := httptest.NewRequest(http.MethodGet, "/mermaid.min.js", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	if got := w.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/javascript") {
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/javascript") {
 		t.Errorf("Content-Type = %q, want JavaScript: the SPA fallback answering HTML here would leave the page without a runtime", got)
 	}
-	if w.Body.Len() != len(data) {
-		t.Errorf("served %d bytes, want the embedded %d", w.Body.Len(), len(data))
+	if rec.Body.Len() != len(data) {
+		t.Errorf("served %d bytes, want the embedded %d", rec.Body.Len(), len(data))
 	}
 }

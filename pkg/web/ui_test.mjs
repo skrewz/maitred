@@ -1506,8 +1506,8 @@ async function testOutcomesChart(page, results) {
         + [...document.querySelectorAll('body > div')].filter(d => /forest-chart-\d+$/.test(d.id)).length,
       stamps: rows.map(r => r.querySelector('.outcomes-stamp')?.textContent ?? ''),
       // The picture sits underneath the links and the stamp
-      // underneath the picture; a cell's drawn/fallback mark is
-      // rendering state, not structure, so it is dropped here.
+      // underneath the picture; a cell's fallback mark is rendering
+      // state, not structure, so it is dropped here.
       firstOrder: [...rows[0]?.children ?? []].map(c => c.className.split(' ')[0]),
     };
   }, chartSource);

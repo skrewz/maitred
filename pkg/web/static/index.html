@@ -109,17 +109,16 @@
         .outcomes-warning { margin-top: 0.75rem; font-size: 0.8rem; color: #fde68a; }
         .outcomes-chart { margin-top: 1rem; cursor: zoom-in; }
         .outcomes-chart svg { max-width: 100%; height: auto; }
-        .outcomes-chart-source { display: none; }
-        .outcomes-chart.fallback .outcomes-chart-source { display: block; font-size: 0.75rem; color: #94a3b8; white-space: pre-wrap; cursor: auto; }
+        .outcomes-chart-source { display: none; white-space: pre-wrap; }
+        .outcomes-chart.fallback .outcomes-chart-source { display: block; font-size: 0.75rem; color: #94a3b8; cursor: auto; }
         .outcomes-stamp { margin-top: 0.4rem; font-size: 0.7rem; color: #64748b; font-family: 'SF Mono', 'Fira Code', monospace; }
         .chart-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.92); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 2rem; overflow: auto; cursor: zoom-out; }
         .chart-overlay-body { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; padding: 1.5rem; max-width: 96vw; max-height: 92vh; overflow: auto; cursor: auto; }
         .chart-overlay-body svg { width: 90vw; height: auto; max-height: 88vh; }
-        /* The overlay copies a cell's markup wholesale, so the drawn
-           and fallback marks are carried across and state which half
-           of the copy a reader is looking at. */
-        .chart-overlay-body .outcomes-chart-source { display: none; }
-        .chart-overlay-body .outcomes-chart.fallback .outcomes-chart-source { display: block; font-size: 1rem; color: #cbd5e1; white-space: pre-wrap; }
+        /* The overlay copies a cell's markup wholesale, so the rules
+           above hold there too; only the fallen-back text's size and
+           colour differ once the picture fills the screen. */
+        .chart-overlay-body .outcomes-chart.fallback .outcomes-chart-source { font-size: 1rem; color: #cbd5e1; }
         .modal-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.8); display: flex; align-items: center; justify-content: center; z-index: 100; }
         .modal { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; padding: 1.5rem; max-width: 480px; }
         .modal h2 { font-size: 1rem; color: #fde68a; margin-bottom: 0.75rem; }
@@ -814,26 +813,18 @@
             }).join('');
         }
 
-        // The forest picture the payload carries is Mermaid source —
-        // text whatever wrote the tracker's current-state block chose,
-        // reaching a port that authenticates nothing — so drawing it
-        // is done under two disciplines
-        // (§forgejo/observability/the-outcomes-view): the source
-        // reaches the page as escaped text and never as markup, and
-        // Mermaid runs at the non-scripting `strict` security level,
-        // which executes no `click` or `link` callbacks in the viewer.
-        // Where the source will not parse the row keeps the raw source
-        // in a <pre> rather than nothing: an unreadable drawing beats
-        // a missing one.
+        // The forest picture the payload carries is Mermaid source
+        // arriving at a port that authenticates nothing; the
+        // disciplines for drawing it — escaped text, the security
+        // level, the text fallback — are the spec's
+        // (§forgejo/observability/the-outcomes-view).
         function chartHtml(source) {
             return `<pre class="outcomes-chart-source">${escapeHtml(source)}</pre>`;
         }
 
         // The vendored runtime is told once, at the security level the
-        // drawing pays for untrusted source. A page whose runtime never
-        // loaded keeps every chart's text fallback rather than blanking
-        // the rows: the failure is loud in the console and quiet on the
-        // page.
+        // spec names for it. A runtime that never loaded leaves every
+        // cell in its text fallback.
         let mermaidConfigured = false;
         function configureMermaid() {
             if (mermaidConfigured || typeof mermaid === 'undefined') return;
