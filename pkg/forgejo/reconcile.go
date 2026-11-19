@@ -93,7 +93,7 @@ func (e *Engine) Reconcile() {
 	// sweep and its first decision. A forest whose write fails is logged and
 	// skipped, never fatal to the tick.
 	if enumErr == nil {
-		e.writeTrackerBlocks(forests, e.now())
+		e.writeTrackerBlocks(forests, time.Now())
 	}
 }
 

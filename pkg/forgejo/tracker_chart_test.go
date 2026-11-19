@@ -1009,27 +1009,11 @@ func wrapUpWire(api *fakeAPI) {
 	api.deps[2] = []Issue{gate}
 }
 
-// wrapUpQueue is the chartForestQueue wiring with the clock pinned — so the
-// dispatch's stamp and the tick's share one moment — and the queue recording
-// how far the API's calls had reached each time a wrap-up task was queued
-// (s-git/maitred#232).
-func wrapUpQueue(t *testing.T, trackerBody string) (*Engine, *fakeAPI, *fakeQueue, *bytes.Buffer, *[]int) {
-	t.Helper()
-	eng, api, q, log := chartForestQueue(t, trackerBody)
-	eng.now = func() time.Time { return chartAt }
-	queued := []int{}
-	q.onAdd = func() {
-		q.mu.Lock()
-		last := q.tasks[len(q.tasks)-1]
-		q.mu.Unlock()
-		if !strings.Contains(last.Prompt, "action=wrap-up") {
-			return
-		}
-		api.mu.Lock()
-		defer api.mu.Unlock()
-		queued = append(queued, len(api.calls))
-	}
-	return eng, api, q, log, &queued
+// wrapUpQueuedAt is where a wrap-up dispatch stands in the fake's ordered log,
+// or -1 when none queued: the queue records into that log, so whether a write
+// came before a dispatch is one index in it (s-git/maitred#232).
+func wrapUpQueuedAt(api *fakeAPI) int {
+	return callIndex(api, "AddTask:Wrap-up")
 }
 
 // callIndex is where the first API call carrying prefix stands in the fake's
@@ -1070,7 +1054,7 @@ func wantEveryMemberClosed(t *testing.T, region string) {
 // shows every member closed (§forgejo/reconciliation/the-tracker-block,
 // §forgejo/reconciliation/watermark-exemptions, s-git/maitred#232).
 func TestWrapUpDrawsTheFinishedForestOnTheSweep(t *testing.T) {
-	eng, api, q, _, queued := wrapUpQueue(t, chartFenced())
+	eng, api, q, _ := chartForestQueue(t, chartFenced())
 	wrapUpWire(api)
 	eng.Reconcile()
 
@@ -1078,12 +1062,12 @@ func TestWrapUpDrawsTheFinishedForestOnTheSweep(t *testing.T) {
 	if got := api.writeCount(); got != 1 {
 		t.Fatalf("the sweep wrote %d issues, want the one write the dispatch makes", got)
 	}
-	wrote := callIndex(api, "UpdateIssueBody:out/2")
-	if len(*queued) == 0 {
+	wrote, queued := callIndex(api, "UpdateIssueBody:out/2"), wrapUpQueuedAt(api)
+	if queued < 0 {
 		t.Fatal("the queue recorded no wrap-up dispatch")
 	}
-	if wrote >= (*queued)[0] {
-		t.Errorf("the write at %d did not precede the wrap-up dispatch queued at %d", wrote, (*queued)[0])
+	if wrote >= queued {
+		t.Errorf("the write at %d did not precede the wrap-up dispatch queued at %d", wrote, queued)
 	}
 	wantEveryMemberClosed(t, regionOf(mustWritten(t, api, "out", 2)))
 }
@@ -1093,7 +1077,7 @@ func TestWrapUpDrawsTheFinishedForestOnTheSweep(t *testing.T) {
 // stale chart survives on, and the one the redraw matters most for
 // (§forgejo/decisions/unblock-cascade, s-git/maitred#232).
 func TestWrapUpDrawsTheFinishedForestOnTheCascade(t *testing.T) {
-	eng, api, q, _, queued := wrapUpQueue(t, chartFenced())
+	eng, api, q, _ := chartForestQueue(t, chartFenced())
 	wrapUpWire(api)
 	// The member's close is the cascade's last: it blocks the tracker, so its
 	// closure newly unblocks it.
@@ -1104,12 +1088,12 @@ func TestWrapUpDrawsTheFinishedForestOnTheCascade(t *testing.T) {
 	if got := api.writeCount(); got != 1 {
 		t.Fatalf("the cascade wrote %d issues, want the one write the dispatch makes", got)
 	}
-	wrote := callIndex(api, "UpdateIssueBody:out/2")
-	if len(*queued) == 0 {
+	wrote, queued := callIndex(api, "UpdateIssueBody:out/2"), wrapUpQueuedAt(api)
+	if queued < 0 {
 		t.Fatal("the queue recorded no wrap-up dispatch")
 	}
-	if wrote >= (*queued)[0] {
-		t.Errorf("the write at %d did not precede the wrap-up dispatch queued at %d", wrote, (*queued)[0])
+	if wrote >= queued {
+		t.Errorf("the write at %d did not precede the wrap-up dispatch queued at %d", wrote, queued)
 	}
 	wantEveryMemberClosed(t, regionOf(mustWritten(t, api, "out", 2)))
 }
@@ -1119,7 +1103,7 @@ func TestWrapUpDrawsTheFinishedForestOnTheCascade(t *testing.T) {
 // no drawing of its own, and the tick's write finds the body it landed
 // current (§forgejo/renderer/the-contract, s-git/maitred#232).
 func TestWrapUpDispatchSharesTheSweepRenderer(t *testing.T) {
-	eng, api, q, _, _ := wrapUpQueue(t, chartFenced())
+	eng, api, q, _ := chartForestQueue(t, chartFenced())
 	wrapUpWire(api)
 	api.blocks[3] = []Issue{*api.issues[2]}
 	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
@@ -1132,13 +1116,24 @@ func TestWrapUpDispatchSharesTheSweepRenderer(t *testing.T) {
 	if region := regionOf(mustWritten(t, api, "out", 2)); !strings.Contains(region, strings.TrimRight(source, "\n")) {
 		t.Error("the picture the dispatch drew is not the sweep's render function's own bytes")
 	}
-	// The tick's own write, over the same graph at the same moment, is the
-	// same bytes: one render function, whichever path calls it.
-	if err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
+	drawn := mustWritten(t, api, "out", 2)
+	// The tick's own write, over the same graph, is the same drawing: one
+	// render function, whichever path calls it. Whether the two stamps fall
+	// inside one minute of the wall clock is not what this pins — the
+	// property is that a drawn forest gains no bytes beyond the stamp.
+	if err := eng.writeTrackerBlock(chartForests()[0], time.Now()); err != nil {
 		t.Fatalf("writeTrackerBlock: %v", err)
 	}
-	if got := api.writeCount(); got != 1 {
-		t.Errorf("the sweep's write found %d bodies to land, want the dispatch's write already current", got)
+	switch writes := api.callCount("UpdateIssueBody:out/2"); writes {
+	case 1:
+		// The stamp had not moved: the tick found the body current.
+	case 2:
+		second := mustWritten(t, api, "out", 2)
+		if got := strings.Replace(second, stampLine(second), stampLine(drawn), 1); got != drawn {
+			t.Error("the tick's write over a body the dispatch drew changed more than the stamp")
+		}
+	default:
+		t.Errorf("the forest was written %d times, want one write or a second that only moved the stamp", writes)
 	}
 }
 
@@ -1146,7 +1141,7 @@ func TestWrapUpDispatchSharesTheSweepRenderer(t *testing.T) {
 // the write is logged naming the tracker, and the wrap-up dispatches anyway
 // (s-git/maitred#232).
 func TestWrapUpDrawFailureStillDispatches(t *testing.T) {
-	eng, api, q, log, _ := wrapUpQueue(t, chartFenced())
+	eng, api, q, log := chartForestQueue(t, chartFenced())
 	wrapUpWire(api)
 	api.blocks[3] = []Issue{*api.issues[2]}
 	api.writeErr = &APIError{StatusCode: 403, Message: "must have Write Issues Unit"}
@@ -1166,7 +1161,7 @@ func TestWrapUpDrawFailureStillDispatches(t *testing.T) {
 // s-git/maitred#232).
 func TestWrapUpAmbiguousFencesLeftUntouched(t *testing.T) {
 	body := chartFenced() + "\n" + fenceBegin + "\n\nanother forest\n\n" + fenceEnd + "\n"
-	eng, api, q, log, _ := wrapUpQueue(t, body)
+	eng, api, q, log := chartForestQueue(t, body)
 	wrapUpWire(api)
 	api.blocks[3] = []Issue{*api.issues[2]}
 	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
@@ -1185,7 +1180,7 @@ func TestWrapUpAmbiguousFencesLeftUntouched(t *testing.T) {
 // decision through its digest and stays byte-for-byte as found
 // (§forgejo/decisions/sync-set, s-git/maitred#232).
 func TestWrapUpDrawWritesTheTrackerAlone(t *testing.T) {
-	eng, api, q, _, _ := wrapUpQueue(t, chartFenced())
+	eng, api, q, _ := chartForestQueue(t, chartFenced())
 	wrapUpWire(api)
 	api.blocks[3] = []Issue{*api.issues[2]}
 	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
@@ -1214,15 +1209,17 @@ func TestWrapUpDrawWritesTheTrackerAlone(t *testing.T) {
 // `Last revisited:` stamp and nothing else
 // (§forgejo/reconciliation/the-tracker-block, s-git/maitred#232).
 func TestWrapUpDrawMovesOnlyTheStampOnACurrentBlock(t *testing.T) {
-	eng, api, q, _, _ := wrapUpQueue(t, chartFenced())
+	eng, api, q, _ := chartForestQueue(t, chartFenced())
 	wrapUpWire(api)
 	api.blocks[3] = []Issue{*api.issues[2]}
-	if err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
+	// The block is current but for an hour-old stamp, which is what the
+	// dispatch's own reading of the clock will move: the draw cannot be
+	// accused of redrawing anything but the stamp.
+	if err := eng.writeTrackerBlock(chartForests()[0], time.Now().Add(-time.Hour)); err != nil {
 		t.Fatalf("writeTrackerBlock: %v", err)
 	}
 	first := mustWritten(t, api, "out", 2)
 
-	eng.now = func() time.Time { return chartAt.Add(time.Hour) }
 	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
 	wrapUpTask(t, q)
 
@@ -1240,7 +1237,7 @@ func TestWrapUpDrawMovesOnlyTheStampOnACurrentBlock(t *testing.T) {
 // chart still lands, from the tick's own pass afterwards
 // (§forgejo/reconciliation/the-tracker-block, s-git/maitred#232).
 func TestWrapUpDrawsWithNoRootGate(t *testing.T) {
-	eng, api, q, log, queued := wrapUpQueue(t, chartFenced()) // chartWire as-is: the tracker's gate is wired to nothing
+	eng, api, q, log := chartForestQueue(t, chartFenced()) // chartWire as-is: the tracker's gate is wired to nothing
 	eng.Reconcile()
 
 	wrapUpTask(t, q)
@@ -1250,11 +1247,11 @@ func TestWrapUpDrawsWithNoRootGate(t *testing.T) {
 	if got := api.writeCount(); got != 1 {
 		t.Fatalf("the sweep wrote %d issues, want the one write its own pass makes", got)
 	}
-	wrote := callIndex(api, "UpdateIssueBody:out/2")
-	if len(*queued) == 0 {
+	wrote, queued := callIndex(api, "UpdateIssueBody:out/2"), wrapUpQueuedAt(api)
+	if queued < 0 {
 		t.Fatal("the queue recorded no wrap-up dispatch")
 	}
-	if wrote < (*queued)[0] {
-		t.Errorf("the write at %d came before the wrap-up dispatch queued at %d: the dispatch drew no chart, so only the tick's pass could", wrote, (*queued)[0])
+	if wrote < queued {
+		t.Errorf("the write at %d came before the wrap-up dispatch queued at %d: the dispatch drew no chart, so only the tick's pass could", wrote, queued)
 	}
 }

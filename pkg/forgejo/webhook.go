@@ -58,13 +58,6 @@ type Engine struct {
 	queue queue.TaskQueueProvider
 	log   *slog.Logger
 
-	// now is the clock the tracker block's stamps are read from —
-	// time.Now in production, pinned by tests so the two stamping
-	// sites (the tick's pass and a wrap-up dispatch's draw) share one
-	// moment and a test never races a minute boundary
-	// (§forgejo/reconciliation/the-tracker-block).
-	now func() time.Time
-
 	// The in-memory decision log: the last decision per key
 	// (§forgejo/observability/the-dashboard-view).
 	decMu     sync.Mutex
@@ -140,7 +133,6 @@ func NewEngine(api API, store *Store, cfg *Config, q queue.TaskQueueProvider, lo
 		cfg:       cfg,
 		queue:     q,
 		log:       logger,
-		now:       time.Now,
 		decisions: make(map[Key]DecisionRecord),
 		reFires:   make(map[reFireSlot]reFireStamp),
 	}
@@ -1282,15 +1274,9 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	if err != nil {
 		return err
 	}
-	// A wrap-up dispatch redraws the tracker's current-state block
-	// before queuing the task, so the picture the finished forest
-	// leaves behind — and the outcomes view publishes — is the one the
-	// wrap-up describes: every member struck through with its close
-	// stamp, not whatever the last pass happened to draw. This is the
-	// sweep's own write reached from a second call site, whichever row
-	// fired the dispatch — the sweep's or the unblock cascade's — and a
-	// drawing that fails is logged and costs the dispatch nothing: the
-	// chart is UX, the agent is the work
+	// A wrap-up dispatch redraws its tracker's current-state block before
+	// queuing, so the picture the finished forest leaves behind is the one
+	// the wrap-up describes; a drawing that fails costs the dispatch nothing
 	// (§forgejo/reconciliation/the-tracker-block, §forgejo/decisions/unblock-cascade,
 	// s-git/maitred#232).
 	if action == ActionWrapUp {

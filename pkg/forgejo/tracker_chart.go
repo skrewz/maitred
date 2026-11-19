@@ -62,9 +62,10 @@ var errFenceAmbiguous = errors.New("the tracker's fence pair is ambiguous")
 // refuses are logged naming that forest and skipped, so one ragged forest costs
 // the others nothing. The walk has already decided and dispatched by the time
 // this runs — the drawing is the tick's last step, never a decision's
-// predecessor. at is the moment the stamp carries; it is a parameter rather
-// than a clock read here so a test can watch the stamp move while the graph
-// stands still.
+// predecessor. at is the moment the stamp carries: one clock read for the
+// whole pass, so every forest a tick draws states the same instant. It is a
+// parameter rather than a clock read here for that, and so a test can watch
+// the stamp move while the graph stands still.
 func (e *Engine) writeTrackerBlocks(forests []Forest, at time.Time) {
 	for _, forest := range forests {
 		// A forest whose tracker is missing states its absence through the
@@ -92,13 +93,14 @@ func trackerRef(forest Forest) string {
 // s-git/maitred#232). The root comes from the blocker rows the dispatch
 // already holds — the gate relation is the one every other walk of the graph
 // reads — and a tracker gated by no ideation issue, never commissioned, has
-// no forest to draw and says so quietly. The write addresses the tracker
-// alone: an issue that is not a tracker — a grouping issue's body drives a
-// landing decision and is never touched — is left entirely unwritten. A
-// failure is logged naming the tracker and costs the dispatch nothing: the
-// chart is UX, the wrap-up is the work.
+// no forest to draw. The rows the dispatch holds were read for a tracker:
+// the sweep's wrap-up row and the cascade's classifier both decide wrap-up on
+// the outcome label first (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/decisions/unblock-cascade), so this is the tracker's own body and
+// nothing else's. A failure is logged naming the tracker and costs the
+// dispatch nothing: the chart is UX, the wrap-up is the work.
 func (e *Engine) drawTrackerBeforeWrapUp(tracker *Issue, blockers []Issue, foundIn string) {
-	if tracker == nil || !isTracker(tracker) {
+	if tracker == nil {
 		return
 	}
 	home := tracker.Repository
@@ -114,7 +116,7 @@ func (e *Engine) drawTrackerBeforeWrapUp(tracker *Issue, blockers []Issue, found
 	rootRow := forestIssue(*root, home)
 	trackerRow := forestIssue(*tracker, rootRow.Repository)
 	forest := Forest{Repository: rootRow.Repository, Root: rootRow, Tracker: &trackerRow}
-	if err := e.writeTrackerBlock(forest, e.now()); err != nil {
+	if err := e.writeTrackerBlock(forest, time.Now()); err != nil {
 		e.log.Error("wrap-up: tracker current-state block not written",
 			"tracker", ref, "error", err)
 	}

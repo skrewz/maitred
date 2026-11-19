@@ -461,11 +461,12 @@ type fakeQueue struct {
 	mu    sync.Mutex
 	tasks []*queue.Task
 	err   error
-	// onAdd, when set, runs once a task has been queued — so a test
-	// can snapshot the state of the world at the moment of queueing,
-	// such as how far the engine's API calls had reached
-	// (s-git/maitred#232).
-	onAdd func()
+	// api, when set, is the fake the engine's calls were made against.
+	// Queueing a task is an engine action like any other, so it joins
+	// that one ordered log: whether a write came before a dispatch is
+	// one index in one log, not a second clock to read
+	// (§forgejo/observability/the-decision-log).
+	api *fakeAPI
 }
 
 func (q *fakeQueue) AddTask(task *queue.Task) error {
@@ -475,9 +476,10 @@ func (q *fakeQueue) AddTask(task *queue.Task) error {
 		return q.err
 	}
 	q.tasks = append(q.tasks, task)
+	api := q.api
 	q.mu.Unlock()
-	if q.onAdd != nil {
-		q.onAdd()
+	if api != nil {
+		api.record("AddTask:" + task.Title)
 	}
 	return nil
 }
@@ -494,7 +496,9 @@ func (q *fakeQueue) all() []*queue.Task {
 func newTestEngine(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store) {
 	t.Helper()
 	api := newFakeAPI()
-	q := &fakeQueue{}
+	// The queue records into the API's ordered log, so a test reading an
+	// ordering reads one log rather than two.
+	q := &fakeQueue{api: api}
 	store, err := NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
