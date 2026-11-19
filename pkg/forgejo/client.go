@@ -79,9 +79,11 @@ type Issue struct {
 	// revision digests the grouping issue's body, because that is the
 	// field naming the order the set must land in, and a restatement of
 	// it is the human's lever on a landing run that reported a conflict
-	// (§forgejo/decisions/sync-set); and the outcomes view scrapes a
-	// forest's picture out of the current-state block its tracker's body
-	// carries (§forgejo/observability/the-outcomes-view). It is whatever
+	// (§forgejo/decisions/sync-set); and the tracker-block write reads the
+	// description it splices into
+	// (§forgejo/reconciliation/the-tracker-block). The outcomes view draws
+	// its picture from the graph and reads no body
+	// (§forgejo/observability/the-outcomes-view). It is whatever
 	// the endpoint reported, and every endpoint the engine reads an issue
 	// from — the single-issue read and the dependency and blocks listings
 	// alike — answers with this same model, body filled the same way
