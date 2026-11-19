@@ -1255,3 +1255,96 @@ func TestWrapUpDrawsWithNoRootGate(t *testing.T) {
 		t.Errorf("the write at %d came before the wrap-up dispatch queued at %d: the dispatch drew no chart, so only the tick's pass could", wrote, queued)
 	}
 }
+
+// TestWrapUpDrawSkipsARootNoRoleNames: the tracker's ideation gate arrives on a
+// blocking edge, so which repository holds it is forge data rather than
+// configuration — and a root sitting where no maitred role names the repository
+// is drawn nowhere, because drawing it would publish that repository's titles
+// into a tracker body the outcomes view shows. The wrap-up queues all the same
+// (§forgejo/webhook/repository-roles, §forgejo/reconciliation/the-tracker-block,
+// s-git/maitred#242 review 2888).
+func TestWrapUpDrawSkipsARootNoRoleNames(t *testing.T) {
+	eng, api, q, log := chartForestQueue(t, chartFenced())
+	wrapUpWire(api)
+	api.blocks[3] = []Issue{*api.issues[2]}
+	// The gate row names a repository carrying no maitred topic at all.
+	api.mu.Lock()
+	gate := api.deps[2][0]
+	gate.Repository = "o/archive"
+	api.deps[2] = []Issue{gate}
+	api.mu.Unlock()
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+
+	wrapUpTask(t, q)
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("wrote %d issues, want none: a root no role names is drawn nowhere", got)
+	}
+	if got := api.callCount("GetIssue:archive/"); got != 0 {
+		t.Errorf("the draw read %d issues out of o/archive, wanting none: the admission test comes before the read", got)
+	}
+	if !strings.Contains(log.String(), "no maitred role names") || !strings.Contains(log.String(), "o/out#2") {
+		t.Errorf("log = %s, want the skipped draw to name the tracker and the rule", log.String())
+	}
+}
+
+// TestWrapUpDrawAddressesTheTrackerNotTheRoot: a tracker read that names no
+// repository of its own is addressed where the dispatch found it, never at the
+// root's repository — the two are unrelated places, and addressing the forest
+// would write somebody else's issue number (§forgejo/client/operations,
+// §forgejo/reconciliation/the-tracker-block, s-git/maitred#242 review 2888).
+func TestWrapUpDrawAddressesTheTrackerNotTheRoot(t *testing.T) {
+	eng, api, q, _ := chartForestQueue(t, chartFenced())
+	wrapUpWire(api)
+	// The gate — and so the forest — lives in a second admitted repository,
+	// while the tracker's own read names no repository at all.
+	api.mu.Lock()
+	gate := api.deps[2][0]
+	gate.Repository = "o/work"
+	api.deps[2] = []Issue{gate}
+	api.issues[2].Repository = ""
+	api.mu.Unlock()
+
+	eng.Reconcile()
+
+	wrapUpTask(t, q)
+	if _, ok := api.writtenBody("out", 2); !ok {
+		t.Error("the tracker was never written: its own repository was unresolvable")
+	}
+	if got := api.callCount("UpdateIssueBody:work/2"); got != 0 {
+		t.Errorf("wrote issue 2 of the root's repository %d times, want none: the write addresses the tracker", got)
+	}
+}
+
+// TestWrapUpDrawNamesWhichAbsenceItFound: a tracker with no ideation gate and a
+// dispatch holding no blocker rows at all both draw nothing, and they are not
+// the same fact — one is the graph, the other a read that failed. The cascade's
+// own re-read is the same request the walk already made, so a fake that fails
+// one fails the walk and nothing dispatches at all: the two lines are pinned at
+// the draw's own boundary (§forgejo/observability/the-decision-log,
+// s-git/maitred#242 review 2887).
+func TestWrapUpDrawNamesWhichAbsenceItFound(t *testing.T) {
+	tests := []struct {
+		name     string
+		blockers []Issue
+		want     string
+	}{
+		{"a blocker read that failed", nil, "tracker blocker rows unread"},
+		{"a tracker gated by nothing", []Issue{}, "gated by no ideation issue"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng, api, log := chartForestEngine(t, chartFenced())
+			tracker := chartTracker(chartFenced())
+
+			eng.drawTrackerBeforeWrapUp(&tracker, tt.blockers, "o/out")
+
+			if got := api.writeCount(); got != 0 {
+				t.Errorf("wrote %d issues, want none: no gate is no forest", got)
+			}
+			if !strings.Contains(log.String(), tt.want) || !strings.Contains(log.String(), "o/out#2") {
+				t.Errorf("log = %s, want %q named with the tracker it concerns", log.String(), tt.want)
+			}
+		})
+	}
+}

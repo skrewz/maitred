@@ -93,12 +93,18 @@ func trackerRef(forest Forest) string {
 // s-git/maitred#232). The root comes from the blocker rows the dispatch
 // already holds — the gate relation is the one every other walk of the graph
 // reads — and a tracker gated by no ideation issue, never commissioned, has
-// no forest to draw. The rows the dispatch holds were read for a tracker:
-// the sweep's wrap-up row and the cascade's classifier both decide wrap-up on
-// the outcome label first (§forgejo/reconciliation/watermark-exemptions,
-// §forgejo/decisions/unblock-cascade), so this is the tracker's own body and
-// nothing else's. A failure is logged naming the tracker and costs the
-// dispatch nothing: the chart is UX, the wrap-up is the work.
+// no forest to draw. Which of those two absences it is matters to whoever
+// reads the log: no blocker rows at all is a read that failed, not a graph
+// fact, so the two say so apart. The rows the dispatch holds were read for a
+// tracker — the sweep's wrap-up row and the cascade's classifier both decide
+// wrap-up on the outcome label first (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/decisions/unblock-cascade) — so the write addresses that issue in
+// the repository the dispatch found it in, and the root — which a blocking
+// edge placed in whichever repository it likes — pays the admission test every
+// other cross-repository hop pays before its title can be drawn into a body
+// the outcomes view publishes (§forgejo/webhook/repository-roles). A failure
+// is logged naming the tracker and costs the dispatch nothing: the chart is
+// UX, the wrap-up is the work.
 func (e *Engine) drawTrackerBeforeWrapUp(tracker *Issue, blockers []Issue, foundIn string) {
 	if tracker == nil {
 		return
@@ -110,12 +116,28 @@ func (e *Engine) drawTrackerBeforeWrapUp(tracker *Issue, blockers []Issue, found
 	ref := forestRef(home, tracker.Number)
 	root := ideationGate(blockers)
 	if root == nil {
-		e.log.Debug("wrap-up: tracker is gated by no ideation issue; nothing to draw", "tracker", ref)
+		if blockers == nil {
+			e.log.Warn("wrap-up: tracker blocker rows unread; cannot tell whether a gate draws this forest",
+				"tracker", ref)
+		} else {
+			e.log.Debug("wrap-up: tracker is gated by no ideation issue; nothing to draw", "tracker", ref)
+		}
 		return
 	}
 	rootRow := forestIssue(*root, home)
-	trackerRow := forestIssue(*tracker, rootRow.Repository)
+	trackerRow := forestIssue(*tracker, home)
 	forest := Forest{Repository: rootRow.Repository, Root: rootRow, Tracker: &trackerRow}
+	admits, err := e.remitAdmits(rootRow.Repository, home)
+	if err != nil {
+		e.log.Error("wrap-up: tracker current-state block not written",
+			"tracker", ref, "error", fmt.Errorf("scope of the root %s: %w", forestRef(rootRow.Repository, rootRow.Number), err))
+		return
+	}
+	if !admits {
+		e.log.Debug("wrap-up: drawing skips a root in a repository no maitred role names",
+			"tracker", ref, "root", forestRef(rootRow.Repository, rootRow.Number))
+		return
+	}
 	if err := e.writeTrackerBlock(forest, time.Now()); err != nil {
 		e.log.Error("wrap-up: tracker current-state block not written",
 			"tracker", ref, "error", err)

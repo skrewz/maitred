@@ -404,7 +404,14 @@ func (f *fakeAPI) IssueDependencies(owner, repo string, number int) ([]Issue, er
 	if f.depsErr != nil {
 		return nil, f.depsErr
 	}
-	return f.deps[number], nil
+	// A read that succeeded and found nothing returns no rows rather than
+	// no slice, the way the client's batch listing does: a nil result then
+	// means a read that failed, which is a fact callers can act on
+	// (§forgejo/client/operations).
+	if rows := f.deps[number]; rows != nil {
+		return rows, nil
+	}
+	return []Issue{}, nil
 }
 
 func (f *fakeAPI) ListIssueComments(owner, repo string, number int) ([]Comment, error) {
