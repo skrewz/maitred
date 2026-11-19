@@ -100,11 +100,11 @@ func trackerRef(forest Forest) string {
 // wrap-up on the outcome label first (§forgejo/reconciliation/watermark-exemptions,
 // §forgejo/decisions/unblock-cascade) — so the write addresses that issue in
 // the repository the dispatch found it in, and the root — which a blocking
-// edge placed in whichever repository it likes — pays the admission test every
-// other cross-repository hop pays before its title can be drawn into a body
-// the outcomes view publishes (§forgejo/webhook/repository-roles). A failure
-// is logged naming the tracker and costs the dispatch nothing: the chart is
-// UX, the wrap-up is the work.
+// edge placed in whichever repository it likes — is admitted by the shared
+// write's own test of both ends of the forest, stated there once so every
+// caller inherits it (§forgejo/webhook/repository-roles). A failure is logged
+// naming the tracker and costs the dispatch nothing: the chart is UX, the
+// wrap-up is the work.
 func (e *Engine) drawTrackerBeforeWrapUp(tracker *Issue, blockers []Issue, foundIn string) {
 	if tracker == nil {
 		return
@@ -127,17 +127,6 @@ func (e *Engine) drawTrackerBeforeWrapUp(tracker *Issue, blockers []Issue, found
 	rootRow := forestIssue(*root, home)
 	trackerRow := forestIssue(*tracker, home)
 	forest := Forest{Repository: rootRow.Repository, Root: rootRow, Tracker: &trackerRow}
-	admits, err := e.remitAdmits(rootRow.Repository, home)
-	if err != nil {
-		e.log.Error("wrap-up: tracker current-state block not written",
-			"tracker", ref, "error", fmt.Errorf("scope of the root %s: %w", forestRef(rootRow.Repository, rootRow.Number), err))
-		return
-	}
-	if !admits {
-		e.log.Debug("wrap-up: drawing skips a root in a repository no maitred role names",
-			"tracker", ref, "root", forestRef(rootRow.Repository, rootRow.Number))
-		return
-	}
 	if err := e.writeTrackerBlock(forest, time.Now()); err != nil {
 		e.log.Error("wrap-up: tracker current-state block not written",
 			"tracker", ref, "error", err)
@@ -145,9 +134,12 @@ func (e *Engine) drawTrackerBeforeWrapUp(tracker *Issue, blockers []Issue, found
 }
 
 // writeTrackerBlock renders one forest and lands its block on that forest's
-// tracker, which the caller has established the forest has. Where the body the
-// composition produced is the body already there — two ticks inside one minute
-// over an unchanged graph — nothing is sent, so a tick never bumps a tracker for
+// tracker, which the caller has established the forest has. Both ends of the
+// forest pay the repository-admission test here, before anything of either is
+// read, so every call site inherits the rule that no repository a maitred
+// role does not name is drawn or published. Where the body the composition
+// produced is the body already there — two ticks inside one minute over an
+// unchanged graph — nothing is sent, so a tick never bumps a tracker for
 // nothing (§forgejo/reconciliation/the-tracker-block).
 func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
 	owner, name := splitRepo(forest.Tracker.Repository)
@@ -172,6 +164,24 @@ func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
 		// §forgejo/observability/the-decision-log).
 		e.log.Debug("reconciliation: tracker lives in a repository no maitred role names; nothing written",
 			"tracker", ref)
+		return nil
+	}
+	// A blocking edge names its far end, so the root's repository is forge
+	// data too, and the same test is asked of it here rather than at
+	// whichever call site thought of it: a root standing where no maitred
+	// role names its repository is read nothing of and drawn nowhere, so
+	// its title reaches no tracker body the outcomes view publishes
+	// (§forgejo/webhook/repository-roles, §forgejo/reconciliation/the-tracker-block).
+	admits, err = e.remitAdmits(forest.Root.Repository, forest.Tracker.Repository)
+	if err != nil {
+		return fmt.Errorf("scope of the root %s: %w", forestRef(forest.Root.Repository, forest.Root.Number), err)
+	}
+	if !admits {
+		// Debug for this sentence as well — an unadmitted repository is a
+		// deployment's deliberate silence, not an event worth reading
+		// (§forgejo/webhook/repository-roles, §forgejo/observability/the-decision-log).
+		e.log.Debug("drawing skips a root in a repository no maitred role names; nothing written",
+			"tracker", ref, "root", forestRef(forest.Root.Repository, forest.Root.Number))
 		return nil
 	}
 	source, err := e.renderForestChart(forest)

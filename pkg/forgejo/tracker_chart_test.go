@@ -1233,17 +1233,16 @@ func TestWrapUpDrawMovesOnlyTheStampOnACurrentBlock(t *testing.T) {
 }
 
 // TestWrapUpDrawsWithNoRootGate: a tracker gated by no ideation issue has no
-// forest to draw — the dispatch says so quietly and queues regardless, and the
-// chart still lands, from the tick's own pass afterwards
+// forest to draw — the dispatch says so quietly (the sentence is pinned by
+// TestWrapUpDrawNamesWhichAbsenceItFound, whose table owns the which-absence
+// pair) and queues regardless, and the chart still lands, from the tick's own
+// pass afterwards — that ordering is this test's own
 // (§forgejo/reconciliation/the-tracker-block, s-git/maitred#232).
 func TestWrapUpDrawsWithNoRootGate(t *testing.T) {
-	eng, api, q, log := chartForestQueue(t, chartFenced()) // chartWire as-is: the tracker's gate is wired to nothing
+	eng, api, q, _ := chartForestQueue(t, chartFenced()) // chartWire as-is: the tracker's gate is wired to nothing
 	eng.Reconcile()
 
 	wrapUpTask(t, q)
-	if !strings.Contains(log.String(), "gated by no ideation issue") || !strings.Contains(log.String(), "o/out#2") {
-		t.Errorf("log = %s, want the skipped draw to name the tracker and the rule", log.String())
-	}
 	if got := api.writeCount(); got != 1 {
 		t.Fatalf("the sweep wrote %d issues, want the one write its own pass makes", got)
 	}
@@ -1346,5 +1345,33 @@ func TestWrapUpDrawNamesWhichAbsenceItFound(t *testing.T) {
 				t.Errorf("log = %s, want %q named with the tracker it concerns", log.String(), tt.want)
 			}
 		})
+	}
+}
+
+// TestWrapUpDrawUnknownScopeFailsClosed: an unknown scope is a failure, not a
+// no-role answer — the wrap-up's draw writes nothing and names the failure,
+// the tick's TestTrackerBlock_UnknownScopeWritesNothing being the twin
+// (§forgejo/webhook/the-scope-cache, s-git/maitred#242 review 2923). The fake
+// cannot queue a wrap-up while the org listing fails — the cascade's own
+// repoRoles test holds the dispatch off and the sweep cannot enumerate — so
+// the draw is pinned at its own boundary, and the half that still queues
+// stays with TestWrapUpDrawFailureStillDispatches.
+func TestWrapUpDrawUnknownScopeFailsClosed(t *testing.T) {
+	eng, api, log := chartForestEngine(t, chartFenced())
+	api.listReposErr = errors.New("the org listing failed")
+	tracker := chartTracker(chartFenced())
+	gate := chartRoot()
+	// The gate stands in a second repository, so its admission is a scope
+	// lookup rather than the equality shortcut.
+	gate.Repository = "o/work"
+
+	eng.drawTrackerBeforeWrapUp(&tracker, []Issue{gate}, "o/out")
+
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("wrote %d issues, want none while the scope is unknown", got)
+	}
+	if !strings.Contains(log.String(), "wrap-up: tracker current-state block not written") ||
+		!strings.Contains(log.String(), "the org listing failed") {
+		t.Errorf("log = %s, want the refused draw to name the scope failure on the tracker it failed on", log.String())
 	}
 }

@@ -724,6 +724,26 @@ func TestListOpenIssues_Empty(t *testing.T) {
 	}
 }
 
+// TestIssueDependencies_Empty pins the contract the wrap-up draw leans on:
+// a blocker listing that succeeded with nothing in it comes back non-nil,
+// so a nil listing is a failed read — the distinction between a tracker
+// gated by nothing and a tracker whose gate could not be read
+// (§forgejo/client/operations, s-git/maitred#242 review 2923).
+func TestIssueDependencies_Empty(t *testing.T) {
+	srv, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	})
+
+	c := New(srv.URL, "test-token", nil)
+	deps, err := c.IssueDependencies("acme", "maitred", 48)
+	if err != nil {
+		t.Fatalf("IssueDependencies: %v", err)
+	}
+	if deps == nil || len(deps) != 0 {
+		t.Errorf("deps = %v, want empty non-nil slice: callers read nil as a failed read", deps)
+	}
+}
+
 func TestIssue_NoRepositoryField(t *testing.T) {
 	// Single-issue responses for the list endpoints omit nothing, but be
 	// defensive: a missing repository object must not panic.
