@@ -144,8 +144,6 @@ func (e *Engine) drawTrackerBeforeWrapUp(tracker *Issue, blockers []Issue, found
 	rootRow := forestIssue(*root, home)
 	trackerRow := forestIssue(*tracker, home)
 	forest := Forest{Repository: rootRow.Repository, Root: rootRow, Tracker: &trackerRow}
-	// The source is discarded on purpose — see the note above on why the
-	// wrap-up path feeds the block alone.
 	if _, err := e.writeTrackerBlock(forest, time.Now()); err != nil {
 		e.log.Error("wrap-up: tracker current-state block not written",
 			"tracker", ref, "error", err)

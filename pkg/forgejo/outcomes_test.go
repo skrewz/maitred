@@ -953,31 +953,6 @@ func TestForests_AbsentTrackerPublishesNoPictureAndIsNotRead(t *testing.T) {
 	}
 }
 
-// TestForests_ShorterDrawingsAreNotAPanic: the fold indexes this tick's
-// drawings by position, and that pairing is a convention the fold does not
-// rely on — a sources slice shorter than the set reads as "drew nothing" for
-// the forests it does not name, emptying their pictures rather than taking
-// down the process inside the sweep
-// (§forgejo/reconciliation/the-tracker-block).
-func TestForests_ShorterDrawingsAreNotAPanic(t *testing.T) {
-	eng, api, _, _ := newTestEngine(t)
-	chartWire(api, chartFenced())
-	forests, err := eng.recordForests()
-	if err != nil || len(forests) != 1 {
-		t.Fatalf("forests = %+v, %v", forests, err)
-	}
-
-	eng.recordForestCharts(forests, []string{}, chartAt)
-	emptied, err := eng.Forests()
-	if err != nil || len(emptied) != 1 {
-		t.Fatalf("forests = %+v, %v", emptied, err)
-	}
-	if emptied[0].Chart != "" || emptied[0].ChartRevisited != "" {
-		t.Errorf("a fold over no drawings left chart %q under stamp %q, want both fields empty",
-			emptied[0].Chart, emptied[0].ChartRevisited)
-	}
-}
-
 // TestForests_ChartIgnoresWhatTheTrackersBodyClaims: a cross-repository
 // tracker whose description carries a decoy picture still brings the
 // payload the drawing the graph supports — the row the blocks read
@@ -1208,10 +1183,11 @@ func TestForests_PicturePaysTheAdmissionTest(t *testing.T) {
 	// The mirrored re-pairing: the destination is refused while the origin is
 	// admitted. Drawing the pair fresh from o/legacy, the tracker is then
 	// re-paired into o/archive — a repository no role names — while the role
-	// the drawing came from stands. Keeping only the second answer would let
-	// the origin's admission overwrite the refused destination and publish the
-	// pair into an unadmitted repository; both answers must count, so the head
-	// empties both fields and the Debug line names the refused destination
+	// the drawing came from stands. Asking the two ends and keeping only the
+	// second answer would let the origin's admission overwrite the refused
+	// destination and publish the pair into an unadmitted repository; both
+	// answers must count, so the head empties both fields and the Debug line
+	// names the refused destination
 	// (§forgejo/webhook/repository-roles,
 	// §forgejo/observability/the-outcomes-view).
 	api.mu.Lock()

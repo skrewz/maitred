@@ -220,11 +220,9 @@ func (e *Engine) carryDrawnPictures(next []Forest) {
 // a forest the tick drew nothing for, and both of its picture fields go
 // empty rather than keeping the pair the set arrived with under this tick's
 // stamp. The set is replaced whole, never mutated in place — the discipline
-// Forests' snapshot contract rests on. sources is indexed by position, and
-// this fold is written to survive a shorter slice — a slice built from a
-// subset of these forests reads as "drew nothing" for the rest rather than
-// a panic inside the sweep — so the pairing is a convention, not a
-// requirement.
+// Forests' snapshot contract rests on. sources is indexed by position: the
+// one caller, writeTrackerBlocks, builds one source per forest of the set it
+// hands over, so the two slices are equal-length by construction.
 //
 // The set folded onto is the one step 2 of this same tick published: Reconcile
 // admits one sweep at a time, so no newer enumeration exists for this replace
@@ -238,7 +236,7 @@ func (e *Engine) recordForestCharts(forests []Forest, sources []string, at time.
 		// The pair is written together or erased together: this is where a
 		// pair carried onto the set (carryDrawnPictures) stops being the
 		// view's answer, whether or not this tick had a drawing for it.
-		if i >= len(sources) || sources[i] == "" {
+		if sources[i] == "" {
 			forest.Chart, forest.ChartRevisited = "", ""
 		} else {
 			forest.Chart, forest.ChartRevisited = sources[i], stamp
