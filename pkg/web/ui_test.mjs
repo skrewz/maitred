@@ -1483,11 +1483,12 @@ async function testOutcomesChart(page, results) {
 
   await page.waitForFunction(() => {
     const cells = document.querySelectorAll('#outcomes-list .outcomes-chart');
-    return cells.length === 2 && [...cells].every(c => c.classList.contains('drawn') || c.classList.contains('fallback'));
+    return cells.length === 2 && [...cells].every(c => c.querySelector('svg') || c.classList.contains('fallback'));
   }, null, { timeout: 30000 }).catch(() => {});
 
   const drawn = await page.evaluate((source) => {
-    const rows = [...document.querySelectorAll('#outcomes-list .outcomes-row')];    const cells = [...document.querySelectorAll('#outcomes-list .outcomes-chart')];
+    const rows = [...document.querySelectorAll('#outcomes-list .outcomes-row')];
+    const cells = [...document.querySelectorAll('#outcomes-list .outcomes-chart')];
     const preOf = (row) => row.querySelector('.outcomes-chart-source');
     return {
       cellCount: cells.length,
@@ -1587,7 +1588,7 @@ async function testOutcomesChart(page, results) {
       }],
     });
   }, chartSource);
-  await page.waitForSelector('#outcomes-list .outcomes-chart.drawn svg', { timeout: 30000 }).catch(() => {});
+  await page.waitForSelector('#outcomes-list .outcomes-chart svg', { timeout: 30000 }).catch(() => {});
 
   const overlay = page.locator('#chart-overlay');
   results.push(assert(
@@ -1645,6 +1646,95 @@ async function testOutcomesChart(page, results) {
   ));
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
+
+  // One forest, drawn: the payload the remaining disciplines are
+  // exercised against.
+  const oneForest = {
+    engine_status: 'enabled',
+    forests: [{
+      repository: 'o/out',
+      root: { number: 5, repository: 'o/out', title: 'Ideation root', state: 'open', html_url: 'https://forge.example.com/o/out/issues/5' },
+      tracker: { number: 6, repository: 'o/out', title: 'Outcome tracker', state: 'open', html_url: 'https://forge.example.com/o/out/issues/6' },
+      chart: chartSource,
+      chart_revisited: '2026-11-16 09:12 AEDT',
+    }],
+  };
+
+  // The poll's discipline: every render replaces the list, and the
+  // two branches that render without rows — the honest empty and the
+  // payload the engine could not vouch for — must close an open
+  // overlay rather than leave the reader inside a picture the poll
+  // has replaced (§forgejo/observability/the-outcomes-view).
+  const closed = [];
+  for (const replaceWith of [{ engine_status: 'enabled', forests: [] }, null]) {
+    await page.evaluate((p) => renderOutcomes(p), oneForest);
+    await page.waitForSelector('#outcomes-list .outcomes-chart svg', { timeout: 30000 }).catch(() => {});
+    await page.locator('#outcomes-list .outcomes-chart').first().click();
+    await overlay.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+    await page.evaluate((p) => renderOutcomes(p), replaceWith);
+    closed.push(!(await overlay.isVisible()));
+  }
+  results.push(assert(
+    closed.every(Boolean),
+    `A re-render closes the overlay whichever branch replaces the list (empty: ${closed[0]}, unreadable: ${closed[1]})`
+  ));
+
+  // A page whose runtime never loaded keeps every picture's text:
+  // the fallback the brief demands, not a row of empty boxes.
+  await page.evaluate((p) => {
+    window.__mermaid = window.mermaid;
+    window.mermaid = undefined;
+    renderOutcomes(p);
+  }, oneForest);
+  await page.waitForFunction(() => {
+    const cell = document.querySelector('#outcomes-list .outcomes-chart');
+    return cell && (cell.classList.contains('fallback') || cell.querySelector('svg'));
+  }, null, { timeout: 10000 }).catch(() => {});
+  const noRuntime = await page.evaluate(() => {
+    const cell = document.querySelector('#outcomes-list .outcomes-chart');
+    const pre = cell?.querySelector('.outcomes-chart-source');
+    return {
+      fallback: !!cell && cell.classList.contains('fallback'),
+      shown: !!pre && getComputedStyle(pre).display !== 'none',
+    };
+  });
+  results.push(assert(
+    noRuntime.fallback && noRuntime.shown,
+    `A page whose runtime never loaded keeps each picture's text (fallback: ${noRuntime.fallback}, shown: ${noRuntime.shown})`
+  ));
+  await page.evaluate(() => { window.mermaid = window.__mermaid; });
+
+  // A click of a cell that is still drawing opens the overlay once
+  // the draw settles, never an empty one.
+  await page.evaluate((p) => renderOutcomes(p), oneForest);
+  await page.locator('#outcomes-list .outcomes-chart').first().click({ timeout: 5000 }).catch(() => {});
+  await overlay.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+  const early = await page.evaluate(() => ({
+    svg: !!document.querySelector('#chart-overlay-body svg'),
+    text: (document.querySelector('#chart-overlay-body')?.textContent ?? '').length > 0,
+  }));
+  results.push(assert(
+    early.svg || early.text,
+    `A click during a draw opens an overlay that fills in, never an empty one (svg: ${early.svg}, text: ${early.text})`
+  ));
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+
+  // The Escape half of the pair needs an open half a keyboard
+  // operator can reach: the focused picture answers Enter.
+  await page.locator('#outcomes-list .outcomes-chart').first().focus().catch(() => {});
+  await page.keyboard.press('Enter');
+  await overlay.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+  results.push(assert(
+    await overlay.isVisible(),
+    'Enter on the focused picture opens the overlay'
+  ));
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  results.push(assert(
+    !(await overlay.isVisible()),
+    'Escape closes what the keyboard opened'
+  ));
 
   // Return to the main instance for anything that follows.
   await page.goto(baseUrl);

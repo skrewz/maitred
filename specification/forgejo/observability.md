@@ -345,16 +345,22 @@ a CDN still draws.
 Where the source will not parse the row states the source itself as
 text rather than nothing: an unreadable drawing beats a missing one,
 and the refusal leaves no error drawing of the renderer's own anywhere
-on the page. A forest carrying no picture builds no chart cell at all
+on the page. The same holds when the runtime itself never arrived: a
+page whose script did not load states every picture as text rather
+than blanking the rows. A forest carrying no picture builds no chart
+cell at all
 — an empty `chart` states no forest, and the stamp (when the region
 carried one) still prints above the absence.
 
-Clicking the drawing opens a **full-screen overlay** of the same
-drawing — the copy the reader asked for, not a second rendering — and
-Escape or a click outside the drawing closes it. A fallen-back picture
-clicks out to the same text the row states. A re-render closes the
-overlay rather than leaving it showing a picture the next poll has
-replaced.
+Clicking the drawing — or pressing Enter or Space with the picture
+focused — opens a **full-screen overlay** of the same drawing: the
+copy the reader asked for, not a second rendering. Escape or a click
+outside the drawing closes it, and a click of a picture still drawing
+opens the overlay once the draw settles rather than empty. A
+fallen-back picture clicks out to the same text the row states. Every
+re-render — including the renders that replace the list with an empty
+or unreadable view — closes the overlay rather than leaving it showing
+a picture the next poll has replaced.
 
 ### The warnings a forest carries
 
