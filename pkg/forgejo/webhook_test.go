@@ -387,7 +387,15 @@ func (f *fakeAPI) IssueBlocks(owner, repo string, number int) ([]Issue, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	return f.blocks[number], nil
+	// A read that succeeded and found nothing returns no rows rather than
+	// no slice, the way the client's batch listing does and the way the
+	// sibling IssueDependencies fake already answers: a nil result then
+	// means a read that failed, which is a fact callers can act on
+	// (§forgejo/client/operations).
+	if rows := f.blocks[number]; rows != nil {
+		return rows, nil
+	}
+	return []Issue{}, nil
 }
 
 func (f *fakeAPI) IssueDependencies(owner, repo string, number int) ([]Issue, error) {
@@ -404,7 +412,14 @@ func (f *fakeAPI) IssueDependencies(owner, repo string, number int) ([]Issue, er
 	if f.depsErr != nil {
 		return nil, f.depsErr
 	}
-	return f.deps[number], nil
+	// A read that succeeded and found nothing returns no rows rather than
+	// no slice, the way the client's batch listing does: a nil result then
+	// means a read that failed, which is a fact callers can act on
+	// (§forgejo/client/operations).
+	if rows := f.deps[number]; rows != nil {
+		return rows, nil
+	}
+	return []Issue{}, nil
 }
 
 func (f *fakeAPI) ListIssueComments(owner, repo string, number int) ([]Comment, error) {
@@ -461,15 +476,26 @@ type fakeQueue struct {
 	mu    sync.Mutex
 	tasks []*queue.Task
 	err   error
+	// api, when set, is the fake the engine's calls were made against.
+	// Queueing a task is an engine action like any other, so it joins
+	// that one ordered log: whether a write came before a dispatch is
+	// one index in one log, not a second clock to read
+	// (§forgejo/observability/the-decision-log).
+	api *fakeAPI
 }
 
 func (q *fakeQueue) AddTask(task *queue.Task) error {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	if q.err != nil {
+		q.mu.Unlock()
 		return q.err
 	}
 	q.tasks = append(q.tasks, task)
+	api := q.api
+	q.mu.Unlock()
+	if api != nil {
+		api.record("AddTask:" + task.Title)
+	}
 	return nil
 }
 
@@ -485,7 +511,9 @@ func (q *fakeQueue) all() []*queue.Task {
 func newTestEngine(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store) {
 	t.Helper()
 	api := newFakeAPI()
-	q := &fakeQueue{}
+	// The queue records into the API's ordered log, so a test reading an
+	// ordering reads one log rather than two.
+	q := &fakeQueue{api: api}
 	store, err := NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)

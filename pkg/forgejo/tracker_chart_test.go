@@ -106,13 +106,17 @@ func chartForestQueue(t *testing.T, trackerBody string) (*Engine, *fakeAPI, *fak
 // (§forgejo/decisions/sync-set).
 const chartSyncBody = "land 3, then 4, then 5, in that order"
 
+// chartClosedAt is the moment the fixtures' closed rows carry — the forge's
+// own close time, the only one a drawing may stamp (§forgejo/renderer/closed-members).
+var chartClosedAt = time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+
 // chartWire hangs the forest on the fake: root 1, tracker 2, members 3 to 5 (3
 // open, 4 closed, 5 a person's), grouping issue 6, and the delivering pull
 // request 7.
 func chartWire(api *fakeAPI, trackerBody string) {
 	root := chartRoot()
 	tracker := chartTracker(trackerBody)
-	closedAt := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	closedAt := chartClosedAt
 	member := chartRow(3, "the purge, one command", nil, "open", time.Time{})
 	closed := chartRow(4, "tombstone and retention", nil, "closed", closedAt)
 	human := chartRow(5, "revoke signing keys", []string{LabelHumanTask}, "open", time.Time{})
@@ -975,4 +979,399 @@ func lastLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// The wrap-up path's drawing (s-git/maitred#232): the dispatch of wrap-up
+// redraws the tracker's current-state block before the task is queued, so the
+// finished forest leaves behind the picture of its completion. The tests below
+// drive the same fixtures the tick's own write uses — the two paths must share
+// one render function, and a test pins it.
+
+// wrapUpWire closes the members chartWire left open and hangs the tracker's
+// gate on its dependencies, as the graph stands the moment a wrap-up fires:
+// every member closed, every close stamped
+// (§forgejo/decisions/transition-table).
+func wrapUpWire(api *fakeAPI) {
+	for _, number := range []int{3, 5} {
+		if row := api.issues[number]; row != nil {
+			row.State = "closed"
+			row.ClosedAt = chartClosedAt
+		}
+		for i := range api.blocks[1] {
+			if api.blocks[1][i].Number == number {
+				api.blocks[1][i].State = "closed"
+				api.blocks[1][i].ClosedAt = chartClosedAt
+			}
+		}
+	}
+	gate := *api.issues[1] // the root stands closed: an open root would hold the tracker off
+	gate.State = "closed"
+	api.deps[2] = []Issue{gate}
+}
+
+// wrapUpQueuedAt is where a wrap-up dispatch stands in the fake's ordered log,
+// or -1 when none queued: the queue records into that log, so whether a write
+// came before a dispatch is one index in it (s-git/maitred#232).
+func wrapUpQueuedAt(api *fakeAPI) int {
+	return callIndex(api, "AddTask:Wrap-up")
+}
+
+// callIndex is where the first API call carrying prefix stands in the fake's
+// ordered log, or -1 when no call did.
+func callIndex(api *fakeAPI, prefix string) int {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	for i, call := range api.calls {
+		if strings.HasPrefix(call, prefix) {
+			return i
+		}
+	}
+	return -1
+}
+
+// wantEveryMemberClosed asserts the region draws every member struck through
+// with its close stamp (§forgejo/renderer/closed-members).
+func wantEveryMemberClosed(t *testing.T, region string) {
+	t.Helper()
+	for _, ref := range []string{"i_work_3", "i_work_4", "i_work_5"} {
+		if !strings.Contains(region, ref) {
+			t.Errorf("the drawing holds no %s:\n%s", ref, region)
+		}
+	}
+	if got := strings.Count(region, "✅"); got != 3 {
+		t.Errorf("the drawing marks %d nodes closed, want the three members:\n%s", got, region)
+	}
+	if got := strings.Count(region, "text-decoration:line-through"); got != 3 {
+		t.Errorf("the drawing strikes through %d labels, want the three members", got)
+	}
+	if got := strings.Count(region, "closed "+chartClosedAt.Format("2006-01-02 15:04 MST")); got != 3 {
+		t.Errorf("the drawing stamps %d close times, want the three members", got)
+	}
+}
+
+// TestWrapUpDrawsTheFinishedForestOnTheSweep: the sweep's wrap-up row queues
+// its task behind exactly one current-state write, and the drawing it follows
+// shows every member closed (§forgejo/reconciliation/the-tracker-block,
+// §forgejo/reconciliation/watermark-exemptions, s-git/maitred#232).
+func TestWrapUpDrawsTheFinishedForestOnTheSweep(t *testing.T) {
+	eng, api, q, _ := chartForestQueue(t, chartFenced())
+	wrapUpWire(api)
+	eng.Reconcile()
+
+	wrapUpTask(t, q)
+	if got := api.writeCount(); got != 1 {
+		t.Fatalf("the sweep wrote %d issues, want the one write the dispatch makes", got)
+	}
+	wrote, queued := callIndex(api, "UpdateIssueBody:out/2"), wrapUpQueuedAt(api)
+	if queued < 0 {
+		t.Fatal("the queue recorded no wrap-up dispatch")
+	}
+	if wrote >= queued {
+		t.Errorf("the write at %d did not precede the wrap-up dispatch queued at %d", wrote, queued)
+	}
+	wantEveryMemberClosed(t, regionOf(mustWritten(t, api, "out", 2)))
+}
+
+// TestWrapUpDrawsTheFinishedForestOnTheCascade: the unblock cascade fires the
+// moment the last member closes, ahead of any sweep — so this is the path a
+// stale chart survives on, and the one the redraw matters most for
+// (§forgejo/decisions/unblock-cascade, s-git/maitred#232).
+func TestWrapUpDrawsTheFinishedForestOnTheCascade(t *testing.T) {
+	eng, api, q, _ := chartForestQueue(t, chartFenced())
+	wrapUpWire(api)
+	// The member's close is the cascade's last: it blocks the tracker, so its
+	// closure newly unblocks it.
+	api.blocks[3] = []Issue{*api.issues[2]}
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+
+	wrapUpTask(t, q)
+	if got := api.writeCount(); got != 1 {
+		t.Fatalf("the cascade wrote %d issues, want the one write the dispatch makes", got)
+	}
+	wrote, queued := callIndex(api, "UpdateIssueBody:out/2"), wrapUpQueuedAt(api)
+	if queued < 0 {
+		t.Fatal("the queue recorded no wrap-up dispatch")
+	}
+	if wrote >= queued {
+		t.Errorf("the write at %d did not precede the wrap-up dispatch queued at %d", wrote, queued)
+	}
+	wantEveryMemberClosed(t, regionOf(mustWritten(t, api, "out", 2)))
+}
+
+// TestWrapUpDispatchSharesTheSweepRenderer: the picture between the fences is
+// the sweep's own render function, byte for byte — the wrap-up path composes
+// no drawing of its own, and the tick's write finds the body it landed
+// current (§forgejo/renderer/the-contract, s-git/maitred#232).
+func TestWrapUpDispatchSharesTheSweepRenderer(t *testing.T) {
+	eng, api, q, _ := chartForestQueue(t, chartFenced())
+	wrapUpWire(api)
+	api.blocks[3] = []Issue{*api.issues[2]}
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+	wrapUpTask(t, q)
+
+	source, err := eng.renderForestChart(chartForests()[0])
+	if err != nil {
+		t.Fatalf("renderForestChart: %v", err)
+	}
+	if region := regionOf(mustWritten(t, api, "out", 2)); !strings.Contains(region, strings.TrimRight(source, "\n")) {
+		t.Error("the picture the dispatch drew is not the sweep's render function's own bytes")
+	}
+	drawn := mustWritten(t, api, "out", 2)
+	// The tick's own write, over the same graph, is the same drawing: one
+	// render function, whichever path calls it. Whether the two stamps fall
+	// inside one minute of the wall clock is not what this pins — the
+	// property is that a drawn forest gains no bytes beyond the stamp.
+	if err := eng.writeTrackerBlock(chartForests()[0], time.Now()); err != nil {
+		t.Fatalf("writeTrackerBlock: %v", err)
+	}
+	switch writes := api.callCount("UpdateIssueBody:out/2"); writes {
+	case 1:
+		// The stamp had not moved: the tick found the body current.
+	case 2:
+		second := mustWritten(t, api, "out", 2)
+		if got := strings.Replace(second, stampLine(second), stampLine(drawn), 1); got != drawn {
+			t.Error("the tick's write over a body the dispatch drew changed more than the stamp")
+		}
+	default:
+		t.Errorf("the forest was written %d times, want one write or a second that only moved the stamp", writes)
+	}
+}
+
+// TestWrapUpDrawFailureStillDispatches: the chart is UX; a forge that refuses
+// the write is logged naming the tracker, and the wrap-up dispatches anyway
+// (s-git/maitred#232).
+func TestWrapUpDrawFailureStillDispatches(t *testing.T) {
+	eng, api, q, log := chartForestQueue(t, chartFenced())
+	wrapUpWire(api)
+	api.blocks[3] = []Issue{*api.issues[2]}
+	api.writeErr = &APIError{StatusCode: 403, Message: "must have Write Issues Unit"}
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+
+	wrapUpTask(t, q)
+	if !strings.Contains(log.String(), "wrap-up: tracker current-state block not written") ||
+		!strings.Contains(log.String(), "o/out#2") || !strings.Contains(log.String(), "403") {
+		t.Errorf("log = %s, want the refused write named with the tracker it failed on", log.String())
+	}
+}
+
+// TestWrapUpAmbiguousFencesLeftUntouched: a description carrying two fence
+// pairs belongs to no guessable region, so the dispatch leaves it exactly as
+// found and the refusal surfaces through the log — as it does on the sweep's
+// own write — while the wrap-up still queues (§forgejo/reconciliation/the-tracker-block,
+// s-git/maitred#232).
+func TestWrapUpAmbiguousFencesLeftUntouched(t *testing.T) {
+	body := chartFenced() + "\n" + fenceBegin + "\n\nanother forest\n\n" + fenceEnd + "\n"
+	eng, api, q, log := chartForestQueue(t, body)
+	wrapUpWire(api)
+	api.blocks[3] = []Issue{*api.issues[2]}
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+
+	wrapUpTask(t, q)
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("wrote %d issues, want none: the ambiguous tracker stays as found", got)
+	}
+	if !strings.Contains(log.String(), "ambiguous") || !strings.Contains(log.String(), "o/out#2") {
+		t.Errorf("log = %s, want the refusal to name the ambiguous tracker", log.String())
+	}
+}
+
+// TestWrapUpDrawWritesTheTrackerAlone: the draw addresses the forest's
+// tracker and nothing else — the grouping issue's body drives a landing
+// decision through its digest and stays byte-for-byte as found
+// (§forgejo/decisions/sync-set, s-git/maitred#232).
+func TestWrapUpDrawWritesTheTrackerAlone(t *testing.T) {
+	eng, api, q, _ := chartForestQueue(t, chartFenced())
+	wrapUpWire(api)
+	api.blocks[3] = []Issue{*api.issues[2]}
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+	wrapUpTask(t, q)
+
+	if got := api.writeCount(); got != 1 {
+		t.Fatalf("wrote %d issues, want one: the tracker", got)
+	}
+	for _, ref := range []struct {
+		repo   string
+		number int
+	}{
+		{"out", 1}, {"out", 6}, {"work", 3}, {"work", 5},
+	} {
+		if _, ok := api.writtenBody(ref.repo, ref.number); ok {
+			t.Errorf("%s#%d was written; the wrap-up draw addresses the tracker alone", ref.repo, ref.number)
+		}
+	}
+	if body := api.issues[6].Body; body != chartSyncBody {
+		t.Errorf("the grouping issue's body = %q, want it byte-for-byte as found", body)
+	}
+}
+
+// TestWrapUpDrawMovesOnlyTheStampOnACurrentBlock: a tracker whose block the
+// tick already drew current gains, from the dispatch's draw, a moved
+// `Last revisited:` stamp and nothing else
+// (§forgejo/reconciliation/the-tracker-block, s-git/maitred#232).
+func TestWrapUpDrawMovesOnlyTheStampOnACurrentBlock(t *testing.T) {
+	eng, api, q, _ := chartForestQueue(t, chartFenced())
+	wrapUpWire(api)
+	api.blocks[3] = []Issue{*api.issues[2]}
+	// The block is current but for an hour-old stamp, which is what the
+	// dispatch's own reading of the clock will move: the draw cannot be
+	// accused of redrawing anything but the stamp.
+	if err := eng.writeTrackerBlock(chartForests()[0], time.Now().Add(-time.Hour)); err != nil {
+		t.Fatalf("writeTrackerBlock: %v", err)
+	}
+	first := mustWritten(t, api, "out", 2)
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+	wrapUpTask(t, q)
+
+	second := mustWritten(t, api, "out", 2)
+	if first == second {
+		t.Fatal("the dispatch's draw changed nothing at all: the stamp never moved")
+	}
+	if got := strings.Replace(second, stampLine(second), stampLine(first), 1); got != first {
+		t.Error("the dispatch's draw moved more than the stamp")
+	}
+}
+
+// TestWrapUpDrawsWithNoRootGate: a tracker gated by no ideation issue has no
+// forest to draw — the dispatch says so quietly (the sentence is pinned by
+// TestWrapUpDrawNamesWhichAbsenceItFound, whose table owns the which-absence
+// pair) and queues regardless, and the chart still lands, from the tick's own
+// pass afterwards — that ordering is this test's own
+// (§forgejo/reconciliation/the-tracker-block, s-git/maitred#232).
+func TestWrapUpDrawsWithNoRootGate(t *testing.T) {
+	eng, api, q, _ := chartForestQueue(t, chartFenced()) // chartWire as-is: the tracker's gate is wired to nothing
+	eng.Reconcile()
+
+	wrapUpTask(t, q)
+	if got := api.writeCount(); got != 1 {
+		t.Fatalf("the sweep wrote %d issues, want the one write its own pass makes", got)
+	}
+	wrote, queued := callIndex(api, "UpdateIssueBody:out/2"), wrapUpQueuedAt(api)
+	if queued < 0 {
+		t.Fatal("the queue recorded no wrap-up dispatch")
+	}
+	if wrote < queued {
+		t.Errorf("the write at %d came before the wrap-up dispatch queued at %d: the dispatch drew no chart, so only the tick's pass could", wrote, queued)
+	}
+}
+
+// TestWrapUpDrawSkipsARootNoRoleNames: the tracker's ideation gate arrives on a
+// blocking edge, so which repository holds it is forge data rather than
+// configuration — and a root sitting where no maitred role names the repository
+// is drawn nowhere, because drawing it would publish that repository's titles
+// into a tracker body the outcomes view shows. The wrap-up queues all the same
+// (§forgejo/webhook/repository-roles, §forgejo/reconciliation/the-tracker-block,
+// s-git/maitred#242 review 2888).
+func TestWrapUpDrawSkipsARootNoRoleNames(t *testing.T) {
+	eng, api, q, log := chartForestQueue(t, chartFenced())
+	wrapUpWire(api)
+	api.blocks[3] = []Issue{*api.issues[2]}
+	// The gate row names a repository carrying no maitred topic at all.
+	api.mu.Lock()
+	gate := api.deps[2][0]
+	gate.Repository = "o/archive"
+	api.deps[2] = []Issue{gate}
+	api.mu.Unlock()
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+
+	wrapUpTask(t, q)
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("wrote %d issues, want none: a root no role names is drawn nowhere", got)
+	}
+	if got := api.callCount("GetIssue:archive/"); got != 0 {
+		t.Errorf("the draw read %d issues out of o/archive, wanting none: the admission test comes before the read", got)
+	}
+	if !strings.Contains(log.String(), "no maitred role names") || !strings.Contains(log.String(), "o/out#2") {
+		t.Errorf("log = %s, want the skipped draw to name the tracker and the rule", log.String())
+	}
+}
+
+// TestWrapUpDrawAddressesTheTrackerNotTheRoot: a tracker read that names no
+// repository of its own is addressed where the dispatch found it, never at the
+// root's repository — the two are unrelated places, and addressing the forest
+// would write somebody else's issue number (§forgejo/client/operations,
+// §forgejo/reconciliation/the-tracker-block, s-git/maitred#242 review 2888).
+func TestWrapUpDrawAddressesTheTrackerNotTheRoot(t *testing.T) {
+	eng, api, q, _ := chartForestQueue(t, chartFenced())
+	wrapUpWire(api)
+	// The gate — and so the forest — lives in a second admitted repository,
+	// while the tracker's own read names no repository at all.
+	api.mu.Lock()
+	gate := api.deps[2][0]
+	gate.Repository = "o/work"
+	api.deps[2] = []Issue{gate}
+	api.issues[2].Repository = ""
+	api.mu.Unlock()
+
+	eng.Reconcile()
+
+	wrapUpTask(t, q)
+	if _, ok := api.writtenBody("out", 2); !ok {
+		t.Error("the tracker was never written: its own repository was unresolvable")
+	}
+	if got := api.callCount("UpdateIssueBody:work/2"); got != 0 {
+		t.Errorf("wrote issue 2 of the root's repository %d times, want none: the write addresses the tracker", got)
+	}
+}
+
+// TestWrapUpDrawNamesWhichAbsenceItFound: a tracker with no ideation gate and a
+// dispatch holding no blocker rows at all both draw nothing, and they are not
+// the same fact — one is the graph, the other a read that failed. The cascade's
+// own re-read is the same request the walk already made, so a fake that fails
+// one fails the walk and nothing dispatches at all: the two lines are pinned at
+// the draw's own boundary (§forgejo/observability/the-decision-log,
+// s-git/maitred#242 review 2887).
+func TestWrapUpDrawNamesWhichAbsenceItFound(t *testing.T) {
+	tests := []struct {
+		name     string
+		blockers []Issue
+		want     string
+	}{
+		{"a blocker read that failed", nil, "tracker blocker rows unread"},
+		{"a tracker gated by nothing", []Issue{}, "gated by no ideation issue"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng, api, log := chartForestEngine(t, chartFenced())
+			tracker := chartTracker(chartFenced())
+
+			eng.drawTrackerBeforeWrapUp(&tracker, tt.blockers, "o/out")
+
+			if got := api.writeCount(); got != 0 {
+				t.Errorf("wrote %d issues, want none: no gate is no forest", got)
+			}
+			if !strings.Contains(log.String(), tt.want) || !strings.Contains(log.String(), "o/out#2") {
+				t.Errorf("log = %s, want %q named with the tracker it concerns", log.String(), tt.want)
+			}
+		})
+	}
+}
+
+// TestWrapUpDrawUnknownScopeFailsClosed: an unknown scope is a failure, not a
+// no-role answer — the wrap-up's draw writes nothing and names the failure,
+// the tick's TestTrackerBlock_UnknownScopeWritesNothing being the twin
+// (§forgejo/webhook/the-scope-cache, s-git/maitred#242 review 2923). The fake
+// cannot queue a wrap-up while the org listing fails — the cascade's own
+// repoRoles test holds the dispatch off and the sweep cannot enumerate — so
+// the draw is pinned at its own boundary, and the half that still queues
+// stays with TestWrapUpDrawFailureStillDispatches.
+func TestWrapUpDrawUnknownScopeFailsClosed(t *testing.T) {
+	eng, api, log := chartForestEngine(t, chartFenced())
+	api.listReposErr = errors.New("the org listing failed")
+	tracker := chartTracker(chartFenced())
+	gate := chartRoot()
+	// The gate stands in a second repository, so its admission is a scope
+	// lookup rather than the equality shortcut.
+	gate.Repository = "o/work"
+
+	eng.drawTrackerBeforeWrapUp(&tracker, []Issue{gate}, "o/out")
+
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("wrote %d issues, want none while the scope is unknown", got)
+	}
+	if !strings.Contains(log.String(), "wrap-up: tracker current-state block not written") ||
+		!strings.Contains(log.String(), "the org listing failed") {
+		t.Errorf("log = %s, want the refused draw to name the scope failure on the tracker it failed on", log.String())
+	}
 }

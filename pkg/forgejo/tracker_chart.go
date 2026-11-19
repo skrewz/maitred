@@ -62,9 +62,10 @@ var errFenceAmbiguous = errors.New("the tracker's fence pair is ambiguous")
 // refuses are logged naming that forest and skipped, so one ragged forest costs
 // the others nothing. The walk has already decided and dispatched by the time
 // this runs — the drawing is the tick's last step, never a decision's
-// predecessor. at is the moment the stamp carries; it is a parameter rather
-// than a clock read here so a test can watch the stamp move while the graph
-// stands still.
+// predecessor. at is the moment the stamp carries: one clock read for the
+// whole pass, so every forest a tick draws states the same instant. It is a
+// parameter rather than a clock read here for that, and so a test can watch
+// the stamp move while the graph stands still.
 func (e *Engine) writeTrackerBlocks(forests []Forest, at time.Time) {
 	for _, forest := range forests {
 		// A forest whose tracker is missing states its absence through the
@@ -86,10 +87,59 @@ func trackerRef(forest Forest) string {
 	return forestRef(forest.Tracker.Repository, forest.Tracker.Number)
 }
 
+// drawTrackerBeforeWrapUp is the wrap-up path's call to the tracker block:
+// the same write the tick makes, at the one moment a finished forest would
+// otherwise be left holding a stale drawing (§forgejo/reconciliation/the-tracker-block,
+// s-git/maitred#232). The root comes from the blocker rows the dispatch
+// already holds — the gate relation is the one every other walk of the graph
+// reads — and a tracker gated by no ideation issue, never commissioned, has
+// no forest to draw. Which of those two absences it is matters to whoever
+// reads the log: no blocker rows at all is a read that failed, not a graph
+// fact, so the two say so apart. The rows the dispatch holds were read for a
+// tracker — the sweep's wrap-up row and the cascade's classifier both decide
+// wrap-up on the outcome label first (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/decisions/unblock-cascade) — so the write addresses that issue in
+// the repository the dispatch found it in, and the root — which a blocking
+// edge placed in whichever repository it likes — is admitted by the shared
+// write's own test of both ends of the forest, stated there once so every
+// caller inherits it (§forgejo/webhook/repository-roles). A failure is logged
+// naming the tracker and costs the dispatch nothing: the chart is UX, the
+// wrap-up is the work.
+func (e *Engine) drawTrackerBeforeWrapUp(tracker *Issue, blockers []Issue, foundIn string) {
+	if tracker == nil {
+		return
+	}
+	home := tracker.Repository
+	if home == "" {
+		home = foundIn // a single-object read may name no repository of its own (§forgejo/client/operations)
+	}
+	ref := forestRef(home, tracker.Number)
+	root := ideationGate(blockers)
+	if root == nil {
+		if blockers == nil {
+			e.log.Warn("wrap-up: tracker blocker rows unread; cannot tell whether a gate draws this forest",
+				"tracker", ref)
+		} else {
+			e.log.Debug("wrap-up: tracker is gated by no ideation issue; nothing to draw", "tracker", ref)
+		}
+		return
+	}
+	rootRow := forestIssue(*root, home)
+	trackerRow := forestIssue(*tracker, home)
+	forest := Forest{Repository: rootRow.Repository, Root: rootRow, Tracker: &trackerRow}
+	if err := e.writeTrackerBlock(forest, time.Now()); err != nil {
+		e.log.Error("wrap-up: tracker current-state block not written",
+			"tracker", ref, "error", err)
+	}
+}
+
 // writeTrackerBlock renders one forest and lands its block on that forest's
-// tracker, which the caller has established the forest has. Where the body the
-// composition produced is the body already there — two ticks inside one minute
-// over an unchanged graph — nothing is sent, so a tick never bumps a tracker for
+// tracker, which the caller has established the forest has. Both ends of the
+// forest pay the repository-admission test here, before anything of either is
+// read, so every call site inherits the rule that no repository a maitred
+// role does not name is drawn or published. Where the body the composition
+// produced is the body already there — two ticks inside one minute over an
+// unchanged graph — nothing is sent, so a tick never bumps a tracker for
 // nothing (§forgejo/reconciliation/the-tracker-block).
 func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
 	owner, name := splitRepo(forest.Tracker.Repository)
@@ -114,6 +164,24 @@ func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
 		// §forgejo/observability/the-decision-log).
 		e.log.Debug("reconciliation: tracker lives in a repository no maitred role names; nothing written",
 			"tracker", ref)
+		return nil
+	}
+	// A blocking edge names its far end, so the root's repository is forge
+	// data too, and the same test is asked of it here rather than at
+	// whichever call site thought of it: a root standing where no maitred
+	// role names its repository is read nothing of and drawn nowhere, so
+	// its title reaches no tracker body the outcomes view publishes
+	// (§forgejo/webhook/repository-roles, §forgejo/reconciliation/the-tracker-block).
+	admits, err = e.remitAdmits(forest.Root.Repository, forest.Tracker.Repository)
+	if err != nil {
+		return fmt.Errorf("scope of the root %s: %w", forestRef(forest.Root.Repository, forest.Root.Number), err)
+	}
+	if !admits {
+		// Debug for this sentence as well — an unadmitted repository is a
+		// deployment's deliberate silence, not an event worth reading
+		// (§forgejo/webhook/repository-roles, §forgejo/observability/the-decision-log).
+		e.log.Debug("drawing skips a root in a repository no maitred role names; nothing written",
+			"tracker", ref, "root", forestRef(forest.Root.Repository, forest.Root.Number))
 		return nil
 	}
 	source, err := e.renderForestChart(forest)

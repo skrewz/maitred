@@ -1274,6 +1274,14 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	if err != nil {
 		return err
 	}
+	// A wrap-up dispatch redraws its tracker's current-state block before
+	// queuing, so the picture the finished forest leaves behind is the one
+	// the wrap-up describes; a drawing that fails costs the dispatch nothing
+	// (§forgejo/reconciliation/the-tracker-block, §forgejo/decisions/unblock-cascade,
+	// s-git/maitred#232).
+	if action == ActionWrapUp {
+		e.drawTrackerBeforeWrapUp(st.Issue, st.Blockers, ev.Repo)
+	}
 	rev := revisionFor(ev, st)
 	if err := e.dispatchPrompt(ev, st, *pc, "", action, rev); err != nil {
 		return err

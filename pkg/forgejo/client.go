@@ -193,11 +193,15 @@ type API interface {
 	GetPullRequest(owner, repo string, number int) (*PullRequest, error)
 	// IssueBlocks lists the issues the given issue blocks. The returned
 	// issues carry their own Repository, which may differ from the
-	// given one (cross-repo blockers).
+	// given one (cross-repo blockers). A listing that succeeded is
+	// never nil — an empty one is an empty slice — so a nil result
+	// means a read that failed (§forgejo/client/operations).
 	IssueBlocks(owner, repo string, number int) ([]Issue, error)
 	// IssueDependencies lists the issues that block the given issue. The
 	// returned issues carry their own Repository, which may differ from
-	// the given one (cross-repo blockers).
+	// the given one (cross-repo blockers). As with IssueBlocks, a
+	// listing that succeeded is never nil: empty means nothing blocks,
+	// nil means the read failed (§forgejo/client/operations).
 	IssueDependencies(owner, repo string, number int) ([]Issue, error)
 	// ListPullRequestReviews lists a pull request's reviews (event,
 	// author, commit).
