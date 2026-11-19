@@ -86,29 +86,23 @@ type Forest struct {
 // §forgejo/observability/the-outcomes-view). The sources are the drawings
 // writeTrackerBlocks made walking the set in order; an empty source is
 // a forest the tick drew nothing for, and both of its picture fields go
-// empty rather than keeping an earlier tick's chart under this tick's stamp.
-// The set is replaced whole, never mutated in place — the discipline
-// Forests' snapshot contract rests on — and only while the snapshot is
-// still the set this tick recorded: drawings that arrive against a newer
-// snapshot are dropped rather than grafted onto it.
+// empty rather than keeping an earlier tick's chart under this tick's
+// stamp — the pair is written together or erased together, which is what
+// states that, and it needs no check that the drawing belongs to the
+// snapshot it lands on: one tick runs at a time, and recordForests is the
+// only writer of the set this folds onto. The set is replaced whole,
+// never mutated in place — the discipline Forests' snapshot contract
+// rests on.
 func (e *Engine) recordForestCharts(forests []Forest, sources []string, at time.Time) {
 	stamp := stampAt(at, e.cfg.ChartLocation())
 	e.forestsMu.Lock()
 	defer e.forestsMu.Unlock()
-	if len(e.forestsSnap) != len(forests) {
-		return
-	}
-	for i := range forests {
-		if &e.forestsSnap[i] != &forests[i] {
-			return
-		}
-	}
 	updated := make([]Forest, len(forests))
 	for i, forest := range forests {
-		forest.Chart = sources[i]
-		forest.ChartRevisited = ""
-		if sources[i] != "" {
-			forest.ChartRevisited = stamp
+		if sources[i] == "" {
+			forest.Chart, forest.ChartRevisited = "", ""
+		} else {
+			forest.Chart, forest.ChartRevisited = sources[i], stamp
 		}
 		updated[i] = forest
 	}
