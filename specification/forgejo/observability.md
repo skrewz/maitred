@@ -220,10 +220,15 @@ Inside that window the view therefore shows the previous tick's drawing
 under the previous tick's stamp, which is what makes an empty picture
 honest rather than a half-written record; a forest the head records for
 the first time carries both fields empty until step 5 draws it. A carried
-pair is never the view's last word: step 5 states what this tick drew. The
+pair is never the view's last word: step 5 states what this tick drew — the
+one exception being a `wrap-up` drawing, which feeds the tracker's block alone
+and reaches the payload at that next step 5
+(§forgejo/reconciliation/the-tracker-block). The
 carry pays the admission test the drawing pays
-(§forgejo/reconciliation/the-tracker-block), so a role withdrawn from a
-tracker's repository between ticks empties both fields at the next tick's head
+(§forgejo/reconciliation/the-tracker-block), of both the repository the pair
+was drawn from and the one the tracker now stands in — the tracker is forge
+data, so a re-pairing can move a picture across repositories, and a role
+withdrawn from either empties both fields at the next tick's head
 rather than leaving the earlier drawing on the port for the length of the walk.
 Where that test cannot be answered — a repository listing the carry fails over
 — both fields go empty as well: a drawing whose remit the engine cannot vouch

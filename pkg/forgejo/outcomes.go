@@ -3,6 +3,7 @@ package forgejo
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -90,6 +91,17 @@ type picture struct {
 	stamp string
 }
 
+// carried is a pair as the carry reads it: the picture and the repository that
+// drawing came from. The repository travels with it because the pair was drawn
+// from the tracker the previous tick paired the root with, which a re-pairing
+// can leave behind — and a picture the view may publish is evidence about the
+// repository it was drawn from, not only the one it now travels to
+// (§forgejo/webhook/repository-roles).
+type carried struct {
+	picture
+	from string
+}
+
 // keyOf names the forest a picture pair belongs to across two recorded sets.
 // It is the store's own forest key (ForestKey, §forgejo/state/forest-digest):
 // a forest is the ideation root it grew from, so a tracker replaced by another
@@ -118,11 +130,15 @@ func keyOf(forest Forest) Key {
 // lands on, so a forest this tick drew nothing for still ends the tick with
 // both fields empty.
 //
-// A remembered picture travels only while its repository is still admitted.
-// The pair is the last drawing the engine made, so a role withdrawn since then
-// must not keep feeding the unauthenticated view for the length of the walk:
-// the carry pays the same admission test the drawing pays (writeTrackerBlock,
-// §forgejo/webhook/repository-roles). A scope the carry cannot read empties
+// A remembered picture travels only while both the repository it was drawn
+// from and the one its tracker now stands in are still admitted. The pair is
+// the last drawing the engine made, so a role withdrawn since then must not
+// keep feeding the unauthenticated view for the length of the walk: the carry
+// pays the same admission test the drawing pays (writeTrackerBlock,
+// §forgejo/webhook/repository-roles), and pays it of the drawing's own
+// repository as well — the forest's tracker is forge data, so a re-pairing can
+// move a picture to a repository whose remit says nothing about the bytes it
+// carries. A scope the carry cannot read empties
 // the pair too — a remembered drawing whose remit is unknown is no evidence
 // the view may publish — and a forest this tick names no tracker for carries
 // nothing at all, the absence the view states
@@ -136,19 +152,34 @@ func (e *Engine) carryDrawnPictures(next []Forest) {
 	// read (Forests, §forgejo/observability/the-outcomes-view). Reading the set
 	// the previous tick published is safe for as long as a recorded set is
 	// replaced whole rather than mutated in place.
-	drawn := make(map[Key]picture, len(previous))
+	carry := make(map[Key]carried, len(previous))
 	for _, forest := range previous {
 		if forest.Chart == "" && forest.ChartRevisited == "" {
 			continue // a forest holding no pair has nothing to carry
 		}
-		drawn[keyOf(forest)] = picture{forest.Chart, forest.ChartRevisited}
+		from := ""
+		if forest.Tracker != nil {
+			from = forest.Tracker.Repository
+		}
+		carry[keyOf(forest)] = carried{
+			picture: picture{forest.Chart, forest.ChartRevisited},
+			from:    from,
+		}
 	}
 	for i, forest := range next {
-		old, ok := drawn[keyOf(forest)]
+		pair, ok := carry[keyOf(forest)]
 		if !ok || forest.Tracker == nil {
 			continue
 		}
+		// Both ends of the pair pay the test: the repository the tracker stands
+		// in now, and the one the drawing came from — which the same
+		// remitAdmits would answer trivially admitted when the two are one, so
+		// asking only the first leaves a re-paired picture's own repository
+		// unasked (§forgejo/webhook/repository-roles).
 		admits, err := e.remitAdmits(forest.Tracker.Repository, forest.Root.Repository)
+		if err == nil && !strings.EqualFold(pair.from, forest.Tracker.Repository) {
+			admits, err = e.remitAdmits(pair.from, forest.Root.Repository)
+		}
 		if err != nil {
 			// An unknown scope is a read that broke, not the remit's
 			// ordinary silence, so it is named as one — the level the scope
@@ -158,16 +189,18 @@ func (e *Engine) carryDrawnPictures(next []Forest) {
 			e.log.Warn("outcomes: cannot tell whether the picture's repository is admitted; nothing carried",
 				"forest", forestRef(forest.Repository, forest.Root.Number),
 				"tracker", forestRef(forest.Tracker.Repository, forest.Tracker.Number),
+				"drawn", pair.from,
 				"error", err)
 			continue
 		}
 		if !admits {
 			e.log.Debug("outcomes: nothing carried; the picture's repository is not admitted",
 				"forest", forestRef(forest.Repository, forest.Root.Number),
-				"tracker", forestRef(forest.Tracker.Repository, forest.Tracker.Number))
+				"tracker", forestRef(forest.Tracker.Repository, forest.Tracker.Number),
+				"drawn", pair.from)
 			continue
 		}
-		next[i].Chart, next[i].ChartRevisited = old.chart, old.stamp
+		next[i].Chart, next[i].ChartRevisited = pair.chart, pair.stamp
 	}
 }
 
@@ -180,7 +213,11 @@ func (e *Engine) carryDrawnPictures(next []Forest) {
 // a forest the tick drew nothing for, and both of its picture fields go
 // empty rather than keeping the pair the set arrived with under this tick's
 // stamp. The set is replaced whole, never mutated in place — the discipline
-// Forests' snapshot contract rests on.
+// Forests' snapshot contract rests on. sources is indexed by position, and
+// this fold is written to survive a shorter slice — a slice built from a
+// subset of these forests reads as "drew nothing" for the rest rather than
+// a panic inside the sweep — so the pairing is a convention, not a
+// requirement.
 //
 // The set folded onto is the one step 2 of this same tick published: Reconcile
 // admits one sweep at a time, so no newer enumeration exists for this replace
@@ -194,7 +231,7 @@ func (e *Engine) recordForestCharts(forests []Forest, sources []string, at time.
 		// The pair is written together or erased together: this is where a
 		// pair carried onto the set (carryDrawnPictures) stops being the
 		// view's answer, whether or not this tick had a drawing for it.
-		if sources[i] == "" {
+		if i >= len(sources) || sources[i] == "" {
 			forest.Chart, forest.ChartRevisited = "", ""
 		} else {
 			forest.Chart, forest.ChartRevisited = sources[i], stamp

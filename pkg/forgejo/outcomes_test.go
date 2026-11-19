@@ -946,6 +946,31 @@ func TestForests_AbsentTrackerPublishesNoPictureAndIsNotRead(t *testing.T) {
 	}
 }
 
+// TestForests_ShorterDrawingsAreNotAPanic: the fold indexes this tick's
+// drawings by position, and that pairing is a convention the fold does not
+// rely on — a sources slice shorter than the set reads as "drew nothing" for
+// the forests it does not name, emptying their pictures rather than taking
+// down the process inside the sweep
+// (§forgejo/reconciliation/the-tracker-block).
+func TestForests_ShorterDrawingsAreNotAPanic(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	chartWire(api, chartFenced())
+	forests, err := eng.recordForests()
+	if err != nil || len(forests) != 1 {
+		t.Fatalf("forests = %+v, %v", forests, err)
+	}
+
+	eng.recordForestCharts(forests, []string{}, chartAt)
+	emptied, err := eng.Forests()
+	if err != nil || len(emptied) != 1 {
+		t.Fatalf("forests = %+v, %v", emptied, err)
+	}
+	if emptied[0].Chart != "" || emptied[0].ChartRevisited != "" {
+		t.Errorf("a fold over no drawings left chart %q under stamp %q, want both fields empty",
+			emptied[0].Chart, emptied[0].ChartRevisited)
+	}
+}
+
 // TestForests_ChartIgnoresWhatTheTrackersBodyClaims: a cross-repository
 // tracker whose description carries a decoy picture still brings the
 // payload the drawing the graph supports — the row the blocks read
@@ -1095,6 +1120,93 @@ func TestForests_PicturePaysTheAdmissionTest(t *testing.T) {
 	if carried != 1 {
 		t.Fatalf("%d forests carry a picture out of o/elsewhere, want exactly 1: at zero the revocation case above asserts nothing at all", carried)
 	}
+
+	// The re-pairing case: a forest's tracker is forge data, so the pair the
+	// carry moves can have been drawn from a repository the tracker no longer
+	// stands in. Asking only where the pair is travelling to asks a question
+	// the drawing never answers — and answers it trivially when the new tracker
+	// shares the root's repository — so the drawing's own repository pays the
+	// test too, and a role withdrawn from it empties both fields at the head
+	// even though the destination is admitted (§forgejo/webhook/repository-roles,
+	// §forgejo/observability/the-outcomes-view).
+	api.mu.Lock()
+	legacy := outcomesTracker(74, "tracker in a repository with a role of its own")
+	legacy.Repository = "o/legacy"
+	api.repos = []Repository{outcomesRepo("o/out"), testRepoDisabled("o/elsewhere"), testRepo("o/legacy")}
+	api.issues[74] = &legacy
+	api.blocks[51] = []Issue{legacy}
+	api.openIssues["out"] = []Issue{root, rootTwo}
+	api.mu.Unlock()
+	eng.scopeAt = time.Time{}
+	if _, err := eng.recordForests(); err != nil {
+		t.Fatalf("recordForests: %v", err)
+	}
+	eng.writeTrackerBlocks(mustForests(t, eng), chartAt.Add(time.Hour))
+	parked, err := eng.Forests()
+	if err != nil || len(parked) != 2 {
+		t.Fatalf("forests = %+v, %v", parked, err)
+	}
+	var kept Forest
+	for _, f := range parked {
+		if f.Root.Number == 51 {
+			kept = f
+		}
+	}
+	if kept.Tracker == nil || kept.Tracker.Repository != "o/legacy" || kept.Chart == "" {
+		t.Fatalf("root 51 = %+v, want its picture drawn while o/legacy still held a role", kept)
+	}
+
+	// The tracker moves into the root's own repository — a second tracker-
+	// reading row takes the pairing — and the role in the repository the
+	// drawing came from is withdrawn in the same breath.
+	api.mu.Lock()
+	api.repos = []Repository{outcomesRepo("o/out"), testRepoDisabled("o/elsewhere"), testRepoDisabled("o/legacy")}
+	home := outcomesTracker(75, "tracker in the root's own repository")
+	home.Repository = "o/out"
+	api.openIssues["out"] = []Issue{root, rootTwo, home}
+	api.issues[75] = &home
+	api.blocks[51] = []Issue{home}
+	api.mu.Unlock()
+	eng.scopeAt = time.Time{}
+	written := log.Len()
+	if _, err := eng.recordForests(); err != nil {
+		t.Fatalf("recordForests: %v", err)
+	}
+	moved, err := eng.Forests()
+	if err != nil || len(moved) != 2 {
+		t.Fatalf("forests = %+v, %v", moved, err)
+	}
+	paired := 0
+	for _, f := range moved {
+		if f.Root.Number != 51 {
+			continue
+		}
+		paired++
+		if f.Tracker == nil || f.Tracker.Repository != "o/out" {
+			t.Fatalf("root 51 = %+v, want its tracker re-paired into o/out", f)
+		}
+		if f.Chart != "" || f.ChartRevisited != "" {
+			t.Errorf("a picture drawn from a withdrawn repository travelled to an admitted one carrying chart %q under stamp %q, want both fields empty",
+				f.Chart, f.ChartRevisited)
+		}
+		if line := findEntry(t, parseLogLines(t, log.Bytes()[written:]),
+			"outcomes: nothing carried; the picture's repository is not admitted"); line["drawn"] != "o/legacy" {
+			t.Errorf("drawn = %v, want o/legacy: the drop names the repository the drawing came from", line["drawn"])
+		}
+	}
+	if paired != 1 {
+		t.Fatalf("%d forests carry root 51, want exactly 1: at zero the re-pairing case above asserts nothing at all", paired)
+	}
+}
+
+// mustForests is the view's set, failed loudly.
+func mustForests(t *testing.T, eng *Engine) []Forest {
+	t.Helper()
+	forests, err := eng.Forests()
+	if err != nil {
+		t.Fatalf("Forests: %v", err)
+	}
+	return forests
 }
 
 // TestForests_CarryFailsClosedOnAnUnknownScope: the carry's admission test
