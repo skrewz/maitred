@@ -76,6 +76,7 @@ triggers:
 | `hold-off-conditions` | | List of Go template conditions, each evaluated one at a time; if any evaluates to `true` the trigger is held off and the matching conditions are logged |
 | `tags` | | Agent capability tags for routing |
 | `timeout` | | Task timeout in seconds (0 = unlimited) |
+| `priority` | | Tier the queue serves the trigger's task at: `firefighter`, `teacher` or `orangutan`. Unset leaves the task at the queue's default tier; an unrecognised tier fails at load, naming the trigger and the value ([§overview/scope](specification/overview.md#scope)) |
 
 ### Prompt Template Variables
 
@@ -278,8 +279,11 @@ template variable works with nested JSON — you can access deeply nested fields
 via dot notation (e.g. `{{ .Payload.sender.login }}`).
 
 The webhook API runs on a separate port from the web dashboard (default `9091`,
-configurable via `MAITRED_API_PORT`). TLS termination is expected to be
-handled by a reverse proxy in front of the API port.
+configurable via `MAITRED_API_PORT`). TLS termination is expected to be handled
+by a reverse proxy in front of the API port. A trigger's `priority` is served
+exactly as declared, so read the port's trust model in
+[§overview/scope](specification/overview.md#scope) before declaring a tier on a
+trigger reachable from it.
 
 ## Web Dashboard
 

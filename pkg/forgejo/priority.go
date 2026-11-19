@@ -2,6 +2,8 @@ package forgejo
 
 import (
 	"strconv"
+
+	"maitred/pkg/queue"
 )
 
 // Task priority: the tier forgejoeng asks the queue to serve a dispatch at.
@@ -14,8 +16,10 @@ import (
 
 // PriorityTeacher is the queue tier a vip dispatch asks for: the queue's own
 // word, forwarded verbatim, the middle of the three tiers hotelier
-// recognises (§forgejo/webhook/vip-priority).
-const PriorityTeacher = "teacher"
+// recognises (§forgejo/webhook/vip-priority). It names queue.PriorityTeacher
+// rather than repeating the string, so the vocabulary has one home
+// (§overview/scope).
+const PriorityTeacher = queue.PriorityTeacher
 
 // taskPriority is the priority a dispatch is scheduled at: the teacher tier
 // where the `vip` label stands behind the object — on it, on the issue a

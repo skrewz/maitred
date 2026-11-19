@@ -2,6 +2,7 @@ package queue_test
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -242,5 +243,37 @@ func TestTask_Priority_JSON(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `"priority":"teacher"`) {
 		t.Errorf("expected priority in JSON, got %s", b)
+	}
+}
+
+// TestPriorityVocabulary: the tiers maitred passes on, and the predicate trigger
+// validation asks.
+//
+// The vocabulary is a deliberate copy of hotelier's rather than an import, so
+// this is the one place the copy is compared against the source — elsewhere
+// the tiers appear only as inputs to maitred's own behaviour. Hotelier
+// validates the field against exactly these — highest first, serving a task
+// whose priority is absent at the lowest of them (see
+// https://github.com/skrewz/hotelier/blob/main/pkg/queue/queue.go).
+//
+// The queue matches a tier exactly, so an empty string — which says nothing at
+// all — and anything merely resembling a tier are not tiers.
+func TestPriorityVocabulary(t *testing.T) {
+	want := []string{"firefighter", "teacher", "orangutan"}
+
+	if got := queue.ValidPriorities(); !slices.Equal(got, want) {
+		t.Fatalf("ValidPriorities() = %v, want %v", got, want)
+	}
+
+	for _, tier := range want {
+		if !queue.IsValidPriority(tier) {
+			t.Errorf("IsValidPriority(%q) = false, want true", tier)
+		}
+	}
+
+	for _, not := range []string{"", "   ", "Teacher", "urgent", " teacher"} {
+		if queue.IsValidPriority(not) {
+			t.Errorf("IsValidPriority(%q) = true, want false", not)
+		}
 	}
 }

@@ -22,7 +22,11 @@ HTTP queue system.
   human-readable `title` for the work it enqueues, expanded with the same
   template machinery as the prompt and carried on the dispatched task; a
   trigger that declares none leaves the task untitled and the queue system
-  names it.
+  names it. A trigger may declare a `priority` — one of the tiers the queue
+  recognises — for the task it enqueues, and one it does not recognise fails
+  the load naming the trigger and the value, so a typo is a startup failure
+  rather than a dispatch the queue refuses. Declaring nothing leaves the field
+  off the task and the queue's own default tier applies.
 - **Prompt templating.** A trigger's `prompt` is a Go `text/template` with
   `.LastRun` (RFC 3339 timestamp of the trigger's last execution) and
   `.Payload` (the webhook payload, when present), plus custom template
@@ -34,7 +38,13 @@ HTTP queue system.
 - **Webhook ingestion.** Named webhook endpoints (YAML files in the webhook
   directory) expose `POST /v1/{provider}/{endpoint}` on the API port. A
   received payload is mapped to a trigger and made available to its prompt
-  and title templates as `.Payload`.
+  and title templates as `.Payload`. The API port checks no signature, token or
+  identity of its own, so anyone who can reach it can dispatch an endpoint's
+  trigger — the trust model the dashboard's controls already ride
+  (§forgejo/observability/triggering-a-sweep). That constrains `priority`: a
+  trigger reachable from this port should declare no tier, leaving the queue's
+  default to apply, unless a proxy in front of the port authenticates — the
+  tier decides where the queue serves work an unauthenticated request started.
 - **Queue dispatch.** Tasks are dispatched through the `TaskQueueProvider`
   interface: an HTTP queue adapter (optional mTLS, optional custom task
   template, optional response logging; the prompt is passed through
@@ -46,14 +56,16 @@ HTTP queue system.
   Forgejo engine sets one per dispatch
   identity, and names each task with a title and a reference URL, per
   §forgejo/webhook/the-pipeline). A priority is the queue's own vocabulary,
-  forwarded verbatim and never interpreted by maitred; a task that declares
-  none omits the field from the wire body entirely, so the queue's default
-  tier applies and the body is the one maitred produced before the field
-  existed. The Forgejo engine sets one wherever the `vip` label stands
-  behind the dispatch — on the object, on the issue a pull request
-  delivers, or on its forest's tracker — per
-  §forgejo/webhook/vip-priority; a trigger's task declares none, since a
-  trigger has no labelled object to judge.
+  forwarded verbatim; the tiers maitred will pass are the three hotelier
+  recognises, named in `pkg/queue`, so a queue whose tiers are named otherwise
+  needs those names changed there. A task that declares none omits the field
+  from the wire body entirely, so the queue's default tier applies and the body
+  is the one maitred produced before the field existed. The Forgejo engine sets
+  one wherever the `vip` label stands behind the dispatch — on the object, on
+  the issue a pull request delivers, or on its forest's tracker — per
+  §forgejo/webhook/vip-priority; a trigger's task carries the tier its
+  definition declares, checked against the tiers the queue recognises when the
+  trigger is loaded.
 - **Persistent state.** Each trigger's last run time and extra state is
   persisted as a JSON file per trigger under the data directory and survives
   restarts. Per-trigger execution history is recorded.

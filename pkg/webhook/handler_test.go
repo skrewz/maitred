@@ -1501,3 +1501,69 @@ endpoints:
 		t.Errorf("trigger handler ran despite the override: %d tasks", mq.Count())
 	}
 }
+
+// TestHandler_WebhookDispatchesPriority: the @webhook path carries the tier the
+// trigger declares, so a webhook-driven trigger's task is served there too
+// (§overview/scope).
+func TestHandler_WebhookDispatchesPriority(t *testing.T) {
+	triggerYAML := `
+triggers:
+  - id: "ranked-pr-review"
+    type: periodic
+    schedule: "@webhook"
+    priority: firefighter
+    prompt: "Review PR: {{ .Payload.pull_request.title }}"
+  - id: "unranked-pr-review"
+    type: periodic
+    schedule: "@webhook"
+    prompt: "Review PR: {{ .Payload.pull_request.title }}"
+`
+	webhookYAML := `
+endpoints:
+  - name: "ranked"
+    trigger_id: "ranked-pr-review"
+    response: '{"status": "submitted"}'
+  - name: "unranked"
+    trigger_id: "unranked-pr-review"
+    response: '{"status": "submitted"}'
+`
+
+	eng, mq, providers := setupTestEnvNoStart(t, triggerYAML, webhookYAML)
+	defer eng.Stop()
+
+	st := eng.StateStore()
+	handler := webhook.NewHandler(eng, st, "test", providers)
+
+	payloadBytes, _ := json.Marshal(map[string]interface{}{
+		"pull_request": map[string]interface{}{"title": "Carry the tier"},
+	})
+
+	for _, tc := range []struct {
+		endpoint string
+		want     string
+	}{
+		{"ranked", "firefighter"},
+		{"unranked", ""},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/v1/forgejo/"+tc.endpoint, strings.NewReader(string(payloadBytes)))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeMux().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: expected status 200, got %d: %s", tc.endpoint, w.Code, w.Body.String())
+		}
+	}
+
+	if mq.Count() != 2 {
+		t.Fatalf("expected 2 tasks, got %d", mq.Count())
+	}
+
+	tasks := mq.Tasks()
+	if tasks[0].Priority != "firefighter" {
+		t.Errorf("declared priority = %q, want 'firefighter'", tasks[0].Priority)
+	}
+	if tasks[1].Priority != "" {
+		t.Errorf("undeclared priority = %q, want unset so the queue's default applies", tasks[1].Priority)
+	}
+}

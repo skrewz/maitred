@@ -319,12 +319,13 @@ func (e *Engine) executeTrigger(def trigger.TriggerDefinition) {
 
 	// Create task
 	task := &queue.Task{
-		ID:      fmt.Sprintf("task-%s-%d", def.ID, time.Now().UnixNano()),
-		Prompt:  prompt,
-		Tags:    def.Tags,
-		Timeout: def.Timeout,
-		Persona: def.Persona,
-		Title:   title,
+		ID:       fmt.Sprintf("task-%s-%d", def.ID, time.Now().UnixNano()),
+		Prompt:   prompt,
+		Tags:     def.Tags,
+		Timeout:  def.Timeout,
+		Persona:  def.Persona,
+		Title:    title,
+		Priority: def.Priority,
 	}
 
 	// Dispatch to queue

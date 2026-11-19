@@ -177,12 +177,13 @@ func (h *Handler) handleWebhook(providers []ProviderConfig) http.HandlerFunc {
 
 		// Create and dispatch task
 		task := &queue.Task{
-			ID:      fmt.Sprintf("task-%s-webhook-%d", ep.TriggerID, time.Now().UnixNano()),
-			Prompt:  prompt,
-			Tags:    def.Tags,
-			Timeout: def.Timeout,
-			Persona: def.Persona,
-			Title:   title,
+			ID:       fmt.Sprintf("task-%s-webhook-%d", ep.TriggerID, time.Now().UnixNano()),
+			Prompt:   prompt,
+			Tags:     def.Tags,
+			Timeout:  def.Timeout,
+			Persona:  def.Persona,
+			Title:    title,
+			Priority: def.Priority,
 		}
 
 		if err := h.engine.Queue().AddTask(task); err != nil {

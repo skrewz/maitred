@@ -3,6 +3,7 @@ package trigger_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1525,5 +1526,72 @@ func TestTriggerDefinition_Validate_InvalidTitle(t *testing.T) {
 
 	if err := def.Validate(); err == nil {
 		t.Error("expected error for invalid title template, got nil")
+	}
+}
+
+// TestLoadTriggerDefinition_Priority: a trigger that names a tier keeps it, so
+// the task the trigger dispatches is served there rather than at the queue's
+// default (§overview/scope). The tier is spelled the way a trigger file spells
+// it — that spelling is what reaches the wire, and a tier the queue would
+// refuse is caught here at load rather than costing a dispatch later. The
+// other tiers need no case here: TestPriorityVocabulary owns the spellings.
+func TestLoadTriggerDefinition_Priority(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "ranked-trigger"
+    type: periodic
+    schedule: "@every 1h"
+    priority: teacher
+    prompt: "Research the news"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := trigger.LoadTriggerDefinitions(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(defs) != 1 {
+		t.Fatalf("expected 1 trigger, got %d", len(defs))
+	}
+
+	if defs[0].Priority != "teacher" {
+		t.Errorf("expected priority %q, got %q", "teacher", defs[0].Priority)
+	}
+}
+
+// TestLoadTriggerDefinitions_InvalidPriority: a tier the queue does not
+// recognise fails at load, naming the trigger and the bad value. The queue
+// would answer 400 for it, and yaml.Unmarshal is non-strict, so the alternative
+// to failing here is a task silently served at the wrong tier — or a key silently
+// dropped — in a configuration repo nobody re-reads.
+func TestLoadTriggerDefinitions_InvalidPriority(t *testing.T) {
+	dir := t.TempDir()
+
+	configYAML := `
+triggers:
+  - id: "typo-trigger"
+    type: periodic
+    schedule: "@every 1h"
+    priority: urgency
+    prompt: "Research the news"
+`
+	if err := os.WriteFile(filepath.Join(dir, "triggers.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := trigger.LoadTriggerDefinitions(dir)
+	if err == nil {
+		t.Fatal("expected an unrecognised priority to fail at load, got none")
+	}
+
+	for _, want := range []string{"typo-trigger", "urgency"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should name %q", err, want)
+		}
 	}
 }

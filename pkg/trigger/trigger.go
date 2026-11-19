@@ -18,6 +18,8 @@ import (
 
 	"github.com/robfig/cron/v3"
 	"gopkg.in/yaml.v3"
+
+	"maitred/pkg/queue"
 )
 
 // TriggerType represents the kind of trigger.
@@ -75,6 +77,7 @@ type triggerFileEntry struct {
 	Tags              []string    `yaml:"tags,omitempty"`
 	Timeout           int         `yaml:"timeout,omitempty"`
 	Persona           string      `yaml:"persona,omitempty"`
+	Priority          string      `yaml:"priority,omitempty"`
 }
 
 // TriggerDefinition is the parsed, validated form of a trigger.
@@ -100,6 +103,15 @@ type TriggerDefinition struct {
 	// .LastRun. Empty means the queue system names the task itself
 	// (see §overview/scope).
 	Title string `yaml:"title,omitempty" json:"title,omitempty"`
+	// Priority is the tier the queue should serve the task this trigger
+	// enqueues at: one of the tiers queue.ValidPriorities lists. Empty means
+	// the trigger says nothing about priority, so the field is left off the
+	// wire body and the queue's own default tier applies. Anything else is
+	// checked at load against the queue's vocabulary: the queue would answer
+	// 400 for a tier it does not recognise, so a typo is rejected here —
+	// naming the trigger and the value — rather than costing a failed
+	// dispatch at runtime (§overview/scope).
+	Priority string `yaml:"priority,omitempty" json:"priority,omitempty"`
 }
 
 // EvalPromptTemplate evaluates the trigger's prompt template with the
@@ -426,6 +438,7 @@ func loadTriggerFile(path string) ([]TriggerDefinition, error) {
 			Tags:              entry.Tags,
 			Timeout:           entry.Timeout,
 			Persona:           entry.Persona,
+			Priority:          entry.Priority,
 		}
 
 		// Validate
@@ -443,6 +456,10 @@ func loadTriggerFile(path string) ([]TriggerDefinition, error) {
 		}
 		if _, err := ParseSchedule(def.Schedule); err != nil {
 			return nil, fmt.Errorf("trigger %s: %w", def.ID, err)
+		}
+		if def.Priority != "" && !queue.IsValidPriority(def.Priority) {
+			return nil, fmt.Errorf("trigger %s: unsupported priority %q (valid: %s)",
+				def.ID, def.Priority, strings.Join(queue.ValidPriorities(), ", "))
 		}
 
 		defs = append(defs, def)
