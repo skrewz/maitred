@@ -33,27 +33,34 @@ func outcomesRepo(fullName string) Repository {
 	}
 }
 
-// outcomesRoot builds an open issue carrying the reserved ideation label.
+// outcomesRoot builds an open issue carrying the reserved ideation label,
+// in the colour a real forge reports for it — the drawing's stroke comes
+// from the label, so the outcomes fixtures carry one too
+// (§forgejo/renderer/classes-and-strokes).
 func outcomesRoot(number int, title string) Issue {
 	return Issue{
-		Number:    number,
-		Title:     title,
-		State:     "open",
-		Labels:    []string{LabelIdeation},
-		UpdatedAt: testUpdatedAt,
-		HTMLURL:   issueURL(number),
+		Number:       number,
+		Title:        title,
+		State:        "open",
+		Labels:       []string{LabelIdeation},
+		LabelColours: chartRootColour,
+		UpdatedAt:    testUpdatedAt,
+		HTMLURL:      issueURL(number),
 	}
 }
 
-// outcomesTracker builds an open issue carrying the reserved outcome label.
+// outcomesTracker builds an open issue carrying the reserved outcome
+// label, in the colour a real forge reports for it
+// (§forgejo/renderer/classes-and-strokes).
 func outcomesTracker(number int, title string) Issue {
 	return Issue{
-		Number:    number,
-		Title:     title,
-		State:     "open",
-		Labels:    []string{LabelOutcome},
-		UpdatedAt: testUpdatedAt,
-		HTMLURL:   issueURL(number),
+		Number:       number,
+		Title:        title,
+		State:        "open",
+		Labels:       []string{LabelOutcome},
+		LabelColours: chartTrackerColour,
+		UpdatedAt:    testUpdatedAt,
+		HTMLURL:      issueURL(number),
 	}
 }
 
@@ -655,13 +662,16 @@ func TestForests_RecordedEmptyIsHonest(t *testing.T) {
 	}
 }
 
-// The current-state block's scrape: the view reads the picture out of the
-// tracker's own description and publishes it alongside the rows, saying
-// "nothing" wherever the region says nothing
-// (§forgejo/observability/the-outcomes-view).
+// The picture the payload carries: the tick's own drawing of the forest's
+// graph, recorded onto the set the view serves. The tracker's description
+// is out of the picture's chain of command, ragged or not
+// (§forgejo/observability/the-outcomes-view,
+// §forgejo/reconciliation/the-tracker-block).
 
-// forestChartSource is the Mermaid source a tracker's current-state block
-// carries between its fences.
+// forestChartSource is the Mermaid source a tracker's description may
+// claim between its fences. The payload no longer reads it: wherever a
+// test says "stale", this is the chart the description holds and the
+// payload must not publish.
 const forestChartSource = "flowchart TD\n\tr51[root #51] --> t71[tracker #71]"
 
 // mermaidBlock is that source as a fenced Mermaid block.
@@ -670,175 +680,115 @@ func mermaidBlock() string {
 }
 
 // currentStateBlock builds a tracker body whose current-state region is
-// delimited by the fence pair the curating agent writes, holding the stamp
-// line and the given fenced block, with prose outside the pair
-// (§forgejo/observability/the-outcomes-view).
+// delimited by the fence pair the engine writes, holding the stamp line
+// and the given fenced block, with prose outside the pair
+// (§forgejo/reconciliation/the-tracker-block).
 func currentStateBlock(stamp, block string) string {
 	region := fenceBegin + "\n\n## Current state\n\nLast revisited: " + stamp + "\n\n" + block + "\n\n" + fenceEnd
 	return "## Outcome\n\nThe prose a human wrote.\n\n" + region + "\n\nA footnote outside the pair.\n"
 }
 
 // stageForest stages one forest in the outcomes fixtures: the root and its
-// tracker in the listing, and the pairing in the root's blocks read — the
-// row that read carries is the description the picture is scraped from
+// tracker in the listing and readable as themselves, and the pairing in
+// the root's blocks read. The payload's picture is drawn from the graph
+// these rows trace, never read out of a description
 // (§forgejo/observability/the-outcomes-view, §forgejo/client/operations).
 func stageForest(api *fakeAPI, root, tracker Issue) {
 	api.openIssues["out"] = []Issue{root, tracker}
 	api.blocks[root.Number] = []Issue{tracker}
+	api.issues[root.Number] = &root
+	api.issues[tracker.Number] = &tracker
 }
 
-// TestForests_ChartIsScrapedFromTheTrackersBody: one table of tracker
-// descriptions, each stating the picture it publishes and the line it
-// leaves in the log. The two fields are the payload's two statements,
-// refused per field rather than per region, and every ragged edge publishes
-// nothing rather than a guessed picture. An empty why is the assertion that
-// the enumeration stayed silent — how "nothing was written yet" reads, at
-// every level — and a why is the rule a region that was there refused by,
-// named once per tick at Debug so a marker that drifted away from what the
-// curating agent writes reads differently from a forest nobody has
-// catalogued (§forgejo/observability/the-outcomes-view).
-func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
+// TestForests_ChartIsDrawnFromTheGraph: one table of tracker
+// descriptions — well-formed but stale, ragged in every way the scrape
+// ever refused, and absent outright, the chart never written to its
+// tracker — and every row carries the same payload picture: the source
+// the tick drew from the forest's graph, stamped at the moment that
+// drawing was made. What a description claims about the graph moves no
+// field (§forgejo/observability/the-outcomes-view,
+// §forgejo/reconciliation/the-tracker-block).
+func TestForests_ChartIsDrawnFromTheGraph(t *testing.T) {
 	const stamp = "2026-11-16 09:12 AEDT"
 	cases := []struct {
-		name      string
-		body      string
-		wantChart string
-		wantStamp string
-		why       string
+		name string
+		body string
 	}{
 		{
-			name:      "one pair, block and stamp",
-			body:      currentStateBlock(stamp, mermaidBlock()),
-			wantChart: forestChartSource,
-			wantStamp: stamp,
+			name: "a well-formed region whose chart and stamp have gone stale",
+			body: currentStateBlock(stamp, "```mermaid\nflowchart TD\n%% stale\n```"),
 		},
 		{
-			name:      "a CET stamp is carried as written",
-			body:      currentStateBlock("2026-11-16 09:12 CET", mermaidBlock()),
-			wantChart: forestChartSource,
-			wantStamp: "2026-11-16 09:12 CET",
-		},
-		{
-			// The view's first silence: a description nobody has delimited
-			// is an uncatalogued forest, an ordinary state.
-			name: "no fence pair at all",
+			// The case the scrape left empty for the whole of a young
+			// forest's life: nobody has written its tracker a chart yet.
+			name: "no fence pair — the chart was never written to the tracker",
 			body: "## Outcome\n\nNothing was ever delimited here.\n",
 		},
 		{
-			// The view's other silence: the label the writer's template
-			// carries, with no value yet — the stamp unwritten, the picture
-			// beside it standing.
-			name:      "a stamp line carrying nothing",
-			body:      currentStateBlock("", mermaidBlock()),
-			wantChart: forestChartSource,
+			name: "an empty description",
+			body: "",
 		},
 		{
 			name: "two fence pairs are ambiguous",
 			body: currentStateBlock(stamp, mermaidBlock()) + "\n" +
 				currentStateBlock("2025-01-01 00:00 AEDT", mermaidBlock()),
-			why: "the fence pair is not exactly one begin and one end",
 		},
 		{
-			name: "the end marker precedes the begin marker",
+			name: "the end marker sits before the begin marker",
 			body: fenceEnd + "\n```mermaid\n" + forestChartSource + "\n```\n" + fenceBegin,
-			why:  "the end marker sits before the begin marker",
 		},
 		{
-			name:      "the pair holds prose but no Mermaid fence",
-			body:      currentStateBlock(stamp, "The graph would go here, but none was written."),
-			wantStamp: stamp,
-			why:       "the region holds no closed Mermaid block",
+			name: "the pair holds prose but no Mermaid fence",
+			body: currentStateBlock(stamp, "The graph would go here, but none was written."),
 		},
 		{
-			name:      "the pair holds two Mermaid blocks",
-			body:      currentStateBlock(stamp, mermaidBlock()+"\n\n"+mermaidBlock()),
-			wantStamp: stamp,
-			why:       "the region holds more than one Mermaid block",
+			name: "the pair holds two Mermaid blocks",
+			body: currentStateBlock(stamp, mermaidBlock()+"\n\n"+mermaidBlock()),
 		},
 		{
-			name:      "the Mermaid fence is never closed",
-			body:      currentStateBlock(stamp, "```mermaid\n"+forestChartSource),
-			wantStamp: stamp,
-			why:       "the region holds an unclosed Mermaid fence",
+			name: "the Mermaid fence is never closed",
+			body: currentStateBlock(stamp, "```mermaid\n"+forestChartSource),
 		},
 		{
-			// A block completed above a dangling opener is a description
-			// mid-edit, and which of the two is the current one is no more
-			// guessable than which of two fence pairs is.
-			name:      "a complete block above an unclosed fence",
-			body:      currentStateBlock(stamp, mermaidBlock()+"\n\n```mermaid\n\tmore"),
-			wantStamp: stamp,
-			why:       "the region holds an unclosed Mermaid fence",
+			name: "the region holds no stamp line",
+			body: fenceBegin + "\n\n" + mermaidBlock() + "\n\n" + fenceEnd,
 		},
 		{
-			name:      "a second opener appears before the first block closes",
-			body:      currentStateBlock(stamp, "```mermaid\n"+forestChartSource+"\n```mermaid\n\tmore\n```"),
-			wantStamp: stamp,
-			why:       "the region holds an unclosed Mermaid fence",
+			name: "a stamp line carrying no value",
+			body: currentStateBlock("", mermaidBlock()),
 		},
 		{
-			// The line is the evidence the region was written to the
-			// contract at all, so its absence is drift rather than the
-			// unwritten stamp above it, and this is the one state whose
-			// picture publishes while the log speaks.
-			name:      "the region holds no stamp line",
-			body:      fenceBegin + "\n\n" + mermaidBlock() + "\n\n" + fenceEnd,
-			wantChart: forestChartSource,
-			why:       "the region holds no stamp line",
-		},
-		{
-			name:      "the pair holds two stamp lines",
-			body:      currentStateBlock(stamp+"\n\nLast revisited: 2025-01-01 00:00 AEDT", mermaidBlock()),
-			wantChart: forestChartSource,
-			why:       "the region holds more than one stamp line",
-		},
-		{
-			// The label is what is counted, not the value: an unwritten
-			// placeholder above the real stamp leaves the block's recency
-			// as unguessable as two filled lines would.
-			name:      "a stamp line carrying nothing then one carrying the stamp",
-			body:      currentStateBlock("\n\nLast revisited: "+stamp, mermaidBlock()),
-			wantChart: forestChartSource,
-			why:       "the region holds more than one stamp line",
+			name: "the region holds two stamp lines",
+			body: currentStateBlock(stamp+"\n\nLast revisited: 2025-01-01 00:00 AEDT", mermaidBlock()),
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var log bytes.Buffer
-			eng, api, _, _ := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log,
-				&slog.HandlerOptions{Level: slog.LevelDebug})))
-			api.repos = []Repository{outcomesRepo("o/out")}
-			root := outcomesRoot(51, "root")
-			tracker := outcomesTracker(71, "tracker")
-			tracker.Body = tc.body
-			stageForest(api, root, tracker)
+			eng, api, _, _ := newTestEngine(t)
+			chartWire(api, tc.body)
+			start := time.Now()
+			eng.Reconcile()
 
-			forests, err := eng.enumerateForests()
+			forests, err := eng.Forests()
 			if err != nil {
-				t.Fatalf("enumerateForests: %v", err)
+				t.Fatalf("Forests: %v", err)
 			}
 			if len(forests) != 1 {
-				t.Fatalf("forests = %+v, want the one forest listed", forests)
+				t.Fatalf("forests = %+v, want the one forest", forests)
 			}
-			if forests[0].Chart != tc.wantChart {
-				t.Errorf("chart = %q, want %q", forests[0].Chart, tc.wantChart)
+			forest := forests[0]
+			want, err := eng.renderForestChart(forest)
+			if err != nil {
+				t.Fatalf("renderForestChart: %v", err)
 			}
-			if forests[0].ChartRevisited != tc.wantStamp {
-				t.Errorf("chart_revisited = %q, want %q", forests[0].ChartRevisited, tc.wantStamp)
+			if forest.Chart != want {
+				t.Errorf("chart = %q, want the tick's drawing of the graph %q: what the description claims moves no field", forest.Chart, want)
 			}
-			if tc.why == "" {
-				if out := log.String(); out != "" {
-					t.Errorf("the enumeration logged %q, want silence: nothing written yet is not a fault", out)
-				}
-				return
-			}
-			line := findEntry(t, parseLogLines(t, log.Bytes()),
-				"outcomes: a tracker's current-state region refused; publishing nothing for the refused field")
-			if line["why"] != tc.why {
-				t.Errorf("why = %v, want %q: the line names the rule that refused", line["why"], tc.why)
-			}
-			if line["tracker"] != "o/out#71" {
-				t.Errorf("tracker = %v, want o/out#71: a refusal names whose description refused", line["tracker"])
+			stamped, err := time.Parse(stampLayout, forest.ChartRevisited)
+			if err != nil {
+				t.Errorf("chart_revisited = %q, want the render moment in the %s layout: %v", forest.ChartRevisited, stampLayout, err)
+			} else if stamped.Before(start.Add(-time.Minute)) || stamped.After(time.Now().Add(time.Minute)) {
+				t.Errorf("chart_revisited = %q, want a stamp of this tick's drawing moment", forest.ChartRevisited)
 			}
 		})
 	}
@@ -846,7 +796,9 @@ func TestForests_ChartIsScrapedFromTheTrackersBody(t *testing.T) {
 
 // TestForests_AbsentTrackerPublishesNoPictureAndIsNotRead: a forest whose
 // tracker is absent publishes both picture fields empty and reads no
-// description of an issue that is not there
+// description of an issue that is not there — through the enumeration and
+// through a full sweep tick, since the tick draws no picture for a forest
+// with nothing to draw it on
 // (§forgejo/observability/the-outcomes-view).
 func TestForests_AbsentTrackerPublishesNoPictureAndIsNotRead(t *testing.T) {
 	eng, api, _, _ := newTestEngine(t)
@@ -862,45 +814,69 @@ func TestForests_AbsentTrackerPublishesNoPictureAndIsNotRead(t *testing.T) {
 		t.Fatalf("forests = %+v, want the root listed with its tracker absent", forests)
 	}
 	if forests[0].Chart != "" || forests[0].ChartRevisited != "" {
-		t.Errorf("chart = %q chart_revisited = %q, want both empty with no tracker to read", forests[0].Chart, forests[0].ChartRevisited)
+		t.Errorf("chart = %q chart_revisited = %q, want both empty with no tracker to draw", forests[0].Chart, forests[0].ChartRevisited)
 	}
 	if n := api.callCount("GetIssue:"); n != 0 {
 		t.Errorf("the walk made %d issue read(s), want none: a forest with no tracker reads no body", n)
 	}
+
+	eng.Reconcile()
+	forests, err = eng.Forests()
+	if err != nil {
+		t.Fatalf("Forests after the sweep: %v", err)
+	}
+	if len(forests) != 1 || forests[0].Chart != "" || forests[0].ChartRevisited != "" {
+		t.Errorf("forests = %+v, want the trackerless forest recorded with both picture fields empty", forests)
+	}
 }
 
-// TestForests_ChartComesFromTheTrackersRow: a tracker living in another
-// repository brings the picture its own description holds rather than the
-// root's, and the walk pays no extra read for it — the row the blocks read
-// returned *is* the tracker's own row (§forgejo/client/operations,
-// §forgejo/observability/the-outcomes-view).
-func TestForests_ChartComesFromTheTrackersRow(t *testing.T) {
+// TestForests_ChartIgnoresWhatTheTrackersBodyClaims: a cross-repository
+// tracker whose description carries a decoy picture still brings the
+// payload the drawing the graph supports — the row the blocks read
+// returned is no longer the picture's source, wherever it lives
+// (§forgejo/client/operations, §forgejo/observability/the-outcomes-view,
+// §forgejo/webhook/repository-roles).
+func TestForests_ChartIgnoresWhatTheTrackersBodyClaims(t *testing.T) {
 	eng, api, _, _ := newTestEngine(t)
 	api.repos = []Repository{outcomesRepo("o/out"), testRepo("o/elsewhere")}
 	root := outcomesRoot(51, "root")
+	api.issues[51] = &root
 	tracker := outcomesTracker(71, "cross-repo tracker")
 	tracker.Repository = "o/elsewhere"
-	tracker.Body = currentStateBlock("2026-11-16 09:12 AEDT", mermaidBlock())
+	tracker.Body = currentStateBlock("2026-11-16 09:12 AEDT",
+		"```mermaid\nflowchart TD\n\tdecoy[a chart that lies]\n```")
 	api.openIssues["out"] = []Issue{root}
 	api.blocks[51] = []Issue{tracker}
 
-	forests, err := eng.enumerateForests()
+	eng.Reconcile()
+	forests, err := eng.Forests()
 	if err != nil {
-		t.Fatalf("enumerateForests: %v", err)
+		t.Fatalf("Forests: %v", err)
 	}
-	if len(forests) != 1 || forests[0].Chart != forestChartSource {
-		t.Fatalf("forests = %+v, want the cross-repo tracker's chart", forests)
+	if len(forests) != 1 || forests[0].Tracker == nil || forests[0].Tracker.Repository != "o/elsewhere" {
+		t.Fatalf("forests = %+v, want the cross-repo tracker paired", forests)
 	}
-	if n := api.callCount("GetIssue:"); n != 0 {
-		t.Errorf("the walk made %d issue read(s), want none: the picture is scraped from the row the blocks read returned", n)
+	forest := forests[0]
+	if strings.Contains(forest.Chart, "a chart that lies") {
+		t.Errorf("chart = %q, want the graph's drawing, not the decoy the description claims", forest.Chart)
+	}
+	want, err := eng.renderForestChart(forest)
+	if err != nil {
+		t.Fatalf("renderForestChart: %v", err)
+	}
+	if forest.Chart != want {
+		t.Errorf("chart = %q, want the tick's drawing of the graph %q", forest.Chart, want)
+	}
+	if forest.ChartRevisited == "" {
+		t.Error("chart_revisited is empty, want the stamp of the drawing that was made")
 	}
 }
 
-// TestForests_PicturePaysTheAdmissionTest: the scraped region is the
-// engine's own drawing, so the read half of the tracker block pays the
-// admission test the write half pays — a tracker in a repository a maitred
-// role names brings its picture, one no role names stays paired with the
-// picture withheld, so a repository outside the remit authors nothing the
+// TestForests_PicturePaysTheAdmissionTest: the picture is the tick's
+// drawing, so the one admission test the drawing pays governs both of
+// its sinks — a tracker in a repository a maitred role names brings its
+// payload picture, one no role names stays paired with the picture
+// withheld, so a repository outside the remit authors nothing the
 // unauthenticated view publishes as the engine's current state; the
 // refusal is Debug, the level every other cross-repository hop uses for
 // this sentence (§forgejo/webhook/repository-roles,
@@ -914,18 +890,19 @@ func TestForests_PicturePaysTheAdmissionTest(t *testing.T) {
 	root := outcomesRoot(51, "root")
 	admitted := outcomesTracker(71, "tracker in an admitted repository")
 	admitted.Repository = "o/elsewhere"
-	admitted.Body = currentStateBlock("2026-11-16 09:12 AEDT", mermaidBlock())
 	rootTwo := outcomesRoot(52, "second root")
 	refused := outcomesTracker(72, "tracker in an unadmitted repository")
 	refused.Repository = "o/archive"
-	refused.Body = currentStateBlock("2026-11-16 09:12 AEDT", mermaidBlock())
 	api.openIssues["out"] = []Issue{root, rootTwo}
+	api.issues[51] = &root
+	api.issues[52] = &rootTwo
 	api.blocks[51] = []Issue{admitted}
 	api.blocks[52] = []Issue{refused}
 
-	forests, err := eng.enumerateForests()
+	eng.Reconcile()
+	forests, err := eng.Forests()
 	if err != nil {
-		t.Fatalf("enumerateForests: %v", err)
+		t.Fatalf("Forests: %v", err)
 	}
 	if len(forests) != 2 {
 		t.Fatalf("forests = %d, want 2", len(forests))
@@ -936,23 +913,99 @@ func TestForests_PicturePaysTheAdmissionTest(t *testing.T) {
 		}
 		switch f.Tracker.Number {
 		case 71:
-			if f.Chart != forestChartSource || f.ChartRevisited == "" {
-				t.Errorf("admitted tracker published chart %q stamp %q, want the picture it carries", f.Chart, f.ChartRevisited)
+			want, err := eng.renderForestChart(f)
+			if err != nil {
+				t.Fatalf("renderForestChart: %v", err)
+			}
+			if f.Chart != want || f.ChartRevisited == "" {
+				t.Errorf("admitted tracker published chart %q stamp %q, want the tick's drawing %q under its stamp", f.Chart, f.ChartRevisited, want)
 			}
 		case 72:
 			if f.Chart != "" || f.ChartRevisited != "" {
-				t.Errorf("unadmitted tracker published chart %q stamp %q, want both empty: the region of a repository no role admits is not the engine's to publish", f.Chart, f.ChartRevisited)
+				t.Errorf("unadmitted tracker published chart %q stamp %q, want both empty: a repository no role admits authors no picture", f.Chart, f.ChartRevisited)
 			}
 		default:
 			t.Errorf("unexpected tracker %d", f.Tracker.Number)
 		}
 	}
 	line := findEntry(t, parseLogLines(t, log.Bytes()),
-		"outcomes: tracker lives in a repository no maitred role names; publishing no picture")
+		"reconciliation: tracker lives in a repository no maitred role names; nothing written")
 	if line["tracker"] != "o/archive#72" {
 		t.Errorf("tracker = %v, want o/archive#72: the refusal names the repository it refused", line["tracker"])
 	}
-	if n := api.callCount("UpdateIssueBody:"); n != 0 {
-		t.Errorf("the enumeration wrote %d issue bodies, want none: the view reads", n)
+	if n := api.callCount("UpdateIssueBody:archive/72"); n != 0 {
+		t.Errorf("the tick wrote %d bodies to the refused repository, want none", n)
+	}
+}
+
+// TestForests_DrawFailureEmptiesThePicture: the view never dresses a
+// fresh stamp over a remembered chart. The tick that cannot draw a
+// forest — here, a root whose role label lost its readable colour —
+// states both picture fields empty, names the failure in the log, and
+// leaves the forest itself listed
+// (§forgejo/observability/the-outcomes-view,
+// §forgejo/reconciliation/the-tracker-block).
+func TestForests_DrawFailureEmptiesThePicture(t *testing.T) {
+	eng, api, log := chartForestEngine(t, chartFenced())
+	eng.Reconcile()
+	forests, err := eng.Forests()
+	if err != nil || len(forests) != 1 {
+		t.Fatalf("forests = %+v, %v", forests, err)
+	}
+	if forests[0].Chart == "" {
+		t.Fatal("the first tick drew no picture into the payload")
+	}
+
+	// The root's role label loses its readable colour: the drawing the
+	// next tick attempts cannot be made, and inventing a hex is not on
+	// the table.
+	api.mu.Lock()
+	api.issues[1].LabelColours = nil
+	api.mu.Unlock()
+	eng.Reconcile()
+
+	forests, err = eng.Forests()
+	if err != nil {
+		t.Fatalf("Forests after the failed draw: %v", err)
+	}
+	if forests[0].Chart != "" || forests[0].ChartRevisited != "" {
+		t.Errorf("chart = %q stamp = %q, want both empty for a tick that drew nothing — never yesterday's chart under today's stamp",
+			forests[0].Chart, forests[0].ChartRevisited)
+	}
+	line := findEntry(t, parseLogLines(t, log.Bytes()),
+		"reconciliation: tracker current-state block not written")
+	if line["tracker"] != "o/out#2" {
+		t.Errorf("the failure line names %v, want o/out#2: the failure is one forest's own", line["tracker"])
+	}
+}
+
+// TestForests_ChartStampIsRenderedInTheConfiguredZone: the payload's
+// recency is the drawing moment spelled in the configured zone, the way
+// the block's stamp is — a CET rendering reads as CET, and the view
+// interprets nothing (§forgejo/config/tracker-chart,
+// §forgejo/observability/the-outcomes-view).
+func TestForests_ChartStampIsRenderedInTheConfiguredZone(t *testing.T) {
+	sydney, err := time.LoadLocation("Australia/Sydney")
+	if err != nil {
+		t.Skip("no tzdata to load Australia/Sydney with")
+	}
+	eng, api, _, _ := newTestEngine(t)
+	chartWire(api, chartFenced())
+	eng.cfg.TrackerTimezone = "Australia/Sydney"
+	eng.Reconcile()
+
+	forests, err := eng.Forests()
+	if err != nil {
+		t.Fatalf("Forests: %v", err)
+	}
+	if len(forests) != 1 || forests[0].ChartRevisited == "" {
+		t.Fatalf("forests = %+v, want the drawn forest carrying its stamp", forests)
+	}
+	stamped, err := time.ParseInLocation(stampLayout, forests[0].ChartRevisited, sydney)
+	if err != nil {
+		t.Fatalf("chart_revisited = %q: %v", forests[0].ChartRevisited, err)
+	}
+	if stamped.UTC().Format(stampLayout) == forests[0].ChartRevisited {
+		t.Errorf("chart_revisited = %q, want the drawing moment spelled in %s rather than as UTC", forests[0].ChartRevisited, sydney)
 	}
 }

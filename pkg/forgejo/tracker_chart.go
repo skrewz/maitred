@@ -22,16 +22,22 @@ import (
 // (§forgejo/client/the-one-mutation).
 const (
 	// fenceBegin and fenceEnd open and close the region the engine owns.
-	// They are the pair the outcomes view scrapes (outcomes.go) and the
-	// pair this file writes, stated once so the region the engine draws
-	// inside can never drift from the region the view reads
-	// (§forgejo/observability/the-outcomes-view).
+	// They are the pair this file writes and the pair a revision keyed
+	// outside of leaves untouched (outsideFence), stated once so the
+	// region the engine draws inside can never drift from the region it
+	// splices (§forgejo/reconciliation/the-tracker-block).
 	fenceBegin = "<!-- maitred:forest:begin -->"
 	fenceEnd   = "<!-- maitred:forest:end -->"
 	// stateHeading is the heading the block stands under when a tracker's
 	// description carries no fence pair yet and the block is inserted as
 	// the body's first heading.
 	stateHeading = "## Current state"
+	// stampLabel prefixes the recency line the block carries:
+	// `Last revisited: <YYYY-MM-DD HH:MM> <TZ>`. The outcomes payload
+	// spells its chart_revisited field with the same layout, so the two
+	// sinks of one drawing state the same moment
+	// (§forgejo/observability/the-outcomes-view).
+	stampLabel = "Last revisited:"
 	// stampLayout renders the stamp's date and time half; the label is the
 	// shared stampLabel the outcomes view scrapes, and the zone abbreviation
 	// follows from the configured location
@@ -60,25 +66,33 @@ var errFenceAmbiguous = errors.New("the tracker's fence pair is ambiguous")
 // §forgejo/reconciliation/the-tracker-block). Each forest stands or falls on its
 // own: a read that fails, a graph the renderer refuses and a write the forge
 // refuses are logged naming that forest and skipped, so one ragged forest costs
-// the others nothing. The walk has already decided and dispatched by the time
-// this runs — the drawing is the tick's last step, never a decision's
-// predecessor. at is the moment the stamp carries: one clock read for the
-// whole pass, so every forest a tick draws states the same instant. It is a
-// parameter rather than a clock read here for that, and so a test can watch
-// the stamp move while the graph stands still.
+// the others nothing. The drawing each forest produces — the one drawing the
+// tick makes for it — also goes onto the outcomes payload, empty wherever the
+// tick drew nothing (recordForestCharts,
+// §forgejo/observability/the-outcomes-view). The walk has already decided and
+// dispatched by the time this runs — the drawing is the tick's last step,
+// never a decision's predecessor. at is the moment the stamp carries: one
+// clock read for the whole pass, so every forest a tick draws states the same
+// instant, in the block and in the payload alike. It is a parameter rather
+// than a clock read here for that, and so a test can watch the stamp move
+// while the graph stands still.
 func (e *Engine) writeTrackerBlocks(forests []Forest, at time.Time) {
-	for _, forest := range forests {
+	sources := make([]string, len(forests))
+	for i, forest := range forests {
 		// A forest whose tracker is missing states its absence through the
 		// outcomes view; there is nothing here to write it to and nothing
 		// worth a log line (§forgejo/observability/the-outcomes-view).
 		if forest.Tracker == nil {
 			continue
 		}
-		if err := e.writeTrackerBlock(forest, at); err != nil {
+		source, err := e.writeTrackerBlock(forest, at)
+		if err != nil {
 			e.log.Error("reconciliation: tracker current-state block not written",
 				"tracker", trackerRef(forest), "error", err)
 		}
+		sources[i] = source
 	}
+	e.recordForestCharts(forests, sources, at)
 }
 
 // trackerRef names the tracker a forest's block is written to — the address a
@@ -127,7 +141,7 @@ func (e *Engine) drawTrackerBeforeWrapUp(tracker *Issue, blockers []Issue, found
 	rootRow := forestIssue(*root, home)
 	trackerRow := forestIssue(*tracker, home)
 	forest := Forest{Repository: rootRow.Repository, Root: rootRow, Tracker: &trackerRow}
-	if err := e.writeTrackerBlock(forest, time.Now()); err != nil {
+	if _, err := e.writeTrackerBlock(forest, time.Now()); err != nil {
 		e.log.Error("wrap-up: tracker current-state block not written",
 			"tracker", ref, "error", err)
 	}
@@ -137,11 +151,15 @@ func (e *Engine) drawTrackerBeforeWrapUp(tracker *Issue, blockers []Issue, found
 // tracker, which the caller has established the forest has. Both ends of the
 // forest pay the repository-admission test here, before anything of either is
 // read, so every call site inherits the rule that no repository a maitred
-// role does not name is drawn or published. Where the body the composition
+// role does not name is drawn or published. It returns the source the tick
+// drew — the bytes the payload carries alongside these rows — whether or not
+// the write succeeded: a drawing refused a body (a fence pair too ambiguous
+// to splice into) still stands in the outcomes view
+// (§forgejo/observability/the-outcomes-view). Where the body the composition
 // produced is the body already there — two ticks inside one minute over an
 // unchanged graph — nothing is sent, so a tick never bumps a tracker for
 // nothing (§forgejo/reconciliation/the-tracker-block).
-func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
+func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) (string, error) {
 	owner, name := splitRepo(forest.Tracker.Repository)
 	ref := trackerRef(forest)
 	// Which repository holds a tracker is forge data, not configuration: the
@@ -154,7 +172,7 @@ func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
 	// §forgejo/reconciliation/the-tracker-block).
 	admits, err := e.remitAdmits(forest.Tracker.Repository, forest.Root.Repository)
 	if err != nil {
-		return fmt.Errorf("scope of %s: %w", forest.Tracker.Repository, err)
+		return "", fmt.Errorf("scope of %s: %w", forest.Tracker.Repository, err)
 	}
 	if !admits {
 		// Debug, the level every other cross-repository hop uses for this
@@ -164,7 +182,7 @@ func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
 		// §forgejo/observability/the-decision-log).
 		e.log.Debug("reconciliation: tracker lives in a repository no maitred role names; nothing written",
 			"tracker", ref)
-		return nil
+		return "", nil
 	}
 	// A blocking edge names its far end, so the root's repository is forge
 	// data too, and the same test is asked of it here rather than at
@@ -174,7 +192,7 @@ func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
 	// (§forgejo/webhook/repository-roles, §forgejo/reconciliation/the-tracker-block).
 	admits, err = e.remitAdmits(forest.Root.Repository, forest.Tracker.Repository)
 	if err != nil {
-		return fmt.Errorf("scope of the root %s: %w", forestRef(forest.Root.Repository, forest.Root.Number), err)
+		return "", fmt.Errorf("scope of the root %s: %w", forestRef(forest.Root.Repository, forest.Root.Number), err)
 	}
 	if !admits {
 		// Debug for this sentence as well — an unadmitted repository is a
@@ -182,11 +200,11 @@ func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
 		// (§forgejo/webhook/repository-roles, §forgejo/observability/the-decision-log).
 		e.log.Debug("drawing skips a root in a repository no maitred role names; nothing written",
 			"tracker", ref, "root", forestRef(forest.Root.Repository, forest.Root.Number))
-		return nil
+		return "", nil
 	}
 	source, err := e.renderForestChart(forest)
 	if err != nil {
-		return fmt.Errorf("rendering %s: %w", ref, err)
+		return "", fmt.Errorf("rendering %s: %w", ref, err)
 	}
 	// The description is read here, at the one moment the splice needs it: the
 	// window in which a human's edit outside the pair could be overwritten is
@@ -197,24 +215,24 @@ func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
 	// (§forgejo/client/the-one-mutation).
 	tracker, err := e.api.GetIssue(owner, name, forest.Tracker.Number)
 	if err != nil {
-		return fmt.Errorf("tracker read %s: %w", ref, err)
+		return source, fmt.Errorf("tracker read %s: %w", ref, err)
 	}
 	if tracker == nil {
-		return fmt.Errorf("tracker read %s: no issue returned", ref)
+		return source, fmt.Errorf("tracker read %s: no issue returned", ref)
 	}
 	body, err := spliceStateBlock(tracker.Body, stateBlock(source, at, e.cfg.ChartLocation()))
 	if err != nil {
-		return fmt.Errorf("%s: %w", ref, err)
+		return source, fmt.Errorf("%s: %w", ref, err)
 	}
 	if body == tracker.Body {
 		// "Nothing was written" is not "nothing was done": the difference
 		// between a converged tick and a forest the tick never reached is
 		// what an operator reads at Debug (§forgejo/observability/the-decision-log).
 		e.log.Debug("tracker current-state block unchanged; nothing written", "tracker", ref)
-		return nil
+		return source, nil
 	}
 	if err := e.api.UpdateIssueBody(owner, name, tracker.Number, body); err != nil {
-		return fmt.Errorf("writing %s: %w", ref, err)
+		return source, fmt.Errorf("writing %s: %w", ref, err)
 	}
 	// The engine's one mutation says so when it lands, as every other side
 	// effect it has does: the question six months out is why a description
@@ -222,7 +240,7 @@ func (e *Engine) writeTrackerBlock(forest Forest, at time.Time) error {
 	// whether it was the engine or an agent
 	// (§forgejo/observability/the-decision-log).
 	e.log.Info("tracker current-state block written", "tracker", ref)
-	return nil
+	return source, nil
 }
 
 // stateBlock is the bytes between one tracker's fence pair: the stamp and the

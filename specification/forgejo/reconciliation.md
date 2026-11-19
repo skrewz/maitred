@@ -85,7 +85,11 @@ ahead of every `wrap-up` dispatch it writes that one tracker's region once more
 (§forgejo/decisions/actions): it gathers the graph, renders it
 (§forgejo/renderer/the-contract), and splices the
 source under a `Last revisited: <YYYY-MM-DD HH:MM> <TZ>` stamp, the time
-rendered in the configured timezone (§forgejo/config/tracker-chart).
+rendered in the configured timezone (§forgejo/config/tracker-chart). The same
+rendering is recorded onto the forest set the outcomes view serves, so the
+payload carries the bytes this tick drew alongside the block they were spliced
+into (§forgejo/observability/the-outcomes-view): one drawing per forest per
+tick, feeding both sinks.
 
 - **The fence bounds the write.** Only a tracker's description is written, and
   only the bytes between one opener and its closer. The outcome prose around
@@ -102,17 +106,17 @@ rendered in the configured timezone (§forgejo/config/tracker-chart).
   re-reads whatever it landed.
 - **The write goes where a role admits it.** Which repository holds a tracker,
   and which repositories the graph's rows live in, is forge data the root's
-  blocking edges name rather than configuration, so all three readers — the
-  write, the draw and the pairing's scrape — pay the admission test every
-  other cross-repository hop pays
+  blocking edges name rather than configuration, so the tick's one drawing pays
+  the admission test every other cross-repository hop pays
   (§forgejo/webhook/repository-roles): the enumeration's own repository is
   admitted by the enumeration, every other only where a maitred role names it. A
-  tracker in a repository no role names is neither written nor scraped — the
-  write skips it and the pairing publishes no chart and no stamp from it, the
-  tracker row itself standing — and the log names the repository refused at
+  tracker in a repository no role names is neither written nor drawn — the
+  tick skips it and neither sink of the drawing receives a chart or a stamp
+  from it, the tracker row itself standing — and the log names the repository
+  refused at
   Debug, the level the engine's other cross-repository hops use for the
-  sentence; a row no role admits draws no node, contributes no title to a body
-  the outcomes view publishes, and has no edges read. One reader does not:
+  sentence; a row no role admits draws no node, contributes no title to the
+  picture the outcomes view publishes, and has no edges read. One reader does not:
   the forest's actionable-state digest folds every row and comment body a
   blocking edge reaches, wherever the edge points, so where an edge leaves the
   roles the digest decides on rows the chart neither draws nor publishes
@@ -181,8 +185,10 @@ rendered in the configured timezone (§forgejo/config/tracker-chart).
 - **A failure is one forest's own.** A read that fails, a graph the renderer
   refuses, a ceiling the source will not fit even collapsed
   (§forgejo/renderer/collapsing) and a write the forge refuses are each logged
-  naming the forest and skipped: no partial region is ever written, and one
-  ragged forest costs nothing to the others.
+  naming the forest and skipped: no partial region is ever written, the forest's
+  picture fields in the outcomes payload stand empty for that tick
+  (§forgejo/observability/the-outcomes-view), and one ragged forest costs
+  nothing to the others.
 
 The block carries no verdict and no instruction, which is why writing it makes
 the engine no less a decision loop than a task runner: it changes what a human

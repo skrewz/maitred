@@ -22,6 +22,13 @@ import (
 type stubForgejoAPI struct {
 	issue *forgejo.Issue
 
+	// issues, when set, answers a single-issue read by number — the
+	// forge answers with the row it holds, and the tick's drawing reads
+	// roots and trackers by number the way any other read does
+	// (§forgejo/client/operations). Where the map holds no row the stub
+	// falls back to issue, so the dispatch tests keep their fixture.
+	issues map[int]*forgejo.Issue
+
 	// reposCounts lists how often the stub has been asked for the
 	// org's repositories, so a test can see a manually fired sweep
 	// run (§forgejo/observability/triggering-a-sweep).
@@ -77,7 +84,10 @@ func (s *stubForgejoAPI) ListOpenPullRequests(string, string) ([]forgejo.PullReq
 	return nil, nil
 }
 
-func (s *stubForgejoAPI) GetIssue(string, string, int) (*forgejo.Issue, error) {
+func (s *stubForgejoAPI) GetIssue(_, _ string, number int) (*forgejo.Issue, error) {
+	if row, ok := s.issues[number]; ok {
+		return row, nil
+	}
 	return s.issue, nil
 }
 
@@ -510,13 +520,17 @@ func TestServerStartStop(t *testing.T) {
 func outcomesStubAPI() *stubForgejoAPI {
 	root := forgejo.Issue{
 		Number: 51, Title: "UI for human review", State: "open",
-		Labels: []string{"ideation"}, Repository: "o/out",
-		HTMLURL: "https://forge.example.com/o/out/issues/51",
+		Labels:       []string{"ideation"},
+		LabelColours: map[string]string{"ideation": "#5319e7"},
+		Repository:   "o/out",
+		HTMLURL:      "https://forge.example.com/o/out/issues/51",
 	}
 	tracker := forgejo.Issue{
 		Number: 71, Title: "forest tracker", State: "open",
-		Labels: []string{"outcome"}, Repository: "o/out",
-		HTMLURL: "https://forge.example.com/o/out/issues/71",
+		Labels:       []string{"outcome"},
+		LabelColours: map[string]string{"outcome": "#1d76db"},
+		Repository:   "o/out",
+		HTMLURL:      "https://forge.example.com/o/out/issues/71",
 		Body: "## Outcome\n\nThe prose a human wrote.\n\n" +
 			"<!-- maitred:forest:begin -->\n\nLast revisited: 2026-11-16 09:12 AEDT\n\n" +
 			"```mermaid\nflowchart TD\n\tr51[root #51] --> t71[tracker #71]\n```\n\n" +
@@ -524,8 +538,10 @@ func outcomesStubAPI() *stubForgejoAPI {
 	}
 	loneRoot := forgejo.Issue{
 		Number: 52, Title: "root without a gate", State: "open",
-		Labels: []string{"ideation"}, Repository: "o/out",
-		HTMLURL: "https://forge.example.com/o/out/issues/52",
+		Labels:       []string{"ideation"},
+		LabelColours: map[string]string{"ideation": "#5319e7"},
+		Repository:   "o/out",
+		HTMLURL:      "https://forge.example.com/o/out/issues/52",
 	}
 	// The forest's one member is a human task with no blockers of its
 	// own, so the forest is waiting on a person and carries a warning
@@ -536,7 +552,8 @@ func outcomesStubAPI() *stubForgejoAPI {
 		HTMLURL: "https://forge.example.com/o/r/issues/90",
 	}
 	return &stubForgejoAPI{
-		issue: &forgejo.Issue{Number: 7, State: "open", Repository: "o/r"},
+		issue:  &forgejo.Issue{Number: 7, State: "open", Repository: "o/r"},
+		issues: map[int]*forgejo.Issue{51: &root, 71: &tracker, 52: &loneRoot},
 		repos: []forgejo.Repository{
 			{Name: "r", FullName: "o/r", Owner: "o", Topics: []string{"maitred-enabled"}},
 			{Name: "out", FullName: "o/out", Owner: "o", Topics: []string{"maitred-outcomes-repo"}},
@@ -560,9 +577,8 @@ type forestIssueJSON struct {
 
 // forestJSON mirrors one forest of the outcomes view: the repository,
 // the root, the tracker — a null tracker states its honest absence — and
-// the picture scraped from the tracker's current-state block: its Mermaid
-// source and that region's recency stamp, each refused on its own and
-// empty when the tracker's description says nothing
+// the picture the sweep tick drew from the forest's graph: its Mermaid
+// source and the drawing's stamp, empty when the tick drew nothing
 // (§forgejo/observability/the-outcomes-view).
 type forestJSON struct {
 	Repository     string           `json:"repository"`
@@ -655,14 +671,19 @@ func TestForgejoOutcomesEndpoint(t *testing.T) {
 	if paired.Tracker.Number != 71 || paired.Tracker.Title != "forest tracker" || paired.Tracker.State != "open" || paired.Tracker.HTMLURL == "" {
 		t.Errorf("tracker = %+v, want outcome issue 71 with its fields", paired.Tracker)
 	}
-	// The forest carries its picture: the Mermaid source the tracker's
-	// current-state block holds and the block's stamp, carried as written
+	// The forest carries its picture: the Mermaid source the tick drew
+	// from the forest's graph — not the stale chart its tracker's
+	// description still claims — under the stamp of that drawing
 	// (§forgejo/observability/the-outcomes-view).
-	if !strings.Contains(paired.Chart, "flowchart TD") || !strings.Contains(paired.Chart, "r51[root #51]") {
-		t.Errorf("chart = %q, want the tracker's Mermaid source", paired.Chart)
+	if !strings.Contains(paired.Chart, "flowchart TD") ||
+		!strings.Contains(paired.Chart, "i_out_51") || !strings.Contains(paired.Chart, "i_out_71") {
+		t.Errorf("chart = %q, want the graph's drawing of the root and its tracker", paired.Chart)
 	}
-	if paired.ChartRevisited != "2026-11-16 09:12 AEDT" {
-		t.Errorf("chart_revisited = %q, want the block's stamp as written", paired.ChartRevisited)
+	if strings.Contains(paired.Chart, "r51[root #51]") {
+		t.Errorf("chart = %q, want the drawing, not the stale chart the description claims", paired.Chart)
+	}
+	if paired.ChartRevisited == "" {
+		t.Error("chart_revisited is empty, want the stamp of the drawing this tick made")
 	}
 	// The forest waiting on a person says so: the warning is the member
 	// itself, linked rather than described, and carries its kind

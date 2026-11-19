@@ -69,9 +69,10 @@ Issue responses also report the issue's **body** (`body`). Two seats read
 it: the landing set's revision digests the grouping issue's body, the
 field that names the order its members must land in, so a restatement of
 the order moves the digest while a comment or a label toggle does not
-(§forgejo/decisions/sync-set), and the outcomes view scrapes a forest's
-picture out of the current-state block its tracker's body carries
-(§forgejo/observability/the-outcomes-view).
+(§forgejo/decisions/sync-set), and the tracker-block write reads the
+description it splices into (§forgejo/reconciliation/the-tracker-block).
+The outcomes view draws its picture from the graph and reads no body at
+all (§forgejo/observability/the-outcomes-view).
 
 An issue arrives in the same shape whichever operation carried it: the
 single-issue read, the dependency listing and the blocks listing all
