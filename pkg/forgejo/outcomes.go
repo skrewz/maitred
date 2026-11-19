@@ -89,16 +89,14 @@ type picture struct {
 	stamp string
 }
 
-// pictureKey identifies a forest across two recorded sets: the repository its
-// root grew in and the root's own number. A tracker may be replaced by another
-// outcome issue between ticks; the forest is still the same forest.
-type pictureKey struct {
-	repository string
-	root       int
-}
-
-func keyOf(forest Forest) pictureKey {
-	return pictureKey{forest.Repository, forest.Root.Number}
+// keyOf names the forest a picture pair belongs to across two recorded sets.
+// It is the store's own forest key (ForestKey, §forgejo/state/forest-digest):
+// a forest is the ideation root it grew from, so a tracker replaced by another
+// outcome issue between ticks leaves the forest — and the pair it carries —
+// the same. Reusing the store's spelling is what keeps "which forest is the
+// same forest" written down once.
+func keyOf(forest Forest) Key {
+	return ForestKey(forest.Repository, forest.Root.Number)
 }
 
 // carryDrawnPictures moves each forest's picture pair from the set being
@@ -123,7 +121,7 @@ func carryDrawnPictures(previous, next []Forest) {
 	if len(previous) == 0 {
 		return
 	}
-	drawn := make(map[pictureKey]picture, len(previous))
+	drawn := make(map[Key]picture, len(previous))
 	for _, forest := range previous {
 		drawn[keyOf(forest)] = picture{forest.Chart, forest.ChartRevisited}
 	}
