@@ -220,7 +220,11 @@ Inside that window the view therefore shows the previous tick's drawing
 under the previous tick's stamp, which is what makes an empty picture
 honest rather than a half-written record; a forest the head records for
 the first time carries both fields empty until step 5 draws it. A carried
-pair is never the view's last word: step 5 states what this tick drew.
+pair is never the view's last word: step 5 states what this tick drew. The
+carry pays the admission test the drawing pays
+(§forgejo/reconciliation/the-tracker-block), so a role withdrawn from a
+tracker's repository between ticks empties both fields at the next tick's head
+rather than leaving the earlier drawing on the port for the length of the walk.
 
 An empty field is therefore a statement about the engine's drawing,
 never about anyone's prose. A forest whose tracker is absent publishes

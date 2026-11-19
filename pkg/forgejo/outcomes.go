@@ -54,7 +54,8 @@ type Forest struct {
 	// tick drew nothing: no tracker, a graph the renderer refused, a
 	// repository no role admits — and never a remembered picture dressed
 	// in a newer stamp. While a tick's walk is still running, the pair a
-	// forest carries is the previous tick's, stamp and all
+	// forest carries is the previous tick's, stamp and all — and never a
+	// pair from a repository the remit has since withdrawn
 	// (carryDrawnPictures).
 	Chart string `json:"chart"`
 	// ChartRevisited is the moment that drawing was made, spelled as the
@@ -99,8 +100,8 @@ func keyOf(forest Forest) Key {
 	return ForestKey(forest.Repository, forest.Root.Number)
 }
 
-// carryDrawnPictures moves each forest's picture pair from the set being
-// replaced onto its successor, so the view keeps a picture between the moment
+// carryDrawnPictures moves each forest's picture pair from the set the tick is
+// replacing onto its successor, so the view keeps a picture between the moment
 // the tick records the set at its head and the moment its step-5 drawing
 // replaces every pair in it (recordForestCharts,
 // §forgejo/reconciliation/the-tracker-block). Without it the set the tick
@@ -116,18 +117,44 @@ func keyOf(forest Forest) Key {
 // the view's last word: the step-5 fold overwrites every pair in the set it
 // lands on, so a forest this tick drew nothing for still ends the tick with
 // both fields empty.
-func carryDrawnPictures(previous, next []Forest) {
-	if len(previous) == 0 {
-		return
-	}
+//
+// A remembered picture travels only while its repository is still admitted.
+// The pair is the last drawing the engine made, so a role withdrawn since then
+// must not keep feeding the unauthenticated view for the length of the walk:
+// the carry pays the same admission test the drawing pays (writeTrackerBlock,
+// §forgejo/webhook/repository-roles). A scope the carry cannot read empties
+// the pair too — the picture fails closed — and a forest this tick names no
+// tracker for carries nothing at all, the absence the view states
+// (§forgejo/observability/the-outcomes-view).
+func (e *Engine) carryDrawnPictures(next []Forest) {
+	e.forestsMu.Lock()
+	previous := e.forestsSnap
+	e.forestsMu.Unlock()
+	// The remit is asked outside forestsMu, because a scope the cache cannot
+	// answer is refreshed there and the request path must never wait on a forge
+	// read (Forests, §forgejo/observability/the-outcomes-view). Reading the set
+	// the previous tick published is safe for as long as a recorded set is
+	// replaced whole rather than mutated in place.
 	drawn := make(map[Key]picture, len(previous))
 	for _, forest := range previous {
+		if forest.Chart == "" && forest.ChartRevisited == "" {
+			continue // a forest holding no pair has nothing to carry
+		}
 		drawn[keyOf(forest)] = picture{forest.Chart, forest.ChartRevisited}
 	}
 	for i, forest := range next {
-		if old, ok := drawn[keyOf(forest)]; ok {
-			next[i].Chart, next[i].ChartRevisited = old.chart, old.stamp
+		old, ok := drawn[keyOf(forest)]
+		if !ok || forest.Tracker == nil {
+			continue
 		}
+		admits, err := e.remitAdmits(forest.Tracker.Repository, forest.Root.Repository)
+		if err != nil || !admits {
+			e.log.Debug("outcomes: nothing carried; the picture's repository is not admitted",
+				"forest", forestRef(forest.Repository, forest.Root.Number),
+				"tracker", forestRef(forest.Tracker.Repository, forest.Tracker.Number))
+			continue
+		}
+		next[i].Chart, next[i].ChartRevisited = old.chart, old.stamp
 	}
 }
 
@@ -347,18 +374,23 @@ func (e *Engine) Forests() ([]Forest, error) {
 // (§forgejo/reconciliation/the-tracker-block). The picture pair each forest
 // carries travels across from the set this one replaces
 // (carryDrawnPictures), so the view holds a picture for as long as the tick's
-// walk runs before step 5 draws the next one.
+// walk runs before step 5 draws the next one. The carry is the tick's own
+// remit test for a remembered picture, paid here rather than at step 5
+// (carryDrawnPictures, §forgejo/webhook/repository-roles).
 func (e *Engine) recordForests() ([]Forest, error) {
 	forests, err := e.enumerateForests()
 	if err != nil {
 		e.log.Error("reconciliation: forest enumeration failed; the outcomes view will say so until a sweep succeeds",
 			"error", err)
+	} else {
+		// The carry fills the new set before it is published, so a pair only
+		// ever lands on bytes no reader can see yet.
+		e.carryDrawnPictures(forests)
 	}
 	e.forestsMu.Lock()
 	if err != nil {
 		e.forestsErr = err
 	} else {
-		carryDrawnPictures(e.forestsSnap, forests)
 		e.forestsSnap, e.forestsAt, e.forestsErr = forests, time.Now(), nil
 	}
 	e.forestsMu.Unlock()

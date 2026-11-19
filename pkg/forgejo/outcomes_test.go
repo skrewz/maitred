@@ -704,7 +704,9 @@ func stageForest(api *fakeAPI, root, tracker Issue) {
 // carries each forest's picture pair across from the set it replaces, so the
 // walk never leaves the view answering an empty picture; step 5 replaces every
 // pair, so a carried pair is never the view's last word, and a forest the head
-// records for the first time carries the honest empty until the tick draws it
+// records for the first time carries the honest empty until the tick draws it,
+// and a forest whose tracker is absent carries it empty from the head, having
+// nothing to draw a picture for
 // (§forgejo/observability/the-outcomes-view,
 // §forgejo/reconciliation/the-tracker-block,
 // §forgejo/reconciliation/the-sweep).
@@ -793,6 +795,22 @@ func TestForests_PictureTravelsAcrossTheTick(t *testing.T) {
 		if forest.ChartRevisited == "" || forest.ChartRevisited == want.ChartRevisited {
 			t.Errorf("forest %s#%d carries stamp %q, want this tick's drawing moment rather than the carried one",
 				forest.Repository, forest.Root.Number, forest.ChartRevisited)
+		}
+	}
+
+	// A tracker unblocked is a forest whose tracker is absent, which the view
+	// states with both fields empty (§forgejo/observability/the-outcomes-view):
+	// a picture has no tracker to be drawn for, so none carries across.
+	api.mu.Lock()
+	api.blocks[want.Root.Number] = nil
+	api.mu.Unlock()
+	lost, err := eng.recordForests()
+	if err != nil || len(lost) != 2 {
+		t.Fatalf("forests = %+v, %v", lost, err)
+	}
+	for _, forest := range lost {
+		if forest.Tracker == nil && (forest.Chart != "" || forest.ChartRevisited != "") {
+			t.Errorf("a forest with no tracker carries chart %q under stamp %q, want both fields empty", forest.Chart, forest.ChartRevisited)
 		}
 	}
 }
@@ -1032,6 +1050,35 @@ func TestForests_PicturePaysTheAdmissionTest(t *testing.T) {
 	}
 	if n := api.callCount("UpdateIssueBody:archive/72"); n != 0 {
 		t.Errorf("the tick wrote %d bodies to the refused repository, want none", n)
+	}
+
+	// The revocation case: a role withdrawn from the repository holding a
+	// picture that tick already drew. The head's carry asks the admission test
+	// as well as step 5's drawing, so step 2 of the next tick — before any
+	// drawing — is enough to empty both fields
+	// (§forgejo/webhook/repository-roles,
+	// §forgejo/observability/the-outcomes-view).
+	api.mu.Lock()
+	api.repos = []Repository{outcomesRepo("o/out"), testRepoDisabled("o/elsewhere")}
+	api.mu.Unlock()
+	eng.scopeAt = time.Time{} // the withdrawal must be seen, not the cached remit
+	if _, err := eng.recordForests(); err != nil {
+		t.Fatalf("recordForests: %v", err)
+	}
+	revoked, err := eng.Forests()
+	if err != nil || len(revoked) != 2 {
+		t.Fatalf("forests = %+v, %v", revoked, err)
+	}
+	for _, f := range revoked {
+		if f.Tracker != nil && f.Tracker.Repository == "o/elsewhere" {
+			if f.Chart != "" || f.ChartRevisited != "" {
+				t.Errorf("a withdrawn remit left chart %q under stamp %q in the view, want both empty at the tick's head", f.Chart, f.ChartRevisited)
+			}
+			if n := findEntry(t, parseLogLines(t, log.Bytes()),
+				"outcomes: nothing carried; the picture's repository is not admitted"); n["tracker"] != "o/elsewhere#71" {
+				t.Errorf("tracker = %v, want o/elsewhere#71: the drop names the picture it dropped", n["tracker"])
+			}
+		}
 	}
 }
 
