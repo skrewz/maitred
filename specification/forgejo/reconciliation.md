@@ -124,12 +124,14 @@ instants — the block the wrap-up's, the picture the last tick's.
   refused at
   Debug, the level the engine's other cross-repository hops use for the
   sentence; a row no role admits draws no node, contributes no title to the
-  picture the outcomes view publishes, and has no edges read. One reader does not:
-  the forest's actionable-state digest folds every row and comment body a
-  blocking edge reaches, wherever the edge points, so where an edge leaves the
-  roles the digest decides on rows the chart neither draws nor publishes
+  picture the outcomes view publishes, and has no edges read. The fourth reader
+  of the graph — the forest's actionable-state digest — pays the same test: a
+  row, a blocker or a comment a blocking edge reaches in a repository no role
+  names folds nowhere, so the gate decides on exactly the rows the chart draws
+  or leaves out, never on rows it neither draws nor publishes
   (§forgejo/decisions/actionable-state-digest). An unknown scope fails closed,
-  naming the failure rather than reading as a repository holding no role
+  naming the failure rather than reading as a repository holding no role — in
+  the fold as in the drawing, before the first read
   (§forgejo/webhook/the-scope-cache).
 - **The stamp moves whatever the graph does.** A tick over an unchanged forest
   rewrites the stamp and nothing else. Where the composed body is byte-identical

@@ -667,6 +667,63 @@ func stampLine(body string) string {
 	return ""
 }
 
+// TestTrackerBlock_RedrawDispatchesNoCurationRun: on a forest whose edges have
+// not moved, a sweep that redrew the tracker's block — the engine's own
+// handwriting, logged naming the tracker — dispatches no curation run: the
+// drawing moves no fact the digest gate decides on, so a still forest stays
+// under one first-observation decompose however often it is redrawn
+// (§forgejo/reconciliation/the-tracker-block,
+// §forgejo/decisions/actionable-state-digest).
+func TestTrackerBlock_RedrawDispatchesNoCurationRun(t *testing.T) {
+	eng, api, q, log := chartForestQueue(t, chartFenced())
+	eng.Reconcile()
+	first, ok := api.writtenBody("out", 2)
+	if !ok {
+		t.Fatal("the first sweep wrote no tracker block")
+	}
+	if got := countAction(t, q, "action=decompose"); got != 1 {
+		t.Fatalf("the first sweep dispatched %d curation runs, want the one first-observation decompose", got)
+	}
+
+	eng.Reconcile()
+	// Whether the second tick lands in the same wall-clock minute as the
+	// first is not what this pins — as in the sweep test above, either the
+	// stamp moves and nothing else does, or the composed body is
+	// byte-identical and nothing is sent. Either way the tick must not wake
+	// a curator (§forgejo/reconciliation/the-tracker-block).
+	second, ok := api.writtenBody("out", 2)
+	if !ok {
+		t.Fatal("the second sweep left no tracker block")
+	}
+	if second != first {
+		if got := strings.Replace(second, stampLine(second), stampLine(first), 1); got != first {
+			t.Error("the second sweep changed more than the stamp")
+		}
+	}
+	if got := countAction(t, q, "action=decompose"); got != 1 {
+		t.Errorf("two sweeps over an unmoved graph dispatched %d curation runs, want the one the first observation earned", got)
+	}
+	// The engine says which description it moved, so a stamp that advanced
+	// at an odd hour is attributable to the tick rather than to an agent
+	// (§forgejo/observability/the-decision-log).
+	if !strings.Contains(log.String(), "tracker current-state block written") {
+		t.Errorf("log = %s, want the engine's write named in the log", log.String())
+	}
+}
+
+// countAction is how many dispatches the queue holds whose prompt carries the
+// given action field.
+func countAction(t *testing.T, q *fakeQueue, action string) int {
+	t.Helper()
+	n := 0
+	for _, task := range q.all() {
+		if strings.Contains(task.Prompt, action) {
+			n++
+		}
+	}
+	return n
+}
+
 // TestTrackerBlock_SweepRecordsThePayloadPicture: one tick draws once and
 // feeds both sinks — the bytes spliced between the tracker's fences are
 // the bytes the outcomes payload carries, under the same stamp, so the

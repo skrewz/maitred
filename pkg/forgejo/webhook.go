@@ -482,7 +482,7 @@ func (e *Engine) forestGate(ev Event, issue *Issue, blockers []Issue) (*ForestDi
 	default:
 		return nil, nil
 	}
-	current, parts, err := ForestDigest(e.api, root, e.cfg.EngineAccount, e.cfg.DecomposerIdentity)
+	current, parts, err := e.ForestDigest(root, e.cfg.EngineAccount, e.cfg.DecomposerIdentity)
 	if err != nil {
 		return nil, err
 	}

@@ -1137,12 +1137,28 @@ so the digest and the decision code cannot disagree about what a row is
 - the state of every blocker of every member, read through
   issue-dependencies so blockers **outside the forest** are included: a
   member becoming implementable because an unrelated issue closed is
-  exactly the kind of move that should change the plan;
+  exactly the kind of move that should change the plan — wherever the
+  blocker stands, provided a maitred role names its repository, since
+  the admission test below bounds the fold as much as it bounds the
+  drawing;
 - comments on the root, the trackers and the members whose author is
   neither the engine's own account nor the configured decomposer
   identity (§forgejo/config/decomposer-identity): the operator's comment
   must be a trigger, not a side effect. Each counts as its author and
   its body.
+
+The fold pays the **admission test** the drawing's three readers pay —
+the write, the gather and the carry — so the digest is the graph's fourth
+reader under one rule, never a fifth under a wider one
+(§forgejo/reconciliation/the-tracker-block, §forgejo/webhook/repository-roles):
+a row, a blocker or a comment a blocking edge reaches in a repository no
+maitred role names folds nowhere, and nothing of it is read. The root's
+own repository is admitted by the walk that found the root, as every
+other reader admits it. Where an edge leaves the roles, the gate
+therefore decides on exactly the rows the chart draws or leaves out — not
+on rows it neither draws nor publishes — and an unknown scope fails the
+fold before its first read, the way an unknown scope fails the drawing
+(§forgejo/webhook/the-scope-cache).
 
 This exclusion is a **self-trigger guard** and nothing more. A digest
 that moves says a fact changed; it does not say the sender of that fact

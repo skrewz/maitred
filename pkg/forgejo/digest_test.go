@@ -2,6 +2,8 @@ package forgejo
 
 import (
 	"errors"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -35,6 +37,11 @@ func digestIssue(repo string, number int, state string, labels ...string) Issue 
 // from it.
 func digestForest() *fakeAPI {
 	f := newFakeAPI()
+	// Every repository the fixture's edges reach holds a maitred role, so
+	// the fold admits each of its rows: a blocking edge into a repository
+	// no role names would otherwise empty the fold
+	// (§forgejo/webhook/repository-roles, §forgejo/decisions/actionable-state-digest).
+	f.repos = []Repository{testRepo("o/r"), testRepo("o/other")}
 	tracker := digestIssue("o/r", 2, "open", LabelOutcome)
 	tracker.Body = "current-state block, rewritten every run"
 	member := digestIssue("o/r", 3, "open", LabelAgenticAutoMerge)
@@ -57,10 +64,36 @@ func digestForest() *fakeAPI {
 // digestRoot is the fixture forest's root. Every test that needs the
 // root — whole or with one fact mutated — starts here, so a fixture
 // change cannot half-land.
+// testRepoNoRole is a fixture repository holding no maitred role at all:
+// the engine reads it nowhere, so nothing that lives in it reaches a
+// decision or a drawing (§forgejo/webhook/repository-roles).
+func testRepoNoRole(fullName string) Repository {
+	owner, name := splitRepo(fullName)
+	return Repository{Name: name, FullName: fullName, Owner: owner}
+}
+
 func digestRoot() Issue {
 	root := digestIssue("o/r", 1, "open", LabelIdeation)
 	root.Body = "the root's intent"
 	return root
+}
+
+// digestFold is one test fold of a fixture forest: the digest, its component
+// sub-digests and any error it reported.
+func digestFold(t *testing.T, f *fakeAPI, root *Issue) (string, map[string]string, error) {
+	t.Helper()
+	return digestScopeEngine(f).ForestDigest(root, digestEngine, digestDecomposer)
+}
+
+// digestScopeEngine is the minimal engine a fixture fold needs: the digest
+// pays the admission test the chart's readers pay, which it asks of the scope
+// cache (§forgejo/webhook/repository-roles), so the cache is seeded from the
+// fixture's own listing rather than left for the fold to list
+// (§forgejo/webhook/the-scope-cache).
+func digestScopeEngine(f *fakeAPI) *Engine {
+	eng := NewEngine(f, nil, testConfig(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	eng.refreshScopeCache(f.repos)
+	return eng
 }
 
 func digest(t *testing.T, f *fakeAPI) string {
@@ -71,7 +104,7 @@ func digest(t *testing.T, f *fakeAPI) string {
 
 func digestOf(t *testing.T, f *fakeAPI, root *Issue) string {
 	t.Helper()
-	got, _, err := ForestDigest(f, root, digestEngine, digestDecomposer)
+	got, _, err := digestFold(t, f, root)
 	if err != nil {
 		t.Fatalf("ForestDigest: %v", err)
 	}
@@ -331,34 +364,90 @@ func TestForestDigestOrderInsensitive(t *testing.T) {
 	})
 }
 
+// TestForestDigestPaysTheAdmissionTest: the digest is the fourth reader of a
+// forest's graph, and it pays the admission test the chart's three readers pay
+// — the write, the gather and the carry (§forgejo/webhook/repository-roles,
+// §forgejo/reconciliation/the-tracker-block). A row, a blocker or a comment the
+// root's blocking edges reach in a repository no maitred role names folds
+// nowhere: where an edge leaves the roles, the digest cannot decide on rows the
+// drawing neither draws nor publishes (§forgejo/decisions/actionable-state-digest).
+func TestForestDigestPaysTheAdmissionTest(t *testing.T) {
+	// restrictToRoles leaves one fixture repository standing — the fold's
+	// baseline and its mutation differ by one fact and nothing else, so a
+	// fact from outside the roles is the only thing that could move it.
+	restrictToRoles := func(f *fakeAPI) {
+		f.repos = []Repository{testRepo("o/r"), testRepoNoRole("o/other")}
+	}
+	t.Run("a blocker outside the roles moves nothing", func(t *testing.T) {
+		f := digestForest()
+		restrictToRoles(f)
+		base := digest(t, f)
+		f.deps[3][1].State = "closed" // o/other#10, in a repository no role names
+		if got := digest(t, f); got != base {
+			t.Errorf("a blocker in an unadmitted repository moved the digest: %s vs %s", got, base)
+		}
+	})
+	t.Run("a row outside the roles folds nowhere", func(t *testing.T) {
+		f := digestForest()
+		restrictToRoles(f)
+		base := digest(t, f)
+		f.blocks[1] = append(f.blocks[1], digestIssue("o/other", 20, "open"))
+		f.comments[20] = []Comment{{Author: "operator", Body: "a foreign comment"}}
+		if got := digest(t, f); got != base {
+			t.Errorf("a row in an unadmitted repository moved the digest: %s vs %s", got, base)
+		}
+		if got := f.callCount("Comments:other/20"); got != 0 {
+			t.Errorf("the fold read an unadmitted row's comments %d times, want no read there at all", got)
+		}
+		if got := f.callCount("IssueDependencies:other/20"); got != 0 {
+			t.Errorf("the fold read an unadmitted row's blockers %d times, want no read there at all", got)
+		}
+	})
+	t.Run("an unknown scope is a failed read", func(t *testing.T) {
+		f := digestForest()
+		f.listReposErr = errors.New("boom")
+		// No snapshot of the roles, and no listing the fold can make: the
+		// scope is unknown, which the fold reports rather than folding an
+		// edge it cannot vouch for (§forgejo/webhook/the-scope-cache).
+		eng := NewEngine(f, nil, testConfig(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		root := digestRoot()
+		if _, _, err := eng.ForestDigest(&root, digestEngine, digestDecomposer); err == nil {
+			t.Fatal("the fold digested on an unknown scope")
+		}
+		if got := f.callCount("IssueBlocks:r/1"); got != 0 {
+			t.Errorf("the fold read the forest on an unknown scope %d times, want the read refused first", got)
+		}
+	})
+}
+
 // TestForestDigestReadFailures pins that a failed read is an error, not
 // an omission: the digest reports no value rather than a partial one
 // (§forgejo/decisions/actionable-state-digest).
 func TestForestDigestReadFailures(t *testing.T) {
 	root := digestRoot()
 	t.Run("no root", func(t *testing.T) {
-		if _, _, err := ForestDigest(digestForest(), nil, digestEngine, digestDecomposer); err == nil {
+		if _, _, err := digestFold(t, digestForest(), nil); err == nil {
 			t.Fatal("a forest with no root digested without error")
 		}
 	})
 	t.Run("blocks listing fails", func(t *testing.T) {
 		f := digestForest()
 		f.issueBlocksErr = errors.New("boom")
-		if _, _, err := ForestDigest(f, &root, digestEngine, digestDecomposer); err == nil {
+		if _, _, err := digestFold(t, f, &root); err == nil {
 			t.Fatal("a failed blocks read digested without error")
 		}
 	})
 	t.Run("dependencies fail", func(t *testing.T) {
 		f := digestForest()
 		f.depsErr = errors.New("boom")
-		if _, _, err := ForestDigest(f, &root, digestEngine, digestDecomposer); err == nil {
+		if _, _, err := digestFold(t, f, &root); err == nil {
 			t.Fatal("a failed dependencies read digested without error")
 		}
 	})
 	t.Run("comments fail", func(t *testing.T) {
 		f := digestForest()
 		f.commentsErr = errors.New("boom")
-		if _, _, err := ForestDigest(f, &root, digestEngine, digestDecomposer); err == nil {
+		if _, _, err := digestFold(t, f, &root); err == nil {
 			t.Fatal("a failed comments read digested without error")
 		}
 	})
@@ -374,18 +463,19 @@ func TestForestDigestReadFailures(t *testing.T) {
 func TestForestDigestIdentities(t *testing.T) {
 	root := digestRoot()
 	f := digestForest()
-	withDecomposer, _, err := ForestDigest(f, &root, digestEngine, digestDecomposer)
+	eng := digestScopeEngine(f)
+	withDecomposer, _, err := eng.ForestDigest(&root, digestEngine, digestDecomposer)
 	if err != nil {
 		t.Fatalf("ForestDigest: %v", err)
 	}
-	withoutDecomposer, _, err := ForestDigest(f, &root, digestEngine, "")
+	withoutDecomposer, _, err := eng.ForestDigest(&root, digestEngine, "")
 	if err != nil {
 		t.Fatalf("ForestDigest: %v", err)
 	}
 	if withDecomposer == withoutDecomposer {
 		t.Error("an unset decomposer identity still excluded the decomposer's comments")
 	}
-	if _, _, err := ForestDigest(f, &root, "", digestDecomposer); err == nil {
+	if _, _, err := eng.ForestDigest(&root, "", digestDecomposer); err == nil {
 		t.Error("an unset engine account digested without error")
 	}
 }
@@ -444,7 +534,7 @@ func TestForestDigestRowsWithoutRepository(t *testing.T) {
 // sub-digests (§forgejo/decisions/actionable-state-digest).
 func digestPartsOf(t *testing.T, f *fakeAPI, root *Issue) (string, map[string]string) {
 	t.Helper()
-	overall, parts, err := ForestDigest(f, root, digestEngine, digestDecomposer)
+	overall, parts, err := digestFold(t, f, root)
 	if err != nil {
 		t.Fatalf("ForestDigest: %v", err)
 	}
