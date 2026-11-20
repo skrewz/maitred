@@ -861,14 +861,15 @@ func TestVendoredMermaidRuntimeIsServed(t *testing.T) {
 	}
 }
 
-// TestStaticResponsesCarrySecurityHeaders: the fence against every
-// origin but the server's rides on every static response, not on the
-// renderer alone (§forgejo/observability/the-outcomes-view). It is
-// worth a test because a CSP fails silently: a broken policy is
-// dropped, and the page still works — unguarded — in every browser.
-func TestStaticResponsesCarrySecurityHeaders(t *testing.T) {
+// TestResponsesCarrySecurityHeaders: the fence against every
+// origin but the server's rides on every response the port gives,
+// not on the renderer alone and not on the file being served
+// (§forgejo/observability/the-outcomes-view). It is worth a test
+// because a CSP fails silently: a broken policy is dropped, and the
+// page still works — unguarded — in every browser.
+func TestResponsesCarrySecurityHeaders(t *testing.T) {
 	srv := New(0, nil, "test", nil, forgejo.EngineStateWord(false, nil))
-	for _, path := range []string{"/", "/outcomes", "/mermaid.min.js"} {
+	for _, path := range []string{"/", "/outcomes", "/mermaid.min.js", "/api/version"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, req)

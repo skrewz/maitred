@@ -340,12 +340,14 @@ whose build depends on a third-party host is worse than a large
 vendored file (s-git/maitred#191). The vendored artifact stays
 byte-identical to upstream's released bundle, and the page loads no
 script from anywhere but its own origin — a page that could not reach
-a CDN still draws. Every static response carries a content-security
-policy that admits no origin but the server's (`default-src 'self'`,
-images from the origin or `data:` only, no object, no submission
-target, no foreign base), so neither the page nor a drawing can make
+a CDN still draws. Every response this port gives carries a
+content-security policy that admits no origin but the server's
+(`default-src 'self'`, images from the origin or `data:` only, no
+object, no submission target, no foreign base) and the mark that no
+type may be sniffed from a response, so neither the page nor a drawing can make
 the viewer's browser reach a host the server itself does not reach, or
-reach it on a form or a rewritten base.
+reach it on a form or a rewritten base — and an endpoint that later
+grows one inherits the fence rather than lacking it silently.
 
 Where the source will not parse the row states the source itself as
 text rather than nothing: an unreadable drawing beats a missing one,

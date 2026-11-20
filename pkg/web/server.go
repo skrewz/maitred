@@ -37,6 +37,7 @@ type Server struct {
 	forgejoStatus string
 	webhookProvs  []webhook.ProviderConfig
 	mux           *http.ServeMux
+	handler       http.Handler
 	httpSrv       *http.Server
 	addr          string
 }
@@ -67,12 +68,13 @@ func New(port int, eng *engine.Engine, version string, fjEng *forgejo.Engine, fj
 		mux:           http.NewServeMux(),
 	}
 	s.registerRoutes()
+	s.handler = fenceHandlers(s.mux)
 	return s
 }
 
 // Handler returns the server's HTTP handler (for tests).
 func (s *Server) Handler() http.Handler {
-	return s.mux
+	return s.handler
 }
 
 // Start binds the dashboard port and then serves HTTP in a
@@ -89,7 +91,7 @@ func (s *Server) Start() error {
 	s.log.Printf("web dashboard listening on %s", s.addr)
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: s.mux,
+		Handler: s.handler,
 		// The port answers unauthenticated callers on whatever network
 		// it binds, so a stranger must not be able to pin a handler
 		// goroutine open by trickling out headers — and a stalled
@@ -141,22 +143,27 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/", s.handleStatic)
 }
 
-func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
-	// The page draws tracker-authored source through a vendored
-	// renderer, so the fence against every other origin rides on
-	// every static response rather than on the renderer alone:
-	// nothing loads from another host, a drawing cannot make the
-	// viewer's browser fetch a remote image, and neither forms nor
-	// a rewritten base open another way out (§forgejo/observability/
-	// the-outcomes-view). The two unsafe-inline entries are the
-	// page's own inline script, styles and attributes, and the
-	// theme CSS Mermaid injects at render time: the fence is
-	// against other origins, not against the page itself.
-	w.Header().Set("Content-Security-Policy",
-		"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "+
-			"img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
+// fenceHandlers puts the content-security policy and the nosniff mark
+// on every response the port gives, not only the files it serves: the
+// fence describes the port, which answers unauthenticated callers on
+// whatever network it binds, so an endpoint that later grows one
+// inherits it rather than silently lacking it — the same reason the
+// fence rides on the response rather than on the renderer alone. The
+// two unsafe-inline entries are the page's own inline script, styles
+// and attributes, and the theme CSS Mermaid injects at render time:
+// the fence is against other origins, not against the page itself
+// (§forgejo/observability/the-outcomes-view).
+func fenceHandlers(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		next.ServeHTTP(w, r)
+	})
+}
 
+func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	// Serve static files from the embedded FS
 	path := strings.TrimPrefix(r.URL.Path, "/")
 	if path == "" {
