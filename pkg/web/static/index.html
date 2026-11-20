@@ -115,10 +115,12 @@
         .chart-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.92); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 2rem; overflow: auto; cursor: zoom-out; }
         .chart-overlay-body { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; padding: 1.5rem; max-width: 96vw; max-height: 92vh; overflow: auto; cursor: auto; }
         .chart-overlay-body svg { width: 90vw; height: auto; max-height: 88vh; }
-        /* The overlay copies a cell's markup wholesale, so the rules
-           above hold there too; only the fallen-back text's size and
-           colour differ once the picture fills the screen. */
-        .chart-overlay-body .outcomes-chart.fallback .outcomes-chart-source { font-size: 1rem; color: #cbd5e1; }
+        /* The overlay copies a cell's children, so the drawing's rules
+           above hold there too. The fallback mark sits on the cell
+           rather than among its children, so it travels onto the body
+           by hand — and it is what shows the fallen-back text, at
+           full-screen size, where the rule above would hide it. */
+        .chart-overlay-body.fallback .outcomes-chart-source { display: block; font-size: 1rem; color: #cbd5e1; }
         .modal-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.8); display: flex; align-items: center; justify-content: center; z-index: 100; }
         .modal { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; padding: 1.5rem; max-width: 480px; }
         .modal h2 { font-size: 1rem; color: #fde68a; margin-bottom: 0.75rem; }
@@ -889,7 +891,9 @@
 
         // The click-out overlay shows the same drawing the row shows,
         // which is why it copies the cell's own markup: SVG where the
-        // source drew, escaped text where it did not. It closes on a
+        // source drew, escaped text where it did not — the fallback
+        // mark travelling with it, since a copy of the children alone
+        // would state neither drawing nor text. It closes on a
         // click of its backdrop and on Escape; the drawing itself is
         // not the backdrop, so clicking inside a fallen-back picture
         // selects text rather than dismissing the view
@@ -898,14 +902,18 @@
             // A click of a cell still drawing opens its overlay once
             // the draw settles, so the enlarged view is never empty.
             (cell.renderDone ?? Promise.resolve()).then(() => {
-                document.getElementById('chart-overlay-body').innerHTML = cell.innerHTML;
+                const body = document.getElementById('chart-overlay-body');
+                body.classList.toggle('fallback', cell.classList.contains('fallback'));
+                body.innerHTML = cell.innerHTML;
                 document.getElementById('chart-overlay').style.display = 'flex';
             });
         }
 
         function closeChartOverlay() {
             document.getElementById('chart-overlay').style.display = 'none';
-            document.getElementById('chart-overlay-body').innerHTML = '';
+            const body = document.getElementById('chart-overlay-body');
+            body.innerHTML = '';
+            body.classList.remove('fallback');
         }
 
         document.getElementById('chart-overlay').addEventListener('click', (e) => {

@@ -1611,18 +1611,26 @@ async function testOutcomesChart(page, results) {
   results.push(assert(!(await overlay.isVisible()), 'A click outside the drawing closes the overlay'));
 
   // A drawing whose source will not parse still clicks out, to the
-  // same text the row states.
+  // same text the row states — and states it visibly. A copy of a
+  // cell's children carries no fallback mark, so the mark has to
+  // cross into the overlay for the text to show at all: reading the
+  // panel's textContent instead of its display would pass on hidden
+  // text, and advertise a behaviour nothing checks.
   await page.evaluate((payload) => renderOutcomes(payload), oneRagged);
   await page.waitForSelector('#outcomes-list .outcomes-chart.fallback .outcomes-chart-source', { timeout: 30000 }).catch(() => {});
   await page.locator('#outcomes-list .outcomes-chart.fallback').first().click();
   await overlay.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
-  const enlargedText = await page.evaluate(() => ({
-    text: document.querySelector('#chart-overlay-body')?.textContent ?? '',
-    svg: !!document.querySelector('#chart-overlay-body svg'),
-  }));
+  const enlargedText = await page.evaluate(() => {
+    const pre = document.querySelector('#chart-overlay-body .outcomes-chart-source');
+    return {
+      text: pre?.textContent ?? '',
+      shown: !!pre && getComputedStyle(pre).display !== 'none',
+      svg: !!document.querySelector('#chart-overlay-body svg'),
+    };
+  });
   results.push(assert(
-    !enlargedText.svg && enlargedText.text.includes('this will not parse'),
-    `The overlay of a fallen-back picture states its text (svg: ${enlargedText.svg})`
+    !enlargedText.svg && enlargedText.shown && enlargedText.text.includes('this will not parse'),
+    `The overlay of a fallen-back picture shows its text (svg: ${enlargedText.svg}, text shown: ${enlargedText.shown})`
   ));
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);

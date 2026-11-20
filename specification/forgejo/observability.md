@@ -359,10 +359,12 @@ carried one) still prints above the absence.
 
 Clicking the drawing — or pressing Enter or Space with the picture
 focused — opens a **full-screen overlay** of the same drawing: the
-copy the reader asked for, not a second rendering. Escape or a click
+copy the reader asked for, not a second rendering, and a copy that
+carries the row's fallback mark with it, so an enlarged fallen-back
+picture shows the same text the row shows rather than an empty panel.
+Escape or a click
 outside the drawing closes it, and a click of a picture still drawing
-opens the overlay once the draw settles rather than empty. A
-fallen-back picture clicks out to the same text the row states. Every
+opens the overlay once the draw settles rather than empty. Every
 re-render — including the renders that replace the list with an empty
 or unreadable view — closes the overlay rather than leaving it showing
 a picture the next poll has replaced.
