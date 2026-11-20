@@ -364,7 +364,9 @@ carries the row's fallback mark with it, so an enlarged fallen-back
 picture shows the same text the row shows rather than an empty panel.
 Escape or a click
 outside the drawing closes it, and a click of a picture still drawing
-opens the overlay once the draw settles rather than empty. Every
+opens the overlay once the draw settles rather than empty — and opens
+nothing at all if a render replaced the list while that draw was in the
+air, since the picture it would show is no longer on the page. Every
 re-render — including the renders that replace the list with an empty
 or unreadable view — closes the overlay rather than leaving it showing
 a picture the next poll has replaced.

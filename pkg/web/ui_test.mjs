@@ -1635,6 +1635,27 @@ async function testOutcomesChart(page, results) {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
 
+  // A click parked on a draw must not outlive the list it was made
+  // from: a render that lands while the draw is in the air has closed
+  // the overlay, and reopening it from a cell the poll replaced would
+  // put the reader back inside a forest that is no longer on the page
+  // (§forgejo/observability/the-outcomes-view).
+  await page.evaluate((payload) => renderOutcomes(payload), oneForest);
+  const parked = await page.evaluate(async () => {
+    document.querySelector('#outcomes-list .outcomes-chart')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    renderOutcomes({ engine_status: 'enabled', forests: [] });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    return {
+      shown: getComputedStyle(document.getElementById('chart-overlay')).display !== 'none',
+      hasSvg: !!document.querySelector('#chart-overlay-body svg'),
+    };
+  });
+  results.push(assert(
+    !parked.shown,
+    `A render that lands during a parked click leaves the overlay closed (open: ${parked.shown}, holding a replaced drawing: ${parked.hasSvg})`
+  ));
+
   // The poll's discipline: every render replaces the list, and the
   // two branches that render without rows — the honest empty and the
   // payload the engine could not vouch for — must close an open

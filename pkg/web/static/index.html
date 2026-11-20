@@ -848,7 +848,14 @@
         // click-out can await it rather than open an overlay on a cell
         // that holds neither drawing nor text yet.
         let chartSerial = 0;
+        // Every render of the list takes the next render number, so a
+        // continuation that started against an older list — this draw
+        // loop, or a click parked on a draw — can see that the poll has
+        // replaced the cells it holds and stand down rather than put
+        // the reader back inside a picture no longer on the page.
+        let renderNumber = 0;
         async function renderForestCharts(cells) {
+            const render = renderNumber;
             configureMermaid();
             const settle = (cells ?? []).map((cell) => {
                 let done;
@@ -856,6 +863,9 @@
                 return done;
             });
             for (const [i, cell] of (cells ?? []).entries()) {
+                // A later render already owns the page: these cells are
+                // detached, and drawing them is work no reader sees.
+                if (render !== renderNumber) return;
                 await drawChartCell(cell);
                 settle[i]();
             }
@@ -899,9 +909,14 @@
         // selects text rather than dismissing the view
         // (§forgejo/observability/the-outcomes-view).
         function openChartOverlay(cell) {
+            const render = renderNumber;
             // A click of a cell still drawing opens its overlay once
-            // the draw settles, so the enlarged view is never empty.
+            // the draw settles, so the enlarged view is never empty —
+            // unless a render landed meanwhile, which replaced the list
+            // this cell belongs to and closed the overlay the poll
+            // closes on every re-render.
             (cell.renderDone ?? Promise.resolve()).then(() => {
+                if (render !== renderNumber) return;
                 const body = document.getElementById('chart-overlay-body');
                 body.classList.toggle('fallback', cell.classList.contains('fallback'));
                 body.innerHTML = cell.innerHTML;
@@ -960,7 +975,10 @@
             // is running every render is a re-render: the open overlay
             // closes before any branch, so no path — not the failed
             // enumeration, not the empty set — leaves the reader
-            // inside a picture the poll has replaced.
+            // inside a picture the poll has replaced. The render number
+            // moves with the list, so a draw — or a click parked on a
+            // draw — still working the old list sees it is superseded.
+            renderNumber++;
             closeChartOverlay();
             const list = document.getElementById('outcomes-list');
             const statusEl = document.getElementById('outcomes-status-text');
