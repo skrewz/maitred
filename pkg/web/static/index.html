@@ -889,10 +889,11 @@
                 // hang below the page.
                 document.getElementById(`d${id}`)?.remove();
                 cell.classList.add('fallback');
-                // The warn names the forest: the page holds several and
-                // Mermaid's error carries no identity of its own.
-                const forest = cell.closest('.outcomes-row')?.querySelector('.outcomes-repo')?.textContent ?? 'an unknown forest';
-                console.warn(`forest chart will not parse; drawing ${forest}'s source as text:`, String(e));
+                // The warn names the forest the row was built for: the
+                // page holds several and Mermaid's error carries no
+                // identity of its own. The cell carries that name
+                // because the row built it from the same field.
+                console.warn(`forest chart will not parse; drawing ${cell.dataset.chartRepo}'s source as text:`, String(e));
             }
         }
 
@@ -1003,7 +1004,7 @@
                         ${issueCell('Tracker', f.tracker, 'no tracker \u2014 this root blocks no outcome issue')}
                     </div>
                     ${warningsHtml(f.warnings)}
-                    ${f.chart ? `<div class="outcomes-chart" tabindex="0" data-chart-source="${escapeHtml(f.chart)}" title="Click to enlarge"><span class="outcomes-chart-svg"></span>${chartHtml(f.chart)}</div>` : ''}
+                    ${f.chart ? `<div class="outcomes-chart" tabindex="0" data-chart-source="${escapeHtml(f.chart)}" data-chart-repo="${escapeHtml(f.repository)}" title="Click to enlarge"><span class="outcomes-chart-svg"></span>${chartHtml(f.chart)}</div>` : ''}
                     ${f.chart_revisited ? `<div class="outcomes-stamp">${escapeHtml(f.chart_revisited)}</div>` : ''}
                 </div>
             `).join('');

@@ -1503,6 +1503,10 @@ async function testOutcomesChart(page, results) {
       fallbackShown: !!preOf(rows[1]) && getComputedStyle(preOf(rows[1])).display !== 'none',
       fallbackText: preOf(rows[1])?.textContent ?? '',
       thirdHasCell: !!rows[2]?.querySelector('.outcomes-chart'),
+      // The fallback warn reads the forest's name off the cell, so the
+      // cell has to carry the name the row states.
+      cellRepo: cells[0]?.dataset.chartRepo ?? '',
+      rowRepo: rows[0]?.querySelector('.outcomes-repo')?.textContent ?? '',
       // A refused render must leave no error drawing of Mermaid's own
       // anywhere on the page.
       strayErrors: document.querySelectorAll('svg.error').length
@@ -1534,6 +1538,10 @@ async function testOutcomesChart(page, results) {
   results.push(assert(
     !drawn.thirdHasCell,
     'A row carrying no picture builds no chart cell'
+  ));
+  results.push(assert(
+    drawn.cellRepo === drawn.rowRepo && drawn.cellRepo !== '',
+    `The chart cell carries the forest the row states, so the fallback warn has a name to read (cell: "${drawn.cellRepo}", row: "${drawn.rowRepo}")`
   ));
   results.push(assert(
     drawn.strayErrors === 0,
