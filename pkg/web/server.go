@@ -146,12 +146,11 @@ func (s *Server) registerRoutes() {
 // fenceHandlers puts the content-security policy and the nosniff mark
 // on every response the port gives, not only the files it serves: the
 // fence describes the port, which answers unauthenticated callers on
-// whatever network it binds, so an endpoint that later grows one
-// inherits it rather than silently lacking it — the same reason the
-// fence rides on the response rather than on the renderer alone. The
-// two unsafe-inline entries are the page's own inline script, styles
-// and attributes, and the theme CSS Mermaid injects at render time:
-// the fence is against other origins, not against the page itself
+// whatever network it binds — the same reason the fence rides on the
+// response rather than on the renderer alone. The two unsafe-inline
+// entries are the page's own inline script, styles and attributes, and
+// the theme CSS Mermaid injects at render time: the fence is against
+// other origins, not against the page itself
 // (§forgejo/observability/the-outcomes-view).
 func fenceHandlers(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

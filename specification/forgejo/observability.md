@@ -346,8 +346,7 @@ content-security policy that admits no origin but the server's
 object, no submission target, no foreign base) and the mark that no
 type may be sniffed from a response, so neither the page nor a drawing can make
 the viewer's browser reach a host the server itself does not reach, or
-reach it on a form or a rewritten base — and an endpoint that later
-grows one inherits the fence rather than lacking it silently.
+reach it on a form or a rewritten base.
 
 Where the source will not parse the row states the source itself as
 text rather than nothing: an unreadable drawing beats a missing one,
