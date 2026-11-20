@@ -889,7 +889,10 @@
                 // hang below the page.
                 document.getElementById(`d${id}`)?.remove();
                 cell.classList.add('fallback');
-                console.warn('forest chart will not parse; drawing the source as text:', String(e));
+                // The warn names the forest: the page holds several and
+                // Mermaid's error carries no identity of its own.
+                const forest = cell.closest('.outcomes-row')?.querySelector('.outcomes-repo')?.textContent ?? 'an unknown forest';
+                console.warn(`forest chart will not parse; drawing ${forest}'s source as text:`, String(e));
             }
         }
 
