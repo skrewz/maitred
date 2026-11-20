@@ -1093,18 +1093,48 @@ func prAutoClosesIssue(body, prRepo, issueRepo string, issueNumber int) bool {
 	return false
 }
 
+// maxCascadeWalkReads bounds the graph reads one event's cascade walk
+// may make. The walk pays one IssueBlocks read per closed node it
+// visits and one IssueDependencies read per open row, so an honest
+// graph reached from one close costs about the size of its forest —
+// the forests the engine serves run to tens of issues, and sixty-four
+// reads is an order of magnitude above that. The bound exists for the
+// graph that is not honest: wide or deep enough that the walk, bounded
+// only by its visited set, would keep the delivery reading the forge
+// for ever (§forgejo/decisions/unblock-cascade, s-git/maitred#246).
+//
+// It is charged beside each read the walk pays, like the cap on
+// resolved closing references beside the fan-out it bounds, so a node
+// pruned by the visited set spends nothing. A walk that reaches the
+// bound fails the read rather than answering with the rows it happened
+// to collect — a partial graph presented as a complete one is the
+// fail-open form #180 exists to close — and every caller already
+// resolves a failed graph read as a hold-off the sweep backstops
+// (§forgejo/webhook/re-fetch).
+const maxCascadeWalkReads = 64
+
+// errCascadeWalkBudget marks the failure of a walk that reached
+// maxCascadeWalkReads before reaching the end of the graph.
+var errCascadeWalkBudget = errors.New("the cascade walk reached its graph-read budget, so the graph read is incomplete")
+
 // graphNode builds the blocker-graph node for issue: its blocks, each
 // open block with its blockers, each closed block followed recursively —
 // the shape the unblock cascade walks. A visited set terminates cycles
-// (§forgejo/webhook/re-fetch).
+// and the read budget bounds the walk (§forgejo/webhook/re-fetch,
+// §forgejo/decisions/unblock-cascade).
 func (e *Engine) graphNode(issue *Issue) (*IssueNode, error) {
+	budget := maxCascadeWalkReads
 	visited := map[Key]bool{issueKey(issue): true}
-	return e.fillNode(issue, visited)
+	return e.fillNode(issue, visited, &budget)
 }
 
-func (e *Engine) fillNode(issue *Issue, visited map[Key]bool) (*IssueNode, error) {
+func (e *Engine) fillNode(issue *Issue, visited map[Key]bool, budget *int) (*IssueNode, error) {
 	node := &IssueNode{Issue: *issue}
 	owner, name := splitRepo(issue.Repository)
+	if *budget == 0 {
+		return nil, fmt.Errorf("cascade walk of %s#%d: %w", issue.Repository, issue.Number, errCascadeWalkBudget)
+	}
+	*budget--
 	blocks, err := e.api.IssueBlocks(owner, name, issue.Number)
 	if err != nil {
 		return nil, err
@@ -1116,6 +1146,10 @@ func (e *Engine) fillNode(issue *Issue, visited map[Key]bool) (*IssueNode, error
 		bo, bn := splitRepo(b.Repository)
 		switch b.State {
 		case "open":
+			if *budget == 0 {
+				return nil, fmt.Errorf("cascade walk of %s#%d: %w", b.Repository, b.Number, errCascadeWalkBudget)
+			}
+			*budget--
 			blockers, err := e.api.IssueDependencies(bo, bn, b.Number)
 			if err != nil {
 				return nil, err
@@ -1127,7 +1161,7 @@ func (e *Engine) fillNode(issue *Issue, visited map[Key]bool) (*IssueNode, error
 				continue // cycle: leave the node as a leaf
 			}
 			visited[k] = true
-			child, err := e.fillNode(&b, visited)
+			child, err := e.fillNode(&b, visited, budget)
 			if err != nil {
 				return nil, err
 			}

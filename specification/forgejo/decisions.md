@@ -793,6 +793,21 @@ when the seeding window ends — the label removal is itself a
 `reassess` once the member is unblocked; a key carrying `outcome`
 dispatches `wrap-up`.
 
+The walk is also **bounded per event**: one cascade walk pays at most
+sixty-four graph reads — one per closed node's blocks listing, one per
+open row's dependencies — charged beside the read it buys, so a node
+the visited set prunes spends nothing (s-git/maitred#246). The bound
+exists for graphs the engine does not serve: an honest graph reached
+from one close costs about the size of its forest, and a graph wide or
+deep enough to exhaust the budget is one no single delivery may stream
+reads from for ever. A walk that reaches the bound **fails the read**
+rather than answering with the rows it happened to collect — a partial
+graph presented as a complete one is the fail-open form #180 exists to
+close — and the event resolves as a hold-off naming the failure, which
+the next sweep backstops (§forgejo/webhook/re-fetch). Forests within
+the bound cascade exactly as they did before: the bound costs no
+correctness on the ordinary path.
+
 A newly unblocked `outcome` tracker dispatches `wrap-up`, never
 `implement`: a tracker is never an implement candidate anywhere in
 the engine, the cascade included (§forgejo/decisions/transition-table).

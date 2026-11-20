@@ -2408,6 +2408,80 @@ func TestHandler_Cascade_Cycle(t *testing.T) {
 	}
 }
 
+// TestGraphNode_ReadBudgetStopsTheWalk: the cascade walk's reads are
+// bounded per event, and a graph deep enough to exceed the bound stops
+// the walk at the bound instead of reading on. A chain of closed
+// issues longer than maxCascadeWalkReads is a walk that cannot
+// complete, and a partial graph is never handed back as a cascade: the
+// walk fails with the budget error, having made no read beyond the
+// bound (§forgejo/decisions/unblock-cascade, s-git/maitred#246).
+func TestGraphNode_ReadBudgetStopsTheWalk(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	for i := 1; i <= maxCascadeWalkReads; i++ {
+		api.blocks[i] = []Issue{*testIssue(i+1, "closed")}
+	}
+	_, err := eng.graphNode(testIssue(1, "closed"))
+	if !errors.Is(err, errCascadeWalkBudget) {
+		t.Fatalf("graphNode error = %v, want the walk-budget error", err)
+	}
+	if n := api.callCount("IssueBlocks:"); n != maxCascadeWalkReads {
+		t.Errorf("%d graph read(s), want the walk to stop at its budget of %d", n, maxCascadeWalkReads)
+	}
+}
+
+// TestGraphNode_ReadBudgetChargesDependencyReads: the budget prices
+// every read the walk makes, not just the blocks listing — each open
+// row's dependency read is charged too. A closed root fanning out to
+// more open issues than the budget pays for stops with exactly
+// maxCascadeWalkReads reads spent, whichever side of the fan-out they
+// fell on (§forgejo/decisions/unblock-cascade).
+func TestGraphNode_ReadBudgetChargesDependencyReads(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	var open []Issue
+	for i := 2; i <= maxCascadeWalkReads+2; i++ {
+		open = append(open, *testIssue(i, "open"))
+		api.deps[i] = []Issue{*testIssue(1, "closed")}
+	}
+	api.blocks[1] = open
+	_, err := eng.graphNode(testIssue(1, "closed"))
+	if !errors.Is(err, errCascadeWalkBudget) {
+		t.Fatalf("graphNode error = %v, want the walk-budget error", err)
+	}
+	if n := api.callCount("IssueBlocks:") + api.callCount("IssueDependencies:"); n != maxCascadeWalkReads {
+		t.Errorf("%d graph read(s), want the walk to stop at its budget of %d", n, maxCascadeWalkReads)
+	}
+}
+
+// TestHandler_IssueClosed_CascadeWalkBudgetHoldsOff: an event whose
+// cascade walk reaches the bound resolves the way an incomplete graph
+// read resolves today — a hold-off naming the failure, which the next
+// sweep backstops. The close dispatches nothing computed from the rows
+// the walk happened to collect and records no decision; the logged
+// re-fetch failure carries the budget as its reason
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/unblock-cascade).
+func TestHandler_IssueClosed_CascadeWalkBudgetHoldsOff(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.issues[7] = testIssue(7, "closed")
+	for i := 7; i < 7+maxCascadeWalkReads; i++ {
+		api.blocks[i] = []Issue{*testIssue(i+1, "closed")}
+	}
+
+	rec := serve(t, h, signedRequest(t, "s3cret", "issues", "closed", issuePayload("o/r", 7, "closed")))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if n := len(q.all()); n != 0 {
+		t.Errorf("got %d tasks, want none (a walk that hit its bound never yields a cascade)", n)
+	}
+	if n := api.callCount("IssueBlocks:"); n != maxCascadeWalkReads {
+		t.Errorf("%d graph read(s), want the walk to stop at its budget of %d", n, maxCascadeWalkReads)
+	}
+	if got := eng.Tracked(); len(got) != 0 {
+		t.Errorf("Tracked() = %v, want no decision: the delivery holds off on the logged failure and the sweep decides", got)
+	}
+}
+
 // TestHandler_Cascade_MissingIssue: a blocked issue that no longer
 // exists in the API is skipped (the re-fetch error is logged).
 func TestHandler_Cascade_MissingIssue(t *testing.T) {
