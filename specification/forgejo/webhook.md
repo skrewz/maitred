@@ -424,12 +424,15 @@ For each decision event, the re-fetch assembles the state
   hop to: its own state and reviews are the read, the PR being its own
   delivery (§forgejo/decisions/sync-set).
   For issue closed, the blocker graph rooted at the closed issue —
-  walked under the cascade's per-event read budget (sixty-four reads,
-  named in the code), so one delivery cannot read the forge for ever;
-  a walk that reaches the bound fails this re-fetch as a failed graph
-  read does — a hold-off naming the failure, never a cascade computed
-  from the rows it collected (§forgejo/decisions/unblock-cascade,
-  s-git/maitred#246).
+  walked under the cascade's per-event budget of sixty-four graph reads
+  (named in the code), one per distinct issue the walk reaches, so the
+  recursion a delivery may not leave unbounded is bounded here. Reads
+  are graph reads, not HTTP requests: each read paginates, and the page
+  count is the client's listing cost rather than this walk's
+  (§forgejo/client/operations, §forgejo/decisions/unblock-cascade). A
+  walk that reaches the bound fails this re-fetch as a failed graph read
+  does — a hold-off naming the failure, never a cascade computed from
+  the rows it collected (s-git/maitred#246).
 - **PR events** — the PR itself, and its reviews, for the review
   transitions and for PR comments (which decide as reconcile). For PR
   reviewed, PR commented, and the sweep's synthetic

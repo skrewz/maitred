@@ -1094,15 +1094,18 @@ func prAutoClosesIssue(body, prRepo, issueRepo string, issueNumber int) bool {
 }
 
 // maxCascadeWalkReads bounds the graph reads one event's cascade walk
-// may make. The walk pays one IssueBlocks read for each closed node it
-// visits and one IssueDependencies read for each open row it reaches,
-// each charged once per issue however many edges reach it, so an honest
-// graph reached from one close costs about the size of its forest — the
-// forests the engine serves run to tens of issues, and sixty-four reads
-// is an order of magnitude above that. The bound exists for the graph
-// that is not honest: wide or deep enough that the walk, bounded only by
-// its visited set, would keep the delivery reading the forge for ever
-// (§forgejo/decisions/unblock-cascade, s-git/maitred#246).
+// may make — graph reads, not HTTP requests: each read paginates, and
+// the page count is the client's listing cost, not this walk's
+// (§forgejo/client/operations). The walk pays one IssueBlocks read for
+// each closed node it visits and one IssueDependencies read for each open
+// row it reaches, each charged once per issue however many edges reach
+// it, so an honest graph reached from one close costs about the size of
+// its forest — the forests the engine serves run to tens of issues, and
+// sixty-four reads is an order of magnitude above that. The bound exists
+// for the graph that is not honest: wide or deep enough that the walk,
+// bounded only by its visited set, would keep the delivery reading the
+// forge for ever (§forgejo/decisions/unblock-cascade,
+// s-git/maitred#246).
 //
 // It is charged beside the read it buys, like the cap on resolved closing
 // references beside the fan-out it bounds, so a node the visited set
