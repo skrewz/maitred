@@ -1115,18 +1115,65 @@ func prAutoClosesIssue(body, prRepo, issueRepo string, issueNumber int) bool {
 	return false
 }
 
+// maxCascadeWalkReads bounds the graph reads one event's cascade walk
+// may make — graph reads, not HTTP requests: each read paginates, and
+// the page count is the client's listing cost, not this walk's
+// (§forgejo/client/operations). The walk pays one IssueBlocks read for
+// each closed node it visits and one IssueDependencies read for each open
+// row it reaches, each charged once per issue however many edges reach
+// it, so an honest graph reached from one close costs about the size of
+// its forest — the forests the engine serves run to tens of issues, and
+// sixty-four reads is an order of magnitude above that. The bound exists
+// for the graph that is not honest: wide or deep enough that the walk,
+// bounded only by its visited set, would keep the delivery reading the
+// forge for ever (§forgejo/decisions/unblock-cascade,
+// s-git/maitred#246).
+//
+// It is charged beside the read it buys, like the cap on resolved closing
+// references beside the fan-out it bounds, so a node the visited set
+// prunes and a repeated open row spend nothing. A walk that reaches the
+// bound fails the read rather than answering with the rows it happened
+// to collect — a partial graph presented as a complete one is the
+// fail-open form #180 exists to close — and every caller already
+// resolves a failed graph read as a hold-off the sweep backstops
+// (§forgejo/webhook/re-fetch).
+const maxCascadeWalkReads = 64
+
+// errCascadeWalkBudget marks the failure of a walk that reached
+// maxCascadeWalkReads before reaching the end of the graph. chargeRead
+// wraps it in the name of the read that could not be paid for.
+var errCascadeWalkBudget = errors.New("the graph-read budget is spent, so the graph read is incomplete")
+
 // graphNode builds the blocker-graph node for issue: its blocks, each
 // open block with its blockers, each closed block followed recursively —
-// the shape the unblock cascade walks. A visited set terminates cycles
-// (§forgejo/webhook/re-fetch).
+// the shape the unblock cascade walks. A visited set terminates cycles,
+// a read set asks each issue once, and the read budget bounds the walk
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/unblock-cascade).
 func (e *Engine) graphNode(issue *Issue) (*IssueNode, error) {
+	budget := maxCascadeWalkReads
 	visited := map[Key]bool{issueKey(issue): true}
-	return e.fillNode(issue, visited)
+	return e.fillNode(issue, visited, map[Key][]IssueNode{}, &budget)
 }
 
-func (e *Engine) fillNode(issue *Issue, visited map[Key]bool) (*IssueNode, error) {
+// chargeRead spends one unit of the walk's read budget on a read of
+// repo#num, failing the walk when the budget is already spent: the read
+// that could not be paid for names itself in the error, so the hold-off
+// the caller logs says which part of the graph went unread
+// (§forgejo/decisions/unblock-cascade).
+func chargeRead(budget *int, repo string, num int) error {
+	if *budget == 0 {
+		return fmt.Errorf("cascade walk of %s#%d: %w", repo, num, errCascadeWalkBudget)
+	}
+	*budget--
+	return nil
+}
+
+func (e *Engine) fillNode(issue *Issue, visited map[Key]bool, read map[Key][]IssueNode, budget *int) (*IssueNode, error) {
 	node := &IssueNode{Issue: *issue}
 	owner, name := splitRepo(issue.Repository)
+	if err := chargeRead(budget, issue.Repository, issue.Number); err != nil {
+		return nil, err
+	}
 	blocks, err := e.api.IssueBlocks(owner, name, issue.Number)
 	if err != nil {
 		return nil, err
@@ -1135,21 +1182,44 @@ func (e *Engine) fillNode(issue *Issue, visited map[Key]bool) (*IssueNode, error
 	for i := range blocks {
 		b := blocks[i]
 		node.Blocks[i].Issue = b
-		bo, bn := splitRepo(b.Repository)
 		switch b.State {
 		case "open":
-			blockers, err := e.api.IssueDependencies(bo, bn, b.Number)
-			if err != nil {
-				return nil, err
+			// A row that names no repository lives in the listing it
+			// was read from, the rule rowRepository encodes — the
+			// read and the failure message must both name an object
+			// the forge can find (§forgejo/client/operations).
+			repo := rowRepository(&b, issue.Repository)
+			// An open issue listed by several closed parents is one
+			// read, not one per edge reaching it: the walk asks once
+			// and reuses the answer, the way the visited set refuses to
+			// re-walk a closed node. Pricing the budget by edges would
+			// lose an honest forest's cascade to a hold-off
+			// (s-git/maitred#246). The slice is shared with every parent
+			// that lists the row, so nothing downstream may rewrite a
+			// blocker row in place: that would edit every other parent's
+			// copy of it.
+			k := Key{Repo: repo, Kind: KindIssue, Number: b.Number}
+			blockers, ok := read[k]
+			if !ok {
+				if err := chargeRead(budget, repo, b.Number); err != nil {
+					return nil, err
+				}
+				bo, bn := splitRepo(repo)
+				rows, err := e.api.IssueDependencies(bo, bn, b.Number)
+				if err != nil {
+					return nil, err
+				}
+				blockers = issueNodes(rows)
+				read[k] = blockers
 			}
-			node.Blocks[i].Blockers = issueNodes(blockers)
+			node.Blocks[i].Blockers = blockers
 		case "closed":
 			k := issueKey(&b)
 			if visited[k] {
 				continue // cycle: leave the node as a leaf
 			}
 			visited[k] = true
-			child, err := e.fillNode(&b, visited)
+			child, err := e.fillNode(&b, visited, read, budget)
 			if err != nil {
 				return nil, err
 			}
