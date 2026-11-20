@@ -107,6 +107,20 @@
         .outcomes-row a { color: #38bdf8; text-decoration: none; }
         .outcomes-row a:hover { text-decoration: underline; }
         .outcomes-warning { margin-top: 0.75rem; font-size: 0.8rem; color: #fde68a; }
+        .outcomes-chart { margin-top: 1rem; cursor: zoom-in; }
+        .outcomes-chart svg { max-width: 100%; height: auto; }
+        .outcomes-chart-source { display: none; white-space: pre-wrap; }
+        .outcomes-chart.fallback .outcomes-chart-source { display: block; font-size: 0.75rem; color: #94a3b8; cursor: auto; }
+        .outcomes-stamp { margin-top: 0.4rem; font-size: 0.7rem; color: #64748b; font-family: 'SF Mono', 'Fira Code', monospace; }
+        .chart-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.92); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 2rem; overflow: auto; cursor: zoom-out; }
+        .chart-overlay-body { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; padding: 1.5rem; max-width: 96vw; max-height: 92vh; overflow: auto; cursor: auto; }
+        .chart-overlay-body svg { width: 90vw; height: auto; max-height: 88vh; }
+        /* The overlay copies a cell's children, so the drawing's rules
+           above hold there too. The fallback mark sits on the cell
+           rather than among its children, so it travels onto the body
+           by hand — and it is what shows the fallen-back text, at
+           full-screen size, where the rule above would hide it. */
+        .chart-overlay-body.fallback .outcomes-chart-source { display: block; font-size: 1rem; color: #cbd5e1; }
         .modal-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.8); display: flex; align-items: center; justify-content: center; z-index: 100; }
         .modal { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; padding: 1.5rem; max-width: 480px; }
         .modal h2 { font-size: 1rem; color: #fde68a; margin-bottom: 0.75rem; }
@@ -158,6 +172,10 @@
         <div id="outcomes-list"></div>
     </div>
 
+    <div id="chart-overlay" class="chart-overlay" style="display: none;">
+        <div id="chart-overlay-body" class="chart-overlay-body"></div>
+    </div>
+
     <div id="sweep-modal" class="modal-overlay" style="display: none;" role="dialog" aria-modal="true">
         <div class="modal">
             <h2 id="sweep-modal-title">Trigger sweep</h2>
@@ -169,6 +187,12 @@
         </div>
     </div>
 
+    <!-- The Mermaid runtime is vendored from upstream's released
+         artifact and served from this server, never from a CDN: the
+         container has no reason to reach the public internet to draw
+         itself, and a publicly mirrored repository must not depend on
+         a third-party host to render (§forgejo/observability/the-outcomes-view). -->
+    <script src="/mermaid.min.js"></script>
     <script>
         let refreshInterval;
         let pausedSet = new Set(); // track paused trigger IDs
@@ -791,11 +815,154 @@
             }).join('');
         }
 
+        // The forest picture the payload carries is Mermaid source
+        // arriving at a port that authenticates nothing; the
+        // disciplines for drawing it — escaped text, the security
+        // level, the text fallback — are the spec's
+        // (§forgejo/observability/the-outcomes-view).
+        function chartHtml(source) {
+            return `<pre class="outcomes-chart-source">${escapeHtml(source)}</pre>`;
+        }
+
+        // The vendored runtime is told once, at the security level the
+        // spec names for it. A runtime that never loaded leaves every
+        // cell in its text fallback.
+        let mermaidConfigured = false;
+        function configureMermaid() {
+            if (mermaidConfigured || typeof mermaid === 'undefined') return;
+            mermaid.initialize({
+                startOnLoad: false,
+                securityLevel: 'strict',
+                theme: 'dark',
+                fontFamily: "'SF Mono', 'Fira Code', monospace",
+            });
+            mermaidConfigured = true;
+        }
+
+        // renderForestCharts draws each cell's picture into the cell
+        // that already carries the source as text; the CSS above shows
+        // the SVG unless the cell carries the fallback mark, so a cell
+        // with no drawing states its text. The draws run one at a time:
+        // Mermaid's render shares a scratch element and queues its calls
+        // to run serially, so a re-render landing mid-draw waits its turn
+        // rather than interleaving with the draw it superseded. Every
+        // cell gets a renderDone promise before the first await so the
+        // click-out can await it rather than open an overlay on a cell
+        // that holds neither drawing nor text yet.
+        let chartSerial = 0;
+        async function renderForestCharts(cells) {
+            configureMermaid();
+            const settle = (cells ?? []).map((cell) => {
+                let done;
+                cell.renderDone = new Promise((resolve) => { done = resolve; });
+                return done;
+            });
+            for (const [i, cell] of (cells ?? []).entries()) {
+                // A cell leaves the document only when renderOutcomes
+                // replaces the list, so a detached cell and a superseded
+                // render are one event, and drawing a detached cell is
+                // work no reader sees
+                // (§forgejo/observability/the-outcomes-view).
+                if (!cell.isConnected) return;
+                await drawChartCell(cell);
+                settle[i]();
+            }
+        }
+
+        async function drawChartCell(cell) {
+            // A cell the runtime never reached — nothing served,
+            // nothing parsed — keeps its text rather than blanking:
+            // an unreadable drawing beats a missing one.
+            if (!cell.dataset.chartSource || typeof mermaid === 'undefined') {
+                cell.classList.add('fallback');
+                return;
+            }
+            // A fresh id per drawing, because a row's SVG and
+            // the overlay's copy of it share the document.
+            const id = `forest-chart-${chartSerial++}`;
+            try {
+                const drawn = await mermaid.render(id, cell.dataset.chartSource);
+                cell.classList.remove('fallback');
+                cell.querySelector('.outcomes-chart-svg').innerHTML = drawn.svg;
+            } catch (e) {
+                // A refused render leaves Mermaid's own scratch
+                // element — the error bomb it draws for a
+                // stranger's source — behind in the document.
+                // The cell states the source as text instead, so
+                // that drawing is removed rather than left to
+                // hang below the page.
+                document.getElementById(`d${id}`)?.remove();
+                cell.classList.add('fallback');
+                // The warn names the forest the row was built for: the
+                // page holds several and Mermaid's error carries no
+                // identity of its own. The cell carries that name
+                // because the row built it from the same field.
+                console.warn(`forest chart will not parse; drawing ${cell.dataset.chartRepo}'s source as text:`, String(e));
+            }
+        }
+
+        // The click-out overlay shows the same drawing the row shows,
+        // which is why it copies the cell's own markup: SVG where the
+        // source drew, escaped text where it did not — the fallback
+        // mark travelling with it, since a copy of the children alone
+        // would state neither drawing nor text. It closes on a
+        // click of its backdrop and on Escape; the drawing itself is
+        // not the backdrop, so clicking inside a fallen-back picture
+        // selects text rather than dismissing the view
+        // (§forgejo/observability/the-outcomes-view).
+        function openChartOverlay(cell) {
+            // A click of a cell still drawing opens its overlay once the
+            // draw settles, so the enlarged view is never empty
+            // (§forgejo/observability/the-outcomes-view).
+            (cell.renderDone ?? Promise.resolve()).then(() => {
+                // A cell the poll replaced draws nothing enlarged
+                // (§forgejo/observability/the-outcomes-view).
+                if (!cell.isConnected) return;
+                const body = document.getElementById('chart-overlay-body');
+                body.classList.toggle('fallback', cell.classList.contains('fallback'));
+                body.innerHTML = cell.innerHTML;
+                document.getElementById('chart-overlay').style.display = 'flex';
+            });
+        }
+
+        function closeChartOverlay() {
+            document.getElementById('chart-overlay').style.display = 'none';
+            const body = document.getElementById('chart-overlay-body');
+            body.innerHTML = '';
+            body.classList.remove('fallback');
+        }
+
+        document.getElementById('chart-overlay').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) closeChartOverlay();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeChartOverlay();
+        });
+
+        // The row's chart cell is the click-out's one handle, so the
+        // section delegates it the way the sweep buttons are
+        // delegated: no source is spliced into a handler, and the
+        // discipline outlives any re-render. The cell is focusable and
+        // answers Enter/Space because Escape closes a view a keyboard
+        // operator could otherwise never open.
+        document.getElementById('outcomes-list').addEventListener('click', (e) => {
+            const cell = e.target.closest('.outcomes-chart');
+            if (cell) openChartOverlay(cell);
+        });
+        document.getElementById('outcomes-list').addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            const cell = e.target.closest('.outcomes-chart');
+            if (cell) {
+                e.preventDefault();
+                openChartOverlay(cell);
+            }
+        });
+
         // renderOutcomes renders the outcomes view
         // (§forgejo/observability/the-outcomes-view): one tall row per
         // current forest, each linking out to its ideation root and
-        // its tracker with their states. The rows are tall so the
-        // forest chart has room underneath when that work lands. An
+        // its tracker with their states, drawing the forest's picture
+        // underneath those links and the region's stamp beneath it. An
         // engine that is not up says so in its own state word — the
         // same words the category enum prints and the dashboard
         // render compares against (TestNonFaultWords pins them in
@@ -805,6 +972,11 @@
         // rectangle, and a view the engine answers 500 for says it
         // could not be read rather than reading as "no forests".
         function renderOutcomes(payload) {
+            // Every branch below replaces the list, so the overlay
+            // closes before any branch — and a draw or a parked click
+            // whose cells the replacement detached sees that in the DOM
+            // (§forgejo/observability/the-outcomes-view).
+            closeChartOverlay();
             const list = document.getElementById('outcomes-list');
             const statusEl = document.getElementById('outcomes-status-text');
             // A failed poll and a payload that carries no status word
@@ -837,8 +1009,11 @@
                         ${issueCell('Tracker', f.tracker, 'no tracker \u2014 this root blocks no outcome issue')}
                     </div>
                     ${warningsHtml(f.warnings)}
+                    ${f.chart ? `<div class="outcomes-chart" tabindex="0" data-chart-source="${escapeHtml(f.chart)}" data-chart-repo="${escapeHtml(f.repository)}" title="Click to enlarge"><span class="outcomes-chart-svg"></span>${chartHtml(f.chart)}</div>` : ''}
+                    ${f.chart_revisited ? `<div class="outcomes-stamp">${escapeHtml(f.chart_revisited)}</div>` : ''}
                 </div>
             `).join('');
+            renderForestCharts([...list.querySelectorAll('.outcomes-chart')]);
         }
 
         // The outcomes payload last rendered, in the same

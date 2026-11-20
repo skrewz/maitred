@@ -1,6 +1,8 @@
 package web
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -827,5 +829,74 @@ func TestForgejoOutcomesEndpoint_RecordedEmpty(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"forests":[]`) {
 		t.Errorf("body %s, want an empty forests list, never null", rec.Body.String())
+	}
+}
+
+// vendoredMermaidSHA256 is the digest of the runtime this tree
+// carries: npm's released dist/mermaid.min.js for mermaid@12.3.0, the
+// artifact the specification records alongside the file
+// (§forgejo/observability/the-outcomes-view).
+const vendoredMermaidSHA256 = "336df803d87a38b70a01e736e666c8f7601d2ce42f5e47c8fafe5d721074b9a3"
+
+// TestVendoredMermaidRuntimeIsServed: the page's vendored runtime is
+// served as JavaScript, and it is the artifact the specification names
+// (§forgejo/observability/the-outcomes-view, s-git/maitred#191). The
+// serve half earns its keep because the SPA fallback answers any
+// unknown path with index.html at 200: this is the browser-free signal
+// that the runtime never landed in the embed, where every chart would
+// otherwise quietly fall back to text. The digest half is what makes
+// the byte-identity promise a fact rather than a sentence — the file
+// is 5.5 MB no one reads, so a stray re-save, an edit in the wrong
+// window or a text filter must fail here.
+func TestVendoredMermaidRuntimeIsServed(t *testing.T) {
+	data, err := staticFS.ReadFile("static/mermaid.min.js")
+	if err != nil {
+		t.Fatalf("static/mermaid.min.js: %v", err)
+	}
+	if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != vendoredMermaidSHA256 {
+		t.Errorf("embedded runtime is sha256 %s (%d bytes), want %s: the specification promises the file is upstream's released mermaid@12.3.0 dist/mermaid.min.js, byte for byte",
+			hex.EncodeToString(sum[:]), len(data), vendoredMermaidSHA256)
+	}
+
+	srv := New(0, nil, "test", nil, forgejo.EngineStateWord(false, nil))
+	req := httptest.NewRequest(http.MethodGet, "/mermaid.min.js", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/javascript") {
+		t.Errorf("Content-Type = %q, want JavaScript: the SPA fallback answering HTML here would leave the page without a runtime", got)
+	}
+	if rec.Body.Len() != len(data) {
+		t.Errorf("served %d bytes, want the embedded %d", rec.Body.Len(), len(data))
+	}
+}
+
+// TestResponsesCarrySecurityHeaders: the fence against every
+// origin but the server's rides on every response the port gives,
+// not on the renderer alone and not on the file being served
+// (§forgejo/observability/the-outcomes-view). It is worth a test
+// because a CSP fails silently: a broken policy is dropped, and the
+// page still works — unguarded — in every browser.
+func TestResponsesCarrySecurityHeaders(t *testing.T) {
+	srv := New(0, nil, "test", nil, forgejo.EngineStateWord(false, nil))
+	for _, path := range []string{"/", "/outcomes", "/mermaid.min.js", "/api/version"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: status = %d, want 200", path, rec.Code)
+		}
+		csp := rec.Header().Get("Content-Security-Policy")
+		for _, want := range []string{"default-src 'self'", "img-src 'self' data:", "object-src 'none'", "base-uri 'none'", "form-action 'none'"} {
+			if !strings.Contains(csp, want) {
+				t.Errorf("GET %s: CSP %q lacks %s", path, csp, want)
+			}
+		}
+		if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("GET %s: X-Content-Type-Options = %q, want nosniff", path, got)
+		}
 	}
 }

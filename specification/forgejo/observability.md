@@ -291,8 +291,11 @@ route costs the server nothing new. The page polls the endpoint on a
 timer and renders **one row per current forest**: the repository the
 forest grew in, the ideation root as a link carrying its state, and
 the tracker as a link carrying its state — or the absence of one,
-stated in the row rather than dropped. The rows are tall so the forest
-chart has room underneath when that work lands. The link is only a
+stated in the row rather than dropped. The row draws the forest's
+picture underneath its links — see **Drawing the picture** below — and
+states the region's recency stamp beneath it, verbatim, the timezone
+abbreviation being the tracker's to choose rather than the page's.
+The link is only a
 link when the forge's URL is one a link can carry (http or https);
 anything else renders as text, since the port authenticates nothing.
 A forest the payload says is waiting on a person draws its **warnings**
@@ -319,6 +322,66 @@ the way back when the route is where the reader already is. The
 header's trigger statistics — numbers this page never reads — stay
 hidden on the route, so they state nothing rather than rendering
 their defaults as facts.
+
+**Drawing the picture.** A row's picture is the `chart` field, and the
+page draws it as Mermaid: the source is handed to a renderer at the
+non-scripting `strict` security level, because the text a tracker's
+region carries is whatever a writer left there and the port
+authenticates nothing, and a drawing that ran `click` or `link`
+callbacks would let that text execute in the viewer
+(§forgejo/observability/why-the-engine-is-off). The source reaches the
+page as escaped text and never as markup, so a source carrying one is
+rendered as the text it is rather than as an element.
+
+The renderer is **vendored** into the page's own asset directory and
+served by the server itself: the container has no reason to reach the
+public internet to draw itself, and a publicly mirrored repository
+whose build depends on a third-party host is worse than a large
+vendored file (s-git/maitred#191). What is vendored is
+`mermaid@12.3.0`'s `dist/mermaid.min.js` — npm's released artifact for
+that version, 5,537,838 bytes, sha256
+`336df803d87a38b70a01e736e666c8f7601d2ce42f5e47c8fafe5d721074b9a3` —
+and it stays byte-identical to that artifact: no re-save, no
+reformatting, no filter. Refreshing the runtime means replacing the
+file with a named release's artifact and restating this sentence to
+name it, because `TestVendoredMermaidRuntimeIsServed` compares the
+embedded bytes against the digest recorded here and fails on any other
+byte. The page loads no script from anywhere but its own origin — a
+page that could not reach a CDN still draws. Every response this port gives carries a
+content-security policy that admits no origin but the server's
+(`default-src 'self'`, images from the origin or `data:` only, no
+object, no submission target, no foreign base) and the mark that no
+type may be sniffed from a response, so neither the page nor a drawing can make
+the viewer's browser reach a host the server itself does not reach, or
+reach it on a form or a rewritten base. What that policy does not close
+is inline execution: it admits the page's own inline script, styles and
+attribute handlers, and the theme CSS Mermaid injects as it draws, so
+it stands against every origin but this one and not against the page's
+own code.
+
+Where the source will not parse the row states the source itself as
+text rather than nothing: an unreadable drawing beats a missing one,
+and the refusal leaves no error drawing of the renderer's own anywhere
+on the page. The same holds when the runtime itself never arrived: a
+page whose script did not load states every picture as text rather
+than blanking the rows. A forest carrying no picture builds no chart
+cell and states no stamp, since the payload's picture and stamp are one
+pair (see **The pair travels as one** above).
+
+Clicking the drawing — or pressing Enter or Space with the picture
+focused — opens a **full-screen overlay** of the same drawing: the
+copy the reader asked for, not a second rendering, and a copy that
+carries the row's fallback mark with it, so an enlarged fallen-back
+picture shows the same text the row shows rather than an empty panel.
+Escape or a click
+outside the drawing closes it, and a click of a picture still drawing
+opens the overlay once the draw settles rather than empty — and opens
+nothing at all if a render replaced the list while that draw was in the
+air, since the picture it would show is no longer on the page. Every
+re-render — including the renders that replace the list with an empty
+or unreadable view — closes the overlay rather than leaving it showing
+a picture the next poll has replaced.
+
 ### The warnings a forest carries
 
 A forest waits on a person in exactly two ways, and each forest of the
