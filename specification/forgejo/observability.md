@@ -365,9 +365,8 @@ and the refusal leaves no error drawing of the renderer's own anywhere
 on the page. The same holds when the runtime itself never arrived: a
 page whose script did not load states every picture as text rather
 than blanking the rows. A forest carrying no picture builds no chart
-cell at all
-— an empty `chart` states no forest, and the stamp (when the region
-carried one) still prints above the absence.
+cell and states no stamp, since the payload's picture and stamp are one
+pair (see **The pair travels as one** above).
 
 Clicking the drawing — or pressing Enter or Space with the picture
 focused — opens a **full-screen overlay** of the same drawing: the
