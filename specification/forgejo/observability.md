@@ -337,10 +337,17 @@ The renderer is **vendored** into the page's own asset directory and
 served by the server itself: the container has no reason to reach the
 public internet to draw itself, and a publicly mirrored repository
 whose build depends on a third-party host is worse than a large
-vendored file (s-git/maitred#191). The vendored artifact stays
-byte-identical to upstream's released bundle, and the page loads no
-script from anywhere but its own origin — a page that could not reach
-a CDN still draws. Every response this port gives carries a
+vendored file (s-git/maitred#191). What is vendored is
+`mermaid@12.3.0`'s `dist/mermaid.min.js` — npm's released artifact for
+that version, 5,537,838 bytes, sha256
+`336df803d87a38b70a01e736e666c8f7601d2ce42f5e47c8fafe5d721074b9a3` —
+and it stays byte-identical to that artifact: no re-save, no
+reformatting, no filter. Refreshing the runtime means replacing the
+file with a named release's artifact and restating this sentence to
+name it, because `TestVendoredMermaidRuntimeIsServed` compares the
+embedded bytes against the digest recorded here and fails on any other
+byte. The page loads no script from anywhere but its own origin — a
+page that could not reach a CDN still draws. Every response this port gives carries a
 content-security policy that admits no origin but the server's
 (`default-src 'self'`, images from the origin or `data:` only, no
 object, no submission target, no foreign base) and the mark that no
