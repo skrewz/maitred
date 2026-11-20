@@ -1172,7 +1172,10 @@ func (e *Engine) fillNode(issue *Issue, visited map[Key]bool, read map[Key][]Iss
 			// and reuses the answer, the way the visited set refuses to
 			// re-walk a closed node. Pricing the budget by edges would
 			// lose an honest forest's cascade to a hold-off
-			// (s-git/maitred#246).
+			// (s-git/maitred#246). The slice is shared with every parent
+			// that lists the row, so nothing downstream may rewrite a
+			// blocker row in place: that would edit every other parent's
+			// copy of it.
 			k := Key{Repo: repo, Kind: KindIssue, Number: b.Number}
 			blockers, ok := read[k]
 			if !ok {
