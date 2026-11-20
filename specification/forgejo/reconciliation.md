@@ -129,9 +129,13 @@ instants — the block the wrap-up's, the picture the last tick's.
   row, a blocker or a comment a blocking edge reaches in a repository no role
   names folds nowhere, so the gate decides on exactly the rows the chart draws
   or leaves out, never on rows it neither draws nor publishes
-  (§forgejo/decisions/actionable-state-digest). An unknown scope fails closed,
-  naming the failure rather than reading as a repository holding no role — in
-  the fold as in the drawing, before the first read
+  (§forgejo/decisions/actionable-state-digest). The fold's root joins its walk
+  as the other readers' roots join theirs: admitted by the walk that found it —
+  the event path's role test of the event's repository, and, where the sweep's
+  digest gate starts the walk at a tracker, the gate's own test of the root
+  before the fold reads anything of it. An unknown scope fails closed, naming
+  the failure rather than reading as a repository holding no role — in the fold
+  as in the drawing, at the first fact beyond the repository already admitted
   (§forgejo/webhook/the-scope-cache).
 - **The stamp moves whatever the graph does.** A tick over an unchanged forest
   rewrites the stamp and nothing else. Where the composed body is byte-identical

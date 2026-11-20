@@ -98,9 +98,13 @@ var digestMemberLabels = []string{
 // blocking edge reaches in a repository no maitred role names folds nowhere,
 // so an edge leaving the roles cannot make the gate decide on rows the chart
 // neither draws nor publishes. The root's own repository is admitted by the
-// walk that found the root, as every other reader admits it; an unknown scope
-// fails the fold before its first read, the way an unknown scope fails the
-// drawing (§forgejo/webhook/the-scope-cache).
+// walk that found the root, as every other reader admits it: the event path
+// has role-tested the event's repository before the fold is reached, and the
+// sweep's commissioned-tracker gate tests the root's repository before its
+// walk starts from the tracker, so the fold's equality shortcut never stands
+// where no role has been asked. An unknown scope fails the fold at the first
+// fact beyond the root's own repository, the way it fails the drawing
+// (§forgejo/webhook/the-scope-cache).
 func (e *Engine) ForestDigest(root *Issue, engineAccount, decomposerIdentity string) (string, map[string]string, error) {
 	f, err := e.forestFold(root, engineAccount, decomposerIdentity)
 	if err != nil {
@@ -116,13 +120,6 @@ func (e *Engine) forestFold(root *Issue, engineAccount, decomposerIdentity strin
 	}
 	if engineAccount == "" {
 		return nil, fmt.Errorf("forgejo: forest digest: no engine account given")
-	}
-	// The scope is asked once before the fold reads anything: which
-	// repositories the root's blocking edges name is forge data, so a scope
-	// the cache cannot answer would leave the fold folding rows it cannot
-	// vouch for (§forgejo/webhook/repository-roles, §forgejo/webhook/the-scope-cache).
-	if _, err := e.freshScope(); err != nil {
-		return nil, fmt.Errorf("forgejo: forest digest: scope of %s: %w", root.Repository, err)
 	}
 	f := &fold{}
 	rootRef := forestRef(root.Repository, root.Number)
@@ -197,10 +194,11 @@ func (e *Engine) forestFold(root *Issue, engineAccount, decomposerIdentity strin
 					depRepo = repo
 				}
 				// A blocker stands wherever an edge names it, so the same test
-				// is asked of it: a state change in a repository no role names
-				// is no fact the gate may decide on
+				// is asked of it, continued by the walk that reached it — the
+				// one that entered this row's repository: a state change in a
+				// repository no role names is no fact the gate may decide on
 				// (§forgejo/webhook/repository-roles).
-				admits, err := e.remitAdmits(depRepo, root.Repository)
+				admits, err := e.remitAdmits(depRepo, repo)
 				if err != nil {
 					return nil, fmt.Errorf("forgejo: forest digest: scope of %s: %w", depRepo, err)
 				}

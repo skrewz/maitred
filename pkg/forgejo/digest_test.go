@@ -64,14 +64,6 @@ func digestForest() *fakeAPI {
 // digestRoot is the fixture forest's root. Every test that needs the
 // root — whole or with one fact mutated — starts here, so a fixture
 // change cannot half-land.
-// testRepoNoRole is a fixture repository holding no maitred role at all:
-// the engine reads it nowhere, so nothing that lives in it reaches a
-// decision or a drawing (§forgejo/webhook/repository-roles).
-func testRepoNoRole(fullName string) Repository {
-	owner, name := splitRepo(fullName)
-	return Repository{Name: name, FullName: fullName, Owner: owner}
-}
-
 func digestRoot() Issue {
 	root := digestIssue("o/r", 1, "open", LabelIdeation)
 	root.Body = "the root's intent"
@@ -371,12 +363,15 @@ func TestForestDigestOrderInsensitive(t *testing.T) {
 // root's blocking edges reach in a repository no maitred role names folds
 // nowhere: where an edge leaves the roles, the digest cannot decide on rows the
 // drawing neither draws nor publishes (§forgejo/decisions/actionable-state-digest).
+// The root's own repository is admitted by the walk that found it, so the
+// sweep's commissioned-tracker gate — the one walk that starts at the tracker
+// — tests the root before its fold reads anything of it.
 func TestForestDigestPaysTheAdmissionTest(t *testing.T) {
 	// restrictToRoles leaves one fixture repository standing — the fold's
 	// baseline and its mutation differ by one fact and nothing else, so a
 	// fact from outside the roles is the only thing that could move it.
 	restrictToRoles := func(f *fakeAPI) {
-		f.repos = []Repository{testRepo("o/r"), testRepoNoRole("o/other")}
+		f.repos = []Repository{testRepo("o/r"), testRepoDisabled("o/other")}
 	}
 	t.Run("a blocker outside the roles moves nothing", func(t *testing.T) {
 		f := digestForest()
@@ -406,16 +401,47 @@ func TestForestDigestPaysTheAdmissionTest(t *testing.T) {
 	t.Run("an unknown scope is a failed read", func(t *testing.T) {
 		f := digestForest()
 		f.listReposErr = errors.New("boom")
-		// No snapshot of the roles, and no listing the fold can make: the
-		// scope is unknown, which the fold reports rather than folding an
-		// edge it cannot vouch for (§forgejo/webhook/the-scope-cache).
+		// No snapshot of the roles, and a listing the fold cannot make:
+		// the first edge past the root's own repository asks the scope
+		// the cache cannot answer, and the fold reports it rather than
+		// folding an edge it cannot vouch for. As with the write, the
+		// gather and the carry, a forest whose facts all stand in the
+		// root's own repository needs no listing at all
+		// (§forgejo/webhook/the-scope-cache).
 		eng := NewEngine(f, nil, testConfig(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 		root := digestRoot()
 		if _, _, err := eng.ForestDigest(&root, digestEngine, digestDecomposer); err == nil {
 			t.Fatal("the fold digested on an unknown scope")
 		}
-		if got := f.callCount("IssueBlocks:r/1"); got != 0 {
-			t.Errorf("the fold read the forest on an unknown scope %d times, want the read refused first", got)
+	})
+	t.Run("a root outside the roles leaves the gate off", func(t *testing.T) {
+		// The sweep's commissioned-tracker path starts the walk at the
+		// tracker, so the root's repository is the fold's one fact no
+		// edge has admitted: a closed ideation root standing in a
+		// repository no role names must leave the digest gate off — no
+		// fact of that root, and no read of it, reaches the decision
+		// that gates a curation run (§forgejo/webhook/repository-roles,
+		// §forgejo/reconciliation/the-tracker-block).
+		f := digestForest()
+		restrictToRoles(f)
+		gate := digestIssue("o/other", 30, "closed", LabelIdeation)
+		f.issues[30] = &gate
+		f.deps[2] = []Issue{gate, digestIssue("o/r", 3, "open")}
+		tracker := f.blocks[1][0]
+		if tracker.Number != 2 {
+			t.Fatalf("fixture moved: blocks[1][0] is %d, want the tracker 2", tracker.Number)
+		}
+		eng := digestScopeEngine(f)
+		ev := Event{Kind: KindIssue, Type: EventReconcile, Repo: "o/r", Number: 2}
+		g, err := eng.forestGate(ev, &tracker, f.deps[2])
+		if err != nil {
+			t.Fatalf("forestGate on an unadmitted root: %v", err)
+		}
+		if g != nil {
+			t.Error("the digest gate armed on a root in a repository no maitred role names")
+		}
+		if got := f.callCount("GetIssue:other/30"); got != 0 {
+			t.Errorf("the gate read the unadmitted root %d times, want no read there at all", got)
 		}
 	})
 }

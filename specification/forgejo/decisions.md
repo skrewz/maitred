@@ -1147,18 +1147,13 @@ so the digest and the decision code cannot disagree about what a row is
   must be a trigger, not a side effect. Each counts as its author and
   its body.
 
-The fold pays the **admission test** the drawing's three readers pay —
-the write, the gather and the carry — so the digest is the graph's fourth
-reader under one rule, never a fifth under a wider one
-(§forgejo/reconciliation/the-tracker-block, §forgejo/webhook/repository-roles):
-a row, a blocker or a comment a blocking edge reaches in a repository no
-maitred role names folds nowhere, and nothing of it is read. The root's
-own repository is admitted by the walk that found the root, as every
-other reader admits it. Where an edge leaves the roles, the gate
-therefore decides on exactly the rows the chart draws or leaves out — not
-on rows it neither draws nor publishes — and an unknown scope fails the
-fold before its first read, the way an unknown scope fails the drawing
-(§forgejo/webhook/the-scope-cache).
+The fold pays the **admission test** the drawing's three readers pay, over
+exactly the graph the drawing reads: the rule — including how the root's
+own repository joins the walk — lives once in
+§forgejo/reconciliation/the-tracker-block, and this section's stake in it
+is that the gate decides on exactly the rows the chart draws or leaves
+out, never on rows it neither draws nor publishes
+(§forgejo/webhook/repository-roles, §forgejo/webhook/the-scope-cache).
 
 This exclusion is a **self-trigger guard** and nothing more. A digest
 that moves says a fact changed; it does not say the sender of that fact

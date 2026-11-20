@@ -467,6 +467,28 @@ func (e *Engine) forestGate(ev Event, issue *Issue, blockers []Issue) (*ForestDi
 		if repo == "" {
 			repo = ev.Repo
 		}
+		// The walk that found this root starts at the tracker, not at the
+		// root, so the root's repository is forge data no line on this path
+		// has tested: the admission test the write pays before touching a
+		// tracker's repository is paid here of the root, before the fold
+		// reads anything of it. The fold's equality shortcut then admits the
+		// root's repository only where a role has been asked — on the root
+		// branch above, HandleEvent's role test of ev.Repo is that question,
+		// already answered
+		// (§forgejo/webhook/repository-roles, §forgejo/reconciliation/the-tracker-block).
+		admits, err := e.remitAdmits(repo, ev.Repo)
+		if err != nil {
+			return nil, fmt.Errorf("forgejo: forest gate: scope of the root %s: %w", forestRef(repo, gate.Number), err)
+		}
+		if !admits {
+			// Debug, the level every other cross-repository hop uses for
+			// this sentence: the gate stays off, as it does for every issue
+			// whose decompose row never consults it
+			// (§forgejo/webhook/repository-roles, §forgejo/observability/the-decision-log).
+			e.log.Debug("digest gate skips a root in a repository no maitred role names",
+				"root", forestRef(repo, gate.Number), "tracker", forestRef(ev.Repo, issue.Number))
+			return nil, nil
+		}
 		owner, name := splitRepo(repo)
 		fetched, err := e.api.GetIssue(owner, name, gate.Number)
 		if err != nil {

@@ -677,8 +677,7 @@ func stampLine(body string) string {
 func TestTrackerBlock_RedrawDispatchesNoCurationRun(t *testing.T) {
 	eng, api, q, log := chartForestQueue(t, chartFenced())
 	eng.Reconcile()
-	first, ok := api.writtenBody("out", 2)
-	if !ok {
+	if _, ok := api.writtenBody("out", 2); !ok {
 		t.Fatal("the first sweep wrote no tracker block")
 	}
 	if got := countAction(t, q, "action=decompose"); got != 1 {
@@ -686,20 +685,10 @@ func TestTrackerBlock_RedrawDispatchesNoCurationRun(t *testing.T) {
 	}
 
 	eng.Reconcile()
-	// Whether the second tick lands in the same wall-clock minute as the
-	// first is not what this pins — as in the sweep test above, either the
-	// stamp moves and nothing else does, or the composed body is
-	// byte-identical and nothing is sent. Either way the tick must not wake
-	// a curator (§forgejo/reconciliation/the-tracker-block).
-	second, ok := api.writtenBody("out", 2)
-	if !ok {
-		t.Fatal("the second sweep left no tracker block")
-	}
-	if second != first {
-		if got := strings.Replace(second, stampLine(second), stampLine(first), 1); got != first {
-			t.Error("the second sweep changed more than the stamp")
-		}
-	}
+	// What the second sweep may write — nothing, or the stamp and nothing
+	// else — is pinned by TestTrackerBlock_SweepWritesTheBlock above; what
+	// this test pins is that whichever it is, the tick must not wake a
+	// curator (§forgejo/reconciliation/the-tracker-block).
 	if got := countAction(t, q, "action=decompose"); got != 1 {
 		t.Errorf("two sweeps over an unmoved graph dispatched %d curation runs, want the one the first observation earned", got)
 	}
