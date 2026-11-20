@@ -2452,6 +2452,52 @@ func TestGraphNode_ReadBudgetChargesDependencyReads(t *testing.T) {
 	}
 }
 
+// TestGraphNode_ReadBudgetChargesIssuesNotEdges: the budget prices the
+// issues a walk reaches, not the edges between them — an open issue that
+// several closed parents list is asked for its blockers once, the way
+// the visited set stops the walk from re-walking a closed node. Multi-
+// blocker issues are the shape the cascade exists to read, so a fan-in
+// forest whose edges outnumber the bound is an honest graph: it completes
+// under the bound instead of losing its cascade to a hold-off
+// (§forgejo/decisions/unblock-cascade, s-git/maitred#246).
+func TestGraphNode_ReadBudgetChargesIssuesNotEdges(t *testing.T) {
+	const fanIn = 24
+	eng, api, _, _ := newTestEngine(t)
+	var closed []Issue
+	for n := 2; n <= 1+fanIn; n++ {
+		closed = append(closed, *testIssue(n, "closed"))
+	}
+	var open []Issue
+	for n := 2 + fanIn; n < 5+fanIn; n++ {
+		open = append(open, *testIssue(n, "open"))
+		api.deps[n] = []Issue{*testIssue(2, "closed")}
+	}
+	api.blocks[1] = closed
+	for n := 2; n <= 1+fanIn; n++ {
+		api.blocks[n] = open
+	}
+
+	node, err := eng.graphNode(testIssue(1, "closed"))
+	if err != nil {
+		t.Fatalf("graphNode error = %v, want a fan-in forest to complete under the bound", err)
+	}
+	if n := api.callCount("IssueDependencies:"); n != len(open) {
+		t.Errorf("%d dependency read(s), want one per open issue (%d), not one per edge", n, len(open))
+	}
+	if n := api.callCount("IssueBlocks:") + api.callCount("IssueDependencies:"); n > maxCascadeWalkReads {
+		t.Errorf("%d graph read(s), want at most the budget of %d", n, maxCascadeWalkReads)
+	}
+	// Every repeated row still carries its blockers: the walk reuses the
+	// answer it already has rather than leaving the row a leaf.
+	for _, parent := range node.Blocks {
+		for _, block := range parent.Blocks {
+			if len(block.Blockers) != 1 {
+				t.Fatalf("open row %d carries %d blocker(s), want the reused answer", block.Issue.Number, len(block.Blockers))
+			}
+		}
+	}
+}
+
 // TestHandler_IssueClosed_CascadeWalkBudgetHoldsOff: an event whose
 // cascade walk reaches the bound resolves the way an incomplete graph
 // read resolves today — a hold-off naming the failure, which the next

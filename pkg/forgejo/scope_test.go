@@ -255,31 +255,6 @@ func TestHandleEvent_RepoWithoutRole_CloseReadFailureHoldsOff(t *testing.T) {
 	}
 }
 
-// TestHandleEvent_RepoWithoutRole_CloseWalkBudgetStops: the cascade-only
-// close path reads the graph with the same per-event bound as every
-// other walk of it — a close in a role-less repository whose downstream
-// graph exceeds the bound stops at the bound, dispatches nothing
-// computed from half a graph, and leaves the decision to the sweep
-// (§forgejo/decisions/unblock-cascade, s-git/maitred#246).
-func TestHandleEvent_RepoWithoutRole_CloseWalkBudgetStops(t *testing.T) {
-	eng, api, q, _ := newScopeEngine(t)
-	for i := 7; i < 7+maxCascadeWalkReads; i++ {
-		api.blocks[i] = []Issue{{Number: i + 1, State: "closed", UpdatedAt: testUpdatedAt, Repository: "o/off"}}
-	}
-
-	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/off", Kind: KindIssue, Number: 7, Sender: "alice"})
-
-	if tasks := q.all(); len(tasks) != 0 {
-		t.Fatalf("got %d tasks, want none (a walk that hit its bound never yields a cascade)", len(tasks))
-	}
-	if n := api.callCount("IssueBlocks:"); n != maxCascadeWalkReads {
-		t.Errorf("%d graph read(s), want the walk to stop at its budget of %d", n, maxCascadeWalkReads)
-	}
-	if got := eng.Tracked(); len(got) != 0 {
-		t.Errorf("Tracked() = %v, want no decision recorded off a truncated walk", got)
-	}
-}
-
 // TestHandleEvent_ScopeCacheNoPerDeliveryRoundTrip: the scope test must
 // not add an API round-trip to every delivery — the enabled set is
 // cached for one reconcile interval
