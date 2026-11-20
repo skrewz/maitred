@@ -196,10 +196,10 @@ func (e *Engine) repoInRemit(repo string) (bool, error) {
 // once so the rule cannot update one walk's loop and miss another: the
 // repository the walk entered is admitted by the walk itself — the
 // enumeration read the forest there — and every other repository must be
-// one a maitred role names. Its readers are the graph's four — the
-// tracker block's write, the drawing's gather, the outcomes carry and the
-// forest digest's fold — alongside the warning walk and the merge reads
-// (§forgejo/webhook/repository-roles, §forgejo/webhook/re-fetch). A
+// one a maitred role names. Its readers are the graph's four
+// (§forgejo/reconciliation/the-tracker-block), alongside the warning walk
+// and the merge reads (§forgejo/webhook/repository-roles,
+// §forgejo/webhook/re-fetch). A
 // non-nil error means the scope is unknown, which is the caller's
 // failure to name, not a hold-off; a false answer is the caller's
 // ordinary silence to log in its own words.

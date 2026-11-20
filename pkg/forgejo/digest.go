@@ -98,11 +98,8 @@ var digestMemberLabels = []string{
 // blocking edge reaches in a repository no maitred role names folds nowhere,
 // so an edge leaving the roles cannot make the gate decide on rows the chart
 // neither draws nor publishes. The root's own repository is admitted by the
-// walk that found the root, as every other reader admits it: the event path
-// has role-tested the event's repository before the fold is reached, and the
-// sweep's commissioned-tracker gate tests the root's repository before its
-// walk starts from the tracker, so the fold's equality shortcut never stands
-// where no role has been asked. An unknown scope fails the fold at the first
+// walk that found the root, as every other reader admits it. An unknown
+// scope fails the fold at the first
 // fact beyond the root's own repository, the way it fails the drawing
 // (§forgejo/webhook/the-scope-cache).
 func (e *Engine) ForestDigest(root *Issue, engineAccount, decomposerIdentity string) (string, map[string]string, error) {
