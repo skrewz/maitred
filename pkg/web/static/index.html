@@ -842,8 +842,10 @@
         // renderForestCharts draws each cell's picture into the cell
         // that already carries the source as text; the CSS above shows
         // the SVG unless the cell carries the fallback mark, so a cell
-        // with no drawing states its text. The draws run one at a time
-        // because Mermaid's render shares a scratch element, and every
+        // with no drawing states its text. The draws run one at a time:
+        // Mermaid's render shares a scratch element and queues its calls
+        // to run serially, so a re-render landing mid-draw waits its turn
+        // rather than interleaving with the draw it superseded. Every
         // cell gets a renderDone promise before the first await so the
         // click-out can await it rather than open an overlay on a cell
         // that holds neither drawing nor text yet.
