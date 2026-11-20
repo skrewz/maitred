@@ -1754,7 +1754,13 @@ async function testOutcomesChart(page, results) {
     }],
   });
   await page.waitForSelector('#outcomes-list .outcomes-chart svg', { timeout: 30000 }).catch(() => {});
-  await page.locator('#outcomes-list .outcomes-chart svg .node').first().click({ force: true }).catch(() => {});
+  // The premise the refusal is measured against: the drawing must
+  // offer nodes, and the click must land on one. Without both, a flat
+  // window.__pwned would only say nothing was clicked — an absence of
+  // evidence rather than the guard having held.
+  const nodeCount = await page.locator('#outcomes-list .outcomes-chart svg .node').count();
+  const clicked = await page.locator('#outcomes-list .outcomes-chart svg .node').first()
+    .click({ force: true, timeout: 5000 }).then(() => true).catch(() => false);
   await page.waitForTimeout(200);
   const inert = await page.evaluate(() => ({
     pwned: window.__pwned === 1,
@@ -1762,8 +1768,8 @@ async function testOutcomesChart(page, results) {
     fallback: !!document.querySelector('#outcomes-list .outcomes-chart.fallback'),
   }));
   results.push(assert(
-    !inert.pwned && inert.svg && !inert.fallback,
-    `A source that tries to downgrade strict draws, inert (script ran: ${inert.pwned}, drawn: ${inert.svg}, fell back: ${inert.fallback})`
+    nodeCount > 0 && clicked && !inert.pwned && inert.svg && !inert.fallback,
+    `A source that tries to downgrade strict draws, inert (nodes offered: ${nodeCount}, click landed: ${clicked}, script ran: ${inert.pwned}, drawn: ${inert.svg}, fell back: ${inert.fallback})`
   ));
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
