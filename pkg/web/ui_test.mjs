@@ -1449,36 +1449,38 @@ async function testOutcomesChart(page, results) {
   // parse, one stating nothing: the three states the picture can
   // arrive in, exercised through the page's own renderer because the
   // mock organisation holds no outcomes repository and so cannot
-  // produce a forest here.
+  // produce a forest here. The drawn forest is what every later
+  // discipline below is exercised against, so each payload names these
+  // forests rather than retyping them.
   const chartSource = 'flowchart TD\n  A["Ideation root #5"] --> B["Tracker #6"]';
-  const painted = await page.evaluate((source) => {
-    renderOutcomes({
-      engine_status: 'enabled',
-      forests: [
-        {
-          repository: 'o/out',
-          root: { number: 5, repository: 'o/out', title: 'Ideation root', state: 'open', html_url: 'https://forge.example.com/o/out/issues/5' },
-          tracker: { number: 6, repository: 'o/out', title: 'Outcome tracker', state: 'open', html_url: 'https://forge.example.com/o/out/issues/6' },
-          chart: source,          chart_revisited: '2026-11-16 09:12 AEDT',
-        },
-        {
-          repository: 'r/ragged',
-          root: { number: 1, repository: 'r/ragged', title: 'Ragged root', state: 'open', html_url: 'https://forge.example.com/r/ragged/issues/1' },
-          tracker: { number: 2, repository: 'r/ragged', title: 'Ragged tracker', state: 'open', html_url: 'https://forge.example.com/r/ragged/issues/2' },
-          chart: 'flowchart TD\n  A --< this will not parse',
-          chart_revisited: '2026-11-02 18:40 CET',
-        },
-        {
-          repository: 'e/empty',
-          root: { number: 9, repository: 'e/empty', title: 'Root with no picture', state: 'open', html_url: 'https://forge.example.com/e/empty/issues/9' },
-          tracker: { number: 10, repository: 'e/empty', title: 'Tracker with no block', state: 'open', html_url: 'https://forge.example.com/e/empty/issues/10' },
-          chart: '',
-          chart_revisited: '',
-        },
-      ],
-    });
+  const drawnForest = {
+    repository: 'o/out',
+    root: { number: 5, repository: 'o/out', title: 'Ideation root', state: 'open', html_url: 'https://forge.example.com/o/out/issues/5' },
+    tracker: { number: 6, repository: 'o/out', title: 'Outcome tracker', state: 'open', html_url: 'https://forge.example.com/o/out/issues/6' },
+    chart: chartSource,
+    chart_revisited: '2026-11-16 09:12 AEDT',
+  };
+  const raggedForest = {
+    repository: 'r/ragged',
+    root: { number: 1, repository: 'r/ragged', title: 'Ragged root', state: 'open', html_url: 'https://forge.example.com/r/ragged/issues/1' },
+    tracker: { number: 2, repository: 'r/ragged', title: 'Ragged tracker', state: 'open', html_url: 'https://forge.example.com/r/ragged/issues/2' },
+    chart: 'flowchart TD\n  A --< this will not parse',
+    chart_revisited: '2026-11-02 18:40 CET',
+  };
+  const emptyForest = {
+    repository: 'e/empty',
+    root: { number: 9, repository: 'e/empty', title: 'Root with no picture', state: 'open', html_url: 'https://forge.example.com/e/empty/issues/9' },
+    tracker: { number: 10, repository: 'e/empty', title: 'Tracker with no block', state: 'open', html_url: 'https://forge.example.com/e/empty/issues/10' },
+    chart: '',
+    chart_revisited: '',
+  };
+  const oneForest = { engine_status: 'enabled', forests: [drawnForest] };
+  const threeForests = { engine_status: 'enabled', forests: [drawnForest, raggedForest, emptyForest] };
+  const oneRagged = { engine_status: 'enabled', forests: [raggedForest] };
+  const painted = await page.evaluate((payload) => {
+    renderOutcomes(payload);
     return [...document.querySelectorAll('#outcomes-list .outcomes-row')].length;
-  }, chartSource);
+  }, threeForests);
   results.push(assert(painted === 3, `Three forest rows rendered (got: ${painted})`));
 
   await page.waitForFunction(() => {
@@ -1576,18 +1578,7 @@ async function testOutcomesChart(page, results) {
 
   // The click-out: a click of the drawing opens a full-screen copy of
   // it, Escape closes it, and a click of the backdrop closes it too.
-  await page.evaluate((source) => {
-    renderOutcomes({
-      engine_status: 'enabled',
-      forests: [{
-        repository: 'o/out',
-        root: { number: 5, repository: 'o/out', title: 'Ideation root', state: 'open', html_url: 'https://forge.example.com/o/out/issues/5' },
-        tracker: { number: 6, repository: 'o/out', title: 'Outcome tracker', state: 'open', html_url: 'https://forge.example.com/o/out/issues/6' },
-        chart: source,
-        chart_revisited: '2026-11-16 09:12 AEDT',
-      }],
-    });
-  }, chartSource);
+  await page.evaluate((payload) => renderOutcomes(payload), oneForest);
   await page.waitForSelector('#outcomes-list .outcomes-chart svg', { timeout: 30000 }).catch(() => {});
 
   const overlay = page.locator('#chart-overlay');
@@ -1621,18 +1612,7 @@ async function testOutcomesChart(page, results) {
 
   // A drawing whose source will not parse still clicks out, to the
   // same text the row states.
-  await page.evaluate(() => {
-    renderOutcomes({
-      engine_status: 'enabled',
-      forests: [{
-        repository: 'r/ragged',
-        root: { number: 1, repository: 'r/ragged', title: 'Ragged root', state: 'open', html_url: 'https://forge.example.com/r/ragged/issues/1' },
-        tracker: { number: 2, repository: 'r/ragged', title: 'Ragged tracker', state: 'open', html_url: 'https://forge.example.com/r/ragged/issues/2' },
-        chart: 'flowchart TD\n  A --< this will not parse',
-        chart_revisited: '2026-11-02 18:40 CET',
-      }],
-    });
-  });
+  await page.evaluate((payload) => renderOutcomes(payload), oneRagged);
   await page.waitForSelector('#outcomes-list .outcomes-chart.fallback .outcomes-chart-source', { timeout: 30000 }).catch(() => {});
   await page.locator('#outcomes-list .outcomes-chart.fallback').first().click();
   await overlay.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
@@ -1646,19 +1626,6 @@ async function testOutcomesChart(page, results) {
   ));
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
-
-  // One forest, drawn: the payload the remaining disciplines are
-  // exercised against.
-  const oneForest = {
-    engine_status: 'enabled',
-    forests: [{
-      repository: 'o/out',
-      root: { number: 5, repository: 'o/out', title: 'Ideation root', state: 'open', html_url: 'https://forge.example.com/o/out/issues/5' },
-      tracker: { number: 6, repository: 'o/out', title: 'Outcome tracker', state: 'open', html_url: 'https://forge.example.com/o/out/issues/6' },
-      chart: chartSource,
-      chart_revisited: '2026-11-16 09:12 AEDT',
-    }],
-  };
 
   // The poll's discipline: every render replaces the list, and the
   // two branches that render without rows — the honest empty and the
