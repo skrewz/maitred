@@ -1114,8 +1114,9 @@ func prAutoClosesIssue(body, prRepo, issueRepo string, issueNumber int) bool {
 const maxCascadeWalkReads = 64
 
 // errCascadeWalkBudget marks the failure of a walk that reached
-// maxCascadeWalkReads before reaching the end of the graph.
-var errCascadeWalkBudget = errors.New("the cascade walk reached its graph-read budget, so the graph read is incomplete")
+// maxCascadeWalkReads before reaching the end of the graph. chargeRead
+// wraps it in the name of the read that could not be paid for.
+var errCascadeWalkBudget = errors.New("the graph-read budget is spent, so the graph read is incomplete")
 
 // graphNode builds the blocker-graph node for issue: its blocks, each
 // open block with its blockers, each closed block followed recursively —
@@ -1128,13 +1129,25 @@ func (e *Engine) graphNode(issue *Issue) (*IssueNode, error) {
 	return e.fillNode(issue, visited, &budget)
 }
 
+// chargeRead spends one unit of the walk's read budget on a read of
+// repo#num, failing the walk when the budget is already spent: the read
+// that could not be paid for names itself in the error, so the hold-off
+// the caller logs says which part of the graph went unread
+// (§forgejo/decisions/unblock-cascade).
+func chargeRead(budget *int, repo string, num int) error {
+	if *budget == 0 {
+		return fmt.Errorf("cascade walk of %s#%d: %w", repo, num, errCascadeWalkBudget)
+	}
+	*budget--
+	return nil
+}
+
 func (e *Engine) fillNode(issue *Issue, visited map[Key]bool, budget *int) (*IssueNode, error) {
 	node := &IssueNode{Issue: *issue}
 	owner, name := splitRepo(issue.Repository)
-	if *budget == 0 {
-		return nil, fmt.Errorf("cascade walk of %s#%d: %w", issue.Repository, issue.Number, errCascadeWalkBudget)
+	if err := chargeRead(budget, issue.Repository, issue.Number); err != nil {
+		return nil, err
 	}
-	*budget--
 	blocks, err := e.api.IssueBlocks(owner, name, issue.Number)
 	if err != nil {
 		return nil, err
@@ -1146,10 +1159,9 @@ func (e *Engine) fillNode(issue *Issue, visited map[Key]bool, budget *int) (*Iss
 		bo, bn := splitRepo(b.Repository)
 		switch b.State {
 		case "open":
-			if *budget == 0 {
-				return nil, fmt.Errorf("cascade walk of %s#%d: %w", b.Repository, b.Number, errCascadeWalkBudget)
+			if err := chargeRead(budget, b.Repository, b.Number); err != nil {
+				return nil, err
 			}
-			*budget--
 			blockers, err := e.api.IssueDependencies(bo, bn, b.Number)
 			if err != nil {
 				return nil, err
