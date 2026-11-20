@@ -1477,6 +1477,7 @@ async function testOutcomesChart(page, results) {
   const oneForest = { engine_status: 'enabled', forests: [drawnForest] };
   const threeForests = { engine_status: 'enabled', forests: [drawnForest, raggedForest, emptyForest] };
   const oneRagged = { engine_status: 'enabled', forests: [raggedForest] };
+  const noForests = { engine_status: 'enabled', forests: [] };
   const painted = await page.evaluate((payload) => {
     renderOutcomes(payload);
     return [...document.querySelectorAll('#outcomes-list .outcomes-row')].length;
@@ -1638,16 +1639,16 @@ async function testOutcomesChart(page, results) {
   // A click parked on a draw must not outlive the list it was made
   // from (§forgejo/observability/the-outcomes-view).
   await page.evaluate((payload) => renderOutcomes(payload), oneForest);
-  const parked = await page.evaluate(async () => {
+  const parked = await page.evaluate(async (empty) => {
     document.querySelector('#outcomes-list .outcomes-chart')
       .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    renderOutcomes({ engine_status: 'enabled', forests: [] });
+    renderOutcomes(empty);
     await new Promise((resolve) => setTimeout(resolve, 1500));
     return {
       shown: getComputedStyle(document.getElementById('chart-overlay')).display !== 'none',
       hasSvg: !!document.querySelector('#chart-overlay-body svg'),
     };
-  });
+  }, noForests);
   results.push(assert(
     !parked.shown,
     `A render that lands during a parked click leaves the overlay closed (open: ${parked.shown}, holding a replaced drawing: ${parked.hasSvg})`
@@ -1659,7 +1660,7 @@ async function testOutcomesChart(page, results) {
   // overlay rather than leave the reader inside a picture the poll
   // has replaced (§forgejo/observability/the-outcomes-view).
   const closed = [];
-  for (const replaceWith of [{ engine_status: 'enabled', forests: [] }, null]) {
+  for (const replaceWith of [noForests, null]) {
     await page.evaluate((p) => renderOutcomes(p), oneForest);
     await page.waitForSelector('#outcomes-list .outcomes-chart svg', { timeout: 30000 }).catch(() => {});
     await page.locator('#outcomes-list .outcomes-chart').first().click();
