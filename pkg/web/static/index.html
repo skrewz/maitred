@@ -913,9 +913,8 @@
             // draw settles, so the enlarged view is never empty
             // (§forgejo/observability/the-outcomes-view).
             (cell.renderDone ?? Promise.resolve()).then(() => {
-                // Cells leave the document only when renderOutcomes
-                // replaces the list, so a cell detached here is one a
-                // later render superseded: it draws nothing enlarged.
+                // A cell the poll replaced draws nothing enlarged
+                // (§forgejo/observability/the-outcomes-view).
                 if (!cell.isConnected) return;
                 const body = document.getElementById('chart-overlay-body');
                 body.classList.toggle('fallback', cell.classList.contains('fallback'));
