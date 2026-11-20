@@ -91,8 +91,19 @@ var digestMemberLabels = []string{
 // digest means. The digest reads no timestamp of a folded issue and
 // makes no call beyond the blocks listing, the members' dependencies
 // and the comments of the root, trackers and members.
-func ForestDigest(api API, root *Issue, engineAccount, decomposerIdentity string) (string, map[string]string, error) {
-	f, err := forestFold(api, root, engineAccount, decomposerIdentity)
+//
+// The fold reads the graph the way the drawing reads it, paying the
+// admission test the drawing's three readers pay (§forgejo/webhook/repository-roles,
+// §forgejo/reconciliation/the-tracker-block): a row, a blocker or a comment a
+// blocking edge reaches in a repository no maitred role names folds nowhere,
+// so an edge leaving the roles cannot make the gate decide on rows the chart
+// neither draws nor publishes. The root's own repository is admitted by the
+// walk that found the root, as every other reader admits it. An unknown
+// scope fails the fold at the first
+// fact beyond the root's own repository, the way it fails the drawing
+// (§forgejo/webhook/the-scope-cache).
+func (e *Engine) ForestDigest(root *Issue, engineAccount, decomposerIdentity string) (string, map[string]string, error) {
+	f, err := e.forestFold(root, engineAccount, decomposerIdentity)
 	if err != nil {
 		return "", nil, err
 	}
@@ -100,7 +111,7 @@ func ForestDigest(api API, root *Issue, engineAccount, decomposerIdentity string
 }
 
 // forestFold reads the forest and folds its actionable facts.
-func forestFold(api API, root *Issue, engineAccount, decomposerIdentity string) (*fold, error) {
+func (e *Engine) forestFold(root *Issue, engineAccount, decomposerIdentity string) (*fold, error) {
 	if root == nil {
 		return nil, fmt.Errorf("forgejo: forest digest: no root given")
 	}
@@ -114,12 +125,12 @@ func forestFold(api API, root *Issue, engineAccount, decomposerIdentity string) 
 		f.fact("root", rootRef, "label", label)
 	}
 	f.fact("root", rootRef, "body", root.Body)
-	if err := foldComments(f, api, rootRef, root.Repository, root.Number, engineAccount, decomposerIdentity); err != nil {
+	if err := foldComments(f, e.api, rootRef, root.Repository, root.Number, engineAccount, decomposerIdentity); err != nil {
 		return nil, err
 	}
 
 	rootOwner, rootName := splitRepo(root.Repository)
-	blocked, err := api.IssueBlocks(rootOwner, rootName, root.Number)
+	blocked, err := e.api.IssueBlocks(rootOwner, rootName, root.Number)
 	if err != nil {
 		return nil, fmt.Errorf("forgejo: forest digest: issues root %s blocks: %w", rootRef, err)
 	}
@@ -132,6 +143,19 @@ func forestFold(api API, root *Issue, engineAccount, decomposerIdentity string) 
 		repo := b.Repository
 		if repo == "" {
 			repo = root.Repository
+		}
+		// A blocking edge names its far end, so which repositories the fold
+		// reads is forge data: a row no maitred role admits contributes no
+		// fact, and nothing of it is read — neither its comments nor its own
+		// blockers (§forgejo/webhook/repository-roles).
+		admits, err := e.remitAdmits(repo, root.Repository)
+		if err != nil {
+			return nil, fmt.Errorf("forgejo: forest digest: scope of %s: %w", repo, err)
+		}
+		if !admits {
+			e.log.Debug("digest omits a row in a repository no maitred role names",
+				"row", forestRef(repo, b.Number))
+			continue
 		}
 		ref := forestRef(repo, b.Number)
 		kind := "member"
@@ -157,7 +181,7 @@ func forestFold(api API, root *Issue, engineAccount, decomposerIdentity string) 
 				}
 			}
 			owner, name := splitRepo(repo)
-			deps, err := api.IssueDependencies(owner, name, b.Number)
+			deps, err := e.api.IssueDependencies(owner, name, b.Number)
 			if err != nil {
 				return nil, fmt.Errorf("forgejo: forest digest: blockers of %s: %w", ref, err)
 			}
@@ -165,6 +189,20 @@ func forestFold(api API, root *Issue, engineAccount, decomposerIdentity string) 
 				depRepo := dep.Repository
 				if depRepo == "" {
 					depRepo = repo
+				}
+				// A blocker stands wherever an edge names it, so the same test
+				// is asked of it, continued by the walk that reached it — the
+				// one that entered this row's repository: a state change in a
+				// repository no role names is no fact the gate may decide on
+				// (§forgejo/webhook/repository-roles).
+				admits, err := e.remitAdmits(depRepo, repo)
+				if err != nil {
+					return nil, fmt.Errorf("forgejo: forest digest: scope of %s: %w", depRepo, err)
+				}
+				if !admits {
+					e.log.Debug("digest omits a blocker in a repository no maitred role names",
+						"blocker", forestRef(depRepo, dep.Number))
+					continue
 				}
 				// Blockers fold by key alone: the same issue blocking
 				// two members is one fact, and the first listing to name
@@ -176,7 +214,7 @@ func forestFold(api API, root *Issue, engineAccount, decomposerIdentity string) 
 				}
 			}
 		}
-		if err := foldComments(f, api, ref, repo, b.Number, engineAccount, decomposerIdentity); err != nil {
+		if err := foldComments(f, e.api, ref, repo, b.Number, engineAccount, decomposerIdentity); err != nil {
 			return nil, err
 		}
 	}
