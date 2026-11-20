@@ -1636,10 +1636,7 @@ async function testOutcomesChart(page, results) {
   await page.waitForTimeout(200);
 
   // A click parked on a draw must not outlive the list it was made
-  // from: a render that lands while the draw is in the air has closed
-  // the overlay, and reopening it from a cell the poll replaced would
-  // put the reader back inside a forest that is no longer on the page
-  // (§forgejo/observability/the-outcomes-view).
+  // from (§forgejo/observability/the-outcomes-view).
   await page.evaluate((payload) => renderOutcomes(payload), oneForest);
   const parked = await page.evaluate(async () => {
     document.querySelector('#outcomes-list .outcomes-chart')
