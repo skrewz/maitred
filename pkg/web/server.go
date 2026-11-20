@@ -147,10 +147,8 @@ func (s *Server) registerRoutes() {
 // on every response the port gives, not only the files it serves: the
 // fence describes the port, which answers unauthenticated callers on
 // whatever network it binds — the same reason the fence rides on the
-// response rather than on the renderer alone. The two unsafe-inline
-// entries are the page's own inline script, styles and attributes, and
-// the theme CSS Mermaid injects at render time: the fence is against
-// other origins, not against the page itself
+// response rather than on the renderer alone. What the policy admits,
+// inline execution included, is the spec's
 // (§forgejo/observability/the-outcomes-view).
 func fenceHandlers(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
