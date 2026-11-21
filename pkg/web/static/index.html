@@ -101,6 +101,12 @@
         .sweeps-title { font-size: 0.75rem; color: #64748b; text-transform: uppercase; margin-bottom: 0.5rem; }
         .sweep-card { background: #1e293b; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; border-left: 3px solid #f59e0b; display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
         .sweep-title { font-weight: 600; font-size: 0.9rem; }
+        /* The route is the forest's picture, and the picture wants the room
+           the reader's screen offers rather than the dashboard's centred
+           reading column (s-git/maitred#249). Only the cap is dropped: the
+           container's padding and the rows' own sizing stay as they are, so a
+           narrow viewport lays out exactly as it did. */
+        #outcomes-view { max-width: none; }
         .outcomes-title { font-size: 1rem; color: #a78bfa; font-weight: 600; }
         .outcomes-row { background: #1e293b; border-radius: 0.5rem; padding: 1.25rem; margin-bottom: 1rem; border-left: 3px solid #a78bfa; min-height: 320px; }
         .outcomes-repo { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 1rem; color: #a78bfa; margin-bottom: 0.75rem; }
