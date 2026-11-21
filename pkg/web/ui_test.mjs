@@ -1163,6 +1163,26 @@ async function testOutcomesPage(page, results) {
     getComputedStyle(document.querySelector('.header .stats')).display === 'none');
   results.push(assert(statsHidden, 'The trigger stats are hidden on /outcomes rather than reading as zeros'));
 
+  // The route renders full-width: the 1200px column the dashboard reads
+  // in belongs to the dashboard, and the forest pictures take the room a
+  // wide screen offers instead (§forgejo/observability/the-outcomes-view,
+  // s-git/maitred#249). The dashboard keeps its cap, which the page still
+  // carries in the shared rule.
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  const widths = await page.evaluate(() => ({
+    outcomes: document.getElementById('outcomes-view').getBoundingClientRect().width,
+    dashboard: getComputedStyle(document.getElementById('dashboard-view')).maxWidth,
+  }));
+  results.push(assert(
+    widths.outcomes > 1200,
+    `The outcomes view takes the wide screen rather than the centred column (got ${widths.outcomes}px)`
+  ));
+  results.push(assert(
+    widths.dashboard === '1200px',
+    `The dashboard still reads in its column (got max-width ${widths.dashboard})`
+  ));
+  await page.setViewportSize({ width: 1280, height: 720 });
+
   // The compare-then-render discipline the dashboard follows: an
   // unchanged payload renders no new rows, so a keyboard operator's
   // focus on a row's link survives the poll

@@ -287,8 +287,12 @@ beyond its operator's network publishes the payload with it
 
 The dashboard serves the view as a page at `/outcomes` — a route on
 the existing SPA, whose fallback already answers the path, so the
-route costs the server nothing new. The page polls the endpoint on a
-timer and renders **one row per current forest**: the repository the
+route costs the server nothing new. The page lays its rows out across
+the full width of the viewport rather than in the dashboard's centred
+column: the widest thing on the page is a forest's picture, and the
+reader's screen is the room it needs (s-git/maitred#249). The page
+polls the endpoint on a timer and renders **one row per current
+forest**: the repository the
 forest grew in, the ideation root as a link carrying its state, and
 the tracker as a link carrying its state — or the absence of one,
 stated in the row rather than dropped. The row draws the forest's
