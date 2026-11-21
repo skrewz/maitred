@@ -26,8 +26,9 @@ implementer_identity: implementer
 engine_account: maitred
 
 # Optional: the zone the tracker's current-state block is stamped in — both
-# its "Last revisited:" line and a closed member's "closed" line — as an IANA
-# name. Unset means UTC; a name the system cannot load is a load error
+# its "Last revisited by maître d' engine:" line and a closed member's
+# "closed" line — as an IANA name. Unset means UTC; a name the system cannot
+# load is a load error
 # (§forgejo/config/tracker-chart). A deployment names its own zone here, e.g.
 # Australia/Sydney.
 tracker_timezone: UTC

@@ -352,7 +352,7 @@ key here is a secret and no second identity exists for it (§forgejo/config/engi
 
 | Key | Required | Value |
 |---|---|---|
-| `tracker_timezone` | no | the zone the block's stamps are rendered in — the `Last revisited:` line and a closed member's `closed` line alike. An IANA name (`Australia/Sydney`); unset means UTC |
+| `tracker_timezone` | no | the zone the block's stamps are rendered in — the `Last revisited by maître d' engine:` line and a closed member's `closed` line alike. An IANA name (`Australia/Sydney`); unset means UTC |
 | `mermaid_max_source_characters` | no | the ceiling past which a rendered source collapses to one node per repository (§forgejo/renderer/collapsing). Unset means `50000`, the length the forge's own Mermaid renderer draws by default — the collapse threshold is worth no more than what the forge will actually draw |
 
 Both keys are inert when unset — the zone is then UTC and the ceiling the
