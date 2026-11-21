@@ -328,9 +328,10 @@ func (s *Server) handleForgejo(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// handleForgejoOutcomes serves the outcomes view: the current forests —
-// each open ideation root in an outcomes repository paired with the
-// outcome tracker it blocks, or the honest absence of one, each forest
+// handleForgejoOutcomes serves the outcomes view: the forests — the
+// current ones, each ideation root in an outcomes repository paired with
+// the outcome tracker it blocks or the honest absence of one, and the
+// past ones whose tickets are both closed — each forest
 // carrying the picture the sweep tick drew from its graph — the Mermaid
 // source and that drawing's stamp, neither composed here — and the
 // warnings saying whether it is waiting on a person
@@ -338,15 +339,19 @@ func (s *Server) handleForgejo(w http.ResponseWriter, r *http.Request) {
 // last sweep tick recorded: like the tracked view this answers from
 // memory, and a request costs no forge read
 // (§forgejo/observability/the-dashboard-view). The response is an
-// object carrying the forest list alongside the one engine-status
-// field, the same shape discipline as handleForgejo, so a
-// configured-but-broken engine never reads as a healthy one with
-// nothing to show (§forgejo/observability/the-dashboard-view). Without
-// the engine, or with no forests, the list is empty — never null. A
-// view the engine cannot vouch for — no sweep has enumerated it yet,
-// the last enumeration failed, or the recorded set has aged past one
-// reconcile interval without a sweep refreshing it — answers 500 rather
-// than an empty list or a stale set: a failed read must not read as
+// object carrying the current forest list, the past forest list beside
+// it, and the one engine-status field, the same shape discipline as
+// handleForgejo, so a configured-but-broken engine never reads as a
+// healthy one with nothing to show
+// (§forgejo/observability/the-dashboard-view). Both lists come from one
+// ForestSplit read, so one response is one picture: a sweep landing
+// during the request cannot name a forest in both halves or in neither
+// (§forgejo/observability/the-outcomes-view). Without the engine, or
+// with no forests, both lists are empty — never null. A view the engine
+// cannot vouch for — no sweep has enumerated it yet, the last
+// enumeration failed, or the recorded set has aged past one reconcile
+// interval without a sweep refreshing it — answers 500 rather than an
+// empty list or a stale set: a failed read must not read as
 // "no forests".
 // The 500 carries a fixed sentence and the read's detail goes to the
 // log — this port authenticates nothing, and raw forge error text
@@ -359,21 +364,24 @@ func (s *Server) handleForgejoOutcomes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	forests := []forgejo.Forest{}
+	past := []forgejo.Forest{}
 	if s.forgejoEng != nil {
-		f, err := s.forgejoEng.Forests()
+		f, p, err := s.forgejoEng.ForestSplit()
 		if err != nil {
 			s.log.Printf("outcomes view: forest read failed: %v", err)
 			http.Error(w, "outcomes read failed", http.StatusInternalServerError)
 			return
 		}
-		forests = f
+		forests, past = f, p
 	}
 	response := struct {
 		EngineStatus string           `json:"engine_status"`
 		Forests      []forgejo.Forest `json:"forests"`
+		PastForests  []forgejo.Forest `json:"past_forests"`
 	}{
 		EngineStatus: s.forgejoStatus,
 		Forests:      forests,
+		PastForests:  past,
 	}
 	json.NewEncoder(w).Encode(response)
 }

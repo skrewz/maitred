@@ -639,6 +639,7 @@ func TestAuthHeader_AllOperations(t *testing.T) {
 	}{
 		{"ListOrgRepositories", http.MethodGet, func(c *Client) error { _, err := c.ListOrgRepositories("acme"); return err }},
 		{"ListOpenIssues", http.MethodGet, func(c *Client) error { _, err := c.ListOpenIssues("acme", "maitred"); return err }},
+		{"ListAllIssues", http.MethodGet, func(c *Client) error { _, err := c.ListAllIssues("acme", "maitred"); return err }},
 		{"ListOpenPullRequests", http.MethodGet, func(c *Client) error { _, err := c.ListOpenPullRequests("acme", "maitred"); return err }},
 		{"GetIssue", http.MethodGet, func(c *Client) error { _, err := c.GetIssue("acme", "maitred", 1); return err }},
 		{"GetPullRequest", http.MethodGet, func(c *Client) error { _, err := c.GetPullRequest("acme", "maitred", 1); return err }},
@@ -685,6 +686,7 @@ func TestAllOperations_SurfaceAPIError(t *testing.T) {
 	ops := map[string]func() error{
 		"ListOrgRepositories":    func() error { _, err := c.ListOrgRepositories("acme"); return err },
 		"ListOpenIssues":         func() error { _, err := c.ListOpenIssues("acme", "maitred"); return err },
+		"ListAllIssues":          func() error { _, err := c.ListAllIssues("acme", "maitred"); return err },
 		"ListOpenPullRequests":   func() error { _, err := c.ListOpenPullRequests("acme", "maitred"); return err },
 		"GetIssue":               func() error { _, err := c.GetIssue("acme", "maitred", 1); return err },
 		"GetPullRequest":         func() error { _, err := c.GetPullRequest("acme", "maitred", 1); return err },
@@ -1078,5 +1080,32 @@ func TestStrokeHex(t *testing.T) {
 		if got != tt.want || ok != tt.wantOK {
 			t.Errorf("strokeHex(%q) = %q, %v, want %q, %v", tt.in, got, ok, tt.want, tt.wantOK)
 		}
+	}
+}
+
+// TestListAllIssues: the stateless listing is the plain issue endpoint
+// with the state filter widened to every state the forge names, so the
+// outcomes walk sees every issue of a repository, open and closed
+// (§forgejo/client/operations, §forgejo/observability/the-outcomes-view).
+func TestListAllIssues(t *testing.T) {
+	srv, rec := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			issueJSON(48, "acme/maitred"),
+		})
+	})
+
+	c := New(srv.URL, "test-token", nil)
+	issues, err := c.ListAllIssues("acme", "maitred")
+	if err != nil {
+		t.Fatalf("ListAllIssues: %v", err)
+	}
+	if rec.path != "/api/v1/repos/acme/maitred/issues" {
+		t.Errorf("path = %q, want /api/v1/repos/acme/maitred/issues", rec.path)
+	}
+	if got := rec.query.Get("state"); got != "all" {
+		t.Errorf("state = %q, want all", got)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("got %d issues, want 1", len(issues))
 	}
 }

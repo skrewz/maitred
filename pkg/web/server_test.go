@@ -40,9 +40,10 @@ type stubForgejoAPI struct {
 	// open issues per repository, and the blocks listings — set only
 	// by the outcomes-endpoint tests, so every other test keeps the
 	// single maitred-enabled repository below (§forgejo/observability/the-outcomes-view).
-	repos      []forgejo.Repository
-	openIssues map[string][]forgejo.Issue
-	blocks     map[int][]forgejo.Issue
+	repos        []forgejo.Repository
+	openIssues   map[string][]forgejo.Issue
+	closedIssues map[string][]forgejo.Issue
+	blocks       map[int][]forgejo.Issue
 
 	// reposErr, when set, fails only ListOrgRepositories — so a test
 	// can break the outcomes view's scope listing without breaking
@@ -80,6 +81,18 @@ func (s *stubForgejoAPI) ListOpenIssues(_, repo string) ([]forgejo.Issue, error)
 		return nil, s.issuesErr
 	}
 	return s.openIssues[repo], nil
+}
+
+// ListAllIssues is the stateless listing: the outcomes view's walk
+// reads every issue once, open and closed alike, and splits current
+// from past on each row's own state (§forgejo/observability/the-outcomes-view).
+func (s *stubForgejoAPI) ListAllIssues(_, repo string) ([]forgejo.Issue, error) {
+	if s.issuesErr != nil {
+		return nil, s.issuesErr
+	}
+	out := make([]forgejo.Issue, 0, len(s.openIssues[repo])+len(s.closedIssues[repo]))
+	out = append(out, s.openIssues[repo]...)
+	return append(out, s.closedIssues[repo]...), nil
 }
 
 func (s *stubForgejoAPI) ListOpenPullRequests(string, string) ([]forgejo.PullRequest, error) {
@@ -517,8 +530,9 @@ func TestServerStartStop(t *testing.T) {
 
 // outcomesStubAPI is the outcomes-view fixture: the organisation holds a
 // work-item repository and an outcomes repository; the outcomes
-// repository holds a root paired with its tracker and a root whose
-// tracker is absent (§forgejo/observability/the-outcomes-view).
+// repository holds a root paired with its tracker, a root whose
+// tracker is absent, and a finished forest whose tickets are both
+// closed (§forgejo/observability/the-outcomes-view).
 func outcomesStubAPI() *stubForgejoAPI {
 	root := forgejo.Issue{
 		Number: 51, Title: "UI for human review", State: "open",
@@ -545,6 +559,23 @@ func outcomesStubAPI() *stubForgejoAPI {
 		Repository:   "o/out",
 		HTMLURL:      "https://forge.example.com/o/out/issues/52",
 	}
+	// The finished forest: root and tracker both closed, so the walk
+	// names it past rather than dropping it
+	// (§forgejo/observability/the-outcomes-view).
+	pastRoot := forgejo.Issue{
+		Number: 53, Title: "a forest that finished", State: "closed",
+		Labels:       []string{"ideation"},
+		LabelColours: map[string]string{"ideation": "#5319e7"},
+		Repository:   "o/out",
+		HTMLURL:      "https://forge.example.com/o/out/issues/53",
+	}
+	pastTracker := forgejo.Issue{
+		Number: 73, Title: "tracker closed with its forest", State: "closed",
+		Labels:       []string{"outcome"},
+		LabelColours: map[string]string{"outcome": "#1d76db"},
+		Repository:   "o/out",
+		HTMLURL:      "https://forge.example.com/o/out/issues/73",
+	}
 	// The forest's one member is a human task with no blockers of its
 	// own, so the forest is waiting on a person and carries a warning
 	// naming it (§forgejo/observability/the-outcomes-view).
@@ -555,13 +586,14 @@ func outcomesStubAPI() *stubForgejoAPI {
 	}
 	return &stubForgejoAPI{
 		issue:  &forgejo.Issue{Number: 7, State: "open", Repository: "o/r"},
-		issues: map[int]*forgejo.Issue{51: &root, 71: &tracker, 52: &loneRoot},
+		issues: map[int]*forgejo.Issue{51: &root, 71: &tracker, 52: &loneRoot, 53: &pastRoot, 73: &pastTracker},
 		repos: []forgejo.Repository{
 			{Name: "r", FullName: "o/r", Owner: "o", Topics: []string{"maitred-enabled"}},
 			{Name: "out", FullName: "o/out", Owner: "o", Topics: []string{"maitred-outcomes-repo"}},
 		},
-		openIssues: map[string][]forgejo.Issue{"out": {root, tracker, loneRoot}},
-		blocks:     map[int][]forgejo.Issue{51: {tracker, member}},
+		openIssues:   map[string][]forgejo.Issue{"out": {root, tracker, loneRoot}},
+		closedIssues: map[string][]forgejo.Issue{"out": {pastRoot, pastTracker}},
+		blocks:       map[int][]forgejo.Issue{51: {tracker, member}, 53: {pastTracker}},
 	}
 }
 
@@ -589,6 +621,7 @@ type forestJSON struct {
 	Chart          string           `json:"chart"`
 	ChartRevisited string           `json:"chart_revisited"`
 	Warnings       []forestWarnJSON `json:"warnings"`
+	WarningsWalked bool             `json:"warnings_walked"`
 }
 
 // forestWarnJSON mirrors one warning of a forest: its reference, the
@@ -604,11 +637,12 @@ type forestWarnJSON struct {
 }
 
 // outcomesViewJSON mirrors the /api/forgejo/outcomes response shape:
-// the forest list and the one engine-status field
-// (§forgejo/observability/the-outcomes-view).
+// the current forest list, the past forest list beside it, and the one
+// engine-status field (§forgejo/observability/the-outcomes-view).
 type outcomesViewJSON struct {
 	EngineStatus string       `json:"engine_status"`
 	Forests      []forestJSON `json:"forests"`
+	PastForests  []forestJSON `json:"past_forests"`
 }
 
 func getOutcomes(t *testing.T, srv *Server) *httptest.ResponseRecorder {
@@ -706,9 +740,13 @@ func TestForgejoOutcomesEndpoint(t *testing.T) {
 		t.Errorf("root 52 picture = %q/%q, want both empty with no tracker to read", lone.Chart, lone.ChartRevisited)
 	}
 	// A forest nothing is waiting on carries the honest empty, spelled
-	// as a list rather than a null (§forgejo/observability/the-outcomes-view).
+	// as a list rather than a null — and the flag saying the walk ran
+	// to find nothing (§forgejo/observability/the-outcomes-view).
 	if lone.Warnings == nil || len(lone.Warnings) != 0 {
 		t.Errorf("root 52 warnings = %+v, want the empty list", lone.Warnings)
+	}
+	if !lone.WarningsWalked {
+		t.Errorf("root 52 says its warnings were not walked, want the walk's empty answer")
 	}
 	if lone.Tracker != nil {
 		t.Errorf("root 52 tracker = %+v, want the absence stated", lone.Tracker)
@@ -730,6 +768,23 @@ func TestForgejoOutcomesEndpoint(t *testing.T) {
 			t.Error("the tracker stands as a forest of its own")
 		}
 	}
+	// The finished forest stands in the past list, not the current one:
+	// both tickets closed, named by its root and tracker, and stating
+	// its warnings as not walked rather than implying a finished forest
+	// waits on no one (§forgejo/observability/the-outcomes-view).
+	if len(view.PastForests) != 1 {
+		t.Fatalf("past_forests = %+v, want the one finished forest", view.PastForests)
+	}
+	past := view.PastForests[0]
+	if past.Root.Number != 53 || past.Root.State != "closed" {
+		t.Errorf("past root = %+v, want closed ideation issue 53", past.Root)
+	}
+	if past.Tracker == nil || past.Tracker.Number != 73 || past.Tracker.State != "closed" {
+		t.Errorf("past tracker = %+v, want closed outcome issue 73", past.Tracker)
+	}
+	if past.Warnings == nil || len(past.Warnings) != 0 || past.WarningsWalked {
+		t.Errorf("past warnings = %+v (walked: %v), want the empty stated as not walked", past.Warnings, past.WarningsWalked)
+	}
 }
 
 // TestForgejoOutcomesEndpoint_Disabled: with no engine and no cause in
@@ -745,6 +800,9 @@ func TestForgejoOutcomesEndpoint_Disabled(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"forests":[]`) {
 		t.Errorf("body %s, want an empty forests list, never null", rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), `"past_forests":[]`) {
+		t.Errorf("body %s, want an empty past_forests list, never null", rec.Body.String())
+	}
 	var view outcomesViewJSON
 	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -752,8 +810,8 @@ func TestForgejoOutcomesEndpoint_Disabled(t *testing.T) {
 	if view.EngineStatus != forgejo.CategoryNotConfigured.String() {
 		t.Errorf("engine_status = %q, want %q", view.EngineStatus, forgejo.CategoryNotConfigured.String())
 	}
-	if len(view.Forests) != 0 {
-		t.Errorf("forests = %d, want none without an engine", len(view.Forests))
+	if len(view.Forests) != 0 || len(view.PastForests) != 0 {
+		t.Errorf("forests = %d, past = %d, want neither list populated without an engine", len(view.Forests), len(view.PastForests))
 	}
 }
 
@@ -819,6 +877,7 @@ func TestForgejoOutcomesEndpoint_Method(t *testing.T) {
 func TestForgejoOutcomesEndpoint_RecordedEmpty(t *testing.T) {
 	api := outcomesStubAPI()
 	api.openIssues["out"] = nil
+	api.closedIssues["out"] = nil
 	fjEng := newForgejoEngine(t, api)
 	fjEng.Reconcile() // the sweep tick records an empty set
 	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
@@ -829,6 +888,9 @@ func TestForgejoOutcomesEndpoint_RecordedEmpty(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"forests":[]`) {
 		t.Errorf("body %s, want an empty forests list, never null", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"past_forests":[]`) {
+		t.Errorf("body %s, want an empty past_forests list, never null", rec.Body.String())
 	}
 }
 

@@ -132,6 +132,15 @@ type fakeAPI struct {
 	listIssuesErr map[string]error
 	listPullsErr  map[string]error
 
+	// closedIssues holds each repository's closed rows, served by the
+	// outcomes view's stateless listing beside the open ones; allIssuesErr,
+	// when it holds an error for a repository, fails only that
+	// repository's ListAllIssues — so a test can break the outcomes
+	// walk's listing without breaking the sweep's open one
+	// (§forgejo/observability/the-outcomes-view).
+	closedIssues map[string][]Issue
+	allIssuesErr map[string]error
+
 	// listReposErr, when set, fails only ListOrgRepositories — so a
 	// test can break the scope listing without breaking the object
 	// re-fetches, and vice versa (§forgejo/webhook/the-scope-cache).
@@ -220,6 +229,8 @@ func newFakeAPI() *fakeAPI {
 		openPulls:     map[string][]PullRequest{},
 		listIssuesErr: map[string]error{},
 		listPullsErr:  map[string]error{},
+		closedIssues:  map[string][]Issue{},
+		allIssuesErr:  map[string]error{},
 		writes:        map[string]string{},
 		// The org's repositories default to the one the fixtures live
 		// in, maitred-enabled, so the event path's scope test passes
@@ -348,6 +359,29 @@ func (f *fakeAPI) ListOpenIssues(owner, repo string) ([]Issue, error) {
 	}
 	out := make([]Issue, 0, len(f.openIssues[repo]))
 	for _, i := range f.openIssues[repo] {
+		out = append(out, withIssueURL(owner, repo, i))
+	}
+	return out, nil
+}
+
+// ListAllIssues is the stateless listing the outcomes view's walk
+// reads: every row of both fixtures, the way a forge answers state=all.
+// A test naming one issue in both fixtures hands that row twice, the way
+// paging a shifted ordering can hand one row on two pages
+// (§forgejo/observability/the-outcomes-view).
+func (f *fakeAPI) ListAllIssues(owner, repo string) ([]Issue, error) {
+	f.record("ListAllIssues:" + repo)
+	if f.err != nil {
+		return nil, f.err
+	}
+	if err, ok := f.allIssuesErr[repo]; ok {
+		return nil, err
+	}
+	out := make([]Issue, 0, len(f.openIssues[repo])+len(f.closedIssues[repo]))
+	for _, i := range f.openIssues[repo] {
+		out = append(out, withIssueURL(owner, repo, i))
+	}
+	for _, i := range f.closedIssues[repo] {
 		out = append(out, withIssueURL(owner, repo, i))
 	}
 	return out, nil

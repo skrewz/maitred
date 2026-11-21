@@ -16,6 +16,7 @@ authenticated with a bearer token:
 |---|---|
 | list an org's repositories (with `topics`, and the repository's units) | derive each repository's roles (§forgejo/webhook/repository-roles) and whether it has the pull requests unit (§forgejo/reconciliation/the-sweep) |
 | list open issues in a repo | event filtering and reconciliation enumeration |
+| list every issue in a repo, either state | the outcomes view's walk, which splits current from past on each row's own state (§forgejo/observability/the-outcomes-view) |
 | list open pull requests in a repo | event filtering, reconciliation enumeration, and the landing set's delivering-PR lookup (§forgejo/decisions/sync-set) |
 | get a single issue (state, labels, author, `updated_at`, `html_url`) | authoritative issue state |
 | get a single pull request (state, merged, head sha, `mergeable`, author, body, `html_url`) | authoritative PR state |
@@ -114,7 +115,7 @@ payload: a title, a state, a label set, a milestone and an assignment are
 never sent, so they cannot change — and a body-only payload cannot reopen or
 close the issue it rewrites.
 
-The engine addresses only the tracker row of a forest it enumerated
+The engine addresses only the tracker row of a current forest it enumerated
 (§forgejo/reconciliation/the-tracker-block, §forgejo/observability/the-outcomes-view),
 under the bearer token its reads already use: the account that authors the
 write is the one `engine_account` names (§forgejo/config/engine-account), and

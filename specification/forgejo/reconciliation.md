@@ -23,10 +23,11 @@ created while the engine was down.
    roles each repository holds (§forgejo/webhook/the-scope-cache) — so the
    sweep adds no API call to the scope test, and a repository excluded
    here is held off on the event path too.
-2. **Record the forest set.** Enumerate the **current forests** — the
-   open `ideation` issues of the outcomes repositories paired with the
-   trackers their roots block — and record the set the **outcomes
-   view** is served from
+2. **Record the forest set.** Enumerate the forests — the
+   `ideation` issues of the outcomes repositories, in either state,
+   paired with the trackers their roots block — and record the set the
+   **outcomes** view is served from; the split into **current** and
+   **past** is the rows' own reading of their states
    (§forgejo/observability/the-outcomes-view). This is why the sweep,
    not an API request, pays the view's reads; a failed enumeration
    leaves the view saying so rather than serving a set it can no
@@ -61,9 +62,11 @@ created while the engine was down.
    re-fetch, decide, dispatch, watermark — serialised on the watermark
    store's per-key lock (§forgejo/state/concurrency). The sweep shares
    the decision function and the event path; no logic is duplicated.
-5. **Write the trackers' current-state blocks.** For every forest step 2
-   enumerated, render its graph and land the drawing on that forest's
-   tracker (§forgejo/reconciliation/the-tracker-block). Like step 2 this is
+5. **Write the trackers' current-state blocks.** For every **current**
+   forest step 2 enumerated, render its graph and land the drawing on
+   that forest's tracker; a past forest — its tickets both closed —
+   draws nothing, the engine not editing a finished forest's history
+   (§forgejo/reconciliation/the-tracker-block). Like step 2 this is
    the tick paying so no request path has to: the chart is as current as the
    forest set the outcomes view is served from. It comes **last** because it
    is the step that changes nothing the tick decides: a forge that has gone
@@ -72,9 +75,11 @@ created while the engine was down.
    tracker's body and its `updated_at`
    (§forgejo/decisions/actionable-state-digest). A forest whose write fails
    is reported and skipped: it neither fails the tick nor delays a decision.
-   The drawings it records replace every picture pair in the set step 2
-   published; between the two steps the view serves the pairs that set
-   carried across, never an empty one it has drawn no conclusion from
+   The drawings it records replace every picture pair of the current forests
+   in the set step 2 published; between the two steps the view serves the
+   pairs that set carried across, never an empty one it has drawn no
+   conclusion from, and a past forest's pair stands frozen at the drawing
+   the forest held when it was last current
    (§forgejo/observability/the-outcomes-view).
 
 The synthetic event carries no sender.
@@ -84,7 +89,7 @@ The synthetic event carries no sender.
 An outcome tracker's description carries its forest's drawing between a pair of
 HTML comments — `<!-- maitred:forest:begin -->` and `<!-- maitred:forest:end -->`
 — under a `## Current state` heading. On every tick the engine writes that
-region for every forest it enumerated (§forgejo/reconciliation/the-sweep), and
+region for every current forest it enumerated (§forgejo/reconciliation/the-sweep), and
 ahead of every `wrap-up` dispatch it writes that one tracker's region once more
 (§forgejo/decisions/actions): it gathers the graph, renders it
 (§forgejo/renderer/the-contract), and splices the
