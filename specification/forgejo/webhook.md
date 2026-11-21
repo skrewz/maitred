@@ -128,8 +128,9 @@ On each `POST`:
    for both event kinds — the action's verb, the title of the object the
    state carries (the pull request where one is present, the issue
    otherwise), and the `repo#number` reference, e.g.
-   `Review: Make everything awesome and pink (o/r#1337)` — with the
-   subject capped so a long issue title cannot produce an unreadable row.
+   `Review: Make everything awesome and pink (o/r#1337)` — never elided:
+   a long title runs to its full length and the queue system's container
+   cuts off the overflow, so the engine names the work in full.
    Its `url` is the pull request's `html_url` where the state carries one,
    the issue's otherwise, and empty where the state carries neither — the
    engine never invents a link. A state with no object at all therefore

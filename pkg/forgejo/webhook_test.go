@@ -1647,10 +1647,11 @@ func TestDispatch_DedupKeyDistinctRepos(t *testing.T) {
 // as the action's verb, the subject's issue or PR title, and the
 // `repo#number` reference; the URL is the pull request's when the state
 // carries one and the issue's otherwise — empty where the state carries
-// neither, since the engine invents no link. A long subject is capped so
-// it cannot produce an unreadable row (§forgejo/webhook/the-pipeline).
+// neither, since the engine invents no link. A long subject is not
+// truncated: the title runs to its full length and the queue system's
+// container cuts off the overflow (§forgejo/webhook/the-pipeline).
 func TestDispatch_TitleAndRefURL(t *testing.T) {
-	long := strings.Repeat("x", maxTaskSubjectRunes+40)
+	long := strings.Repeat("x", 200)
 
 	cases := []struct {
 		name   string
@@ -1702,21 +1703,24 @@ func TestDispatch_TitleAndRefURL(t *testing.T) {
 			want:   "Wrap-up (o/r#7)",
 		},
 		{
-			name:   "long subject is capped",
+			// A long subject runs to its full length: the engine elides
+			// nothing and leaves the overflow to be cut off by the queue
+			// system's container.
+			name:   "long subject is not truncated",
 			ev:     Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"},
 			st:     State{Issue: &Issue{Number: 7, Title: long, State: "open", HTMLURL: "https://forge.example.com/o/r/issues/7"}},
 			action: ActionImplement,
-			want:   "Implement: " + strings.Repeat("x", maxTaskSubjectRunes-1) + "… (o/r#7)",
+			want:   "Implement: " + long + " (o/r#7)",
 			url:    "https://forge.example.com/o/r/issues/7",
 		},
 		{
-			// A reference so long that no subject fits the line leaves
-			// the action-and-reference form, capped.
-			name:   "reference leaving no room for a subject",
-			ev:     Event{Type: EventIssueOpened, Repo: strings.Repeat("r", maxTaskTitleRunes), Kind: KindIssue, Number: 7, Sender: "alice"},
+			// A long repository name costs the composed line nothing
+			// either: the subject survives in full beside the reference.
+			name:   "long reference keeps the subject",
+			ev:     Event{Type: EventIssueOpened, Repo: strings.Repeat("r", 200), Kind: KindIssue, Number: 7, Sender: "alice"},
 			st:     State{Issue: testIssue(7, "open")},
 			action: ActionImplement,
-			want:   "Implement (" + strings.Repeat("r", maxTaskTitleRunes-len("Implement (")-1) + "…",
+			want:   "Implement: issue 7 (" + strings.Repeat("r", 200) + "#7)",
 			url:    "https://forge.example.com/o/r/issues/7",
 		},
 	}
