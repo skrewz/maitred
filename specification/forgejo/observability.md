@@ -123,7 +123,15 @@ blocks no tracker — is listed anyway, **with the tracker stated as
 absent**: a forest without its gate is exactly the situation a human
 needs to see, so the view never papers over it by dropping the row. An
 `outcome` issue that no ideation issue blocks is not a forest and is
-not listed. The walk reads one stateless listing of each outcomes
+not listed. A root whose blocks read answers `404` — the forge's
+definitive "no such issue", the answer a root deleted by
+`teardown-forest` gives while its row still stands in a listing already
+made (§forgejo/decisions/forest-teardown, §forgejo/webhook/re-fetch) —
+lists no forest: the view pictures what exists, and a deleted root no
+longer exists, so the row is skipped with the skip logged. That is the
+lifecycle's ordinary answer, not a failed read; every other failure of
+the walk still fails the whole enumeration.
+The walk reads one stateless listing of each outcomes
 repository — every issue of it, open and closed — and keeps each issue
 number once, so a forest whose root closed while its tracker stayed open
 is still enumerated, one whose tickets have both closed is enumerated as

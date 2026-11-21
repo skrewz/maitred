@@ -319,7 +319,10 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 // state mid-walk cannot be enumerated on both sides of the split — and
 // the walk keeps each issue number once, so a row the forge's paging
 // hands twice because the ordering shifted mid-listing enumerates one
-// forest and counts once. The pairing costs no read beyond the one
+// forest and counts once. A root whose blocks read answers not found —
+// deleted since the listing was made, the teardown order's expected
+// lifecycle — names no forest: the row is skipped and the walk carries
+// on (s-git/maitred#268). The pairing costs no read beyond the one
 // blocks read per forest row; what the widening does cost is the
 // listing itself, one full paging per outcomes repository per tick which
 // the repository's whole history grows
@@ -336,7 +339,9 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 // test admitted first, so a blocking-edge row cannot send the engine's
 // token where no role names it (§forgejo/webhook/repository-roles,
 // §forgejo/observability/the-warnings-a-forest-carries). A failed read
-// fails the enumeration. The list is
+// fails the enumeration — save the forge's definitive "no such issue"
+// for a root's own read, which names a deleted forest rather than a
+// broken read and skips the row. The list is
 // empty — never nil — when no repository holds the role. A non-nil error
 // means a read failed — the organisation listing, an issue listing, a
 // blocks read, a scope lookup, or one of the warning reads — each
@@ -375,6 +380,22 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 			forest := Forest{Repository: root.Repository, Root: root}
 			blocked, err := e.api.IssueBlocks(owner, name, issue.Number)
 			if err != nil {
+				if isNotFound(err) {
+					// The forge's definitive "no such issue": the root was
+					// deleted — by teardown-forest or any other walk that
+					// reaches it — while its row still stands in the listing
+					// the walk already made. The view pictures what exists,
+					// so the row names no forest; the deletion is the
+					// lifecycle's ordinary answer, not a failed read, and
+					// one dead root must not take the whole view down on
+					// every poll (§forgejo/decisions/forest-teardown,
+					// §forgejo/observability/the-outcomes-view,
+					// s-git/maitred#268).
+					e.log.Debug("outcomes: forest root not found; the forest is no longer listed",
+						"forest", forestRef(root.Repository, issue.Number),
+						"error", err)
+					continue
+				}
 				return nil, fmt.Errorf("forgejo: outcomes: issues %s#%d blocks: %w", root.Repository, issue.Number, err)
 			}
 			for k := range blocked {

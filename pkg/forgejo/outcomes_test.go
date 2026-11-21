@@ -240,6 +240,48 @@ func TestForests_ReadFailureIsError(t *testing.T) {
 	}
 }
 
+// TestForests_DeletedRootIsSkipped: a forest root the forge answers not
+// found for — deleted by teardown-forest, its row still standing in the
+// listing the walk already made — names no forest and skips without
+// failing the enumeration, while a failure that is not the forge's
+// definitive "no such issue" still fails the whole set
+// (§forgejo/observability/the-outcomes-view,
+// §forgejo/decisions/forest-teardown). The view survives the deletion of
+// one forest rather than the whole outcomes view going dark on every
+// poll (s-git/maitred#268).
+func TestForests_DeletedRootIsSkipped(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	gone := outcomesRoot(89, "deleted root")
+	goneTracker := outcomesTracker(90, "deleted tracker")
+	live := outcomesRoot(84, "live root")
+	liveTracker := outcomesTracker(109, "live tracker")
+	api.openIssues["out"] = []Issue{gone, goneTracker, live, liveTracker}
+	api.blocks[84] = []Issue{liveTracker}
+	// The forge still hands 89's row on the listing the walk made; the
+	// blocks read of the deleted root answers 404.
+	api.issueBlocksErrOn = map[int]error{89: &APIError{StatusCode: 404, Message: "The target couldn't be found."}}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v: a deleted root is the lifecycle's ordinary answer, not a failed read", err)
+	}
+	if len(forests) != 1 || forests[0].Root.Number != 84 {
+		t.Fatalf("forests = %+v, want only the live forest: the deleted root skips, the rest survive", forests)
+	}
+
+	// A failure that is not a 404 still fails the enumeration whole —
+	// the skip belongs to the forge's definitive answer alone.
+	api.issueBlocksErrOn = map[int]error{89: errors.New("blocks read down")}
+	forests, err = eng.enumerateForests()
+	if err == nil || forests != nil {
+		t.Fatalf("forests = %+v, err = %v, want the enumeration to fail closed on a broken read", forests, err)
+	}
+	if !strings.Contains(err.Error(), "blocks read down") {
+		t.Errorf("error %q, want it to name the failed read", err.Error())
+	}
+}
+
 // TestForests_ScopeBackoffFailsClosed: a stale snapshot with a failed
 // listing waiting out the retry backoff is an error, never the empty
 // list a caller could read as "no outcomes repositories". The event
