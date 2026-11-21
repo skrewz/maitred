@@ -187,6 +187,12 @@ type API interface {
 	ListOrgRepositories(org string) ([]Repository, error)
 	// ListOpenIssues lists the open issues of a repository.
 	ListOpenIssues(owner, repo string) ([]Issue, error)
+	// ListAllIssues lists every issue of a repository, open and closed.
+	// It is read by the outcomes view's walk, which splits current from
+	// past on each row's own state; the paging is the forge's, so keeping
+	// each issue of a repository once is the walk's job
+	// (§forgejo/observability/the-outcomes-view).
+	ListAllIssues(owner, repo string) ([]Issue, error)
 	// ListOpenPullRequests lists the open pull requests of a repository.
 	ListOpenPullRequests(owner, repo string) ([]PullRequest, error)
 	// GetIssue fetches a single issue.
@@ -343,6 +349,21 @@ func (c *Client) ListOrgRepositories(org string) ([]Repository, error) {
 // ListOpenIssues implements API.
 func (c *Client) ListOpenIssues(owner, repo string) ([]Issue, error) {
 	batch, err := listAll[wireIssue](c, repoPath(owner, repo)+"/issues", "state", "open")
+	if err != nil {
+		return nil, err
+	}
+	return toIssues(batch), nil
+}
+
+// ListAllIssues implements API. The state filter is widened to every
+// state the forge names: the issue listing's state parameter is optional
+// and takes open, closed or all, spelled in the upstream handler's own
+// swagger annotation
+// (https://codeberg.org/forgejo/forgejo/src/branch/forgejo/routers/api/v1/repo/issue.go),
+// and this asks for all rather than relying on an absent filter's
+// default.
+func (c *Client) ListAllIssues(owner, repo string) ([]Issue, error) {
+	batch, err := listAll[wireIssue](c, repoPath(owner, repo)+"/issues", "state", "all")
 	if err != nil {
 		return nil, err
 	}

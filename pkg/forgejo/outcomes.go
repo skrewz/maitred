@@ -7,9 +7,23 @@ import (
 	"time"
 )
 
-// The outcomes view: the current forests of the organisation, enumerated
-// from the outcomes repositories for the dashboard
-// (§forgejo/observability/the-outcomes-view).
+// The outcomes view: the forests of the organisation — the current ones
+// and the past ones — enumerated from the outcomes repositories for the
+// dashboard (§forgejo/observability/the-outcomes-view).
+
+// forestIsCurrent states the view's split: a forest is current when its
+// ideation root or its outcome tracker exists and is open; a forest whose
+// tickets are both closed is past — a forest that finished while nobody
+// was watching is history on the page, not a disappearance
+// (§forgejo/observability/the-outcomes-view). The reading is a pure
+// function of the rows the walk already holds, which is what lets one
+// recorded set serve both lists without a read of its own.
+func forestIsCurrent(f Forest) bool {
+	if f.Root.State == "open" {
+		return true
+	}
+	return f.Tracker != nil && f.Tracker.State == "open"
+}
 
 // ForestIssue is one issue of a forest, slimmed to the fields the view
 // shows: number, title, state, the repository the issue lives in, and
@@ -27,11 +41,13 @@ type ForestIssue struct {
 	HTMLURL    string `json:"html_url"`
 }
 
-// Forest is one current forest: the outcomes repository it grew in, the
-// open ideation root, and the outcome tracker the root blocks — or the
-// honest absence of one, spelled as a nil tracker so the field is always
-// present and a forest without its gate stays visible rather than being
-// dropped (§forgejo/observability/the-outcomes-view).
+// Forest is one forest of the view: the outcomes repository it grew in,
+// the ideation root it grew from, and the outcome tracker the root blocks
+// — or the honest absence of one, spelled as a nil tracker so the field
+// is always present and a forest without its gate stays visible rather
+// than being dropped (§forgejo/observability/the-outcomes-view). Whether
+// the forest is current or past is the rows' own state saying, not a
+// field of its own (forestIsCurrent).
 type Forest struct {
 	// Repository is the full name of the outcomes repository the root
 	// was found in — the root's own row resolved once (forestIssue),
@@ -40,7 +56,9 @@ type Forest struct {
 	// the repository genuinely varies
 	// (§forgejo/observability/the-outcomes-view).
 	Repository string `json:"repository"`
-	// Root is the open ideation issue the forest grew from.
+	// Root is the ideation issue the forest grew from, open or closed —
+	// the state is the row's own saying, which is what separates a
+	// current forest from a past one.
 	Root ForestIssue `json:"root"`
 	// Tracker is the outcome issue the root blocks, or nil when the
 	// root blocks no outcome issue — the absence stated, not papered
@@ -72,8 +90,15 @@ type Forest struct {
 	// waiting on a person, each stated as a reference
 	// (§forgejo/observability/the-outcomes-view). A forest nothing is
 	// waiting on carries an empty list rather than a null, the same
-	// honest empty the forest list itself is.
+	// honest empty the forest list itself is — and WarningsWalked
+	// states whether this list is a walked empty at all.
 	Warnings []ForestWarning `json:"warnings"`
+	// WarningsWalked is that statement: the warning walk runs for the
+	// current forests alone, so a past row's empty list says "not
+	// walked", never "nobody waits" — the honest empty belongs to a
+	// walk that found nothing, and a finished forest's empty was never
+	// read (§forgejo/observability/the-warnings-a-forest-carries).
+	WarningsWalked bool `json:"warnings_walked"`
 }
 
 // The view draws rather than scrapes: the picture fields are filled by the
@@ -233,6 +258,14 @@ func (e *Engine) recordForestCharts(forests []Forest, sources []string, at time.
 	defer e.forestsMu.Unlock()
 	updated := make([]Forest, len(forests))
 	for i, forest := range forests {
+		// A past forest's pair is frozen: step 5 draws the current
+		// forests alone, so the fold leaves the carried pair — the last
+		// drawing made while the forest lived, stamp and all — standing
+		// as the row's picture (§forgejo/observability/the-outcomes-view).
+		if !forestIsCurrent(forest) {
+			updated[i] = forest
+			continue
+		}
 		// The pair is written together or erased together: this is where a
 		// pair carried onto the set (carryDrawnPictures) stops being the
 		// view's answer, whether or not this tick had a drawing for it.
@@ -267,11 +300,12 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 	}
 }
 
-// enumerateForests walks the current forests
+// enumerateForests walks the forests — current and past
 // (§forgejo/observability/the-outcomes-view): it walks the
 // repositories the scope cache classifies as outcomes repositories
-// (§forgejo/webhook/repository-roles), lists each one's open issues,
-// and pairs every ideation issue with the first issue it blocks that
+// (§forgejo/webhook/repository-roles), lists each one's issues once,
+// open and closed alike, and pairs every ideation issue in either state
+// with the first issue it blocks that
 // reads as a tracker — isTracker's one reading, the one the cascade and
 // the teardown apply (Client.IssueBlocks, the same read the cascade
 // follows, §forgejo/client/operations, §forgejo/decisions/unblock-cascade).
@@ -279,9 +313,22 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 // read from the tracker's description — the sweep tick draws it once from
 // the graph and records it onto the set (recordForestCharts,
 // §forgejo/reconciliation/the-tracker-block). A root whose tracker is
-// missing is listed with the absence stated; an outcome issue no open root
-// blocks is not a forest and is not listed.
-// Pull requests carry no forest. Each forest additionally carries its
+// missing is listed with the absence stated; an outcome issue no
+// ideation issue blocks is not a forest and is not listed. The listing
+// is stateless — one listing per repository, so a root that changes
+// state mid-walk cannot be enumerated on both sides of the split — and
+// the walk keeps each issue number once, so a row the forge's paging
+// hands twice because the ordering shifted mid-listing enumerates one
+// forest and counts once. The pairing costs no read beyond the one
+// blocks read per forest row; what the widening does cost is the
+// listing itself, one full paging per outcomes repository per tick which
+// the repository's whole history grows
+// (§forgejo/observability/the-outcomes-view, §forgejo/reconciliation/the-sweep).
+// The rows' own states decide one thing in the walk: whether this row
+// pays the warning walk. Which list a row lands in is the reader's
+// reading, not the walk's (ForestSplit), and the set is recorded in the
+// order the listings arrived.
+// Pull requests carry no forest. Each current forest additionally carries its
 // warnings, walked from the same rows the pairing reads: one blockers
 // read per member either kind concerns, one membership read per
 // landing-set member, and the pull-request listing, read and review
@@ -308,15 +355,22 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 	forests := []Forest{}
 	for _, entered := range repos {
 		owner, name := splitRepo(entered)
-		issues, err := e.api.ListOpenIssues(owner, name)
+		rows, err := e.api.ListAllIssues(owner, name)
 		if err != nil {
-			return nil, fmt.Errorf("forgejo: outcomes: list open issues of %s: %w", entered, err)
+			return nil, fmt.Errorf("forgejo: outcomes: list issues of %s: %w", entered, err)
 		}
-		for j := range issues {
-			issue := &issues[j]
-			if issue.IsPull || !hasLabel(issue, LabelIdeation) {
+		// A repository numbers its issues once, so the number is the root's
+		// identity within the listing: paging a listing whose ordering shifted
+		// mid-walk can hand one row on two pages, and the second reading must
+		// duplicate neither the forest nor its count
+		// (§forgejo/observability/the-outcomes-view).
+		seen := make(map[int]bool, len(rows))
+		for j := range rows {
+			issue := &rows[j]
+			if issue.IsPull || !hasLabel(issue, LabelIdeation) || seen[issue.Number] {
 				continue
 			}
+			seen[issue.Number] = true
 			root := forestIssue(*issue, entered)
 			forest := Forest{Repository: root.Repository, Root: root}
 			blocked, err := e.api.IssueBlocks(owner, name, issue.Number)
@@ -336,15 +390,19 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 				// §forgejo/reconciliation/the-sweep).
 				break
 			}
-			// The same rows say whether the forest is waiting on a
-			// person; the walk is the digest's one hop out of the root
+			// The warning walk is the digest's one hop out of the root
 			// (§forgejo/decisions/commissioning,
-			// §forgejo/observability/the-outcomes-view).
-			warnings, err := e.forestWarnings(issue, root.Repository, blocked)
-			if err != nil {
-				return nil, fmt.Errorf("forgejo: outcomes: warnings of forest %s#%d: %w", root.Repository, issue.Number, err)
+			// §forgejo/observability/the-warnings-a-forest-carries).
+			if forestIsCurrent(forest) {
+				warnings, err := e.forestWarnings(issue, root.Repository, blocked)
+				if err != nil {
+					return nil, fmt.Errorf("forgejo: outcomes: warnings of forest %s#%d: %w", root.Repository, issue.Number, err)
+				}
+				forest.Warnings = warnings
+				forest.WarningsWalked = true
+			} else {
+				forest.Warnings = []ForestWarning{}
 			}
-			forest.Warnings = warnings
 			forests = append(forests, forest)
 		}
 	}
@@ -371,29 +429,62 @@ var errForestsUnavailable = errors.New("forests not yet enumerated")
 // §forgejo/observability/the-outcomes-view).
 var errForestsStale = errors.New("forest enumeration is stale")
 
-// Forests returns the outcomes view as the last sweep tick recorded it:
-// the dashboard's picture of the current forests, served from memory
-// the way Tracked serves the decisions the engine holds
+// Forests returns the current forests as the last sweep tick recorded
+// them: the dashboard's picture of the forests in flight, served from
+// memory the way Tracked serves the decisions the engine holds
 // (§forgejo/observability/the-outcomes-view,
 // §forgejo/observability/the-dashboard-view) — an API request costs no
-// forge read. The returned slice is the snapshot itself:
-// recordForests replaces it whole and never mutates a published
-// snapshot in place, so it stays safe to read after the lock is
-// released, and the caller must not modify it. A non-nil error means
-// the view cannot be vouched for — the most recent sweep's enumeration
-// failed (that error, so the caller can log which read broke), no
-// enumeration has landed yet (errForestsUnavailable), or the recorded
-// set has aged past one reconcile interval without being refreshed
-// (errForestsStale). Either way the result is nil: like the scope
-// cache, the view never acts on a set it can no longer stand behind
-// (§forgejo/webhook/the-scope-cache). The bound is applied as the set
-// is read rather than left to every sweep path to mark it, so a sweep
-// that returns before the step that records the set — a forge too
+// forge read. It is ForestSplit's current half, and vouches for nothing
+// beyond what that read vouches for; a caller serving both lists calls
+// ForestSplit.
+func (e *Engine) Forests() ([]Forest, error) {
+	current, _, err := e.ForestSplit()
+	return current, err
+}
+
+// ForestSplit answers both halves of the view — the current forests
+// and the past ones — from one acquisition of the snapshot. One lock is
+// the point: a response built from two reads could straddle a sweep that
+// landed between them and name a forest in both tabs or in neither,
+// which is the disappearance s-git/maitred#266 was filed against,
+// reimported as a race; one read promises the set the spec promises —
+// the one the last tick recorded (§forgejo/observability/the-outcomes-view).
+// Which rows are current is the rows' own saying (forestIsCurrent), so
+// the split is a pure reading that costs nothing beyond the acquisition.
+// Both halves are newly built and the caller must not modify them. A
+// non-nil error means the view cannot be vouched for — the most recent
+// sweep's enumeration failed (that error, so the caller can log which
+// read broke), no enumeration has landed yet (errForestsUnavailable), or
+// the recorded set has aged past one reconcile interval without being
+// refreshed (errForestsStale). Either way both halves are nil: like the
+// scope cache, the view never acts on a set it can no longer stand
+// behind (§forgejo/webhook/the-scope-cache). The bound is applied as the
+// set is read rather than left to every sweep path to mark it, so a
+// sweep that returns before the step that records the set — a forge too
 // unreachable to list the organisation — leaves the view saying it is
 // stale rather than serving the pre-outage set as if fresh.
-func (e *Engine) Forests() ([]Forest, error) {
+func (e *Engine) ForestSplit() (current, past []Forest, err error) {
 	e.forestsMu.Lock()
 	defer e.forestsMu.Unlock()
+	snap, err := e.forestsSnapshot()
+	if err != nil {
+		return nil, nil, err
+	}
+	current, past = []Forest{}, []Forest{}
+	for _, forest := range snap {
+		if forestIsCurrent(forest) {
+			current = append(current, forest)
+		} else {
+			past = append(past, forest)
+		}
+	}
+	return current, past, nil
+}
+
+// forestsSnapshot applies the snapshot's one discipline — failure,
+// absence, age — and hands back the recorded set. The caller holds
+// forestsMu.
+func (e *Engine) forestsSnapshot() ([]Forest, error) {
 	if e.forestsErr != nil {
 		return nil, e.forestsErr
 	}
@@ -424,8 +515,8 @@ func (e *Engine) Forests() ([]Forest, error) {
 // made fresh and costs no organisation listing of its own
 // (§forgejo/webhook/the-scope-cache). The set and the error are reported
 // to the caller as well as recorded: the sweep's next step writes each
-// forest it enumerated to that forest's tracker, and a forest the
-// enumeration did not name is never written to
+// current forest's drawing to that forest's tracker, and a forest the
+// enumeration did not name — or named as past — is never written to
 // (§forgejo/reconciliation/the-tracker-block). The picture pair each forest
 // carries travels across from the set this one replaces
 // (carryDrawnPictures), so the view holds a picture for as long as the tick's

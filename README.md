@@ -306,9 +306,14 @@ unnecessary before anything runs. The same can be driven over the API:
 `GET /api/forgejo` lists the sweep catalog in its `sweeps` field,
 `POST /api/forgejo/sweeps/{id}` starts one (a sweep already in flight is
 skipped, as with a scheduled sweep), and `GET /api/forgejo/outcomes`
-lists the current forests — each open `ideation` root in the outcomes
-repositories paired with the `outcome` tracker it blocks, each forest
-carrying the picture the engine drew from that forest's graph on the
+lists the current forests — each `ideation` root in the outcomes
+repositories paired with the `outcome` tracker it blocks — alongside
+the **past forests** in a `past_forests` field: a forest is current
+while its root or its tracker is open, and past once both have closed,
+enumerated from one stateless listing of each outcomes repository, which
+the walk reads one issue number at a time so one forest is counted once
+even when the forge's paging hands a row twice,
+each forest carrying the picture the engine drew from that forest's graph on the
 last sweep tick, and
 the **warnings** saying whether the forest is waiting on a person: an
 approved, mergeable pull request that the merge gate would fire at and
@@ -323,7 +328,9 @@ polling it is a freshness choice rather than a cost one, and its
 enumeration cost and audience are spelled out where the view is
 specified (see `specification/forgejo/observability.md`). The dashboard
 also serves that view as a page at `/outcomes` (reachable from the
-header): one tall row per current forest, linking out to its ideation
+header), where a pair of tabs — **Current forests** and **Past
+forests**, each carrying its count — chooses the list: one tall row per
+forest, linking out to its ideation
 root and its tracker with their states, drawing each forest's picture —
 the Mermaid source the payload carries — underneath those links with the
 region's recency stamp beneath it, where a click of the drawing opens it
@@ -333,10 +340,12 @@ draws it is vendored into the page's own assets and served by the server,
 so the page needs no network beyond the server itself to render. Each
 forest the payload says is waiting on a person is marked with one ⚠️
 entry per warning linking to the issue or pull request holding it up,
-and the page states plainly when the engine is off or there are no
+while a past row states its warnings as not walked rather than
+implying that a finished forest waits on no one, and the page states
+plainly when the engine is off or there are no
 forests instead of rendering an empty rectangle.
 
-The same tick lands each forest's drawing on its own tracker: the engine
+The same tick lands each current forest's drawing on its own tracker: the engine
 renders the forest into Mermaid and rewrites only the region of that tracker's
 description held between the `<!-- maitred:forest:begin -->` and
 `<!-- maitred:forest:end -->` markers, under a

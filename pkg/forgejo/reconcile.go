@@ -22,7 +22,7 @@ const maitredOutcomesTopic = "maitred-outcomes-repo"
 // dispatch, watermark, serialised on the watermark store's per-key lock.
 // Before the walk it records the forest set the outcomes view is served
 // from (§forgejo/observability/the-outcomes-view); after the walk it
-// lands each forest's drawing on its tracker
+// lands each current forest's drawing on its tracker
 // (§forgejo/reconciliation/the-tracker-block). A sweep that starts while
 // another is in flight is skipped (§forgejo/reconciliation/scheduling).
 func (e *Engine) Reconcile() {

@@ -94,8 +94,8 @@ type Engine struct {
 	// burst costs one listing rather than one each.
 	refreshMu sync.Mutex
 
-	// The forest snapshot: the current forests as the last sweep tick
-	// enumerated them, the moment that enumeration landed, and the
+	// The forest snapshot: the forests — current and past — as the last
+	// sweep tick enumerated them, the moment that enumeration landed, and the
 	// error the most recent enumeration failed with — nil alongside a
 	// set only for as long as that set is what the engine can vouch
 	// for. forestsAt's zero value says nothing ever was recorded, so

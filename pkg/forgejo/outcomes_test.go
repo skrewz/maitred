@@ -178,7 +178,7 @@ func TestForests_OnlyOutcomesReposEnumerated(t *testing.T) {
 	if forests[0].Repository != "o/out" {
 		t.Errorf("repository = %q, want o/out", forests[0].Repository)
 	}
-	if n := api.callCount("ListOpenIssues:wi"); n != 0 {
+	if n := api.callCount("ListAllIssues:wi"); n != 0 {
 		t.Errorf("the work-item repository was listed %d times: the view walks only outcomes repositories", n)
 	}
 }
@@ -214,7 +214,7 @@ func TestForests_ReadFailureIsError(t *testing.T) {
 		want   string
 	}{
 		{"org listing fails", func(api *fakeAPI) { api.listReposErr = errors.New("org listing down") }, "org listing down"},
-		{"issue listing fails", func(api *fakeAPI) { api.listIssuesErr = map[string]error{"out": errors.New("listing down")} }, "list open issues of o/out"},
+		{"issue listing fails", func(api *fakeAPI) { api.allIssuesErr = map[string]error{"out": errors.New("listing down")} }, "list issues of o/out"},
 		{"blocks read fails", func(api *fakeAPI) { api.issueBlocksErr = errors.New("blocks read down") }, "issues o/out#51 blocks"},
 	}
 	for _, tc := range cases {
@@ -269,7 +269,7 @@ func TestForests_ScopeBackoffFailsClosed(t *testing.T) {
 	if forests != nil {
 		t.Errorf("forests = %+v, want nil alongside the error", forests)
 	}
-	if n := api.callCount("ListOpenIssues:out"); n != 0 {
+	if n := api.callCount("ListAllIssues:out"); n != 0 {
 		t.Errorf("the stale snapshot was acted on: %d issue listing(s) ran during the backoff", n)
 	}
 
@@ -427,15 +427,15 @@ func TestForests_FailedEnumerationSilencesTheView(t *testing.T) {
 		t.Fatalf("Forests after the first sweep: %v", err)
 	}
 
-	api.listIssuesErr = map[string]error{"out": errors.New("listing down")}
+	api.allIssuesErr = map[string]error{"out": errors.New("listing down")}
 	eng.recordForests()
 	if forests, err := eng.Forests(); err == nil || forests != nil {
 		t.Errorf("Forests = %+v, %v, want the failed enumeration's error and nil, not the last set", forests, err)
-	} else if !strings.Contains(err.Error(), "list open issues of o/out") {
+	} else if !strings.Contains(err.Error(), "list issues of o/out") {
 		t.Errorf("error %q, want it to name the read that broke", err)
 	}
 
-	delete(api.listIssuesErr, "out")
+	delete(api.allIssuesErr, "out")
 	eng.recordForests()
 	if forests, err := eng.Forests(); err != nil || len(forests) != 1 {
 		t.Errorf("Forests = %+v, %v, want the view recovered by the next successful sweep", forests, err)
@@ -1383,5 +1383,301 @@ func TestForests_ChartStampIsRenderedInTheConfiguredZone(t *testing.T) {
 	}
 	if stamped.UTC().Format(stampLayout) == forests[0].ChartRevisited {
 		t.Errorf("chart_revisited = %q, want the drawing moment spelled in %s rather than as UTC", forests[0].ChartRevisited, sydney)
+	}
+}
+
+// --- current versus past (s-git/maitred#266) ---
+
+// TestForests_ClosedRootOpenTrackerIsCurrent: a forest whose ideation root
+// closed while its tracker stayed open is still a current forest — current
+// means the root OR the tracker exists and is open, not the root alone —
+// and the walk finds it in the same stateless listing it pays for an
+// open root, with the same one blocks read per forest
+// (§forgejo/observability/the-outcomes-view).
+func TestForests_ClosedRootOpenTrackerIsCurrent(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	root := outcomesRoot(51, "the idea, filed and finished")
+	root.State = "closed"
+	tracker := outcomesTracker(71, "the work still in flight")
+	api.openIssues["out"] = []Issue{tracker}
+	api.closedIssues["out"] = []Issue{root}
+	api.blocks[51] = []Issue{tracker}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	if len(forests) != 1 {
+		t.Fatalf("forests = %d, want the closed root's forest enumerated", len(forests))
+	}
+	f := forests[0]
+	if f.Root.Number != 51 || f.Root.State != "closed" {
+		t.Errorf("root = %+v, want closed ideation issue 51", f.Root)
+	}
+	if f.Tracker == nil || f.Tracker.Number != 71 || f.Tracker.State != "open" {
+		t.Errorf("tracker = %+v, want open outcome issue 71", f.Tracker)
+	}
+	// The walk paid one stateless listing for the repository and the
+	// same one blocks read per forest row the open walk pays
+	// (§forgejo/observability/the-outcomes-view).
+	if n := api.callCount("ListAllIssues:out"); n != 1 {
+		t.Errorf("the walk made %d listings of o/out, want 1", n)
+	}
+	if n := api.callCount("IssueBlocks:out/51"); n != 1 {
+		t.Errorf("the walk made %d blocks reads of the root, want 1", n)
+	}
+
+	// Both rows open the door: the forest is current, not past.
+	if _, err := eng.recordForests(); err != nil {
+		t.Fatalf("recordForests: %v", err)
+	}
+	current, err := eng.Forests()
+	if err != nil || len(current) != 1 || current[0].Root.Number != 51 {
+		t.Errorf("Forests = %+v, %v, want the root-or-tracker-open forest", current, err)
+	}
+	if !current[0].WarningsWalked {
+		t.Errorf("a current row says its warnings were not walked, want the walk's answer: %+v", current[0].Warnings)
+	}
+	_, past, err := eng.ForestSplit()
+	if err != nil || len(past) != 0 {
+		t.Errorf("ForestSplit's past half = %+v, %v, want none: an open tracker makes this forest current", past, err)
+	}
+}
+
+// TestForests_BothClosedIsPast: a forest whose root and tracker are both
+// closed leaves the current list for the past one, named by its ideation
+// and tracker tickets with their closed states, and states its warnings
+// as not walked without paying the warning walk's reads
+// (§forgejo/observability/the-outcomes-view).
+func TestForests_BothClosedIsPast(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	root := outcomesRoot(51, "a forest that finished")
+	root.State = "closed"
+	tracker := outcomesTracker(71, "closed with its forest")
+	tracker.State = "closed"
+	// One member outlived its forest — an open landing-set row. A
+	// warning walk over this fixture would read the repository's pull
+	// requests, which is what makes the zero count below mean what it
+	// says: the past row states its warnings not walked rather than
+	// paying that read (§forgejo/observability/the-warnings-a-forest-carries).
+	member := Issue{
+		Number: 91, Title: "approved, never merged", State: "open",
+		Labels: []string{LabelAgenticAutoMerge}, HTMLURL: issueURL(91),
+	}
+	api.closedIssues["out"] = []Issue{root, tracker}
+	api.openIssues["out"] = []Issue{member}
+	api.blocks[51] = []Issue{tracker, member}
+
+	if _, err := eng.recordForests(); err != nil {
+		t.Fatalf("recordForests: %v", err)
+	}
+	current, err := eng.Forests()
+	if err != nil {
+		t.Fatalf("Forests: %v", err)
+	}
+	if len(current) != 0 {
+		t.Errorf("Forests = %+v, want empty: neither ticket is open", current)
+	}
+	_, past, err := eng.ForestSplit()
+	if err != nil {
+		t.Fatalf("ForestSplit: %v", err)
+	}
+	if len(past) != 1 {
+		t.Fatalf("the split's past half = %d, want the finished forest", len(past))
+	}
+	f := past[0]
+	if f.Root.State != "closed" || f.Tracker == nil || f.Tracker.State != "closed" {
+		t.Errorf("past row = %+v, want both tickets closed", f)
+	}
+	if len(f.Warnings) != 0 || f.WarningsWalked {
+		t.Errorf("past warnings = %+v (walked: %v), want the empty stated as not walked", f.Warnings, f.WarningsWalked)
+	}
+	// A finished forest pays no warning-walk reads: the walk this
+	// fixture would act on — listing the repository's open pull
+	// requests for the surviving member — never runs for a past row
+	// (§forgejo/observability/the-warnings-a-forest-carries).
+	if n := api.callCount("ListOpenPullRequests"); n != 0 {
+		t.Errorf("the past walk made %d pull-request listings, want 0", n)
+	}
+}
+
+// TestForests_PastRowStatesAnAbsentTracker: a closed root that blocks no
+// tracker is a past forest whose gate is stated absent — the same honest
+// absence the current rows state — and it carries no picture, having been
+// seen only after it was done (§forgejo/observability/the-outcomes-view).
+func TestForests_PastRowStatesAnAbsentTracker(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	root := outcomesRoot(51, "an idea that closed untracked")
+	root.State = "closed"
+	api.closedIssues["out"] = []Issue{root}
+
+	if _, err := eng.recordForests(); err != nil {
+		t.Fatalf("recordForests: %v", err)
+	}
+	_, past, err := eng.ForestSplit()
+	if err != nil {
+		t.Fatalf("ForestSplit: %v", err)
+	}
+	if len(past) != 1 {
+		t.Fatalf("the split's past half = %d, want the closed root with its absence stated", len(past))
+	}
+	if past[0].Tracker != nil {
+		t.Errorf("past tracker = %+v, want the absence stated", past[0].Tracker)
+	}
+	if past[0].Chart != "" || past[0].ChartRevisited != "" {
+		t.Errorf("a past forest never seen while current carries chart %q under stamp %q, want both fields empty",
+			past[0].Chart, past[0].ChartRevisited)
+	}
+	if current, err := eng.Forests(); err != nil || len(current) != 0 {
+		t.Errorf("Forests = %+v, %v, want empty", current, err)
+	}
+}
+
+// TestForests_PastPictureIsFrozen: a forest's picture pair freezes on the
+// tick it was last current. Step 5 addresses the current forests alone —
+// the engine does not edit a closed tracker's history — so the past row
+// carries the last drawing made while the forest lived, under the stamp
+// belonging to that drawing, and no later tick writes that tracker or
+// redraws that pair (§forgejo/observability/the-outcomes-view,
+// §forgejo/reconciliation/the-tracker-block).
+func TestForests_PastPictureIsFrozen(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	chartWire(api, chartFenced())
+
+	first, err := eng.recordForests()
+	if err != nil || len(first) != 1 {
+		t.Fatalf("forests = %+v, %v", first, err)
+	}
+	eng.writeTrackerBlocks(first, chartAt)
+	drawn, err := eng.Forests()
+	if err != nil || len(drawn) != 1 || drawn[0].Chart == "" {
+		t.Fatalf("Forests = %+v, %v, want the tick's drawing", drawn, err)
+	}
+	wantChart, wantStamp := drawn[0].Chart, drawn[0].ChartRevisited
+	writesBefore := api.callCount("UpdateIssueBody")
+	trackerReadsBefore := api.callCount("GetIssue:out/2")
+
+	// The forest finishes: root and tracker both close — with the
+	// closed_at a real forge reports, so the graph the mutation
+	// below would redraw is one the renderer accepts rather than a
+	// refusal doing the pin's work (§forgejo/renderer/closed-members).
+	api.mu.Lock()
+	root := *api.issues[1]
+	root.State = "closed"
+	root.ClosedAt = chartClosedAt
+	tracker := *api.issues[2]
+	tracker.State = "closed"
+	tracker.ClosedAt = chartClosedAt
+	api.issues[1] = &root
+	api.issues[2] = &tracker
+	api.openIssues["out"] = nil
+	api.closedIssues["out"] = []Issue{root, tracker}
+	// The pairing reads the tracker's row from the blocks listing, so
+	// that row is where the tracker's closed state has to show.
+	api.blocks[1] = []Issue{tracker}
+	api.mu.Unlock()
+
+	second, err := eng.recordForests()
+	if err != nil || len(second) != 1 {
+		t.Fatalf("forests = %+v, %v", second, err)
+	}
+	eng.writeTrackerBlocks(second, chartAt.Add(time.Hour))
+
+	_, past, err := eng.ForestSplit()
+	if err != nil || len(past) != 1 {
+		t.Fatalf("the split's past half = %+v, %v, want the finished forest", past, err)
+	}
+	if past[0].Chart != wantChart || past[0].ChartRevisited != wantStamp {
+		t.Errorf("the past row carries chart %q under stamp %q, want the frozen pair %q under %q",
+			past[0].Chart, past[0].ChartRevisited, wantChart, wantStamp)
+	}
+	if current, err := eng.Forests(); err != nil || len(current) != 0 {
+		t.Errorf("Forests = %+v, %v, want empty once the forest is past", current, err)
+	}
+	// Step 5 never reaches for the closed tracker at all — not one
+	// read, not one write. The read pin is what makes this mean the
+	// skip rather than a write the forge would have coalesced away:
+	// with the skip removed the tick reads the tracker to compare a
+	// body the newer stamp would have changed, so both counts move
+	// (§forgejo/reconciliation/the-tracker-block).
+	if n := api.callCount("GetIssue:out/2"); n != trackerReadsBefore {
+		t.Errorf("the tick read the closed tracker %d times after the forest closed, want 0", n-trackerReadsBefore)
+	}
+	if n := api.callCount("UpdateIssueBody"); n != writesBefore {
+		t.Errorf("the tick made %d tracker writes after the forest closed, want 0", n-writesBefore)
+	}
+}
+
+// TestForests_ListingRowOnTwoPagesEnumeratesOnce: the stateless listing is
+// the forge's paged answer, and paging a repository whose ordering shifted
+// mid-walk can hand one row on two pages. The walk keeps each issue number
+// once, so the straddling root is one forest, counted once, and pays its
+// one blocks read once rather than once per reading
+// (§forgejo/observability/the-outcomes-view).
+func TestForests_ListingRowOnTwoPagesEnumeratesOnce(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	root := outcomesRoot(51, "a root that straddles a page boundary")
+	tracker := outcomesTracker(71, "the work it gates")
+	// Naming the root in both fixtures is the straddle: the stateless
+	// listing answers from both, so issue 51 arrives twice the way two
+	// pages would hand it over
+	// (§forgejo/observability/the-outcomes-view).
+	api.openIssues["out"] = []Issue{root}
+	api.closedIssues["out"] = []Issue{root, tracker}
+	api.blocks[51] = []Issue{tracker}
+
+	if _, err := eng.recordForests(); err != nil {
+		t.Fatalf("recordForests: %v", err)
+	}
+	current, past, err := eng.ForestSplit()
+	if err != nil {
+		t.Fatalf("ForestSplit: %v", err)
+	}
+	if len(current) != 1 || len(past) != 0 {
+		t.Errorf("the split counted %d current and %d past, want one forest on one tab: %+v",
+			len(current), len(past), current)
+	}
+	if n := api.callCount("IssueBlocks:out/51"); n != 1 {
+		t.Errorf("the duplicated row made %d blocks reads of the root, want 1", n)
+	}
+}
+
+// TestForests_ForestSplitIsOnePicture: the split answers both halves
+// from one snapshot — disjoint, together naming the recorded set, and
+// both halves nil when the view cannot be vouched for — the promise a
+// pair of separate reads could break when a sweep lands between them
+// (§forgejo/observability/the-outcomes-view).
+func TestForests_ForestSplitIsOnePicture(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	live := outcomesRoot(51, "still ideating")
+	liveTracker := outcomesTracker(71, "in flight")
+	stageForest(api, live, liveTracker)
+	done := outcomesRoot(52, "a forest that finished")
+	done.State = "closed"
+	doneTracker := outcomesTracker(72, "closed with its forest")
+	doneTracker.State = "closed"
+	api.closedIssues["out"] = []Issue{done, doneTracker}
+	api.blocks[52] = []Issue{doneTracker}
+
+	if current, past, err := eng.ForestSplit(); current != nil || past != nil || !errors.Is(err, errForestsUnavailable) {
+		t.Errorf("ForestSplit before any sweep = %+v, %+v, %v, want both halves nil with the absence stated", current, past, err)
+	}
+	if _, err := eng.recordForests(); err != nil {
+		t.Fatalf("recordForests: %v", err)
+	}
+	current, past, err := eng.ForestSplit()
+	if err != nil {
+		t.Fatalf("ForestSplit: %v", err)
+	}
+	if len(current) != 1 || current[0].Root.Number != 51 {
+		t.Errorf("current half = %+v, want the living forest", current)
+	}
+	if len(past) != 1 || past[0].Root.Number != 52 {
+		t.Errorf("past half = %+v, want the finished forest", past)
 	}
 }

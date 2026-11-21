@@ -1246,6 +1246,76 @@ async function testOutcomesPage(page, results) {
     `A tracker's absence is stated, not dropped (got: "${synthetic.texts[1]?.trim()}")`
   ));
 
+  // The heading is a pair of tabs — Current forests and Past forests,
+  // each carrying its count — and the chosen tab renders its own list
+  // in the same row shape: a past forest links its closed root and
+  // its closed tracker, states its warnings as not walked rather than
+  // wearing the empty of a walk that found nothing, and carries no ⚠️
+  // marker (§forgejo/observability/the-outcomes-view).
+  const tabs = await page.evaluate(async () => {
+    renderOutcomes({
+      engine_status: 'enabled',
+      forests: [
+        {
+          repository: 'o/out',
+          root: { number: 5, repository: 'o/out', title: 'Ideation root', state: 'open', html_url: 'https://forge.example.com/o/out/issues/5' },
+          tracker: { number: 6, repository: 'o/out', title: 'Outcome tracker', state: 'open', html_url: 'https://forge.example.com/o/out/issues/6' },
+          warnings: [],
+          warnings_walked: true,
+        },
+      ],
+      past_forests: [
+        {
+          repository: 'o/out',
+          root: { number: 3, repository: 'o/out', title: 'A finished idea', state: 'closed', html_url: 'https://forge.example.com/o/out/issues/3' },
+          tracker: { number: 4, repository: 'o/out', title: 'Closed with its forest', state: 'closed', html_url: 'https://forge.example.com/o/out/issues/4' },
+          warnings: [],
+          warnings_walked: false,
+        },
+      ],
+    });
+    const labels = [...document.querySelectorAll('#outcomes-tabs .forgejo-tab')].map(b => b.textContent.trim());
+    const panelRole = document.getElementById('outcomes-list').getAttribute('role');
+    const currentRows = [...document.querySelectorAll('#outcomes-list .outcomes-row')].map(r => r.textContent);
+    document.querySelector('#outcomes-tabs .forgejo-tab[data-outcomes-kind="past"]').click();
+    const pastRows = [...document.querySelectorAll('#outcomes-list .outcomes-row')].map(r => r.textContent);
+    const pastHrefs = [...document.querySelectorAll('#outcomes-list a')].map(a => a.getAttribute('href'));
+    document.querySelector('#outcomes-tabs .forgejo-tab[data-outcomes-kind="current"]').click();
+    const backRows = [...document.querySelectorAll('#outcomes-list .outcomes-row')].map(r => r.textContent);
+    return { labels, panelRole, currentRows, pastRows, pastHrefs, backRows };
+  });
+  results.push(assert(
+    tabs.labels.some(l => l.includes('Current forests') && l.includes('(1)'))
+      && tabs.labels.some(l => l.includes('Past forests') && l.includes('(1)')),
+    `The heading is a pair of tabs carrying the payload's counts (got: ${tabs.labels.join(' | ')})`
+  ));
+  results.push(assert(
+    tabs.panelRole === 'tabpanel',
+    `The tabs the heading declares control a panel (list role: "${tabs.panelRole}")`
+  ));
+  results.push(assert(
+    tabs.currentRows.length === 1 && tabs.currentRows[0].includes('#5'),
+    `The current tab renders the current list (rows: ${tabs.currentRows.length})`
+  ));
+  results.push(assert(
+    tabs.pastRows.length === 1 && tabs.pastRows[0].includes('#3') && tabs.pastRows[0].includes('#4')
+      && /closed/i.test(tabs.pastRows[0]) && !tabs.pastRows[0].includes('\u26a0'),
+    `The past tab renders the finished forest with its closed states and no warning marker (got: "${tabs.pastRows[0]?.trim().slice(0, 90)}")`
+  ));
+  results.push(assert(
+    tabs.pastRows.length === 1 && /warnings not walked/i.test(tabs.pastRows[0])
+      && !(tabs.currentRows[0] ?? '').includes('warnings not walked'),
+    `A past row states its warnings as not walked; a current row does not (past: "${tabs.pastRows[0]?.trim().slice(0, 90)}")`
+  ));
+  results.push(assert(
+    tabs.pastHrefs.includes('https://forge.example.com/o/out/issues/3'),
+    'A past row links the tickets that identify the forest'
+  ));
+  results.push(assert(
+    tabs.backRows.length === 1 && tabs.backRows[0].includes('#5'),
+    'Switching back renders the current list again'
+  ));
+
   // A forest the payload says is waiting on a person draws its
   // warnings in the row: one ⚠️ entry per warning, naming its kind,
   // the object holding the forest up and the age of the condition,

@@ -85,7 +85,12 @@ func (e *Engine) writeTrackerBlocks(forests []Forest, at time.Time) {
 		// A forest whose tracker is missing states its absence through the
 		// outcomes view; there is nothing here to write it to and nothing
 		// worth a log line (§forgejo/observability/the-outcomes-view).
-		if forest.Tracker == nil {
+		// A past forest is skipped the same way: step 5 addresses the
+		// current forests alone — both its tickets closed, so its
+		// description is history the engine does not edit — and the pair
+		// the forest carried into the past stands frozen as its picture
+		// (§forgejo/observability/the-outcomes-view).
+		if forest.Tracker == nil || !forestIsCurrent(forest) {
 			continue
 		}
 		source, err := e.writeTrackerBlock(forest, at)

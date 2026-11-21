@@ -97,15 +97,21 @@ watermark store is unaffected, §forgejo/state/persistence).
 
 The forest is the unit of work this engine stewards: an ideation root and
 the outcome tracker it blocks (§forgejo/decisions/commissioning). The
-engine therefore offers an **outcomes view**: the **current forests** of
-the organisation — every open `ideation` issue in the repositories holding
-the outcomes role (§forgejo/webhook/repository-roles), paired with the
-`outcome` issue it blocks. The view introduces no new label vocabulary:
+engine therefore offers an **outcomes view**: the forests of the
+organisation in the repositories holding the outcomes role
+(§forgejo/webhook/repository-roles), split into the **current forests**
+and the **past** ones. A forest is **current** when its ideation root or
+its outcome tracker exists and is open; a forest whose root and tracker
+are both closed is **past** — the pair of tickets still identifies it,
+and the page shows it under the past tab rather than dropping a forest
+that finished while nobody was watching. A root with no tracker is
+current while it is open and past once it closes. The view introduces no
+new label vocabulary:
 it reads only the reserved `ideation` and `outcome` names
 (§forgejo/decisions/actions).
 
 The pairing is found the way the cascade finds connected issues: for each
-open ideation issue the engine asks which issues it blocks
+ideation issue in either state the engine asks which issues it blocks
 (§forgejo/client/operations) and takes the first blocked issue the
 engine reads as a **tracker** — one carrying `outcome` and not
 `ideation`, the one reading the cascade and the teardown apply
@@ -116,9 +122,26 @@ everywhere else in the engine. A root whose tracker is missing — it
 blocks no tracker — is listed anyway, **with the tracker stated as
 absent**: a forest without its gate is exactly the situation a human
 needs to see, so the view never papers over it by dropping the row. An
-`outcome` issue that no open ideation root blocks is not a forest and is
-not listed. The view is a picture of what exists, not of what an order
-is about to do: an `ideation` root already carrying `teardown-forest` or
+`outcome` issue that no ideation issue blocks is not a forest and is
+not listed. The walk reads one stateless listing of each outcomes
+repository — every issue of it, open and closed — and keeps each issue
+number once, so a forest whose root closed while its tracker stayed open
+is still enumerated, one whose tickets have both closed is enumerated as
+past, an issue that changes state mid-walk cannot arrive on both sides
+of the split, and a row the paging hands twice because the ordering
+shifted is one forest rather than two. Per
+tick the widening costs one full issue listing per outcomes repository
+— a paging the repository's whole history grows — beside the one
+blocks read per forest row the view already paid; the cost paragraph
+below carries the numbers. A forest's warnings are walked for the
+current forests alone — walking the dead would buy the past tab reads
+the current one does not pay — and a past row says so rather than
+claiming the empty: its warnings list is empty beside
+`warnings_walked` reading false, because the honest empty belongs to a
+walk that found nothing, not to a walk that never happened
+(§forgejo/observability/the-warnings-a-forest-carries). The view is a
+picture of what exists, not of what an order is about to do: an
+`ideation` root already carrying `teardown-forest` or
 `sync` — a forest under teardown or mid-sync — is still among the
 current forests, whatever the decompose gate makes of the same row
 (§forgejo/decisions/forest-teardown, §forgejo/decisions/sync-set).
@@ -126,11 +149,15 @@ current forests, whatever the decompose gate makes of the same row
 The dashboard API serves the view at `GET /api/forgejo/outcomes`. The
 set it serves is the one the last sweep tick recorded: like the tracked
 view it answers from memory, and a request costs no forge read
-(§forgejo/observability/the-dashboard-view). The response is an object
-carrying two things: the **forest list** and **one engine-status field**
-rendering the engine's state as the forgejo view does
-(§forgejo/observability/the-dashboard-view), so a configured-but-broken
-engine never reads as a healthy one with nothing to show. Each forest
+(§forgejo/observability/the-dashboard-view). One acquisition of that
+set answers both lists together, so a response cannot straddle two
+ticks and name a forest in both halves or in neither. The response is an object
+carrying three things: the **forest list** — the current forests —, the
+**past forest list** beside it, spelled the same way and never a second
+shape, and **one engine-status field** rendering the engine's state as
+the forgejo view does (§forgejo/observability/the-dashboard-view), so a
+configured-but-broken engine never reads as a healthy one with nothing
+to show. Each forest
 names its **repository** — spelled as the forge's listing spells it,
 falling back to the scope cache's lowercased key where a listing row
 omits it — its **root** — number, title, state, repository, and HTML URL
@@ -147,10 +174,13 @@ stamp — a pair, drawn as described below, that always travels as one —
 and its
 **warnings**, the ⚠️
 marks saying whether the forest is waiting on a person, an empty list
-when it is not
+when it is not, beside the
+**`warnings_walked`** flag stating whether that list was walked at
+all — true for the current forests, false for the past rows, whose
+empty says "not walked", never "nobody waits"
 (§forgejo/observability/the-warnings-a-forest-carries). Without the
 engine, or
-with no forests, the list is empty — never `null`: an enumeration that
+with no forests, both lists are empty — never `null`: an enumeration that
 found nothing is an honest empty, not a view that never read. A view the
 engine cannot vouch for — no sweep's enumeration has landed yet, the
 most recent one failed (the organisation listing, an issue listing, or a
@@ -183,7 +213,9 @@ render from the same edges (§forgejo/reconciliation/the-tracker-block) —
 and it matches even where the write into the description is itself
 refused. A description with no fence pair, two fence pairs, or a pair
 holding no fenced Mermaid block says where the block may land; it says
-nothing about the payload. The outcomes path reads no description and
+nothing about the payload; the past rows' pictures are the frozen pairs
+they carried into the past tab (see **The pair travels as one** below).
+The outcomes path reads no description and
 parses no prose at all: the tracker's description is out of the
 picture's chain of command entirely.
 
@@ -219,7 +251,15 @@ and the stamp belonging to it — and step 5 replaces every pair in it.
 Inside that window the view therefore shows the previous tick's drawing
 under the previous tick's stamp, which is what makes an empty picture
 honest rather than a half-written record; a forest the head records for
-the first time carries both fields empty until step 5 draws it. A carried
+the first time carries both fields empty until step 5 draws it. A forest
+that has gone past draws nothing: step 5 addresses the current forests
+alone — a past forest's tickets are both closed, and the engine does
+not edit a finished forest's history, while a current forest whose
+tracker closed with its root still living has that tracker rewritten
+as any current row's — so a past row carries the pair the forest held on the
+tick it was last current, frozen under the stamp belonging to that
+drawing, and a past forest the engine never saw while it was current
+carries both fields empty. A carried
 pair is never the view's last word: step 5 states what this tick drew,
 with the wrap-up path's one-sink drawing accounted for where that
 exception lives (§forgejo/reconciliation/the-tracker-block). The
@@ -256,9 +296,16 @@ carries the tick's drawing from the graph all the same.
 
 The enumeration happens on the reconciliation sweep's tick, not on the
 request path (§forgejo/reconciliation/the-sweep): per tick it costs one
-issue listing per outcomes repository and one blocks read per open
-ideation root, on top of the sweep's own walk; the enumeration itself
-adds no read for the picture, which the tick's step-5 drawing makes for
+stateless issue listing per outcomes repository — every issue of the
+repository, open and closed, which a long history grows — and one blocks
+read per ideation root whatever that root's state, on top of the sweep's
+own walk. The past list reaches exactly as far as that listing does:
+every forest whose tickets are both closed, and nothing bounds it, so a
+deployment pays for its own history in the size of the payload and the
+height of the past tab rather than in any read the current view does not
+already pay — no count caps the list, and none is implied. The
+enumeration itself adds no read for the picture, which the tick's step-5
+drawing makes for
 both of its sinks (§forgejo/reconciliation/the-tracker-block,
 §forgejo/reconciliation/the-sweep). The
 sweep's own organisation listing keeps the scope cache fresh, so the walk
@@ -291,8 +338,10 @@ route costs the server nothing new. The page lays its rows out across
 the full width of the viewport rather than in the dashboard's centred
 column: the widest thing on the page is a forest's picture, and the
 reader's screen is the room it needs (s-git/maitred#249). The page
-polls the endpoint on a timer and renders **one row per current
-forest**: the repository the
+polls the endpoint on a timer, turns the **Current forests** heading
+into a pair of tabs — **Current forests** and **Past forests**, each
+carrying its count — and renders **one row per forest** of the tab the
+reader chose: the repository the
 forest grew in, the ideation root as a link carrying its state, and
 the tracker as a link carrying its state — or the absence of one,
 stated in the row rather than dropped. The row draws the forest's
@@ -302,7 +351,8 @@ abbreviation being the tracker's to choose rather than the page's.
 The link is only a
 link when the forge's URL is one a link can carry (http or https);
 anything else renders as text, since the port authenticates nothing.
-A forest the payload says is waiting on a person draws its **warnings**
+The row's shape is the same on both tabs; only the payload's lists
+differ. A forest the payload says is waiting on a person draws its **warnings**
 in the row: one ⚠️ entry per warning, each naming its kind, the issue
 or pull request holding the forest up, and the age of the condition,
 and linked through the warning's own HTML URL under the same link test
@@ -317,7 +367,8 @@ of the two states it is in, in the engine's own status words: an
 engine that is not up names
 its state (the category word the enum prints,
 §forgejo/observability/why-the-engine-is-off), and an enabled engine
-whose last sweep found nothing says there are no current forests.
+whose last sweep found nothing says the tab it is showing holds no
+forests.
 A view the engine answers `500` for says it could not be read, so an
 empty rectangle never passes for a dashboard
 (§forgejo/observability/the-dashboard-view). The header links to the
@@ -396,7 +447,10 @@ holds a forest up may live across the organisation), its **kind**, and
 the **age** of the condition in seconds, so the dashboard links to the
 object rather than constructing the judgement from reads of its own. A
 forest nothing is waiting on carries an empty list, never `null` — the
-honest empty the forest list itself is. A warning reports; it dispatches
+honest empty the forest list itself is, `warnings_walked` true saying
+the walk ran and found nothing; a past row's empty carries the flag
+false, stating a walk that never happened rather than a forest nobody
+waits on (§forgejo/observability/the-outcomes-view). A warning reports; it dispatches
 nothing, holds nothing off and gates nothing, and no decision reads a
 warning back (§forgejo/decisions/actions).
 

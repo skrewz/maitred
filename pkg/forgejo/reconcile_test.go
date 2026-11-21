@@ -999,6 +999,11 @@ func TestReconcile_DecomposeDigestGate_CommissionedForest(t *testing.T) {
 	api.issues[1].State = "closed"
 	api.deps[2][0].State = "closed" // the value copy of the root the tracker's dependencies carry
 	api.openIssues["r"] = []Issue{*api.issues[2], *api.issues[4]}
+	// The closed root shows in the stateless listing the way the forge's
+	// would, which is where the walk finds the forest: the open
+	// tracker keeps it current
+	// (§forgejo/observability/the-outcomes-view).
+	api.closedIssues["r"] = []Issue{*api.issues[1]}
 	api.mu.Unlock()
 
 	eng.Reconcile()
@@ -1031,11 +1036,15 @@ func TestReconcile_DecomposeDigestGate_CommissionedForest(t *testing.T) {
 	if got := len(q.all()); got != 1 {
 		t.Fatalf("commissioned quiet forest dispatched %d tasks across two sweeps, want 1", got)
 	}
-	// The root has closed, so it is not among the current forests:
-	// the outcomes walk pairs no root and costs no blocks read —
-	// only the digest computation reads (§forgejo/observability/the-outcomes-view).
-	if got := api.callCount("IssueBlocks:r/1"); got != readsAfterOne+1 {
-		t.Errorf("second sweep cost %d forest reads, want one digest computation (%d total)", got-readsAfterOne, readsAfterOne+1)
+	// The root has closed but the tracker is open, so the forest is
+	// still current and the walk finds the root in the same listing:
+	// each sweep reads the root's blocks three times — the digest
+	// computation, the outcomes view's walk (recordForests) and the
+	// tracker block's graph each make one read, as for a live forest
+	// (§forgejo/observability/the-outcomes-view,
+	// §forgejo/reconciliation/the-tracker-block).
+	if got := api.callCount("IssueBlocks:r/1"); got != readsAfterOne+3 {
+		t.Errorf("second sweep cost %d forest reads, want one digest computation, one outcomes walk and one chart graph (%d total)", got-readsAfterOne, readsAfterOne+3)
 	}
 }
 

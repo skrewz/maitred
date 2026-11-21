@@ -107,7 +107,7 @@
            container's padding and the rows' own sizing stay as they are, so a
            narrow viewport lays out exactly as it did. */
         #outcomes-view { max-width: none; }
-        .outcomes-title { font-size: 1rem; color: #a78bfa; font-weight: 600; }
+        .outcomes-tabs { display: flex; gap: 0.25rem; }
         .outcomes-row { background: #1e293b; border-radius: 0.5rem; padding: 1.25rem; margin-bottom: 1rem; border-left: 3px solid #a78bfa; min-height: 320px; }
         .outcomes-repo { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 1rem; color: #a78bfa; margin-bottom: 0.75rem; }
         .outcomes-row a { color: #38bdf8; text-decoration: none; }
@@ -172,10 +172,10 @@
 
     <div class="container" id="outcomes-view" style="display: none;">
         <div class="refresh-bar">
-            <span class="outcomes-title">Current forests</span>
+            <div class="outcomes-tabs" id="outcomes-tabs" role="tablist" aria-label="Forest lists"></div>
             <span class="status" id="outcomes-status-text">Connecting...</span>
         </div>
-        <div id="outcomes-list"></div>
+        <div id="outcomes-list" role="tabpanel"></div>
     </div>
 
     <div id="chart-overlay" class="chart-overlay" style="display: none;">
@@ -466,6 +466,18 @@
         // the full paragraph
         // (§forgejo/observability/the-dashboard-view).
         const forgejoTabState = new Map(); // repo -> 'issue' | 'pr'
+
+        // tabButton draws the one tab button the page's tab pairs
+        // share — the dashboard's per-repository groups and the
+        // outcomes heading alike: the active one marked, the label
+        // carrying the count of the rows behind it, and whatever
+        // data attribute the section's click delegation routes by
+        // (§forgejo/observability/the-dashboard-view,
+        // §forgejo/observability/the-outcomes-view).
+        const tabButton = (active, kind, label, count, dataAttr) => `
+            <button class="forgejo-tab${active === kind ? ' active' : ''}" role="tab"
+                    aria-selected="${active === kind}" ${dataAttr}>${label} <span class="forgejo-tab-count">(${count})</span></button>
+        `;
         const forgejoOpenState = new Map(); // "key/what" -> bool
 
         // anchorSlug derives the heading's anchor id from a repository
@@ -603,10 +615,7 @@
                 const active = forgejoTabState.get(repo)
                     || (group.issue.length > 0 ? 'issue' : 'pr');
                 forgejoTabState.set(repo, active);
-                const tab = (kind, label, count) => `
-                    <button class="forgejo-tab${active === kind ? ' active' : ''}" role="tab"
-                            aria-selected="${active === kind}" data-repo="${escapeHtml(repo)}" data-kind="${kind}">${label} <span class="forgejo-tab-count">(${count})</span></button>
-                `;
+                const tab = (kind, label, count) => tabButton(active, kind, label, count, `data-repo="${escapeHtml(repo)}" data-kind="${kind}"`);
                 const panel = (kind, rows, emptyText) => `
                     <div class="forgejo-panel" role="tabpanel" data-repo="${escapeHtml(repo)}" data-kind="${kind}"${active === kind ? '' : ' hidden'}>
                         ${rows.length > 0 ? rows.map(cardHtml).join('') : `<div class="forgejo-empty">${emptyText}</div>`}
@@ -809,10 +818,17 @@
         // inserted as text and never as markup
         // (§forgejo/observability/the-warnings-a-forest-carries). The
         // page translates the kind word into nothing: printing the
-        // payload's field directly is what lets the row's words be
-        // the walk's words. A forest with no warnings renders
-        // nothing: the honest empty carries no marker.
-        function warningsHtml(warnings) {
+        // payload's field directly is what lets the row's words be the
+        // walk's words. A walked forest with no warnings renders
+        // nothing: the honest empty carries no marker. A forest whose
+        // warnings the walk never reached (warnings_walked false — the
+        // past rows) says so plainly rather than wearing an empty that
+        // would read as "nobody waits"
+        // (§forgejo/observability/the-warnings-a-forest-carries).
+        function warningsHtml(warnings, walked) {
+            if (walked === false) {
+                return '<div class="outcomes-warning">warnings not walked</div>';
+            }
             return (warnings ?? []).map(w => {
                 // An undated warning drops the age clause: printing
                 // 0s would state a wait of no duration as a fact.
@@ -965,56 +981,92 @@
         });
 
         // renderOutcomes renders the outcomes view
-        // (§forgejo/observability/the-outcomes-view): one tall row per
-        // current forest, each linking out to its ideation root and
+        // (§forgejo/observability/the-outcomes-view): the Current
+        // forests heading is a pair of tabs — Current and Past, each
+        // carrying its count — and the chosen tab renders one tall
+        // row per forest, each linking out to its ideation root and
         // its tracker with their states, drawing the forest's picture
-        // underneath those links and the region's stamp beneath it. An
-        // engine that is not up says so in its own state word — the
-        // same words the category enum prints and the dashboard
-        // render compares against (TestNonFaultWords pins them in
-        // pkg/forgejo/status_test.go); here any word but "enabled"
-        // means the view has nothing to stand on. An honest empty
-        // says there are no forests rather than rendering an empty
+        // underneath those links and the region's stamp beneath it.
+        // The row's shape is the same on both tabs; only the payload's
+        // lists differ, and a past row states its warnings as not
+        // walked. An engine that is not up says so in its own state
+        // word — the same words the category enum prints and the
+        // dashboard render compares against (TestNonFaultWords pins
+        // them in pkg/forgejo/status_test.go); here any word but
+        // "enabled" means the view has nothing to stand on. An honest empty
+        // says the tab holds no forests rather than rendering an empty
         // rectangle, and a view the engine answers 500 for says it
         // could not be read rather than reading as "no forests".
+        let activeOutcomesTab = 'current';
+        let lastOutcomesPayload = null;
+
+        // A tab click re-renders from the payload last read: the lists
+        // are the payload's halves, so switching tabs asks nothing of
+        // the server (§forgejo/observability/the-outcomes-view).
+        document.getElementById('outcomes-tabs').addEventListener('click', (e) => {
+            const btn = e.target.closest('.forgejo-tab');
+            if (!btn || btn.dataset.outcomesKind === activeOutcomesTab) return;
+            activeOutcomesTab = btn.dataset.outcomesKind;
+            if (lastOutcomesPayload) renderOutcomes(lastOutcomesPayload);
+        });
+
         function renderOutcomes(payload) {
             // Every branch below replaces the list, so the overlay
             // closes before any branch — and a draw or a parked click
             // whose cells the replacement detached sees that in the DOM
             // (§forgejo/observability/the-outcomes-view).
             closeChartOverlay();
+            lastOutcomesPayload = payload;
+            // The heading's two tabs are the page's one tab button, each
+            // bound to the tab this section shows and the attribute its
+            // delegation routes by. Building them here states each label
+            // once for the two branches below
+            // (§forgejo/observability/the-outcomes-view).
+            const tabs = (current, past) => tabButton(activeOutcomesTab, 'current', 'Current forests', current, 'data-outcomes-kind="current"')
+                + tabButton(activeOutcomesTab, 'past', 'Past forests', past, 'data-outcomes-kind="past"');
             const list = document.getElementById('outcomes-list');
             const statusEl = document.getElementById('outcomes-status-text');
+            const tabsEl = document.getElementById('outcomes-tabs');
+            const forests = payload?.forests || [];
+            const pastForests = payload?.past_forests || [];
             // A failed poll and a payload that carries no status word
             // both mean the engine has said nothing about the view;
             // "could not be read" is the true statement, and the
             // enum's fixed set has no blank word to render instead
             // (TestNonFaultWords pins it in pkg/forgejo/status_test.go).
             if (!payload || !payload.engine_status) {
+                tabsEl.innerHTML = tabs(0, 0);
                 statusEl.textContent = 'Error loading outcomes';
                 list.innerHTML = '<div class="empty-state"><h2>Outcomes could not be read</h2><p>The engine has nothing it can vouch for yet: the last enumeration failed, has not landed, or has aged out.</p></div>';
                 return;
             }
             statusEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
             const status = payload.engine_status;
+            tabsEl.innerHTML = tabs(forests.length, pastForests.length);
             if (status !== 'enabled') {
                 const word = escapeHtml(status);
-                list.innerHTML = `<div class="empty-state"><h2>Forgejo engine \u2014 ${word}</h2><p>The outcomes view is what the Forgejo engine knows of the current forests, and the engine is ${word}.</p></div>`;
+                list.innerHTML = `<div class="empty-state"><h2>Forgejo engine \u2014 ${word}</h2><p>The outcomes view is what the Forgejo engine knows of the forests it has enumerated, and the engine is ${word}.</p></div>`;
                 return;
             }
-            const forests = payload.forests || [];
-            if (forests.length === 0) {
-                list.innerHTML = '<div class="empty-state"><h2>No current forests</h2><p>The engine is enabled, and its last sweep found no open ideation roots in the outcomes repositories.</p></div>';
+            const rows = activeOutcomesTab === 'past' ? pastForests : forests;
+            if (rows.length === 0) {
+                // The honest empty names the tab it speaks for: the
+                // current tab waits on an open root or tracker, the
+                // past tab on a forest that has closed both
+                // (§forgejo/observability/the-outcomes-view).
+                list.innerHTML = activeOutcomesTab === 'past'
+                    ? '<div class="empty-state"><h2>No past forests</h2><p>The engine is enabled, and none of the forests it has enumerated has closed both its root and its tracker yet.</p></div>'
+                    : '<div class="empty-state"><h2>No current forests</h2><p>The engine is enabled, and its last sweep found no forest with an open ideation root or an open outcome tracker in the outcomes repositories.</p></div>';
                 return;
             }
-            list.innerHTML = forests.map(f => `
+            list.innerHTML = rows.map(f => `
                 <div class="outcomes-row">
                     <div class="outcomes-repo">${escapeHtml(f.repository)}</div>
                     <div class="trigger-meta">
                         ${issueCell('Ideation', f.root, 'no open ideation root')}
                         ${issueCell('Tracker', f.tracker, 'no tracker \u2014 this root blocks no outcome issue')}
                     </div>
-                    ${warningsHtml(f.warnings)}
+                    ${warningsHtml(f.warnings, f.warnings_walked)}
                     ${f.chart ? `<div class="outcomes-chart" tabindex="0" data-chart-source="${escapeHtml(f.chart)}" data-chart-repo="${escapeHtml(f.repository)}" title="Click to enlarge"><span class="outcomes-chart-svg"></span>${chartHtml(f.chart)}</div>` : ''}
                     ${f.chart_revisited ? `<div class="outcomes-stamp">${escapeHtml(f.chart_revisited)}</div>` : ''}
                 </div>
