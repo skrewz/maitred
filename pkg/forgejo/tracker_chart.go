@@ -33,11 +33,14 @@ const (
 	// the body's first heading.
 	stateHeading = "## Current state"
 	// stampLabel prefixes the recency line the block carries:
-	// `Last revisited: <YYYY-MM-DD HH:MM> <TZ>`. The outcomes payload
-	// spells its chart_revisited field with the same layout, so the two
-	// sinks of one drawing state the same moment
-	// (§forgejo/observability/the-outcomes-view).
-	stampLabel = "Last revisited:"
+	// `Last revisited by maître d' engine: <YYYY-MM-DD HH:MM> <TZ>`. The
+	// attribution is the point: another author redrawing the block still
+	// writes the plain `Last revisited:` line, so from the stamp alone — no
+	// logs, no diff — a reader can say the engine drew the picture
+	// (s-git/maitred#251). The outcomes payload spells its chart_revisited
+	// field with the same layout, so the two sinks of one drawing state the
+	// same moment (§forgejo/observability/the-outcomes-view).
+	stampLabel = "Last revisited by maître d' engine:"
 	// stampLayout renders the stamp's date and time half; the label is the
 	// shared stampLabel, and the zone abbreviation follows from the
 	// configured location (§forgejo/config/tracker-chart). stampAt spells an

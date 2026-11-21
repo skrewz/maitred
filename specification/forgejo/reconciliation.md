@@ -88,8 +88,12 @@ region for every forest it enumerated (§forgejo/reconciliation/the-sweep), and
 ahead of every `wrap-up` dispatch it writes that one tracker's region once more
 (§forgejo/decisions/actions): it gathers the graph, renders it
 (§forgejo/renderer/the-contract), and splices the
-source under a `Last revisited: <YYYY-MM-DD HH:MM> <TZ>` stamp, the time
-rendered in the configured timezone (§forgejo/config/tracker-chart). The tick's
+source under a `Last revisited by maître d' engine: <YYYY-MM-DD HH:MM> <TZ>`
+stamp, the time rendered in the configured timezone
+(§forgejo/config/tracker-chart). The attribution is the point: another author
+redrawing the region still writes the plain `Last revisited:` line, so from the
+stamp alone — without logs or a diff — a reader can say the engine drew the
+picture (s-git/maitred#251). The tick's
 rendering is recorded onto the forest set the outcomes view serves too, so the
 payload carries the bytes it drew alongside the block they were spliced into —
 and carries them even where the splice found no region to land in

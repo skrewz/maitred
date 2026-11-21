@@ -339,9 +339,11 @@ forests instead of rendering an empty rectangle.
 The same tick lands each forest's drawing on its own tracker: the engine
 renders the forest into Mermaid and rewrites only the region of that tracker's
 description held between the `<!-- maitred:forest:begin -->` and
-`<!-- maitred:forest:end -->` markers, under a `Last revisited:` stamp rendered
-in `tracker_timezone`. That region is the one thing the engine writes to
-Forgejo; an issue's title, state and labels, and every other issue's body — a
+`<!-- maitred:forest:end -->` markers, under a
+`Last revisited by maître d' engine:` stamp rendered in `tracker_timezone` —
+the attribution says the engine, not an agent, drew the picture. That region
+is the one thing the engine writes to Forgejo; an issue's title, state and
+labels, and every other issue's body — a
 member's, or a grouping issue's whose body drives a landing decision — stay as
 they were found. A `wrap-up` dispatch also redraws its tracker's region once,
 before queueing the task, so a finished forest's chart shows every member

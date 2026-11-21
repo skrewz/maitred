@@ -149,7 +149,7 @@ func chartWire(api *fakeAPI, trackerBody string) {
 }
 
 func chartStamp(at time.Time, loc *time.Location) string {
-	return "Last revisited: " + at.In(loc).Format(stampLayout)
+	return "Last revisited by maître d' engine: " + at.In(loc).Format(stampLayout)
 }
 
 // chartForests is the one forest the fixtures describe, as the outcomes view
@@ -199,6 +199,28 @@ func TestTrackerBlock_WritesIntoFencePair(t *testing.T) {
 	}
 	if got := api.writeCount(); got != 1 {
 		t.Errorf("wrote %d issues, want only the tracker", got)
+	}
+}
+
+// TestTrackerBlock_StampIsStampedAsTheEngines: the stamp line the engine
+// writes names the engine — `Last revisited by maître d' engine:` — so a reader
+// of a fresh picture can say from the stamp alone, without logs or a diff,
+// that it was the engine's write path that drew it; the plain `Last
+// revisited:` line is left to other authors and appears nowhere in the
+// region the engine writes (s-git/maitred#251,
+// §forgejo/reconciliation/the-tracker-block).
+func TestTrackerBlock_StampIsStampedAsTheEngines(t *testing.T) {
+	eng, api, _ := chartForestEngine(t, chartFenced())
+	if _, err := eng.writeTrackerBlock(chartForests()[0], chartAt); err != nil {
+		t.Fatalf("writeTrackerBlock: %v", err)
+	}
+	region := regionOf(mustWritten(t, api, "out", 2))
+	want := "Last revisited by maître d' engine: " + chartAt.In(time.UTC).Format(stampLayout)
+	if !strings.HasPrefix(region, want+"\n") {
+		t.Errorf("the region's stamp line = %q, want the engine's attributed stamp %q", firstLines(region, 1), want)
+	}
+	if strings.Contains(region, "Last revisited:") {
+		t.Errorf("the region the engine wrote still carries the unattributed stamp:\n%s", firstLines(region, 3))
 	}
 }
 
@@ -1332,7 +1354,7 @@ func TestWrapUpDrawWritesTheTrackerAlone(t *testing.T) {
 
 // TestWrapUpDrawMovesOnlyTheStampOnACurrentBlock: a tracker whose block the
 // tick already drew current gains, from the dispatch's draw, a moved
-// `Last revisited:` stamp and nothing else
+// `Last revisited by maître d' engine:` stamp and nothing else
 // (§forgejo/reconciliation/the-tracker-block, s-git/maitred#232).
 func TestWrapUpDrawMovesOnlyTheStampOnACurrentBlock(t *testing.T) {
 	eng, api, q, _ := chartForestQueue(t, chartFenced())

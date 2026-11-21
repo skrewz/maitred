@@ -133,8 +133,8 @@ type Config struct {
 	// Unset is a load error, never a silently inert gate.
 	EngineAccount string `yaml:"engine_account"`
 	// TrackerTimezone names the zone the tracker's current-state block
-	// is stamped in — both its `Last revisited:` line and a closed
-	// member's `closed` line — spelled as an IANA name such as
+	// is stamped in — both its `Last revisited by maître d' engine:` line
+	// and a closed member's `closed` line — spelled as an IANA name such as
 	// "UTC" (§forgejo/config/tracker-chart). Unset means UTC; a name
 	// that will not load is a load error (§forgejo/config/validation),
 	// so a running engine never stamps in a zone nobody configured
