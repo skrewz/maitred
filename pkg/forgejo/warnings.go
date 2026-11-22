@@ -93,19 +93,15 @@ type ForestWarning struct {
 // other path (§forgejo/observability/the-outcomes-view,
 // §forgejo/decisions/actionable-state-digest). The forge's definitive 404
 // excepts itself only at the read that first asks whether an object is
-// there — a member's own blockers read, the delivery's own pull-request
-// read, the delivery's own blocking-edge listing — which says that object
-// is gone and its wait with it: the warning that stood on it is held back
-// with a logged line naming the reference, the reading a dangling
-// reference already gets (§forgejo/webhook/re-fetch). A 404 from any other
-// read — one further down the fan-out, or a later read of an object this
-// walk already established — names something else or a broken read, and
-// stays a failure. The states that are an ordinary answer rather than a
-// failure — a repository outside the remit, one whose pull requests unit is
-// off, a delivery whose graph
-// reaches past the read budget — are settled before the read or hold their
-// warning back, so what is left to fail is a read the engine should have
-// been able to pay and could not.
+// there; each such read names its own site, and the rule's fail-closed
+// half — the `404` further down the fan-out, or at a later read of an
+// object this walk established — is the spec's
+// (§forgejo/observability/the-warnings-a-forest-carries). The states that
+// are an ordinary answer rather than a failure — a repository outside the
+// remit, one whose pull requests unit is off, a delivery whose graph reaches
+// past the read budget — are settled before the read or hold their warning
+// back, so what is left to fail is a read the engine should have been able
+// to pay and could not.
 func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) ([]ForestWarning, error) {
 	warnings := []ForestWarning{}
 	seen := map[string]bool{}
