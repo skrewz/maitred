@@ -219,7 +219,7 @@ func (e *Engine) HandleEvent(ev Event) {
 					e.log.Error("dispatch failed", "key", key.String(), "action", string(d.Action), "error", err)
 					return
 				}
-				if err := e.store.saveLocked(key, watermarkAt(w, string(d.Action), revisionFor(ev, st))); err != nil {
+				if err := e.store.saveLocked(key, watermarkAt(w, string(d.Action), digestFor(d.Action, ev, st))); err != nil {
 					e.log.Error("save watermark", "key", key.String(), "error", err)
 				}
 				// The gate compared against the stored digest; a
@@ -1718,7 +1718,14 @@ func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
 		e.log.Warn("load watermark (continuing without)", "key", k.String(), "error", err)
 		w = nil
 	}
-	rev := issueRevision(issue)
+	// The cascade's watermark records the emitted action's declared
+	// digest, which for the issue-path actions is the re-fetched
+	// issue's revision. A sync-set candidate never reaches this line:
+	// dispatchCascade hands it to dispatchSyncSet, which reads the set
+	// before deriving anything, so the state built here carries
+	// exactly the object these actions read
+	// (§forgejo/decisions/actions, §forgejo/decisions/unblock-cascade).
+	rev := digestFor(cd.Action, Event{}, State{Issue: issue})
 	if alreadyDispatched(w, cd.Action, rev) {
 		return nil
 	}
@@ -1836,7 +1843,7 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 			// assembled state carries unchanged, so nothing but the
 			// tier can differ.
 			if dispErr = e.dispatch(ev, st, ActionMergeOrWait); dispErr == nil {
-				dispErr = e.store.saveLocked(k, watermarkAt(w, string(ActionMergeOrWait), pr.HeadSHA))
+				dispErr = e.store.saveLocked(k, watermarkAt(w, string(ActionMergeOrWait), digestFor(ActionMergeOrWait, ev, st)))
 			}
 			return
 		}
@@ -1928,14 +1935,22 @@ func (e *Engine) dispatchSyncSet(cd CascadeDispatch, sender string) error {
 	if err := e.dispatch(ev, st, ActionSync); err != nil {
 		return err
 	}
-	return e.store.Save(k, watermarkAt(w, string(ActionSync), syncSetRevision(issue, members, e.cfg.Reviews)))
+	return e.store.Save(k, watermarkAt(w, string(ActionSync), digestFor(ActionSync, ev, st)))
 }
 
-// revisionFor is the revision a dispatch's watermark records: the PR
-// head sha for pull requests, the issue's updated_at for issues, and
-// the derived set revision for a landing set — the state of the whole
-// set, not of the grouping issue alone
-// (§forgejo/webhook/the-pipeline, §forgejo/decisions/sync-set).
+// revisionFor is the object revision a decision-log entry records and
+// the re-fire stamp is keyed on: the PR head sha for pull requests,
+// the issue's updated_at for issues, and the derived set revision for
+// a landing set — the state of the whole set, not of the grouping
+// issue alone (§forgejo/webhook/the-pipeline, §forgejo/state/watermark,
+// §forgejo/decisions/sync-set). What a dispatch's own watermark
+// records is the dispatched action's declared digest, reached through
+// the declaration table (§forgejo/decisions/actions). Each action
+// reads one object, so its declared digest is the revision this
+// function derives for that object — an agreement the tests keep
+// rather than a coincidence of wording, since nothing in the types
+// forces it (TestDeclaredDigests_AgreeWithTheObjectRevision,
+// TestDispatch_WatermarkNamesTheLoggedRevision).
 func revisionFor(ev Event, st State) string {
 	// The set revision describes a landing set, so it takes
 	// precedence only on the path that attached members to the

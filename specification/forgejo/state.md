@@ -19,6 +19,12 @@ A watermark records, for one issue or pull request:
   What a reason line makes of that digest belongs to
   §forgejo/observability/the-decision-log.
 
+The revision a dispatch records is that action's **declared digest**
+(§forgejo/decisions/actions); today every action's digest is the revision of
+the object its predicate reads, which is also the revision the decision log
+names for the dispatch and the re-fire bound is keyed on, and the tests keep
+the two derivations answering with one value.
+
 The revision records *what the engine last reacted to*, never whether an
 object is actionable: eligibility is a predicate over re-fetched state
 alone (§forgejo/reconciliation/the-state-is-the-watermark). On an event
