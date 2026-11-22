@@ -251,6 +251,30 @@ func TestPredicates_AgreeWithRows(t *testing.T) {
 	}
 }
 
+// TestReadyAtRow_NamesAnAbstainAsAFault checks that a row with no next
+// question records an abstain as the wiring fault it is, rather than
+// the silent nothing the decision log forbids: the chain predicates are
+// the only abstaining ones, and the rows that ask them continue
+// (§forgejo/observability/the-decision-log, §forgejo/decisions/actions).
+func TestReadyAtRow_NamesAnAbstainAsAFault(t *testing.T) {
+	// No lens has reported at head, so fix-feedback's predicate abstains
+	// and the review-reading cluster falls through to the fan-out
+	// elsewhere.
+	d, ok := readyAtRow(ActionFixFeedback, prEvent(EventPRReviewed, "carol"), State{
+		PR:           openPR("abc"),
+		ReviewLenses: testLenses,
+	})
+	if ok {
+		t.Error("readyAtRow reports the action ready on an abstain, want a hold-off")
+	}
+	if d.Dispatched {
+		t.Errorf("readyAtRow dispatched %q, want a hold-off", d.Action)
+	}
+	if !strings.Contains(d.Reason, string(ActionFixFeedback)) || !strings.Contains(d.Reason, "wiring fault") {
+		t.Errorf("hold-off reason = %q, want it to name the abstaining ask as a wiring fault", d.Reason)
+	}
+}
+
 // TestDeclarations_InputsNameTheVocabularyOfInputs spot-checks that
 // the declared sets speak the shared vocabulary of the two state
 // families the specification names — state facts and the declared

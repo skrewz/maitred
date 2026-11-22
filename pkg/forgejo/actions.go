@@ -28,6 +28,9 @@ import (
 // readyAnswer is the predicate's verdict: the state calls for the
 // action (readyYes), does not (readyNo), or the predicate abstains and
 // the asking row continues to its next question (readyNotApplicable).
+// Only the review-reading rows have such a next question; the rest ask
+// through readyAtRow, which records an abstain as the wiring fault it
+// would be.
 type readyAnswer int
 
 const (
@@ -196,6 +199,27 @@ func declarationFor(a Action) actionDecl {
 // decision log (§forgejo/observability/the-decision-log).
 func readyTo(a Action, e Event, s State) (Decision, readyAnswer) {
 	return declarationFor(a).ready(e, s)
+}
+
+// readyAtRow asks an action's predicate from a row that has no next
+// question after it, so the predicate's answer is that row's whole
+// decision: readyYes is the dispatch the row paces, readyNo the
+// hold-off it records. Abstention belongs to the rows that do continue
+// — the review-reading cluster's fall-through to the fan-out
+// (decideChainReported) — so an abstain reaching one of these rows is
+// a misrouted ask, and is named in the decision log rather than
+// recorded as the silent nothing
+// (§forgejo/observability/the-decision-log, §forgejo/decisions/actions).
+// ok reports whether the state calls for the action.
+func readyAtRow(a Action, e Event, s State) (Decision, bool) {
+	d, ans := readyTo(a, e, s)
+	switch ans {
+	case readyYes:
+		return d, true
+	case readyNo:
+		return d, false
+	}
+	return holdOff(fmt.Sprintf("the %s declaration abstains only where the asking row has a next question to fall through to; this row has none, so asking it here is a wiring fault", a)), false
 }
 
 // digestFor derives the revision a dispatch of the action is

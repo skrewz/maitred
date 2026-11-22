@@ -519,8 +519,8 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 		// (§forgejo/decisions/sync-set). The predicate answers the set
 		// question; this row owns only its pacing
 		// (§forgejo/decisions/actions).
-		d, ans := readyTo(ActionSync, e, s)
-		if ans != readyYes {
+		d, ready := readyAtRow(ActionSync, e, s)
+		if !ready {
 			return d
 		}
 		rev := digestFor(ActionSync, e, s)
@@ -539,8 +539,8 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 			// the re-firing: once nothing deletable remains, the sweep
 			// stops asking. The sweep's row is state-governed pacing
 			// territory (§forgejo/reconciliation/the-state-is-the-watermark).
-			d, ans := readyTo(ActionTeardownForest, e, s)
-			if ans != readyYes {
+			d, ready := readyAtRow(ActionTeardownForest, e, s)
+			if !ready {
 				return d
 			}
 			return stateGoverned(d)
@@ -558,8 +558,8 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 		// observation is a wiring fault, and the predicate answers it
 		// with the hold-off a missing digest owes
 		// (§forgejo/webhook/re-fetch).
-		d, ans := readyTo(ActionDecompose, e, s)
-		if ans != readyYes {
+		d, ready := readyAtRow(ActionDecompose, e, s)
+		if !ready {
 			return d
 		}
 		return d
@@ -574,14 +574,14 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 			// no gate, an open gate, or the digest comparison — one
 			// forest, one answer, whichever row asks
 			// (§forgejo/decisions/actionable-state-digest, s-git/maitred#209).
-			d, ans := readyTo(ActionDecompose, e, s)
-			if ans != readyYes {
+			d, ready := readyAtRow(ActionDecompose, e, s)
+			if !ready {
 				return d
 			}
 			return d
 		}
-		d, ans := readyTo(ActionWrapUp, e, s)
-		if ans != readyYes {
+		d, ready := readyAtRow(ActionWrapUp, e, s)
+		if !ready {
 			return d
 		}
 		return stateGoverned(d)
@@ -622,8 +622,8 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 	if issue != nil && issue.State == "open" && hasLabel(issue, LabelIdeation) {
 		return decideDecompose(e, issue, s, w)
 	}
-	d, ans := readyTo(ActionImplement, e, s)
-	if ans != readyYes {
+	d, ready := readyAtRow(ActionImplement, e, s)
+	if !ready {
 		return d
 	}
 	rev := digestFor(ActionImplement, e, s)
@@ -669,8 +669,8 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 		}
 		return decideDecompose(e, issue, s, w)
 	}
-	d, ans := readyTo(ActionReassess, e, s)
-	if ans != readyYes {
+	d, ready := readyAtRow(ActionReassess, e, s)
+	if !ready {
 		return d
 	}
 	rev := digestFor(ActionReassess, e, s)
@@ -699,8 +699,8 @@ func decideDecompose(e Event, issue *Issue, s State, w *Watermark) Decision {
 	if hasLabel(issue, LabelTeardownForest) {
 		return decideTeardown(e, issue, s, w)
 	}
-	d, ans := readyTo(ActionDecompose, e, s)
-	if ans != readyYes {
+	d, ready := readyAtRow(ActionDecompose, e, s)
+	if !ready {
 		return d
 	}
 	// The gate's answer is the same one the sweep's rows give for this
@@ -726,8 +726,8 @@ func decideDecompose(e Event, issue *Issue, s State, w *Watermark) Decision {
 // sweep's row (§forgejo/reconciliation/watermark-exemptions,
 // §forgejo/decisions/forest-teardown).
 func decideTeardown(e Event, issue *Issue, s State, w *Watermark) Decision {
-	d, ans := readyTo(ActionTeardownForest, e, s)
-	if ans != readyYes {
+	d, ready := readyAtRow(ActionTeardownForest, e, s)
+	if !ready {
 		return d
 	}
 	rev := digestFor(ActionTeardownForest, e, s)
@@ -804,8 +804,8 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 	// forest whose gate has not opened is held off upstream, by the
 	// seeding window (§forgejo/decisions/commissioning, s-git/maitred#151).
 	if !pr.Mergeable {
-		d, ans := readyTo(ActionRebase, e, s)
-		if ans != readyYes {
+		d, ready := readyAtRow(ActionRebase, e, s)
+		if !ready {
 			return d
 		}
 		rev := digestFor(ActionRebase, e, s)
@@ -851,8 +851,8 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 		return holdOff(fmt.Sprintf("PR %d is not open", pr.Number))
 	}
 	if !pr.Mergeable {
-		d, ans := readyTo(ActionRebase, e, s)
-		if ans != readyYes {
+		d, ready := readyAtRow(ActionRebase, e, s)
+		if !ready {
 			return d
 		}
 		rev := digestFor(ActionRebase, e, s)
@@ -949,7 +949,7 @@ func decideReviewFanOut(e Event, pr *PullRequest, s State, w *Watermark, labelRe
 	// (§forgejo/decisions/actions). A label-requested fan-out re-asks an
 	// approving lens, so it never reaches here
 	// (§forgejo/decisions/label-triggered-review).
-	held, _ := readyTo(ActionReview, e, s)
+	held, _ := readyAtRow(ActionReview, e, s)
 	return held
 }
 
