@@ -101,10 +101,7 @@ func TestActionDeclarations_DigestsMatchRowRevisions(t *testing.T) {
 		}
 	}
 	if got, want := digestFor(ActionSync, Event{}, st), syncSetRevision(issue, members, testLenses); got != want {
-		t.Errorf("digestFor(sync) with members = %q, want the set revision %q", got, want)
-	}
-	if got, want := digestFor(ActionSync, Event{}, State{Issue: issue}), issueRevision(issue); got != want {
-		t.Errorf("digestFor(sync) without member rows = %q, want the issue revision %q", got, want)
+		t.Errorf("digestFor(sync) = %q, want the set revision %q", got, want)
 	}
 }
 
@@ -263,7 +260,7 @@ func TestDeclarations_InputsNameTheVocabularyOfInputs(t *testing.T) {
 	owns := func(a Action, want ...string) {
 		t.Helper()
 		have := map[string]bool{}
-		for _, in := range declaredInputs(a) {
+		for _, in := range declarationFor(a).inputs {
 			have[in] = true
 		}
 		for _, in := range want {
@@ -281,7 +278,7 @@ func TestDeclarations_InputsNameTheVocabularyOfInputs(t *testing.T) {
 	// State fields the predicates read: a digest function must not
 	// consult nothing at all.
 	for _, a := range everyAction {
-		if all := declaredInputs(a); len(all) == 0 || strings.TrimSpace(strings.Join(all, " ")) == "" {
+		if all := declarationFor(a).inputs; len(all) == 0 || strings.TrimSpace(strings.Join(all, " ")) == "" {
 			t.Errorf("action %q declares an empty input set", a)
 		}
 	}

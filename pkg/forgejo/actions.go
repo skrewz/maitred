@@ -149,7 +149,7 @@ func init() {
 				"members' PRs", "members' PR reviews", "config.review lenses",
 			},
 			ready:  syncReady,
-			digest: syncSetOrIssueDigest,
+			digest: syncSetDigest,
 		},
 	}
 }
@@ -191,12 +191,6 @@ func declarationFor(a Action) actionDecl {
 	return decl
 }
 
-// declaredInputs names the input set an action's declaration reads
-// (§forgejo/decisions/inputs).
-func declaredInputs(a Action) []string {
-	return declarationFor(a).inputs
-}
-
 // readyTo asks an action's declared predicate whether the state calls
 // for it. The Decision carries the reason either answer owes the
 // decision log (§forgejo/observability/the-decision-log).
@@ -222,11 +216,12 @@ func foldComponents() []digestComponent {
 // issue row's activity revision — a tracker's with the engine-owned
 // region masked out (§forgejo/reconciliation/the-tracker-block);
 // prHeadDigest is the pull request's head sha; and the sync action's
-// digest is the whole landing set's revision, falling back to the
-// grouping issue's own revision while no member rows are attached
-// (the cascade's candidate path, before the set is read). A later
-// member of this chain re-keys these onto the digest of the declared
-// input set itself (s-git/maitred#258 scope note).
+// digest is the whole landing set's revision. The sync leg of the
+// unblock cascade reads the set before it dispatches
+// (dispatchSyncSet), so no declared digest is ever derived over a
+// state whose members are absent. A later member of this chain
+// re-keys these onto the digest of the declared input set itself
+// (s-git/maitred#258 scope note).
 func issueDigest(_ Event, s State) string {
 	if s.Issue == nil {
 		return ""
@@ -241,12 +236,9 @@ func prHeadDigest(_ Event, s State) string {
 	return s.PR.HeadSHA
 }
 
-func syncSetOrIssueDigest(_ Event, s State) string {
+func syncSetDigest(_ Event, s State) string {
 	if s.Issue == nil {
 		return ""
-	}
-	if len(s.SyncMembers) == 0 {
-		return issueRevision(s.Issue)
 	}
 	return syncSetRevision(s.Issue, s.SyncMembers, s.ReviewLenses)
 }
@@ -338,7 +330,9 @@ func reviewReady(_ Event, s State) (Decision, readyAnswer) {
 // rebaseReady is rebase's predicate: an open pull request the forge
 // reports not mergeable (§forgejo/decisions/transition-table). The
 // row that dispatched it names the delivery: an open event, or new
-// commits on a PR that already existed.
+// commits on a PR that already existed. Mergeability is the row's
+// entry condition rather than a fact the predicate restates: both
+// rows ask rebase only from a not-mergeable branch.
 func rebaseReady(e Event, s State) (Decision, readyAnswer) {
 	pr := s.PR
 	if pr == nil {
@@ -346,9 +340,6 @@ func rebaseReady(e Event, s State) (Decision, readyAnswer) {
 	}
 	if !prOpen(pr) {
 		return holdOff(fmt.Sprintf("PR %d is not open", pr.Number)), readyNo
-	}
-	if pr.Mergeable {
-		return Decision{}, readyNotApplicable
 	}
 	reason := fmt.Sprintf("PR %d synced with merge conflicts", pr.Number)
 	if e.Type == EventPROpened {
@@ -536,7 +527,9 @@ func wrapUpReady(_ Event, s State) (Decision, readyAnswer) {
 // ideation root carrying the order, still blocking at least one issue
 // the order would delete — a spared tracker is not one — because a
 // forest with nothing left to delete dispatches nothing, on either
-// path (§forgejo/decisions/forest-teardown, s-git/maitred#173).
+// path (§forgejo/decisions/forest-teardown, s-git/maitred#173). The
+// order label is the row's entry condition, both rows testing it
+// before asking, so the predicate does not restate it.
 func teardownForestReady(e Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
@@ -547,9 +540,6 @@ func teardownForestReady(e Event, s State) (Decision, readyAnswer) {
 	}
 	if !hasLabel(issue, LabelIdeation) {
 		return holdOffTeardownWithoutRoot(issue.Number), readyNo
-	}
-	if !hasLabel(issue, LabelTeardownForest) {
-		return Decision{}, readyNotApplicable
 	}
 	remaining := countDeletableMembers(s.Blocked)
 	if remaining == 0 {

@@ -1701,8 +1701,12 @@ func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
 		w = nil
 	}
 	// The cascade's watermark records the emitted action's declared
-	// digest: for the issue-path actions this is the re-fetched
-	// issue's revision (§forgejo/decisions/actions).
+	// digest, which for the issue-path actions is the re-fetched
+	// issue's revision. A sync-set candidate never reaches this line:
+	// dispatchCascade hands it to dispatchSyncSet, which reads the set
+	// before deriving anything, so the state built here carries
+	// exactly the object these actions read
+	// (§forgejo/decisions/actions, §forgejo/decisions/unblock-cascade).
 	rev := digestFor(cd.Action, Event{}, State{Issue: issue})
 	if alreadyDispatched(w, cd.Action, rev) {
 		return nil

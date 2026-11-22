@@ -276,7 +276,7 @@ type ForestDigestGate struct {
 
 // movedComponents names the components of the forest's actionable
 // state whose sub-digests differ between the two observations, in the
-// the fixed foldComponents order so the reason is deterministic, each
+// fixed order foldComponents gives so the reason is deterministic, each
 // named by its reporting phrase. A fold
 // that gained or lost a component entirely shows as that component
 // moving. A stored slot written before sub-digests existed carries no
@@ -880,19 +880,6 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 // review-following rows own the PR then; when the outstanding lenses
 // are all suppressed, the hold-off names them.
 func decideReviewFanOut(e Event, pr *PullRequest, s State, w *Watermark, labelRequested bool) Decision {
-	// The declaration's predicate answers the one question the fan-out
-	// is built on — is any lens owed an approval at head — and when
-	// every lens is satisfied that is the hold-off named; the row
-	// composes the per-lens dispatch and applies each lens's pacing
-	// (§forgejo/decisions/actions, §forgejo/decisions/review-lenses).
-	// A label-requested fan-out outranks the standing approvals, so
-	// the satisfied-chain answer is asked only when no label overrides
-	// it (§forgejo/decisions/label-triggered-review).
-	if !labelRequested {
-		if d, ans := readyTo(ActionReview, e, s); ans == readyNo {
-			return d
-		}
-	}
 	rev := digestFor(ActionReview, e, s)
 	var dispatched []LensDispatch
 	var satisfied, suppressed []string
@@ -956,7 +943,14 @@ func decideReviewFanOut(e Event, pr *PullRequest, s State, w *Watermark, labelRe
 	if len(suppressed) > 0 {
 		return holdOff(fmt.Sprintf("review already dispatched at revision %s for the outstanding lens(es) of PR %d: %s", pr.HeadSHA, pr.Number, strings.Join(suppressed, ", ")))
 	}
-	return holdOff(fmt.Sprintf("PR %d: every review lens (%s) holds an undismissed approval at head %s; the review-following rows decide", pr.Number, strings.Join(lensIdentities(s.ReviewLenses), ", "), pr.HeadSHA))
+	// Nothing was dispatched and nothing was suppressed, so every lens
+	// holds an undismissed approval at head: that is the declaration's
+	// answer, and the row asks it rather than restating it
+	// (§forgejo/decisions/actions). A label-requested fan-out re-asks an
+	// approving lens, so it never reaches here
+	// (§forgejo/decisions/label-triggered-review).
+	held, _ := readyTo(ActionReview, e, s)
+	return held
 }
 
 // lensStanding is one lens's standing against a revision.
