@@ -1022,79 +1022,62 @@ func TestForestWarnings_WarningsArePerReference(t *testing.T) {
 // TestForestWarnings_DeletedDeliveryIsHeldBack reproduces the failure
 // s-git/maitred#268 quotes: `warnings of forest ...: forgejo: HTTP 404`
 // is wrapped only by the warning walk, so it names a read inside the
-// walk, not a root's blocks read — here, the delivery's own read, the
-// pull request deleted since the listing that named it. That 404 is the
-// forge's definitive "no such object": a delivery that no longer exists
-// waits on nobody, so the stale warning is held back, the skip is logged
-// where the operator sees it, and the enumeration survives — every tick
-// dying with the whole view dark is the failure this reproduces
-// (§forgejo/observability/the-warnings-a-forest-carries,
-// §forgejo/webhook/re-fetch).
+// walk, not a root's blocks read — here, one of the delivery's own reads.
+// Each row erases the delivery at one of the two reads whose URL *is* it:
+// the pull request the listing named, deleted since; or its own
+// blocking-edge listing, answering 404 past the read that established it.
+// That 404 is the forge's definitive "no such object": a delivery that no
+// longer exists waits on nothing, so its stale warning is held back, the
+// hold is logged where the operator sees it, and the enumeration survives
+// — every tick dying with the whole view dark is the failure this
+// reproduces (§forgejo/observability/the-warnings-a-forest-carries,
+// §forgejo/webhook/re-fetch, s-git/maitred#268). Deleting either branch
+// must not leave its row green.
 func TestForestWarnings_DeletedDeliveryIsHeldBack(t *testing.T) {
-	var log bytes.Buffer
-	eng, api, _, _ := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log, nil)))
-	member := warningsMember(14, LabelAgenticAutoMerge)
-	warningsForest(api, member)
-	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
-	delete(api.pulls, pr.Number)
+	notFound := &APIError{StatusCode: 404, Message: "The target couldn't be found."}
+	for _, tc := range []struct {
+		name string
+		// erase takes the delivery away at one of its own reads.
+		erase func(*fakeAPI, int)
+		line  string
+	}{
+		{"the delivery's own pull-request read", func(f *fakeAPI, pr int) {
+			delete(f.pulls, pr)
+		}, "candidate delivery's read answers not found"},
+		{"the delivery's own blocking-edge listing", func(f *fakeAPI, pr int) {
+			f.issueBlocksErrOn = map[int]error{pr: notFound}
+		}, "forest warnings: holding a stale warning back: the delivery's own listing answers not found"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var log bytes.Buffer
+			eng, api, _, _ := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log, nil)))
+			member := warningsMember(14, LabelAgenticAutoMerge)
+			warningsForest(api, member)
+			pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+			tc.erase(api, pr.Number)
 
-	forests, err := eng.enumerateForests()
-	if err != nil {
-		t.Fatalf("enumerateForests: %v: a deleted delivery is an absence, not a failed read", err)
-	}
-	if !forests[0].WarningsWalked {
-		t.Error("warnings_walked = false, want the walk to have run")
-	}
-	if len(forests[0].Warnings) != 0 {
-		t.Fatalf("warnings = %+v, want none: the delivery that warned is gone", forests[0].Warnings)
-	}
-	// The skip is the fail-open finding's only diagnostic, so the level
-	// is the assertion: the handler here runs at the production default,
-	// and a line logged below it is not in this buffer to be found.
-	line := findEntry(t, parseLogLines(t, log.Bytes()),
-		"candidate delivery's read answers not found")
-	if line["level"] != "INFO" {
-		t.Errorf("level = %v, want INFO: the production handler would drop the skip", line["level"])
-	}
-	if line["delivery"] != "o/r#"+strconv.Itoa(pr.Number) {
-		t.Errorf("delivery = %v, want the reference whose read answered", line["delivery"])
-	}
-}
-
-// TestForestWarnings_DeletedDeliveryAtItsEdgeListingIsHeldBack: the rule's
-// fourth site, and the one the delivery's own pull-request read does not
-// cover — the delivery stands at the read that establishes it, and it is
-// the listing of its blocking edges that answers the `404`. That listing's
-// URL is the delivery's too, so the answer is the same absence: the warning
-// is held back, the skip is logged where the operator sees it, and the
-// enumeration survives. Deleting the branch must not leave this green
-// (§forgejo/observability/the-warnings-a-forest-carries,
-// §forgejo/webhook/re-fetch, s-git/maitred#268).
-func TestForestWarnings_DeletedDeliveryAtItsEdgeListingIsHeldBack(t *testing.T) {
-	var log bytes.Buffer
-	eng, api, _, _ := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log, nil)))
-	member := warningsMember(17, LabelAgenticAutoMerge)
-	warningsForest(api, member)
-	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
-	api.issueBlocksErrOn = map[int]error{pr.Number: &APIError{StatusCode: 404, Message: "The target couldn't be found."}}
-
-	forests, err := eng.enumerateForests()
-	if err != nil {
-		t.Fatalf("enumerateForests: %v: a delivery gone at its own edge listing is an absence, not a failed read", err)
-	}
-	if !forests[0].WarningsWalked {
-		t.Error("warnings_walked = false, want the walk to have run")
-	}
-	if len(forests[0].Warnings) != 0 {
-		t.Fatalf("warnings = %+v, want none: the delivery whose edges were to be read is gone", forests[0].Warnings)
-	}
-	line := findEntry(t, parseLogLines(t, log.Bytes()),
-		"forest warnings: holding a stale warning back: the delivery's own listing answers not found")
-	if line["level"] != "INFO" {
-		t.Errorf("level = %v, want INFO: the production handler would drop the skip", line["level"])
-	}
-	if line["delivery"] != "o/r#"+strconv.Itoa(pr.Number) {
-		t.Errorf("delivery = %v, want the reference whose read answered", line["delivery"])
+			forests, err := eng.enumerateForests()
+			if err != nil {
+				t.Fatalf("enumerateForests: %v: a delivery gone at its own read is an absence, not a failed read", err)
+			}
+			if !forests[0].WarningsWalked {
+				t.Error("warnings_walked = false, want the walk to have run")
+			}
+			if len(forests[0].Warnings) != 0 {
+				t.Fatalf("warnings = %+v, want none: the delivery that warned is gone", forests[0].Warnings)
+			}
+			// The hold is the fail-open finding's only diagnostic, so the
+			// level is the assertion: the handler here runs at the
+			// production default, and a line logged below it is not in this
+			// buffer to be found.
+			line := findEntry(t, parseLogLines(t, log.Bytes()), tc.line)
+			if line["level"] != "INFO" {
+				t.Errorf("level = %v, want INFO: the production handler would drop the hold", line["level"])
+			}
+			if line["delivery"] != "o/r#"+strconv.Itoa(pr.Number) {
+				t.Errorf("delivery = %v, want the reference whose read answered", line["delivery"])
+			}
+		})
 	}
 }
 
