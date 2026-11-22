@@ -285,6 +285,35 @@ func TestForests_DeletedRootIsSkipped(t *testing.T) {
 	}
 }
 
+// TestForests_EveryRootOfARepositoryGoneFailsTheEnumeration is the skip's
+// own limit: a repository whose every root read answered the forge's 404
+// is not reporting that all its forests are gone, since the teardown
+// closes roots rather than deleting them
+// (§forgejo/decisions/forest-teardown), so what it is reporting is a read
+// that stopped answering. The enumeration fails rather than recording the
+// empty set the skips would otherwise hand the view
+// (§forgejo/observability/the-outcomes-view, s-git/maitred#268).
+// TestForests_DeletedRootIsSkipped is the other half: one root gone among
+// live ones skips, and the view survives.
+func TestForests_EveryRootOfARepositoryGoneFailsTheEnumeration(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	api.repos = []Repository{outcomesRepo("o/out")}
+	notFound := &APIError{StatusCode: 404, Message: "The target couldn't be found."}
+	api.openIssues["out"] = []Issue{outcomesRoot(89, "gone root"), outcomesRoot(91, "gone too")}
+	api.issueBlocksErrOn = map[int]error{89: notFound, 91: notFound}
+
+	forests, err := eng.enumerateForests()
+	if err == nil {
+		t.Fatalf("enumerateForests = %+v, want an error: a repository answering absence for every root it listed is a broken read, not an empty forest set", forests)
+	}
+	if forests != nil {
+		t.Errorf("forests = %+v, want the partial result dropped", forests)
+	}
+	if !strings.Contains(err.Error(), "every forest root of o/out answers not found") {
+		t.Errorf("error %q, want it to name the repository whose roots all answered not found", err)
+	}
+}
+
 // TestForests_ScopeBackoffFailsClosed: a stale snapshot with a failed
 // listing waiting out the retry backoff is an error, never the empty
 // list a caller could read as "no outcomes repositories". The event
