@@ -131,8 +131,8 @@ type repoPair struct {
 	from, to *drawnRepo
 }
 
-// collapsedLines renders an aggregated work-order set, ordered by target then
-// source (§forgejo/renderer/the-source).
+// collapsedLines renders an aggregated work-order set, ordered by source, then
+// target (§forgejo/renderer/the-source).
 func collapsedLines(set map[string]repoPair) []string {
 	keys := make([]string, 0, len(set))
 	for key := range set {
