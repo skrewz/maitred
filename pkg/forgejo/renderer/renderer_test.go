@@ -528,7 +528,8 @@ func TestTrackerEdgesAreStatedNotDrawn(t *testing.T) {
 
 // TestRootEdgesAreImpliedNotDrawn: a blocking edge out of the ideation root
 // states which issues the forest holds, which the forest's own note line
-// already states, so no source line draws it — in either view
+// already states, so no source line draws it — in either view. A member's edge
+// into the root is a work order, not a membership statement, and stays drawn
 // (§forgejo/renderer/edge-classes, §forgejo/renderer/note-lines).
 func TestRootEdgesAreImpliedNotDrawn(t *testing.T) {
 	t.Parallel()
@@ -550,6 +551,8 @@ func TestRootEdgesAreImpliedNotDrawn(t *testing.T) {
 			{From: root, To: second},
 			{From: first, To: tracker},
 			{From: first, To: second},
+			{From: second, To: root},
+			{From: tracker, To: root},
 		},
 		Strokes: strokes(),
 	}
@@ -561,17 +564,19 @@ func TestRootEdgesAreImpliedNotDrawn(t *testing.T) {
 	if strings.Contains(got, "-.-") {
 		t.Errorf("a dotted edge out of the root was drawn:\n%s", got)
 	}
-	for _, drawn := range []string{"i_forest_1 ", " i_forest_1\n"} {
-		for _, line := range strings.Split(got, "\n") {
-			if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, drawn) || strings.HasSuffix(trimmed, drawn) {
-				t.Errorf("an edge at the root was drawn: %q", line)
-			}
+	for _, line := range strings.Split(got, "\n") {
+		if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "i_forest_1 ") {
+			t.Errorf("an edge out of the root was drawn: %q", line)
 		}
 	}
 	for _, want := range []string{
 		"%% forest forest#1 rendered by maitred",
+		// the tracker's edge into the root counts no peer into the fan, so
+		// it stays the one it had before that edge arrived
 		"%% tracker forest#2 fans to 1 issue (fan stated, not drawn)",
 		"i_forest_3 ==> i_tasks_4",
+		// a member's edge into the root is a work order and stays drawn
+		"i_tasks_4 ==> i_forest_1",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("want %q in the source, got:\n%s", want, got)
@@ -581,11 +586,7 @@ func TestRootEdgesAreImpliedNotDrawn(t *testing.T) {
 	// Collapsed, the root's repository is still declared first and a member's
 	// work order between repositories is still drawn
 	// (§forgejo/renderer/collapsing).
-	full, err := Render(graph, wideCeiling())
-	if err != nil {
-		t.Fatalf("Render: %v", err)
-	}
-	collapsed, err := Render(graph, Config{MaxSourceCharacters: len([]rune(full)) - 1, Location: aedt()})
+	collapsed, err := Render(graph, Config{MaxSourceCharacters: len([]rune(got)) - 1, Location: aedt()})
 	if err != nil {
 		t.Fatalf("Render collapsed: %v", err)
 	}
@@ -765,9 +766,6 @@ func TestCollapseNamesItself(t *testing.T) {
 		if !strings.Contains(small, want) {
 			t.Errorf("want %q in the collapsed source, got:\n%s", want, small)
 		}
-	}
-	if strings.Contains(small, "-.-") {
-		t.Errorf("the collapsed view drew a dotted edge out of the root:\n%s", small)
 	}
 	if strings.Contains(small, "tasks (2)</a>") || strings.Contains(small, "forest (2)</a>") {
 		t.Errorf("a collapsed node carried an anchor:\n%s", small)
