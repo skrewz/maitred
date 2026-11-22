@@ -1926,10 +1926,13 @@ func (e *Engine) dispatchSyncSet(cd CascadeDispatch, sender string) error {
 // a landing set — the state of the whole set, not of the grouping
 // issue alone (§forgejo/webhook/the-pipeline, §forgejo/state/watermark,
 // §forgejo/decisions/sync-set). What a dispatch's own watermark
-// records is the dispatched action's declared digest,
-// reached through the declaration table
-// (§forgejo/decisions/actions); the two agree by construction, the
-// actions reading an object key on the fact this names.
+// records is the dispatched action's declared digest, reached through
+// the declaration table (§forgejo/decisions/actions). Each action
+// reads one object, so its declared digest is the revision this
+// function derives for that object — an agreement the tests keep
+// rather than a coincidence of wording, since nothing in the types
+// forces it (TestDeclaredDigests_AgreeWithTheObjectRevision,
+// TestDispatch_WatermarkNamesTheLoggedRevision).
 func revisionFor(ev Event, st State) string {
 	// The set revision describes a landing set, so it takes
 	// precedence only on the path that attached members to the

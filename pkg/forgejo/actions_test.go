@@ -320,6 +320,64 @@ func TestReadyAtRow_NamesAnAbstainAsAFault(t *testing.T) {
 	}
 }
 
+// TestDeclaredDigests_AgreeWithTheObjectRevision pins the claim the
+// watermark rests on: the digest a dispatch is watermarked on and the
+// revision the decision log names and the re-fire stamp is keyed on
+// are two derivations of one fact, and for every action over every
+// state shape a write path hands them they answer with the same value
+// (§forgejo/state/watermark, §forgejo/webhook/the-pipeline,
+// §forgejo/decisions/actions). A re-key of one action's digest is
+// therefore an edit to that declaration, to revisionFor, to the two
+// sections named above and to this test — not to one line.
+func TestDeclaredDigests_AgreeWithTheObjectRevision(t *testing.T) {
+	for _, path := range []struct {
+		// name is the write path whose state the case stands for.
+		name    string
+		ev      Event
+		st      State
+		actions []Action
+	}{
+		{
+			name:    "the event pipeline's issue leg",
+			ev:      Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7},
+			st:      State{Issue: openIssue()},
+			actions: []Action{ActionImplement, ActionReassess, ActionDecompose, ActionWrapUp, ActionTeardownForest},
+		},
+		{
+			// The cascade's issue leg holds the issue and its blockers
+			// and nothing else, so a digest may not need more than that.
+			name:    "the unblock cascade's issue leg",
+			ev:      Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7},
+			st:      State{Issue: trackerIssue()},
+			actions: []Action{ActionImplement, ActionWrapUp},
+		},
+		{
+			name:    "the event pipeline's PR leg",
+			ev:      Event{Type: EventPRReviewed, Repo: "o/r", Kind: KindPR, Number: 9},
+			st:      State{PR: openPR("sha-head"), ReviewLenses: testLenses},
+			actions: []Action{ActionReview, ActionFixFeedback, ActionMergeOrWait, ActionRebase},
+		},
+		{
+			// Both sync writes — the sweep's row and dispatchSyncSet —
+			// read the set the same way, so the set revision is what
+			// both derivations answer.
+			name:    "the sweep's sync row and the cascade's set leg",
+			ev:      Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: 11},
+			st:      State{Issue: syncIssueFixture(11), SyncMembers: []SyncMember{syncMemberFixture(4, 40)}, ReviewLenses: testLenses},
+			actions: []Action{ActionSync},
+		},
+	} {
+		t.Run(path.name, func(t *testing.T) {
+			for _, a := range path.actions {
+				digest, rev := digestFor(a, path.ev, path.st), revisionFor(path.ev, path.st)
+				if digest != rev {
+					t.Errorf("digestFor(%s) = %q, want the revision the log records, %q", a, digest, rev)
+				}
+			}
+		})
+	}
+}
+
 // TestDeclarations_InputsNameTheVocabularyOfInputs spot-checks that
 // the declared sets speak the shared vocabulary of the two state
 // families the specification names — state facts and the declared

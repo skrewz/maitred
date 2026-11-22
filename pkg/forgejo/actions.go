@@ -22,8 +22,12 @@ import (
 // §forgejo/reconciliation/the-state-is-the-watermark). The digest is
 // the revision the watermark records under the action's name
 // (§forgejo/state/watermark); which fact each action keys on today is
-// what the declarations state, and a later change to that key edits
-// exactly one line (§forgejo/decisions/transition-table).
+// what the declarations state. Re-keying one is an edit to that
+// declaration and to revisionFor, which derives the revision the
+// decision log names and the re-fire stamp is keyed on — two
+// derivations answering with one value, which
+// TestDeclaredDigests_AgreeWithTheObjectRevision keeps them doing
+// (§forgejo/decisions/transition-table).
 
 // readyAnswer is the predicate's verdict: the state calls for the
 // action (readyYes), does not (readyNo), or the predicate abstains and

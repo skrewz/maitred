@@ -2112,6 +2112,127 @@ func TestHandler_CrossRepoCascade(t *testing.T) {
 	}
 }
 
+// TestDispatch_WatermarkNamesTheLoggedRevision walks the write paths
+// that record a dispatch's watermark and checks each records the
+// revision the decision log names for the same dispatch. The two are
+// separate derivations — the dispatched action's declared digest and
+// the object's revision — and where they part the log describes a
+// dispatch at a revision the store never recorded
+// (§forgejo/state/watermark, §forgejo/webhook/the-pipeline,
+// §forgejo/decisions/actions).
+func TestDispatch_WatermarkNamesTheLoggedRevision(t *testing.T) {
+	t.Run("the pipeline's issue and PR legs", func(t *testing.T) {
+		cases := []struct {
+			name      string
+			eventType string
+			action    string
+			payload   map[string]any
+			key       Key
+			// fanOut records its revisions per subject slot rather than
+			// in the watermark's main slot
+			// (§forgejo/state/watermark).
+			fanOut bool
+			setup  func(api *fakeAPI)
+		}{
+			{
+				name: "implement on an opened issue", eventType: "issues", action: "opened",
+				payload: issuePayload("o/r", 7, "opened"),
+				key:     Key{Repo: "o/r", Kind: KindIssue, Number: 7},
+				setup:   func(api *fakeAPI) { api.issues[7] = testIssue(7, "open") },
+			},
+			{
+				name: "reassess on an edited issue", eventType: "issues", action: "edited",
+				payload: issuePayload("o/r", 7, "edited"),
+				key:     Key{Repo: "o/r", Kind: KindIssue, Number: 7},
+				setup:   func(api *fakeAPI) { api.issues[7] = testIssue(7, "open") },
+			},
+			{
+				name: "rebase on a PR opened with conflicts", eventType: "pull_request", action: "opened",
+				payload: prPayload("o/r", 9, "opened"),
+				key:     Key{Repo: "o/r", Kind: KindPR, Number: 9},
+				setup:   func(api *fakeAPI) { api.pulls[9] = testPR(9, "open", false) },
+			},
+			{
+				name: "review fan-out on an opened PR", eventType: "pull_request", action: "opened",
+				payload: prPayload("o/r", 9, "opened"),
+				key:     Key{Repo: "o/r", Kind: KindPR, Number: 9},
+				fanOut:  true,
+				setup:   func(api *fakeAPI) { api.pulls[9] = testPR(9, "open", true) },
+			},
+			{
+				name: "merge-or-wait on an approved opted-in PR", eventType: "pull_request_review_approved", action: "approved",
+				payload: prPayload("o/r", 9, "approved"),
+				key:     Key{Repo: "o/r", Kind: KindPR, Number: 9},
+				setup: func(api *fakeAPI) {
+					api.pulls[9] = optedInDelivery(testPR(9, "open", true), api, 4)
+					api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
+				},
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				eng, api, q, store := newTestEngine(t)
+				h := NewHandler(eng, "s3cret", nil)
+				tc.setup(api)
+				rec := serve(t, h, signedRequest(t, "s3cret", tc.eventType, tc.action, tc.payload))
+				if rec.Code != http.StatusNoContent {
+					t.Fatalf("status = %d, want 204", rec.Code)
+				}
+				if len(q.all()) != 1 {
+					t.Fatalf("got %d tasks, want 1", len(q.all()))
+				}
+				w, err := store.Load(tc.key)
+				if err != nil {
+					t.Fatalf("Load: %v", err)
+				}
+				if w == nil {
+					t.Fatal("the dispatch recorded no watermark")
+				}
+				logged := decisionFor(t, eng, tc.key)
+				if tc.fanOut {
+					if len(w.Subjects) == 0 {
+						t.Fatal("the fan-out recorded no subject slots")
+					}
+					for lens, slot := range w.Subjects {
+						if slot.Revision != logged.Revision {
+							t.Errorf("the %s slot records revision %q, the decision log names %q", lens, slot.Revision, logged.Revision)
+						}
+					}
+					return
+				}
+				if logged.Revision != w.Revision {
+					t.Errorf("the decision log names revision %q, the watermark records %q",
+						logged.Revision, w.Revision)
+				}
+			})
+		}
+	})
+
+	t.Run("the cascade's issue leg", func(t *testing.T) {
+		eng, api, q, store := newTestEngine(t)
+		api.issues[10] = testIssue(10, "open")
+		key := Key{Repo: "o/r", Kind: KindIssue, Number: 10}
+		cd := CascadeDispatch{Key: key, Action: ActionImplement}
+		if err := eng.dispatchCascade(cd, "alice"); err != nil {
+			t.Fatalf("dispatchCascade: %v", err)
+		}
+		if len(q.all()) != 1 {
+			t.Fatalf("got %d tasks, want 1 (implement for issue 10)", len(q.all()))
+		}
+		w, err := store.Load(key)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if w == nil {
+			t.Fatal("the cascade recorded no watermark")
+		}
+		ev := Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 10, Sender: "alice"}
+		if want := revisionFor(ev, State{Issue: api.issues[10]}); w.Revision != want {
+			t.Errorf("the cascade's watermark records %q, want the revision the leg's own state gives, %q", w.Revision, want)
+		}
+	})
+}
+
 // decisionFor returns the recorded decision for one key
 // (§forgejo/observability/the-decision-log).
 func decisionFor(t *testing.T, eng *Engine, k Key) DecisionRecord {

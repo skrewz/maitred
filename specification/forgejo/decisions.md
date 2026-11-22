@@ -183,8 +183,9 @@ code: its input set, its ready predicate over that set, and the
 digest a dispatch is watermarked on. The decision path reaches an
 action's inputs, predicate and digest through that declaration, so no
 row states those facts beside it a second time; the digest each
-action declares today is the revision that path already keys on, and
-re-keying one is a deliberate edit to one line of the declaration
+action declares today is the revision that path already keys on; re-keying
+one edits that declaration and the object revision the pipeline names
+(§forgejo/webhook/the-pipeline), whose agreement the tests pin
 (§forgejo/state/watermark). The `decompose` fold's component set is
 drawn from that action's declaration rather than from a list beside
 the fold (§forgejo/decisions/actionable-state-digest). The Inputs
