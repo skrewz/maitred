@@ -181,16 +181,19 @@ The action names form the enum the engine config maps to canned
 prompts. Each action carries exactly one declaration in the decision
 code: its input set, its ready predicate over that set, and the
 digest a dispatch is watermarked on. The decision path reaches an
-action's inputs, predicate and digest through that declaration, so no
-row states those facts beside it a second time; the digest each
+action's predicate and digest through that declaration, so no row
+states those facts beside it a second time; the declaration *records*
+the input set — the refusal of undeclared reads that will one day
+check a predicate against it is a later member of this chain
+(§forgejo/decisions/inputs). The digest each
 action declares today is the revision that path already keys on; re-keying
 one edits that declaration and the object revision the pipeline names
 (§forgejo/webhook/the-pipeline), whose agreement the tests pin
 (§forgejo/state/watermark). The `decompose` fold's component set is
 drawn from that action's declaration rather than from a list beside
 the fold (§forgejo/decisions/actionable-state-digest). The Inputs
-column names each action's declared set, in lockstep with the code
-that consults it (§forgejo/decisions/inputs).
+column names each action's declared set, in lockstep with the
+declaration that records it (§forgejo/decisions/inputs).
 
 | Action | Dispatched when | Inputs |
 |---|---|---|
@@ -1114,9 +1117,11 @@ alone. Both guards are inert when the identity is unset.
 
 The enumeration above is the vocabulary the action declarations name:
 each action carries one declaration (§forgejo/decisions/actions)
-naming the subset of these facts its predicate reads, and the
-decision path consults an action's inputs through that declaration —
-never through a list the code merely agrees with.
+naming the subset of these facts its predicate reads. The declaration
+records that set, in one place; the refusal of undeclared reads that
+will one day check a predicate against it is a later member of this
+chain, so today the path records inputs through the declaration rather
+than consulting it.
 
 ## Actionable-state digest
 

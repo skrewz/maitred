@@ -10,10 +10,12 @@ import (
 // Every action the decision function can name carries exactly one
 // declaration: the input set its predicate reads, the ready predicate
 // over that set, and the digest a dispatch is watermarked on. The
-// decision path reaches an action's inputs, predicate and digest
-// through this table — the rows in decisions.go neither restate the
-// digest beside a dispatch nor carry a private readiness rule the
-// declaration does not name.
+// decision path reaches an action's predicate and digest through this
+// table — the rows in decisions.go neither restate the digest beside a
+// dispatch nor carry a private readiness rule the declaration does not
+// name. The input set is recorded rather than consulted: the refusal
+// of undeclared reads that will one day check a predicate against it
+// is a later member of this chain (§forgejo/decisions/inputs).
 //
 // The predicate answers the question "does this state call for this
 // action", one answer whichever path asks it; how a ready row is
