@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"log/slog"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -286,31 +287,75 @@ func TestForests_DeletedRootIsSkipped(t *testing.T) {
 }
 
 // TestForests_EveryRootOfARepositoryGoneFailsTheEnumeration is the skip's
-// own limit: a repository whose every root read answered the forge's 404
-// is not reporting that all its forests are gone, since the teardown
-// closes roots rather than deleting them
+// own limit and its floor. A repository whose every root read answered the
+// forge's 404 is not reporting that all its forests are gone, since the
+// teardown closes roots rather than deleting them
 // (§forgejo/decisions/forest-teardown), so what it is reporting is a read
-// that stopped answering. The enumeration fails rather than recording the
-// empty set the skips would otherwise hand the view
-// (§forgejo/observability/the-outcomes-view, s-git/maitred#268).
-// TestForests_DeletedRootIsSkipped is the other half: one root gone among
-// live ones skips, and the view survives.
+// that stopped answering, and the enumeration fails rather than recording
+// the empty set the skips would otherwise hand the view
+// (§forgejo/observability/the-outcomes-view, s-git/maitred#268). One 404
+// is no evidence about a set, though, so the guard speaks only where a
+// second root could have contradicted it: a repository whose only root
+// answers 404 keeps the skip, and the other repositories' forests with
+// it. TestForests_DeletedRootIsSkipped is the third case: one root gone
+// among live ones skips, and the view survives.
 func TestForests_EveryRootOfARepositoryGoneFailsTheEnumeration(t *testing.T) {
-	eng, api, _, _ := newTestEngine(t)
-	api.repos = []Repository{outcomesRepo("o/out")}
 	notFound := &APIError{StatusCode: 404, Message: "The target couldn't be found."}
-	api.openIssues["out"] = []Issue{outcomesRoot(89, "gone root"), outcomesRoot(91, "gone too")}
-	api.issueBlocksErrOn = map[int]error{89: notFound, 91: notFound}
+	cases := []struct {
+		name    string
+		mutate  func(api *fakeAPI)
+		wantErr string
+		want    []string
+	}{
+		{
+			name: "every root of a repository that listed several",
+			mutate: func(api *fakeAPI) {
+				api.repos = []Repository{outcomesRepo("o/out")}
+				api.openIssues["out"] = []Issue{outcomesRoot(89, "gone root"), outcomesRoot(91, "gone too")}
+				api.issueBlocksErrOn = map[int]error{89: notFound, 91: notFound}
+			},
+			wantErr: "every forest root of o/out answers not found",
+		},
+		{
+			name: "the only root of a repository that listed one",
+			mutate: func(api *fakeAPI) {
+				api.repos = []Repository{outcomesRepo("o/out"), outcomesRepo("o/other")}
+				api.openIssues["out"] = []Issue{outcomesRoot(89, "the one root, deleted")}
+				api.openIssues["other"] = []Issue{outcomesRoot(120, "root of a healthy repository")}
+				api.issueBlocksErrOn = map[int]error{89: notFound}
+			},
+			want: []string{"o/other#120"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, _, _ := newTestEngine(t)
+			tc.mutate(api)
 
-	forests, err := eng.enumerateForests()
-	if err == nil {
-		t.Fatalf("enumerateForests = %+v, want an error: a repository answering absence for every root it listed is a broken read, not an empty forest set", forests)
-	}
-	if forests != nil {
-		t.Errorf("forests = %+v, want the partial result dropped", forests)
-	}
-	if !strings.Contains(err.Error(), "every forest root of o/out answers not found") {
-		t.Errorf("error %q, want it to name the repository whose roots all answered not found", err)
+			forests, err := eng.enumerateForests()
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("enumerateForests = %+v, want an error: a repository answering absence for every root it listed is a broken read, not an empty forest set", forests)
+				}
+				if forests != nil {
+					t.Errorf("forests = %+v, want the partial result dropped", forests)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("error %q, want it to name the repository whose roots all answered not found", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("enumerateForests: %v: one 404 is no evidence about a set of roots; the single root skips and the view survives", err)
+			}
+			got := make([]string, 0, len(forests))
+			for _, f := range forests {
+				got = append(got, forestRef(f.Repository, f.Root.Number))
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("forests = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

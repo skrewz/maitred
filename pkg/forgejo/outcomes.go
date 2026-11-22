@@ -428,7 +428,9 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 			}
 			forests = append(forests, forest)
 		}
-		if rootsGone > 0 && rootsGone == rootsRead {
+		// The exception's limit: a wholly-404 repository with roots enough to
+		// speak for a set (§forgejo/observability/the-outcomes-view).
+		if rootsGone > 0 && rootsRead > 1 && rootsGone == rootsRead {
 			return nil, fmt.Errorf("forgejo: outcomes: every forest root of %s answers not found, which no healthy read of a forest set answers", entered)
 		}
 	}

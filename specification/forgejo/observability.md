@@ -132,13 +132,16 @@ the steady state. The same `404` is also what a row the token cannot see
 answers, so the row is skipped with a line naming the forest that
 skipped (§forgejo/webhook/re-fetch); every other failure of the walk
 still fails the whole enumeration. A repository whose **every** root
-answers that `404` fails the enumeration rather than listing no forest:
-the teardown closes roots rather than deleting them, so a repository
-answering *absence* for every root its own listing named is reporting a
-read that stopped answering, not a forest set emptied — where one deleted
-root among live ones is the race the skip covers. The walk reads one
-stateless listing of each outcomes repository — every issue of it, open and
-closed — and keeps each issue
+answers that `404`, and whose listing named more than one root, fails
+the enumeration rather than listing no forest: the teardown closes roots
+rather than deleting them, so a repository answering *absence* for every
+root its own listing named is reporting a read that stopped answering,
+not a forest set emptied — where one deleted root among live ones is the
+race the skip covers. The guard's floor is that evidence: one `404` says
+nothing about a set, so a repository whose **only** root answers it keeps
+the skip, which is the deleted row s-git/maitred#268 was filed against.
+The walk reads one stateless listing of each outcomes repository — every
+issue of it, open and closed — and keeps each issue
 number once, so a forest whose root closed while its tracker stayed open
 is still enumerated, one whose tickets have both closed is enumerated as
 past, an issue that changes state mid-walk cannot arrive on both sides
