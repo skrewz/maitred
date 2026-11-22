@@ -1,6 +1,8 @@
 package forgejo
 
 import (
+	"bytes"
+	"log/slog"
 	"strconv"
 	"strings"
 	"testing"
@@ -1014,5 +1016,163 @@ func TestForestWarnings_WarningsArePerReference(t *testing.T) {
 		if again[i].Kind != warns[i].Kind || again[i].Repository != warns[i].Repository || again[i].Number != warns[i].Number {
 			t.Errorf("second enumeration's warnings[%d] = %+v, want the first's %+v", i, again[i], warns[i])
 		}
+	}
+}
+
+// TestForestWarnings_DeletedDeliveryIsHeldBack reproduces the failure
+// s-git/maitred#268 quotes: `warnings of forest ...: forgejo: HTTP 404`
+// is wrapped only by the warning walk, so it names a read inside the
+// walk, not a root's blocks read — here, the delivery's own read, the
+// pull request deleted since the listing that named it. That 404 is the
+// forge's definitive "no such object": a delivery that no longer exists
+// waits on nobody, so the stale warning is held back, the skip is logged
+// where the operator sees it, and the enumeration survives — every tick
+// dying with the whole view dark is the failure this reproduces
+// (§forgejo/observability/the-warnings-a-forest-carries,
+// §forgejo/webhook/re-fetch).
+func TestForestWarnings_DeletedDeliveryIsHeldBack(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, _, _ := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log, nil)))
+	member := warningsMember(14, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	delete(api.pulls, pr.Number)
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v: a deleted delivery is an absence, not a failed read", err)
+	}
+	if !forests[0].WarningsWalked {
+		t.Error("warnings_walked = false, want the walk to have run")
+	}
+	if len(forests[0].Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none: the delivery that warned is gone", forests[0].Warnings)
+	}
+	// The skip is the fail-open finding's only diagnostic, so the level
+	// is the assertion: the handler here runs at the production default,
+	// and a line logged below it is not in this buffer to be found.
+	line := findEntry(t, parseLogLines(t, log.Bytes()),
+		"member delivers nothing: its delivery's read answers not found")
+	if line["level"] != "INFO" {
+		t.Errorf("level = %v, want INFO: the production handler would drop the skip", line["level"])
+	}
+	if line["delivery"] != "o/r#"+strconv.Itoa(pr.Number) {
+		t.Errorf("delivery = %v, want the reference whose read answered", line["delivery"])
+	}
+}
+
+// TestForestWarnings_DeletedMemberIsHeldBack: the walk's other member
+// read answers the same way — a human-task member deleted while its
+// blocking-edge row still dangles in the root's listing answers the
+// blockers read with 404. The member is not waiting on anyone, so its
+// warning is held back and the enumeration survives, while a failure
+// that is not the forge's definitive answer still fails the walk whole
+// (§forgejo/observability/the-warnings-a-forest-carries,
+// §forgejo/webhook/re-fetch, s-git/maitred#268).
+func TestForestWarnings_DeletedMemberIsHeldBack(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, _, _ := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log, nil)))
+	member := warningsMember(15, LabelHumanTask)
+	warningsForest(api, member)
+	delete(api.issues, member.Number)
+	api.issueDepsErrOn = map[int]error{member.Number: &APIError{StatusCode: 404, Message: "The target couldn't be found."}}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v: a deleted member is an absence, not a failed read", err)
+	}
+	if len(forests[0].Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none: the member that warned is gone", forests[0].Warnings)
+	}
+	line := findEntry(t, parseLogLines(t, log.Bytes()),
+		"forest warnings: member not found; nothing waits on it")
+	if line["level"] != "INFO" {
+		t.Errorf("level = %v, want INFO: the production handler would drop the skip", line["level"])
+	}
+	if line["member"] != "o/r#15" {
+		t.Errorf("member = %v, want the reference whose read answered", line["member"])
+	}
+}
+
+// TestForestWarnings_DeletedMemberStillChecksItsDelivery: one object's
+// absence silences its own warning and nobody else's. A member carrying
+// both `human-task` and an auto-merge label answers its own blockers
+// read with 404, which holds the human-task warning back — but the pull
+// request delivering that member is a different object, read elsewhere,
+// and its stall is still a person's wait the view must publish
+// (§forgejo/observability/the-warnings-a-forest-carries,
+// s-git/maitred#268).
+func TestForestWarnings_DeletedMemberStillChecksItsDelivery(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	member := warningsMember(16, LabelHumanTask, LabelAgenticAutoMerge)
+	warningsForest(api, member)
+	pr := approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+	// The member is deleted: its issue read answers the way the resolving
+	// loop already reads a dangling reference, and its blockers read
+	// answers the way the walk's own member read does.
+	delete(api.issues, member.Number)
+	api.issueDepsErrOn = map[int]error{member.Number: &APIError{StatusCode: 404, Message: "The target couldn't be found."}}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v", err)
+	}
+	warns := forests[0].Warnings
+	if len(warns) != 1 {
+		t.Fatalf("warnings = %+v, want the one stale delivery of the member whose own read 404s", warns)
+	}
+	if warns[0].Kind != WarningStaleAgenticMerge || warns[0].Number != pr.Number {
+		t.Errorf("warning = %+v, want the stale merge of o/r#%d: the member's absence is not the delivery's",
+			warns[0], pr.Number)
+	}
+}
+
+// TestForestWarnings_FailedNotFoundReadFailsTheEnumeration: the `404`
+// the walk reads as an absence is the answer of the read whose URL *is*
+// the member or the delivery. Every other `404` in the walk's fan-out
+// names some other object — a listing, an edge row, an issue the
+// delivery mentions — and reading it as the delivery's absence would
+// hold a real stall back while `warnings_walked: true` published the
+// forest as checked and clear, which is the state the fail-closed rule
+// refuses (§forgejo/observability/the-warnings-a-forest-carries,
+// s-git/maitred#268).
+func TestForestWarnings_FailedNotFoundReadFailsTheEnumeration(t *testing.T) {
+	notFound := &APIError{StatusCode: 404, Message: "The target couldn't be found."}
+	for _, tc := range []struct {
+		name string
+		fail func(*fakeAPI)
+	}{
+		{"pull request listing", func(f *fakeAPI) { f.listPullsErr = map[string]error{"r": notFound} }},
+		{"blocking-edge row read", func(f *fakeAPI) {
+			f.blocks[926] = append(f.blocks[926], Issue{
+				Number: 611, Title: "edge", State: "open", Repository: "o/r",
+				Labels: []string{LabelAgenticSyncMerge}, UpdatedAt: testUpdatedAt,
+			})
+			f.issueBlocksErrOn = map[int]error{611: notFound}
+		}},
+		{"connected issue's blockers read", func(f *fakeAPI) {
+			f.blocks[926] = append(f.blocks[926], Issue{
+				Number: 612, Title: "edge", State: "open", Repository: "o/r",
+				UpdatedAt: testUpdatedAt,
+			})
+			f.issueDepsErrOn = map[int]error{612: notFound}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, _, _ := newTestEngine(t)
+			member := warningsMember(26, LabelAgenticAutoMerge)
+			warningsForest(api, member)
+			approvedDelivery(t, api, member, time.Now().Add(-3*time.Hour))
+			tc.fail(api)
+
+			forests, err := eng.enumerateForests()
+			if err == nil {
+				t.Fatalf("enumerateForests = %+v, want the 404 on the %s read to fail the walk: "+
+					"it names an object other than the member or its delivery", forests, tc.name)
+			}
+			if forests != nil {
+				t.Errorf("forests = %+v, want the partial result dropped", forests)
+			}
+		})
 	}
 }

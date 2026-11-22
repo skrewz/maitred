@@ -124,13 +124,14 @@ absent**: a forest without its gate is exactly the situation a human
 needs to see, so the view never papers over it by dropping the row. An
 `outcome` issue that no ideation issue blocks is not a forest and is
 not listed. A root whose blocks read answers `404` — the forge's
-definitive "no such issue", the answer a root deleted by
-`teardown-forest` gives while its row still stands in a listing already
-made (§forgejo/decisions/forest-teardown, §forgejo/webhook/re-fetch) —
-lists no forest: the view pictures what exists, and a deleted root no
-longer exists, so the row is skipped with the skip logged. That is the
-lifecycle's ordinary answer, not a failed read; every other failure of
-the walk still fails the whole enumeration.
+definitive "no such issue" — lists no forest: the root was deleted
+between the listing that made the row and the read of it, and the
+teardown order closes roots rather than deleting them
+(§forgejo/decisions/forest-teardown), so this is race cover rather than
+the steady state. The same `404` is also what a row the token cannot see
+answers, so the row is skipped with a line naming the forest that
+skipped (§forgejo/webhook/re-fetch); every other failure of the walk
+still fails the whole enumeration.
 The walk reads one stateless listing of each outcomes
 repository — every issue of it, open and closed — and keeps each issue
 number once, so a forest whose root closed while its tracker stayed open
@@ -574,7 +575,19 @@ unchecked forest as a healthy one. That is the fail-closed rule the view
 already applies to its own reads, taken to the wider surface the warnings
 touch — the whole view goes rather than one forest going quietly, which
 is the trade the rule makes on purpose
-(§forgejo/observability/the-outcomes-view).
+(§forgejo/observability/the-outcomes-view). The forge's definitive `404`
+excepts itself, and only at the read whose URL *is* the object — a member's
+own blockers read, or the delivery's own reads on the delivery walk — which
+says *that* object has been deleted since the listing that carried it, and a
+wait that is gone waits on nobody: its warning is held back with a logged
+line naming the reference that answered, the ordinary answer a dangling
+reference already gets on the merge path (§forgejo/webhook/re-fetch). The
+logged line is there for the reason the pairing's skipped row is
+(§forgejo/observability/the-outcomes-view). A `404` from any read further
+down the fan-out names some other object — an edge row, a listing, an issue
+the delivery mentions — and reading it as the delivery's absence would hold
+a real stall back while `warnings_walked: true` published the forest as
+checked; it fails the walk with every other failure.
 
 A warning's title and HTML URL are text their authors wrote, in
 repositories the view did not previously name. The page that renders a
