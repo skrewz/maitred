@@ -336,9 +336,13 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 // test admitted first, so a blocking-edge row cannot send the engine's
 // token where no role names it (§forgejo/webhook/repository-roles,
 // §forgejo/observability/the-warnings-a-forest-carries). A failed read
-// fails the enumeration. The list is
-// empty — never nil — when no repository holds the role. A non-nil error
-// means a read failed — the organisation listing, an issue listing, a
+// fails the enumeration — save the forge's definitive "no such issue", at
+// the read that first asks whether a root, member or delivery is there,
+// which says that object was deleted: the row or warning it stood on drops
+// out, with a logged line naming it; the exception's limits are the spec's
+// (§forgejo/observability/the-outcomes-view). The list is empty — never nil
+// — when no repository holds the role. A non-nil error means a read failed —
+// the organisation listing, an issue listing, a
 // blocks read, a scope lookup, or one of the warning reads — each
 // wrapped with the repository or issue it concerned, and the partial
 // result is dropped: a failed read must not read as an empty set of
@@ -365,6 +369,7 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 		// duplicate neither the forest nor its count
 		// (§forgejo/observability/the-outcomes-view).
 		seen := make(map[int]bool, len(rows))
+		rootsRead, rootsGone := 0, 0
 		for j := range rows {
 			issue := &rows[j]
 			if issue.IsPull || !hasLabel(issue, LabelIdeation) || seen[issue.Number] {
@@ -374,7 +379,18 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 			root := forestIssue(*issue, entered)
 			forest := Forest{Repository: root.Repository, Root: root}
 			blocked, err := e.api.IssueBlocks(owner, name, issue.Number)
+			rootsRead++
 			if err != nil {
+				if isNotFound(err) {
+					rootsGone++
+					// The root itself is gone; every other failure is a read
+					// of a forest that stands (§forgejo/webhook/re-fetch,
+					// s-git/maitred#268).
+					e.log.Info("outcomes: forest root not found; the forest is no longer listed",
+						"forest", forestRef(root.Repository, issue.Number),
+						"error", err)
+					continue
+				}
 				return nil, fmt.Errorf("forgejo: outcomes: issues %s#%d blocks: %w", root.Repository, issue.Number, err)
 			}
 			for k := range blocked {
@@ -404,6 +420,11 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 				forest.Warnings = []ForestWarning{}
 			}
 			forests = append(forests, forest)
+		}
+		// The exception's limit: a wholly-404 repository with roots enough to
+		// speak for a set (§forgejo/observability/the-outcomes-view).
+		if rootsGone > 0 && rootsRead > 1 && rootsGone == rootsRead {
+			return nil, fmt.Errorf("forgejo: outcomes: every forest root of %s answers not found, which no healthy read of a forest set answers", entered)
 		}
 	}
 	return forests, nil

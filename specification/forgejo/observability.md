@@ -123,8 +123,25 @@ blocks no tracker — is listed anyway, **with the tracker stated as
 absent**: a forest without its gate is exactly the situation a human
 needs to see, so the view never papers over it by dropping the row. An
 `outcome` issue that no ideation issue blocks is not a forest and is
-not listed. The walk reads one stateless listing of each outcomes
-repository — every issue of it, open and closed — and keeps each issue
+not listed. A root whose blocks read answers `404` — the forge's
+definitive "no such issue" — lists no forest: the root was deleted
+between the listing that made the row and the read of it, and the
+teardown order closes roots rather than deleting them
+(§forgejo/decisions/forest-teardown), so this is race cover rather than
+the steady state. The same `404` is also what a row the token cannot see
+answers, so the row is skipped with a line naming the forest that
+skipped (§forgejo/webhook/re-fetch); every other failure of the walk
+still fails the whole enumeration. A repository whose **every** root
+answers that `404`, and whose listing named more than one root, fails
+the enumeration rather than listing no forest: the teardown closes roots
+rather than deleting them, so a repository answering *absence* for every
+root its own listing named is reporting a read that stopped answering,
+not a forest set emptied — where one deleted root among live ones is the
+race the skip covers. The guard's floor is that evidence: one `404` says
+nothing about a set, so a repository whose **only** root answers it keeps
+the skip, which is the deleted row s-git/maitred#268 was filed against.
+The walk reads one stateless listing of each outcomes repository — every
+issue of it, open and closed — and keeps each issue
 number once, so a forest whose root closed while its tracker stayed open
 is still enumerated, one whose tickets have both closed is enumerated as
 past, an issue that changes state mid-walk cannot arrive on both sides
@@ -566,7 +583,21 @@ unchecked forest as a healthy one. That is the fail-closed rule the view
 already applies to its own reads, taken to the wider surface the warnings
 touch — the whole view goes rather than one forest going quietly, which
 is the trade the rule makes on purpose
-(§forgejo/observability/the-outcomes-view).
+(§forgejo/observability/the-outcomes-view). The forge's definitive `404`
+excepts itself, and only at the read that first asks whether an object the
+walk was pointed at is there — a member's own blockers read, the delivery's
+own pull-request read, the delivery's own blocking-edge listing — which says
+*that* object has been deleted since the listing that carried it, and a
+wait that is gone waits on nobody: its warning is held back with a logged
+line naming the reference that answered, the ordinary answer a dangling
+reference already gets on the merge path (§forgejo/webhook/re-fetch). The
+logged line is there for the reason the pairing's skipped row is
+(§forgejo/observability/the-outcomes-view). A `404` from any other read
+names some other object — an edge row, a listing, an issue the delivery
+mentions — or a read of an object this walk already established, the
+delivery's reviews being that case; reading either as the walked object's
+absence would hold a real stall back while `warnings_walked: true` published
+the forest as checked, so it fails the walk with every other failure.
 
 A warning's title and HTML URL are text their authors wrote, in
 repositories the view did not previously name. The page that renders a

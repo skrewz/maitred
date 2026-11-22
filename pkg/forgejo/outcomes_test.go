@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"log/slog"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -235,6 +236,124 @@ func TestForests_ReadFailureIsError(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("error %q, want it to name the failed read (%s)", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+// TestForests_DeletedRootIsSkipped: a forest root the forge answers not
+// found for — deleted between the listing the walk made and its blocks
+// read — names no forest and skips without failing the enumeration, and
+// the skip is logged where the operator sees it, since the same 404 is
+// what a row the token cannot see answers
+// (§forgejo/observability/the-outcomes-view, §forgejo/webhook/re-fetch).
+// The view survives the loss of one root rather than the whole outcomes
+// view going dark on every poll (s-git/maitred#268).
+func TestForests_DeletedRootIsSkipped(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, _, _ := newEngineWithLogger(t, slog.New(slog.NewJSONHandler(&log, nil)))
+	api.repos = []Repository{outcomesRepo("o/out")}
+	gone := outcomesRoot(89, "deleted root")
+	goneTracker := outcomesTracker(90, "deleted tracker")
+	live := outcomesRoot(84, "live root")
+	liveTracker := outcomesTracker(109, "live tracker")
+	api.openIssues["out"] = []Issue{gone, goneTracker, live, liveTracker}
+	api.blocks[84] = []Issue{liveTracker}
+	// The forge still hands 89's row on the listing the walk made; the
+	// blocks read of the deleted root answers 404. A failure that is not
+	// the forge's definitive answer still fails closed — see
+	// TestForests_ReadFailureIsError's "blocks read fails" case.
+	api.issueBlocksErrOn = map[int]error{89: &APIError{StatusCode: 404, Message: "The target couldn't be found."}}
+
+	forests, err := eng.enumerateForests()
+	if err != nil {
+		t.Fatalf("enumerateForests: %v: a deleted root is an absence, not a failed read", err)
+	}
+	if len(forests) != 1 || forests[0].Root.Number != 84 {
+		t.Fatalf("forests = %+v, want only the live forest: the deleted root skips, the rest survive", forests)
+	}
+	// The skip's visibility is the assertion: the handler here runs at
+	// the production default, so a line logged below Info is not in this
+	// buffer to find, and the row would vanish with no trace of which
+	// forest the view dropped (§forgejo/observability/the-outcomes-view).
+	line := findEntry(t, parseLogLines(t, log.Bytes()),
+		"outcomes: forest root not found; the forest is no longer listed")
+	if line["level"] != "INFO" {
+		t.Errorf("level = %v, want INFO: the production handler would drop the skip", line["level"])
+	}
+	if line["forest"] != "o/out#89" {
+		t.Errorf("forest = %v, want the forest that skipped", line["forest"])
+	}
+}
+
+// TestForests_EveryRootOfARepositoryGoneFailsTheEnumeration is the skip's
+// own limit and its floor. A repository whose every root read answered the
+// forge's 404 is not reporting that all its forests are gone, since the
+// teardown closes roots rather than deleting them
+// (§forgejo/decisions/forest-teardown), so what it is reporting is a read
+// that stopped answering, and the enumeration fails rather than recording
+// the empty set the skips would otherwise hand the view
+// (§forgejo/observability/the-outcomes-view, s-git/maitred#268). One 404
+// is no evidence about a set, though, so the guard speaks only where a
+// second root could have contradicted it: a repository whose only root
+// answers 404 keeps the skip, and the other repositories' forests with
+// it. TestForests_DeletedRootIsSkipped is the third case: one root gone
+// among live ones skips, and the view survives.
+func TestForests_EveryRootOfARepositoryGoneFailsTheEnumeration(t *testing.T) {
+	notFound := &APIError{StatusCode: 404, Message: "The target couldn't be found."}
+	cases := []struct {
+		name    string
+		mutate  func(api *fakeAPI)
+		wantErr string
+		want    []string
+	}{
+		{
+			name: "every root of a repository that listed several",
+			mutate: func(api *fakeAPI) {
+				api.repos = []Repository{outcomesRepo("o/out")}
+				api.openIssues["out"] = []Issue{outcomesRoot(89, "gone root"), outcomesRoot(91, "gone too")}
+				api.issueBlocksErrOn = map[int]error{89: notFound, 91: notFound}
+			},
+			wantErr: "every forest root of o/out answers not found",
+		},
+		{
+			name: "the only root of a repository that listed one",
+			mutate: func(api *fakeAPI) {
+				api.repos = []Repository{outcomesRepo("o/out"), outcomesRepo("o/other")}
+				api.openIssues["out"] = []Issue{outcomesRoot(89, "the one root, deleted")}
+				api.openIssues["other"] = []Issue{outcomesRoot(120, "root of a healthy repository")}
+				api.issueBlocksErrOn = map[int]error{89: notFound}
+			},
+			want: []string{"o/other#120"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, _, _ := newTestEngine(t)
+			tc.mutate(api)
+
+			forests, err := eng.enumerateForests()
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("enumerateForests = %+v, want an error: a repository answering absence for every root it listed is a broken read, not an empty forest set", forests)
+				}
+				if forests != nil {
+					t.Errorf("forests = %+v, want the partial result dropped", forests)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("error %q, want it to name the repository whose roots all answered not found", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("enumerateForests: %v: one 404 is no evidence about a set of roots; the single root skips and the view survives", err)
+			}
+			got := make([]string, 0, len(forests))
+			for _, f := range forests {
+				got = append(got, forestRef(f.Repository, f.Root.Number))
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("forests = %v, want %v", got, tc.want)
 			}
 		})
 	}

@@ -91,12 +91,17 @@ type ForestWarning struct {
 // not a warning absent: the forest would present as healthy what the
 // engine has not checked, the mistake the outcomes view refuses on every
 // other path (§forgejo/observability/the-outcomes-view,
-// §forgejo/decisions/actionable-state-digest). The states that are an
-// ordinary answer rather than a failure — a repository outside the remit,
-// one whose pull requests unit is off, a delivery whose graph reaches past
-// the read budget — are settled before the read or hold their warning back,
-// so what is left to fail is a read the engine should have been able to pay
-// and could not.
+// §forgejo/decisions/actionable-state-digest). The forge's definitive 404
+// excepts itself only at the read that first asks whether an object is
+// there; each such read names its own site, and the rule's fail-closed
+// half — the `404` further down the fan-out, or at a later read of an
+// object this walk established — is the spec's
+// (§forgejo/observability/the-warnings-a-forest-carries). The states that
+// are an ordinary answer rather than a failure — a repository outside the
+// remit, one whose pull requests unit is off, a delivery whose graph reaches
+// past the read budget — are settled before the read or hold their warning
+// back, so what is left to fail is a read the engine should have been able
+// to pay and could not.
 func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) ([]ForestWarning, error) {
 	warnings := []ForestWarning{}
 	seen := map[string]bool{}
@@ -162,10 +167,19 @@ func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) (
 			// (§forgejo/observability/the-warnings-a-forest-carries).
 			owner, name := splitRepo(repo)
 			rows, err := e.api.IssueDependencies(owner, name, member.Number)
-			if err != nil {
+			if isNotFound(err) {
+				// The member's own read, so this is its row that dangled
+				// since the listing (§forgejo/webhook/re-fetch,
+				// s-git/maitred#268). Its delivery is another object, and
+				// is still read below.
+				e.log.Info("forest warnings: member not found; nothing waits on it",
+					"member", repo+"#"+strconv.Itoa(member.Number),
+					"error", err)
+			} else if err != nil {
 				return nil, fmt.Errorf("blockers of %s#%d: %w", repo, member.Number, err)
+			} else {
+				add(humanTaskWarning(member, repo, workOrders(rows, repo, gates), now))
 			}
-			add(humanTaskWarning(member, repo, workOrders(rows, repo, gates), now))
 		}
 		if landing {
 			warn, err := e.staleMergeWarning(member, repo, gates, listings, now)
@@ -355,8 +369,12 @@ func (e *Engine) gateHoldsDeliveryOff(pr *PullRequest, repo string, gates map[st
 //
 // A false answer does not say the delivery is healthy — it says the wait cannot
 // be established, which is the one thing a warning may not paper over, and it
-// leaves the line every other dropped relation leaves. Unknown scope is the one
-// answer that is not a hold-off but an error — scope the engine cannot
+// leaves the line every other dropped relation leaves. One false is stronger
+// than the other: the delivery's own blocking-edge listing answering the
+// forge's 404 says the delivery is gone and the wait its edges stood on is
+// gone with it. Both hold the warning back, and the walk publishes neither
+// way. Unknown scope is the one answer that is not a hold-off but an error —
+// scope the engine cannot
 // establish fails the walk rather than reading on, here as everywhere else
 // (§forgejo/webhook/the-scope-cache).
 //
@@ -392,6 +410,15 @@ func (e *Engine) admittedGraph(pr *PullRequest, prRepo string) (rows []Issue, as
 	}
 	owner, name := splitRepo(prRepo)
 	rows, err = e.api.IssueBlocks(owner, name, pr.Number)
+	if isNotFound(err) {
+		// The delivery's own listing, so this 404 can name no other object:
+		// the delivery was deleted since the read that established it, and
+		// the wait its edges stood on went with it — held back, not answered
+		// (§forgejo/webhook/re-fetch, s-git/maitred#268).
+		e.log.Info("forest warnings: holding a stale warning back: the delivery's own listing answers not found",
+			"delivery", delivery, "error", err)
+		return nil, false, nil
+	}
 	if err != nil {
 		return nil, false, fmt.Errorf("blocking edges of %s#%d: %w", prRepo, pr.Number, err)
 	}
