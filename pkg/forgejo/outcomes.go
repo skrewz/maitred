@@ -339,8 +339,7 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 // fails the enumeration — save the forge's definitive "no such issue", at
 // the read that first asks whether a root, member or delivery is there,
 // which says that object was deleted: the row or warning it stood on drops
-// out, with a logged line naming it. A repository whose roots all answer
-// that is the exception's own limit, and fails
+// out, with a logged line naming it; the exception's limits are the spec's
 // (§forgejo/observability/the-outcomes-view). The list is empty — never nil
 // — when no repository holds the role. A non-nil error means a read failed —
 // the organisation listing, an issue listing, a
@@ -370,12 +369,6 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 		// duplicate neither the forest nor its count
 		// (§forgejo/observability/the-outcomes-view).
 		seen := make(map[int]bool, len(rows))
-		// The exception's limit: a repository whose every root read answered
-		// absence is not reporting that all its forests are gone, because a
-		// teardown closes roots rather than deleting them
-		// (§forgejo/decisions/forest-teardown), so it is a read that stopped
-		// answering wearing the face of an empty set
-		// (§forgejo/observability/the-outcomes-view).
 		rootsRead, rootsGone := 0, 0
 		for j := range rows {
 			issue := &rows[j]
