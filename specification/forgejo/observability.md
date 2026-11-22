@@ -576,18 +576,20 @@ already applies to its own reads, taken to the wider surface the warnings
 touch — the whole view goes rather than one forest going quietly, which
 is the trade the rule makes on purpose
 (§forgejo/observability/the-outcomes-view). The forge's definitive `404`
-excepts itself, and only at the read whose URL *is* the object — a member's
-own blockers read, or the delivery's own reads on the delivery walk — which
-says *that* object has been deleted since the listing that carried it, and a
+excepts itself, and only at the read that first asks whether an object the
+walk was pointed at is there — a member's own blockers read, the delivery's
+own pull-request read, the delivery's own blocking-edge listing — which says
+*that* object has been deleted since the listing that carried it, and a
 wait that is gone waits on nobody: its warning is held back with a logged
 line naming the reference that answered, the ordinary answer a dangling
 reference already gets on the merge path (§forgejo/webhook/re-fetch). The
 logged line is there for the reason the pairing's skipped row is
-(§forgejo/observability/the-outcomes-view). A `404` from any read further
-down the fan-out names some other object — an edge row, a listing, an issue
-the delivery mentions — and reading it as the delivery's absence would hold
-a real stall back while `warnings_walked: true` published the forest as
-checked; it fails the walk with every other failure.
+(§forgejo/observability/the-outcomes-view). A `404` from any other read
+names some other object — an edge row, a listing, an issue the delivery
+mentions — or a read of an object this walk already established, the
+delivery's reviews being that case; reading either as the walked object's
+absence would hold a real stall back while `warnings_walked: true` published
+the forest as checked, so it fails the walk with every other failure.
 
 A warning's title and HTML URL are text their authors wrote, in
 repositories the view did not previously name. The page that renders a

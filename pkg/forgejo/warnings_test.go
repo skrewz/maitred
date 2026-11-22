@@ -1052,7 +1052,7 @@ func TestForestWarnings_DeletedDeliveryIsHeldBack(t *testing.T) {
 	// is the assertion: the handler here runs at the production default,
 	// and a line logged below it is not in this buffer to be found.
 	line := findEntry(t, parseLogLines(t, log.Bytes()),
-		"member delivers nothing: its delivery's read answers not found")
+		"candidate delivery's read answers not found")
 	if line["level"] != "INFO" {
 		t.Errorf("level = %v, want INFO: the production handler would drop the skip", line["level"])
 	}

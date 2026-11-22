@@ -614,10 +614,10 @@ nowhere. Both answer *delivers nothing*, which the predicate
 reads as *not ready*: a member whose delivery the engine cannot see
 must not make a set look ready to land
 (§forgejo/reconciliation/the-sweep, §forgejo/webhook/repository-roles,
-§forgejo/decisions/merge-gate). A delivery the listing named but whose
-own read answers the forge's definitive `404` answers *delivers nothing*
-the same way — deleted since the listing, so there is no open head to land
-— which is the absence the outcomes view holds a stale warning back for,
+§forgejo/decisions/merge-gate). A delivery the listing named but whose own
+pull-request read answers the forge's definitive `404` answers *delivers
+nothing* the same way — deleted since the listing, so there is no open head to
+land — which is the absence the outcomes view holds a stale warning back for,
 and one read at the delivery's own read rather than at any `404` the fan-out
 past it meets (§forgejo/observability/the-warnings-a-forest-carries,
 §forgejo/webhook/re-fetch).

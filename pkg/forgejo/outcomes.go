@@ -336,10 +336,10 @@ func forestIssue(i Issue, fallback string) ForestIssue {
 // test admitted first, so a blocking-edge row cannot send the engine's
 // token where no role names it (§forgejo/webhook/repository-roles,
 // §forgejo/observability/the-warnings-a-forest-carries). A failed read
-// fails the enumeration — save the forge's definitive "no such issue",
-// which the read of a deleted root, member or delivery answers: that
-// object no longer exists, and the row or warning it stood on drops out,
-// with a logged line naming it. The list is empty — never nil — when no
+// fails the enumeration — save the forge's definitive "no such issue", at
+// the read that first asks whether a root, member or delivery is there,
+// which says that object was deleted: the row or warning it stood on drops
+// out, with a logged line naming it. The list is empty — never nil — when no
 // repository holds the role. A non-nil error
 // means a read failed — the organisation listing, an issue listing, a
 // blocks read, a scope lookup, or one of the warning reads — each

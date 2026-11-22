@@ -1036,7 +1036,10 @@ func (e *Engine) syncMembers(blockers []Issue) ([]SyncMember, error) {
 // §forgejo/webhook/the-scope-cache). One answer is the delivery's own absence:
 // the `404` of this read, whose URL *is* the pull request, is the ordinary
 // "delivers nothing" a closed delivery answers — the caller that merges on it
-// still waits, and the walk that warns on it says so at Info
+// still waits, and the walk that warns on it logs the read at Info. Where the
+// listing offered a later candidate that also closes the member, that candidate
+// becomes the delivery, and the line naming the read that failed is where a
+// reader of the decision log sees the re-anchor
 // (§forgejo/webhook/re-fetch).
 func (e *Engine) deliveryPR(member *Issue, repo string, listings map[string][]PullRequest) (*PullRequest, []Review, error) {
 	owner, name := splitRepo(repo)
@@ -1064,9 +1067,10 @@ func (e *Engine) deliveryPR(member *Issue, repo string, listings map[string][]Pu
 		pr, err := e.api.GetPullRequest(owner, name, pulls[j].Number)
 		if isNotFound(err) {
 			// Deleted since the listing named it: the one 404 whose URL is the
-			// delivery, and so the one that may say so
-			// (§forgejo/webhook/re-fetch, s-git/maitred#268).
-			e.log.Info("member delivers nothing: its delivery's read answers not found",
+			// delivery, and so the one that may say so. The line names the read
+			// rather than the conclusion, since the loop below has not reached
+			// one (§forgejo/webhook/re-fetch, s-git/maitred#268).
+			e.log.Info("candidate delivery's read answers not found",
 				"member", memberRef,
 				"delivery", repo+"#"+strconv.Itoa(pulls[j].Number),
 				"error", err)
