@@ -4,8 +4,6 @@ flowchart TD
   i_forest{{"forest (1)"}}
   i_outcomes(["outcomes (3)"])
   i_tasks["tasks (3)"]
-  i_forest -.-> i_outcomes
-  i_forest -.-> i_tasks
   i_tasks ==> i_outcomes
   classDef root stroke:#5319e7,stroke-width:2px
   classDef tracker stroke:#1d76db,stroke-width:2px

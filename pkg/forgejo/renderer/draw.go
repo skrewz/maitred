@@ -65,7 +65,7 @@ type drawnRepo struct {
 }
 
 // drawCollapsed declares one node per repository, the root's first and the rest
-// by name, and aggregates the edges between repositories
+// by name, and aggregates the work-order edges between repositories
 // (§forgejo/renderer/collapsing).
 func drawCollapsed(b *strings.Builder, f *forest, classes map[string][]string) {
 	repos := map[string]*drawnRepo{}
@@ -113,23 +113,15 @@ func drawCollapsed(b *strings.Builder, f *forest, classes map[string][]string) {
 		classes[class] = append(classes[class], repo.id)
 	}
 
-	gate := map[string]repoPair{}
 	work := map[string]repoPair{}
-	aggregate := func(set map[string]repoPair, edges []edge) {
-		for _, e := range edges {
-			from, to := repos[strings.ToLower(e.from.repo())], repos[strings.ToLower(e.to.repo())]
-			if from.declaration == to.declaration {
-				continue // an edge inside one repository draws nothing once collapsed
-			}
-			set[fmt.Sprintf("%04d\x00%04d", from.declaration, to.declaration)] = repoPair{from, to}
+	for _, e := range f.work {
+		from, to := repos[strings.ToLower(e.from.repo())], repos[strings.ToLower(e.to.repo())]
+		if from.declaration == to.declaration {
+			continue // an edge inside one repository draws nothing once collapsed
 		}
+		work[fmt.Sprintf("%04d\x00%04d", from.declaration, to.declaration)] = repoPair{from, to}
 	}
-	aggregate(gate, f.gate)
-	aggregate(work, f.work)
-	for _, line := range collapsedLines(gate, "-.->") {
-		b.WriteString("  " + line + "\n")
-	}
-	for _, line := range collapsedLines(work, "==>") {
+	for _, line := range collapsedLines(work) {
 		b.WriteString("  " + line + "\n")
 	}
 }
@@ -139,9 +131,9 @@ type repoPair struct {
 	from, to *drawnRepo
 }
 
-// collapsedLines renders an aggregated edge set, ordered by target then source
-// (§forgejo/renderer/the-source).
-func collapsedLines(set map[string]repoPair, arrow string) []string {
+// collapsedLines renders an aggregated work-order set, ordered by target then
+// source (§forgejo/renderer/the-source).
+func collapsedLines(set map[string]repoPair) []string {
 	keys := make([]string, 0, len(set))
 	for key := range set {
 		keys = append(keys, key)
@@ -150,17 +142,15 @@ func collapsedLines(set map[string]repoPair, arrow string) []string {
 	out := make([]string, 0, len(keys))
 	for _, key := range keys {
 		pair := set[key]
-		out = append(out, pair.from.id+" "+arrow+" "+pair.to.id)
+		out = append(out, pair.from.id+" ==> "+pair.to.id)
 	}
 	return out
 }
 
-// drawEdges declares the gate edges first, then the work-order edges
-// (§forgejo/renderer/edge-classes).
+// drawEdges declares the work-order edges (§forgejo/renderer/the-source). The
+// root's blocking edges and a tracker's fan are stated elsewhere, never drawn
+// here (§forgejo/renderer/edge-classes).
 func drawEdges(b *strings.Builder, f *forest) {
-	for _, e := range f.gate {
-		fmt.Fprintf(b, "  %s -.-> %s\n", e.from.id, e.to.id)
-	}
 	for _, e := range f.work {
 		fmt.Fprintf(b, "  %s ==> %s\n", e.from.id, e.to.id)
 	}

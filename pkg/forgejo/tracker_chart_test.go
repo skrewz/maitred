@@ -527,7 +527,7 @@ func TestTrackerBlock_DrawsTheGraphItGathers(t *testing.T) {
 		"closed 2026-10-05 12:00 UTC",     // and the forge's own close time
 		"(#3)",                            // the grouping issue names its members
 		"i_work_4 ==> i_work_3",           // the work order the edges state
-		"i_out_1 -.-> i_out_2",            // the gate that reaches the tracker
+		"i_work_3 ==> i_out_6",            // and the work order into the grouping
 		`stroke:#5319e7,stroke-width:2px`, // the root's hex is its label's
 		`stroke:#1d76db,stroke-width:2px`, // the tracker's hex is its label's
 		`stroke:#6b7a8c`,                  // the member class is the engine's
@@ -536,6 +536,9 @@ func TestTrackerBlock_DrawsTheGraphItGathers(t *testing.T) {
 		if !strings.Contains(region, want) {
 			t.Errorf("the source carries no %q:\n%s", want, region)
 		}
+	}
+	if strings.Contains(region, "-.-") {
+		t.Errorf("the ideation root's membership edges were drawn:\n%s", region)
 	}
 	if strings.Contains(region, "i_work_7") {
 		t.Error("a delivering pull request was drawn as a member")
