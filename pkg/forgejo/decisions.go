@@ -948,8 +948,19 @@ func decideReviewFanOut(e Event, pr *PullRequest, s State, w *Watermark, labelRe
 	// answer, and the row asks it rather than restating it
 	// (§forgejo/decisions/actions). A label-requested fan-out re-asks an
 	// approving lens, so it never reaches here
-	// (§forgejo/decisions/label-triggered-review).
-	held, _ := readyAtRow(ActionReview, e, s)
+	// (§forgejo/decisions/label-triggered-review). Reaching this line
+	// means the loop above classified every lens through the same facts
+	// reviewReady reads — the same s.ReviewLenses, s.Reviews and head —
+	// so the answer can only be readyNo here and the bool is agreement
+	// rather than a branch. A ready answer would carry a dispatch whose
+	// lens list is empty, which the pipeline routes to the singleton
+	// branch outside the fan-out and its per-lens guards
+	// (§forgejo/webhook/the-pipeline), so it is named here as the wiring
+	// fault readyAtRow names an abstain as.
+	held, ready := readyAtRow(ActionReview, e, s)
+	if ready {
+		return holdOff("the review declaration answered ready at the fan-out's tail, where every lens holds an undismissed approval at head; a ready answer here would dispatch a review with no lenses, so this is a wiring fault")
+	}
 	return held
 }
 
