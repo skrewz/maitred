@@ -577,13 +577,13 @@ func digestPartsOf(t *testing.T, f *fakeAPI, root *Issue) (string, map[string]st
 func TestForestDigestPartsCoverTheFixtureComponents(t *testing.T) {
 	root := digestRoot()
 	_, parts := digestPartsOf(t, digestForest(), &root)
-	for _, component := range digestComponents {
+	for _, component := range foldComponents() {
 		if parts[component.key] == "" {
 			t.Errorf("component %q has no sub-digest in the fixture fold (parts: %v)", component, parts)
 		}
 	}
-	if len(parts) != len(digestComponents) {
-		t.Errorf("parts carry %d components, want %d (%v)", len(parts), len(digestComponents), parts)
+	if len(parts) != len(foldComponents()) {
+		t.Errorf("parts carry %d components, want %d (%v)", len(parts), len(foldComponents()), parts)
 	}
 }
 
@@ -617,7 +617,7 @@ func TestForestDigestPartsLocaliseMoves(t *testing.T) {
 			mutated := digestRoot()
 			c.mutate(f, &mutated)
 			_, parts := digestPartsOf(t, f, &mutated)
-			for _, component := range digestComponents {
+			for _, component := range foldComponents() {
 				moved := parts[component.key] != base[component.key]
 				if moved != (component.key == c.want) {
 					t.Errorf("component %q moved = %v, want %v (base %v, got %v)",

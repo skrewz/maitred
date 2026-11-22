@@ -276,7 +276,7 @@ type ForestDigestGate struct {
 
 // movedComponents names the components of the forest's actionable
 // state whose sub-digests differ between the two observations, in the
-// fixed digestComponents order so the reason is deterministic, each
+// the fixed foldComponents order so the reason is deterministic, each
 // named by its reporting phrase. A fold
 // that gained or lost a component entirely shows as that component
 // moving. A stored slot written before sub-digests existed carries no
@@ -290,7 +290,7 @@ func (g *ForestDigestGate) movedComponents() []string {
 		return []string{"the digest as a whole"}
 	}
 	var moved []string
-	for _, component := range digestComponents {
+	for _, component := range foldComponents() {
 		if g.CurrentParts[component.key] != g.StoredParts[component.key] {
 			moved = append(moved, component.phrase)
 		}
@@ -516,65 +516,75 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 		// changed through a delivery-less move (an edge edit, a
 		// human closing a member) is found here, evaluated under
 		// the set-revision guard like every other sync row
-		// (§forgejo/decisions/sync-set).
-		return considerSyncIssue(issue, s.SyncMembers, s.ReviewLenses, w)
+		// (§forgejo/decisions/sync-set). The predicate answers the set
+		// question; this row owns only its pacing
+		// (§forgejo/decisions/actions).
+		d, ans := readyTo(ActionSync, e, s)
+		if ans != readyYes {
+			return d
+		}
+		rev := digestFor(ActionSync, e, s)
+		if alreadyDispatched(w, ActionSync, rev) {
+			return holdOff(fmt.Sprintf("sync already dispatched at set revision %s", rev))
+		}
+		return d
 	}
 	if hasLabel(issue, LabelIdeation) {
 		if hasLabel(issue, LabelTeardownForest) {
 			// The teardown row wins over the root's row: a forest being
 			// deleted is never re-commissioned in the same breath
-			// (§forgejo/decisions/forest-teardown). The forest still
-			// standing is the state that calls for the deletion — a member
-			// the order would delete, so a spared tracker is not — which is
-			// also what ends the re-firing: once nothing deletable remains,
-			// the sweep stops asking.
-			remaining := countDeletableMembers(s.Blocked)
-			if remaining == 0 {
-				return holdOff(fmt.Sprintf("issue %d is an open %s root carrying %s but blocking no issue other than an %s tracker, which the order spares: its forest has nothing left to delete", issue.Number, LabelIdeation, LabelTeardownForest, LabelOutcome))
+			// (§forgejo/decisions/forest-teardown). The predicate answers
+			// whether the forest still stands — a member the order would
+			// delete, so a spared tracker is not — which is also what ends
+			// the re-firing: once nothing deletable remains, the sweep
+			// stops asking. The sweep's row is state-governed pacing
+			// territory (§forgejo/reconciliation/the-state-is-the-watermark).
+			d, ans := readyTo(ActionTeardownForest, e, s)
+			if ans != readyYes {
+				return d
 			}
-			return stateGoverned(dispatch(ActionTeardownForest, fmt.Sprintf("issue %d is an open %s root carrying %s and still blocking %d issue(s) the order would delete; the state calls for teardown regardless of revision %s", issue.Number, LabelIdeation, LabelTeardownForest, remaining, issueRevision(issue))))
+			return stateGoverned(d)
 		}
 		// A root is decomposed even when a tracker's wrap-up would
 		// also apply: decompose wins over wrap-up
 		// (§forgejo/reconciliation/watermark-exemptions). The digest
-		// gate is this row's whole decision: the forest dispatches only
-		// when its actionable-state digest moved since the store last
-		// observed it (§forgejo/decisions/actionable-state-digest,
+		// gate is this row's whole decision — the declaration's
+		// predicate — the forest dispatching only when its
+		// actionable-state digest moved since the store last observed
+		// it (§forgejo/decisions/actionable-state-digest,
 		// s-git/maitred#209). A sweep root always reaches this row with
 		// the gate armed — a root whose kind labels conflict was held
 		// off in the sync branch above — so a row arriving with no
-		// observation is a wiring fault, and it holds off like any
-		// missing digest does (§forgejo/webhook/re-fetch).
-		if d, ok := digestGateDecision(s.ForestGate, fmt.Sprintf("issue %d is an open %s issue", issue.Number, LabelIdeation)); ok {
+		// observation is a wiring fault, and the predicate answers it
+		// with the hold-off a missing digest owes
+		// (§forgejo/webhook/re-fetch).
+		d, ans := readyTo(ActionDecompose, e, s)
+		if ans != readyYes {
 			return d
 		}
-		return holdOff(fmt.Sprintf("issue %d is an open %s issue: the digest gate assembled no observation of its forest; nothing dispatches on a missing digest", issue.Number, LabelIdeation))
+		return d
 	}
 	if hasLabel(issue, LabelOutcome) {
-		if open := openBlockers(s.Blockers); len(open) > 0 {
+		if len(openBlockers(s.Blockers)) > 0 {
 			// A commissioned forest stays under curation: closing the root removes
 			// it from the sweep's enumeration of open issues, so the tracker's
 			// own row carries the curation until the forest is finished
-			// (§forgejo/reconciliation/watermark-exemptions).
-			gate := ideationGate(s.Blockers)
-			if gate == nil {
-				return holdOff(fmt.Sprintf("issue %d is an open %s tracker blocked by %d open issue(s) and gated by no %s issue; state calls for no action", issue.Number, LabelOutcome, len(open), LabelIdeation))
-			}
-			if gate.State == "open" {
-				return holdOff(fmt.Sprintf("issue %d is an open %s tracker whose %s root %d is still open; its own row carries the curation", issue.Number, LabelOutcome, LabelIdeation, gate.Number))
-			}
-			// The commissioned tracker carries its forest's curation
-			// under the same digest gate as the root's row: one forest,
-			// one answer, whichever row the sweep reaches. The gate arms
-			// wherever this row dispatches, so a missing observation is
-			// a wiring fault and holds off like any missing digest does
+			// (§forgejo/reconciliation/watermark-exemptions). The
+			// decompose declaration's predicate is the whole question:
+			// no gate, an open gate, or the digest comparison — one
+			// forest, one answer, whichever row asks
 			// (§forgejo/decisions/actionable-state-digest, s-git/maitred#209).
-			if d, ok := digestGateDecision(s.ForestGate, fmt.Sprintf("issue %d is an open %s tracker commissioned by %s %d and still blocked by %d open issue(s)", issue.Number, LabelOutcome, LabelIdeation, gate.Number, len(open))); ok {
+			d, ans := readyTo(ActionDecompose, e, s)
+			if ans != readyYes {
 				return d
 			}
-			return holdOff(fmt.Sprintf("issue %d is an open %s tracker whose forest the digest gate assembled no observation of: nothing dispatches on a missing digest", issue.Number, LabelOutcome))
+			return d
 		}
-		return stateGoverned(dispatch(ActionWrapUp, fmt.Sprintf("issue %d is an open, fully unblocked %s tracker; the state calls for wrap-up regardless of revision %s", issue.Number, LabelOutcome, revisionFacts(issue, issueRevision(issue)))))
+		d, ans := readyTo(ActionWrapUp, e, s)
+		if ans != readyYes {
+			return d
+		}
+		return stateGoverned(d)
 	}
 	return decideIssueOpened(e, s, w)
 }
@@ -609,35 +619,18 @@ func otherKindLabel(issue *Issue) string {
 // §forgejo/decisions/transition-table).
 func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 	issue := s.Issue
-	if issue == nil {
-		return holdOff("no issue state re-fetched")
-	}
-	if issue.State != "open" {
-		return holdOff(fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State))
-	}
-	if hasLabel(issue, LabelIdeation) {
+	if issue != nil && issue.State == "open" && hasLabel(issue, LabelIdeation) {
 		return decideDecompose(e, issue, s, w)
 	}
-	if label := neverWorkItemLabel(issue.Labels); label != "" {
-		return holdOffNeverImplement(issue.Number, label)
+	d, ans := readyTo(ActionImplement, e, s)
+	if ans != readyYes {
+		return d
 	}
-	if label := transientHoldOffLabel(issue.Labels); label != "" {
-		return holdOffForestSeeding(issue.Number, label)
-	}
-	if hasLabel(issue, LabelTeardownForest) {
-		return holdOffTeardownWithoutRoot(issue.Number)
-	}
-	if open := openBlockers(s.Blockers); len(open) > 0 {
-		return holdOff(fmt.Sprintf("issue %d is blocked by %d open issue(s)", issue.Number, len(open)))
-	}
-	if len(s.ConnectedPRs) > 0 {
-		return holdOff(fmt.Sprintf("issue %d has %d connected open PR(s)", issue.Number, len(s.ConnectedPRs)))
-	}
-	rev := issueRevision(issue)
+	rev := digestFor(ActionImplement, e, s)
 	if !onSweep(e) && alreadyDispatched(w, ActionImplement, rev) {
 		return holdOff(fmt.Sprintf("implement already dispatched at revision %s", rev))
 	}
-	return dispatchOnState(w, onSweep(e), ActionImplement, rev, fmt.Sprintf("issue %d opened: open, unblocked, no connected PR", issue.Number))
+	return dispatchOnState(w, onSweep(e), ActionImplement, rev, d.Reason)
 }
 
 // decideIssueActivity handles an edited issue, a label change, or a
@@ -657,13 +650,7 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 // blocker, so the decision holds off naming the open blockers.
 func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	issue := s.Issue
-	if issue == nil {
-		return holdOff("no issue state re-fetched")
-	}
-	if issue.State != "open" {
-		return holdOff(fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State))
-	}
-	if hasLabel(issue, LabelIdeation) {
+	if issue != nil && issue.State == "open" && hasLabel(issue, LabelIdeation) {
 		// The comment row is guarded by authorship, not blanket: the
 		// decomposer's own comment on its root holds off silently,
 		// every other author's comment reaches the root row, where the
@@ -682,23 +669,15 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 		}
 		return decideDecompose(e, issue, s, w)
 	}
-	if label := neverWorkItemLabel(issue.Labels); label != "" {
-		return holdOffNeverReassess(issue.Number, label)
+	d, ans := readyTo(ActionReassess, e, s)
+	if ans != readyYes {
+		return d
 	}
-	if label := transientHoldOffLabel(issue.Labels); label != "" {
-		return holdOffForestSeeding(issue.Number, label)
-	}
-	if hasLabel(issue, LabelTeardownForest) {
-		return holdOffTeardownWithoutRoot(issue.Number)
-	}
-	if open := openBlockers(s.Blockers); len(open) > 0 {
-		return holdOff(fmt.Sprintf("issue %d is blocked by %s; not reassessing", issue.Number, issueRefs(open)))
-	}
-	rev := issueRevision(issue)
+	rev := digestFor(ActionReassess, e, s)
 	if alreadyDispatched(w, ActionReassess, rev) {
 		return holdOff(fmt.Sprintf("reassess already dispatched at revision %s", revisionFacts(issue, rev)))
 	}
-	return dispatch(ActionReassess, fmt.Sprintf("issue %d: %s", issue.Number, e.Type))
+	return dispatch(ActionReassess, d.Reason)
 }
 
 // decideDecompose is the event path's root row. Wherever the gate is
@@ -718,19 +697,11 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 // (§forgejo/decisions/transition-table).
 func decideDecompose(e Event, issue *Issue, s State, w *Watermark) Decision {
 	if hasLabel(issue, LabelTeardownForest) {
-		return decideTeardown(issue, s, w)
+		return decideTeardown(e, issue, s, w)
 	}
-	subject := fmt.Sprintf("issue %d is an open %s root: the label makes the root", issue.Number, LabelIdeation)
-	if e.Type == EventIssueCommented {
-		// The author guard on the comment row is this row's whole loop
-		// prevention, so the dispatch names the comment's author: when
-		// the declared identity does not match the account that
-		// actually posts — a stale declaration, a renamed persona —
-		// the fail-open loop is legible in the decision log as a
-		// stream of decompose dispatches authored by that account
-		// (§forgejo/config/decomposer-identity,
-		// §forgejo/decisions/loop-prevention, s-git/maitred#147).
-		subject = fmt.Sprintf("issue %d is an open %s root: a comment by %s", issue.Number, LabelIdeation, e.Sender)
+	d, ans := readyTo(ActionDecompose, e, s)
+	if ans != readyYes {
+		return d
 	}
 	// The gate's answer is the same one the sweep's rows give for this
 	// forest, and while the gate is armed it stands in place of the
@@ -738,40 +709,15 @@ func decideDecompose(e Event, issue *Issue, s State, w *Watermark) Decision {
 	// revision, so a revision guard beside the gate would suppress the
 	// very re-curation the gate exists to allow
 	// (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#209).
-	// Only a kind-conflicting root reaches the guard below, with the
-	// gate unarmed.
-	if d, ok := digestGateDecision(s.ForestGate, subject); ok {
-		return d
+	// Only the unarmed row — the event path's kind-conflicting root —
+	// keeps the guard below.
+	if unarmedDigestGate(s.ForestGate) {
+		rev := digestFor(ActionDecompose, e, s)
+		if alreadyDispatched(w, ActionDecompose, rev) {
+			return holdOff(fmt.Sprintf("decompose already dispatched at revision %s", rev))
+		}
 	}
-	rev := issueRevision(issue)
-	if alreadyDispatched(w, ActionDecompose, rev) {
-		return holdOff(fmt.Sprintf("decompose already dispatched at revision %s", rev))
-	}
-	return dispatch(ActionDecompose, subject)
-}
-
-// digestGateDecision is the digest gate's whole decision, shared by
-// every row that dispatches decompose while the gate is armed, so all
-// paths give the same answer for this action: unchanged digests hold
-// off, a moved digest dispatches with a reason naming the component
-// that moved, and a forest the store has never observed dispatches as
-// a first observation (§forgejo/decisions/actionable-state-digest,
-// §forgejo/reconciliation/watermark-exemptions, s-git/maitred#209).
-// ok reports whether the gate carries an observation at all: a nil
-// gate is an unarmed one, whose row keeps its own guard — only the
-// event path's kind-conflicting root reaches that case. subject
-// phrases the state the row found; the gate's clause follows it.
-func digestGateDecision(g *ForestDigestGate, subject string) (Decision, bool) {
-	if g == nil || g.Current == "" {
-		return Decision{}, false
-	}
-	if g.Current == g.Stored {
-		return holdOff(fmt.Sprintf("%s: the forest's actionable-state digest is unchanged since it was last observed: nothing a decompose run could act on has moved", subject)), true
-	}
-	if g.Stored == "" {
-		return dispatch(ActionDecompose, fmt.Sprintf("%s: the forest's actionable-state digest is observed for the first time; the state calls for decompose", subject)), true
-	}
-	return dispatch(ActionDecompose, fmt.Sprintf("%s: the forest's actionable-state digest moved (%s); the state calls for decompose", subject, strings.Join(g.movedComponents(), ", "))), true
+	return d
 }
 
 // decideTeardown is the event path's teardown row: an open root carrying
@@ -779,22 +725,16 @@ func digestGateDecision(g *ForestDigestGate, subject string) (Decision, bool) {
 // revision-keyed watermark guard, the exemption being a property of the
 // sweep's row (§forgejo/reconciliation/watermark-exemptions,
 // §forgejo/decisions/forest-teardown).
-func decideTeardown(issue *Issue, s State, w *Watermark) Decision {
-	// The engine can see whether there is anything to delete, so it does
-	// not ask for an agent to find out: a forest with nothing left to
-	// delete dispatches nothing, on the event path or the sweep, and the
-	// label standing over it decides no work. The spared tracker is the
-	// one member whose edge says nothing about whether a forest remains,
-	// so it is excluded from the count here exactly as on the sweep
-	// (§forgejo/decisions/forest-teardown, s-git/maitred#173).
-	if countDeletableMembers(s.Blocked) == 0 {
-		return holdOff(fmt.Sprintf("issue %d carries %s but blocks no issue other than an %s tracker, which the order spares: its forest has nothing left to delete", issue.Number, LabelTeardownForest, LabelOutcome))
+func decideTeardown(e Event, issue *Issue, s State, w *Watermark) Decision {
+	d, ans := readyTo(ActionTeardownForest, e, s)
+	if ans != readyYes {
+		return d
 	}
-	rev := issueRevision(issue)
+	rev := digestFor(ActionTeardownForest, e, s)
 	if alreadyDispatched(w, ActionTeardownForest, rev) {
 		return holdOff(fmt.Sprintf("teardown-forest already dispatched at revision %s", rev))
 	}
-	return dispatch(ActionTeardownForest, fmt.Sprintf("issue %d is an open %s root carrying %s: the forest it commissioned is to be deleted", issue.Number, LabelIdeation, LabelTeardownForest))
+	return d
 }
 
 // isTracker reports whether the issue is an outcome tracker: the reserved
@@ -864,10 +804,15 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 	// forest whose gate has not opened is held off upstream, by the
 	// seeding window (§forgejo/decisions/commissioning, s-git/maitred#151).
 	if !pr.Mergeable {
-		if alreadyDispatched(w, ActionRebase, pr.HeadSHA) {
-			return holdOff(fmt.Sprintf("rebase already dispatched at revision %s", pr.HeadSHA))
+		d, ans := readyTo(ActionRebase, e, s)
+		if ans != readyYes {
+			return d
 		}
-		return dispatch(ActionRebase, fmt.Sprintf("PR %d opened with merge conflicts", pr.Number))
+		rev := digestFor(ActionRebase, e, s)
+		if alreadyDispatched(w, ActionRebase, rev) {
+			return holdOff(fmt.Sprintf("rebase already dispatched at revision %s", rev))
+		}
+		return dispatch(ActionRebase, d.Reason)
 	}
 	return decideReviewFanOut(e, pr, s, w, false)
 }
@@ -906,10 +851,15 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 		return holdOff(fmt.Sprintf("PR %d is not open", pr.Number))
 	}
 	if !pr.Mergeable {
-		if !onSweep(e) && alreadyDispatched(w, ActionRebase, pr.HeadSHA) {
-			return holdOff(fmt.Sprintf("rebase already dispatched at revision %s", pr.HeadSHA))
+		d, ans := readyTo(ActionRebase, e, s)
+		if ans != readyYes {
+			return d
 		}
-		return dispatchOnState(w, onSweep(e), ActionRebase, pr.HeadSHA, fmt.Sprintf("PR %d synced with merge conflicts", pr.Number))
+		rev := digestFor(ActionRebase, e, s)
+		if !onSweep(e) && alreadyDispatched(w, ActionRebase, rev) {
+			return holdOff(fmt.Sprintf("rebase already dispatched at revision %s", rev))
+		}
+		return dispatchOnState(w, onSweep(e), ActionRebase, rev, d.Reason)
 	}
 	return decideReviewFanOut(e, pr, s, w, carriesLabel(pr.Labels, LabelTriggerReview))
 }
@@ -930,6 +880,20 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 // review-following rows own the PR then; when the outstanding lenses
 // are all suppressed, the hold-off names them.
 func decideReviewFanOut(e Event, pr *PullRequest, s State, w *Watermark, labelRequested bool) Decision {
+	// The declaration's predicate answers the one question the fan-out
+	// is built on — is any lens owed an approval at head — and when
+	// every lens is satisfied that is the hold-off named; the row
+	// composes the per-lens dispatch and applies each lens's pacing
+	// (§forgejo/decisions/actions, §forgejo/decisions/review-lenses).
+	// A label-requested fan-out outranks the standing approvals, so
+	// the satisfied-chain answer is asked only when no label overrides
+	// it (§forgejo/decisions/label-triggered-review).
+	if !labelRequested {
+		if d, ans := readyTo(ActionReview, e, s); ans == readyNo {
+			return d
+		}
+	}
+	rev := digestFor(ActionReview, e, s)
 	var dispatched []LensDispatch
 	var satisfied, suppressed []string
 	for _, lens := range s.ReviewLenses {
@@ -950,7 +914,7 @@ func decideReviewFanOut(e Event, pr *PullRequest, s State, w *Watermark, labelRe
 			continue
 		}
 		exempt := onSweep(e) && !st.reported
-		guarded := alreadyDispatchedSubject(w, lens.Identity, ActionReview, pr.HeadSHA)
+		guarded := alreadyDispatchedSubject(w, lens.Identity, ActionReview, rev)
 		if !exempt && guarded {
 			suppressed = append(suppressed, lens.Identity)
 			continue
@@ -966,7 +930,7 @@ func decideReviewFanOut(e Event, pr *PullRequest, s State, w *Watermark, labelRe
 			// The stalled shape the exemption exists to recover: the
 			// state fact carries past the recorded revision, and the
 			// log says so rather than "already dispatched".
-			reason += fmt.Sprintf("; the state calls for the lens regardless of revision %s", pr.HeadSHA)
+			reason += fmt.Sprintf("; the state calls for the lens regardless of revision %s", rev)
 			if !lensHasAnyReview(s.Reviews, lens) {
 				// The slot names this revision yet no review by the
 				// lens's login has ever been seen — the shape a
@@ -1170,83 +1134,57 @@ func lensIdentities(lenses []ReviewLens) []string {
 func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
 	if pr != nil && prOpen(pr) && pr.Mergeable {
-		if d, ok := decideChainReported(e, s, w, true); ok {
+		if d, ok := decideChainReported(e, s, w); ok {
 			return d
 		}
 	}
 	return decidePRSynced(e, s, w)
 }
 
-// decideChainReported is the review-reading cluster's shared branch:
-// the gate the lens reports at head impose on fix-feedback and
-// merge-or-wait (§forgejo/decisions/review-lenses). mergeFires is
-// every lens approved at head with no reviewer's latest undismissed
-// review at head a non-approval; fixFires is every lens reported at
-// head with the reports not all approvals — on the sweep a comment
-// report counts (the sweep triggers the implementer, not the
-// reviewer), while the pure review-event path waits for a
-// changes-requested (§forgejo/decisions/transition-table). The
-// merge-or-wait dispatch additionally requires the
-// agentic-auto-merge opt-in — on the issue the PR's own body names as
-// the one it delivers, through mergeOptedIn: the sync-set
-// hold-off and the merge gate sit
-// ahead of it, and a PR they let through with no opt-in on that seat
-// holds off naming the missing
-// opt-in and the connected issues
-// (§forgejo/decisions/merge-gate, s-git/maitred#179,
-// s-git/maitred#228). ok is
-// false when the branch does not apply — some lens has still not
-// reported at head — and the caller falls through to the fan-out
-// row, which names the outstanding lenses in its reason.
-func decideChainReported(e Event, s State, w *Watermark, sweepComments bool) (Decision, bool) {
+// decideChainReported routes the review-reading cluster once the chain
+// has reported at head: the merge-or-wait and fix-feedback
+// declarations' predicates answer whether the state calls for either,
+// and the row owns only the pacing — fix-feedback's revision-keyed
+// guard on the guarded paths, merge-or-wait's standing exemption
+// (§forgejo/decisions/review-lenses, §forgejo/decisions/actions).
+// Whether a comment report counts towards "not all approvals" is the
+// path's reading rule, derived from the event: the sweep and the
+// PR-commented path trigger the implementer on a comment report,
+// while the pure review-event path waits for a changes-requested
+// (§forgejo/decisions/transition-table). ok is false when neither
+// declaration's predicate applies — some lens has still not reported
+// at head, or the comment-only chain the review-event path leaves to
+// the sweep — and the caller falls through to the fan-out row, which
+// names the outstanding lenses in its reason.
+func decideChainReported(e Event, s State, w *Watermark) (Decision, bool) {
 	pr := s.PR
 	gate := prReviewGate(s.Reviews, s.ReviewLenses, pr.HeadSHA)
 	if !gate.allReported {
 		return Decision{}, false
 	}
-	if gate.mergeFires() {
-		if d, ok := syncMemberSetHoldOff(pr, e.Repo, s); ok {
-			return d, true
+	if d, ans := readyTo(ActionMergeOrWait, e, s); ans != readyNotApplicable {
+		if ans == readyYes {
+			// The exempt merge row: an opted-into-merging PR sits at a
+			// frozen head sha once the chain approves, so a
+			// revision-keyed watermark makes it a fixed point no path
+			// can fire on again — the state is its watermark on every
+			// path, the re-fire the engine's to bound, not this row's
+			// (§forgejo/reconciliation/watermark-exemptions,
+			// §forgejo/decisions/loop-prevention).
+			return stateGoverned(d), true
 		}
-		if open := mergeGateOpenBlockers(e, s); len(open) > 0 {
-			return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens, but a connected issue is blocked by %s; not merging", pr.Number, issueRefs(open))), true
-		}
-		// The merge opt-in is a precondition on every path that
-		// reaches here, the cascade's PR leg included, asked through
-		// mergeOptedIn on the PR's own re-fetch: the issue the PR's
-		// body closes is the only seat, so the precondition is never
-		// satisfiable by a label the author attached to the pull
-		// request itself
-		// (§forgejo/decisions/merge-gate, s-git/maitred#179,
-		// s-git/maitred#228).
-		ref, optedIn := mergeOptedIn(pr, e.Repo, s.ConnectedIssues)
-		if !optedIn {
-			return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens but no issue its body closes carries the %s label; an approved PR with no merge opt-in waits on a human (connected issues: %s)", pr.Number, LabelAgenticAutoMerge, connectedIssueNames(s))), true
-		}
-		// The exempt merge row. An opted-into-merging PR sits at a
-		// frozen head sha once the chain approves, so a revision-keyed
-		// watermark makes it a fixed point no path can fire on again: a
-		// dispatch that went nowhere, or a merge run that died, never
-		// recovers. The state is therefore its watermark on every path —
-		// the review event, a PR comment, the unblock cascade's PR leg
-		// and the sweep alike — and the row re-fires until the PR closes,
-		// stopping the moment it does because the sweep enumerates open
-		// pull requests only. The re-fire is the engine's to bound, not
-		// this row's (§forgejo/reconciliation/watermark-exemptions,
-		// §forgejo/decisions/loop-prevention). The dispatch reason names
-		// the delivered issue whose label granted the opt-in
-		// (§forgejo/decisions/merge-gate,
-		// §forgejo/observability/the-decision-log).
-		return stateGoverned(dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d stands at approving reviews from every lens and %s; the state calls for merge-or-wait regardless of revision %s", pr.Number, issueOptInClause(ref), pr.HeadSHA))), true
+		return d, true
 	}
-	if gate.fixFires(sweepComments) {
-		if d, held := holdOffPRNotOwned(pr, s.ImplementerIdentity); held {
-			return d, true
+	d, ans := readyTo(ActionFixFeedback, e, s)
+	switch ans {
+	case readyNo:
+		return d, true
+	case readyYes:
+		rev := digestFor(ActionFixFeedback, e, s)
+		if !onSweep(e) && alreadyDispatched(w, ActionFixFeedback, rev) {
+			return holdOff(fmt.Sprintf("fix-feedback already dispatched at revision %s", rev)), true
 		}
-		if !onSweep(e) && alreadyDispatched(w, ActionFixFeedback, pr.HeadSHA) {
-			return holdOff(fmt.Sprintf("fix-feedback already dispatched at revision %s", pr.HeadSHA)), true
-		}
-		return dispatchOnState(w, onSweep(e), ActionFixFeedback, pr.HeadSHA, fmt.Sprintf("PR %d stands at reviews at head %s whose reports are not all approvals (lenses without an approval: %s)", pr.Number, pr.HeadSHA, strings.Join(gate.outstanding, ", "))), true
+		return dispatchOnState(w, onSweep(e), ActionFixFeedback, rev, d.Reason), true
 	}
 	return Decision{}, false
 }
@@ -1404,7 +1342,7 @@ func decidePRReviewed(e Event, s State, w *Watermark) Decision {
 	if len(s.Reviews) == 0 {
 		return holdOff("no reviews on re-fetch")
 	}
-	if d, ok := decideChainReported(e, s, w, false); ok {
+	if d, ok := decideChainReported(e, s, w); ok {
 		return d
 	}
 	// A fully reported chain that dispatches no merge or fix — the
@@ -1815,66 +1753,6 @@ func syncMemberSetHoldOff(pr *PullRequest, prRepo string, s State) (Decision, bo
 	d := holdOff(reason)
 	d.Cascade = emissions
 	return d, true
-}
-
-// considerSyncIssue is the sync predicate, one function called from
-// every direction the set state moved from: the sweep's row, the
-// cascade walk's emission, and the approval path's emission re-checked
-// on re-fetch. An open issue carrying the sync label dispatches sync
-// once every blocking issue is closed — landed, or finished by a
-// human — or stands with its delivering PR approved at head and
-// mergeable while carrying agentic-sync-merge. "Approved at head" is
-// the lens gate: every configured lens must hold an undismissed
-// approval at the PR's head (§forgejo/decisions/review-lenses). A
-// pull request that blocks the grouping issue directly is such a
-// blocking issue too, and is held to that same test through its own
-// state: the set does not land past a delivery the graph places in
-// front of it. The dispatch is recorded against a revision derived
-// from the whole set, so the sweep does not re-fire at an unchanged
-// set state (§forgejo/decisions/sync-set).
-func considerSyncIssue(issue *Issue, members []SyncMember, lenses []ReviewLens, w *Watermark) Decision {
-	if len(members) == 0 {
-		return holdOff(fmt.Sprintf("issue %d is an open %s issue with no blocking issues; an empty set has nothing to land", issue.Number, LabelSync))
-	}
-	var notReady []string
-	for i := range members {
-		m := &members[i]
-		if m.Issue.State != "open" {
-			continue // a closed member's work has landed, or a human finished it
-		}
-		ref := fmt.Sprintf("%s#%d", m.Issue.Repository, m.Issue.Number)
-		if m.Issue.IsPull {
-			ref = fmt.Sprintf("%s PR #%d", m.Issue.Repository, m.Issue.Number)
-		}
-		switch {
-		case !hasLabel(&m.Issue, LabelAgenticSyncMerge):
-			notReady = append(notReady, fmt.Sprintf("%s is open without the %s label: a member awaiting a human must be closed before the set lands", ref, LabelAgenticSyncMerge))
-		case m.PR == nil || !prOpen(m.PR) || !m.PR.Mergeable:
-			if m.Issue.IsPull {
-				// A PR member is its own delivery: what is not ready is
-				// the PR itself, not some PR hanging off an issue
-				// (§forgejo/decisions/sync-set).
-				notReady = append(notReady, fmt.Sprintf("%s is not an open, mergeable pull request", ref))
-			} else {
-				notReady = append(notReady, fmt.Sprintf("%s has no mergeable open PR", ref))
-			}
-		default:
-			if !allLensesApproved(m.Reviews, lenses, m.PR.HeadSHA) {
-				notReady = append(notReady, fmt.Sprintf("%s is not approved at head %s", ref, m.PR.HeadSHA))
-			}
-		}
-	}
-	if len(notReady) > 0 {
-		// An unready set is not an event worth a comment: the hold-off
-		// is silent, at home only in the decision log
-		// (§forgejo/decisions/sync-set, §forgejo/observability/the-decision-log).
-		return holdOff(fmt.Sprintf("sync issue %d held off: %s", issue.Number, strings.Join(notReady, "; ")))
-	}
-	rev := syncSetRevision(issue, members, lenses)
-	if alreadyDispatched(w, ActionSync, rev) {
-		return holdOff(fmt.Sprintf("sync already dispatched at set revision %s", rev))
-	}
-	return dispatch(ActionSync, fmt.Sprintf("issue %d is an open %s issue: all %d member(s) closed or approved, mergeable, and opted in; the state calls for sync at set revision %s", issue.Number, LabelSync, len(members), rev))
 }
 
 // syncSetRevision derives the set revision the sync dispatch's

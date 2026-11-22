@@ -9,27 +9,6 @@ import (
 	"strings"
 )
 
-// digestComponent is one component of a forest's actionable state:
-// its key — the first part of each folded fact of that component, so
-// the fold groups by it for free — and the phrase the dispatch reason
-// uses to name it, so a run firing at an unexpected time can be
-// diagnosed (§forgejo/decisions/actionable-state-digest,
-// s-git/maitred#209). The slice is the component set, in reporting
-// order; key and phrase travel together so no component can gain a key
-// without a name.
-type digestComponent struct {
-	key    string
-	phrase string
-}
-
-var digestComponents = []digestComponent{
-	{"root", "the root's state, labels or body"},
-	{"member", "a member's state or kind/landing labels"},
-	{"tracker", "a tracker's state"},
-	{"blocker", "a blocker's state"},
-	{"comment", "a comment authored outside the engine"},
-}
-
 // digestMemberLabels are the kind and landing labels the digest folds
 // for a forest member: the labels that change what a decompose re-run
 // could act on — a member becoming a human task, a sync grouping, or
@@ -56,7 +35,8 @@ var digestMemberLabels = []string{
 // (§forgejo/state/forest-digest), and the digest gates the `decompose`
 // dispatch on the digest moving. Alongside the overall digest the
 // function reports the fold's sub-digest per component present in the
-// fold (digestComponents): the gate stores both, because naming which
+// fold (the decompose declaration's component set, read through
+// foldComponents): the gate stores both, because naming which
 // component moved between two observations needs the per-component
 // baseline — a changed overall digest alone says only that something
 // moved (§forgejo/decisions/actionable-state-digest, s-git/maitred#209).
@@ -294,10 +274,12 @@ func (f *fold) sum() string {
 // componentSums is the same hash taken component by component: only the
 // components with facts stand in the result, so a component appearing or
 // disappearing shows as a sub-digest appearing or disappearing
-// (§forgejo/decisions/actionable-state-digest).
+// (§forgejo/decisions/actionable-state-digest). The components are the
+// `decompose` declaration's set, drawn through foldComponents so no
+// list lives beside the fold.
 func (f *fold) componentSums() map[string]string {
-	parts := make(map[string]string, len(digestComponents))
-	for _, component := range digestComponents {
+	parts := make(map[string]string, len(foldComponents()))
+	for _, component := range foldComponents() {
 		var facts []foldedFact
 		for _, fact := range f.facts {
 			if fact.component == component.key {
