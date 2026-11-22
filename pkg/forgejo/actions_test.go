@@ -251,6 +251,51 @@ func TestPredicates_AgreeWithRows(t *testing.T) {
 	}
 }
 
+// TestDecomposeReady_TeardownOrderIsAskedOfTheRoot pins the scope of
+// the order label inside the decompose declaration: a root carrying
+// the order is the teardown declaration's forest, while a tracker
+// carrying it is not a root and keeps the curation row it had before
+// the declaration existed — asking the order of the tracker would
+// lose that dispatch and misdescribe the issue it holds off on
+// (§forgejo/decisions/forest-teardown, §forgejo/decisions/actions).
+func TestDecomposeReady_TeardownOrderIsAskedOfTheRoot(t *testing.T) {
+	moved := &ForestDigestGate{
+		RootRepo: "o/r", RootNumber: 3,
+		Current: "cur", CurrentParts: map[string]string{"root": "r2"},
+		Stored: "old", StoredParts: map[string]string{"root": "r1"},
+	}
+	blocked := []Issue{
+		{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
+		{Number: 4, State: "open", Repository: "o/r"},
+	}
+
+	t.Run("a root under the order is the teardown row's", func(t *testing.T) {
+		e := issueEvent(EventReconcile)
+		st := State{Issue: labelledIssue(LabelIdeation, LabelTeardownForest), Blockers: blocked, ForestGate: moved}
+		d, ans := readyTo(ActionDecompose, e, st)
+		if ans != readyNo {
+			t.Fatalf("predicate answered %v (reason %q), want a hold-off", ans, d.Reason)
+		}
+		want := "issue 7 is an open ideation root carrying teardown-forest: the teardown order stands above the root's row"
+		if d.Reason != want {
+			t.Errorf("hold-off = %q, want %q", d.Reason, want)
+		}
+	})
+
+	t.Run("a tracker carrying the order keeps its curation row", func(t *testing.T) {
+		e := issueEvent(EventReconcile)
+		st := State{Issue: labelledIssue(LabelOutcome, LabelTeardownForest), Blockers: blocked, ForestGate: moved}
+		d, ans := readyTo(ActionDecompose, e, st)
+		if ans != readyYes {
+			t.Fatalf("predicate answered %v (reason %q), want the curation dispatch its row made", ans, d.Reason)
+		}
+		if got := Decide(e, st, nil); !got.Dispatched || got.Action != ActionDecompose || got.Reason != d.Reason {
+			t.Errorf("Decide gave %q dispatched=%v reason %q, want the declaration's dispatch %q",
+				got.Action, got.Dispatched, got.Reason, d.Reason)
+		}
+	})
+}
+
 // TestReadyAtRow_NamesAnAbstainAsAFault checks that a row with no next
 // question records an abstain as the wiring fault it is, rather than
 // the silent nothing the decision log forbids: the chain predicates are

@@ -436,18 +436,21 @@ func mergeOrWaitReady(e Event, s State) (Decision, readyAnswer) {
 // in the row rather than in the predicate
 // (§forgejo/decisions/actionable-state-digest,
 // §forgejo/reconciliation/watermark-exemptions, s-git/maitred#209).
-// A teardown order stands above the root's row, so under the label
-// decompose answers "not ready" — the teardown declaration's row
-// decides that root (§forgejo/decisions/forest-teardown).
+// A teardown order stands above the root's row, so a root carrying
+// the order answers "not ready" — the teardown declaration's row
+// decides that forest (§forgejo/decisions/forest-teardown). The order
+// is asked of the root's labels because the root's row is the one that
+// tests it; the tracker's row asks no question of an order, which
+// §decisions/actions does not give it.
 func decomposeReady(e Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
 		return holdOff("no issue state re-fetched"), readyNo
 	}
-	if hasLabel(issue, LabelTeardownForest) {
-		return holdOff(fmt.Sprintf("issue %d is an open %s root carrying %s: the teardown order stands above the root's row", issue.Number, LabelIdeation, LabelTeardownForest)), readyNo
-	}
 	if hasLabel(issue, LabelIdeation) {
+		if hasLabel(issue, LabelTeardownForest) {
+			return holdOff(fmt.Sprintf("issue %d is an open %s root carrying %s: the teardown order stands above the root's row", issue.Number, LabelIdeation, LabelTeardownForest)), readyNo
+		}
 		if onSweep(e) {
 			return digestGateAnswer(s.ForestGate, fmt.Sprintf("issue %d is an open %s issue", issue.Number, LabelIdeation),
 				holdOff(fmt.Sprintf("issue %d is an open %s issue: the digest gate assembled no observation of its forest; nothing dispatches on a missing digest", issue.Number, LabelIdeation)))
