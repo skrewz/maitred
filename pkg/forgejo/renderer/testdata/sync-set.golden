@@ -4,9 +4,6 @@ flowchart TD
   i_tasks_200["<a href='https://example.com/tasks/issues/200' target='_blank' style='color:inherit'>tasks#200 ·<br/>land together (#201 #202)</a>"]
   i_tasks_201["<a href='https://example.com/tasks/issues/201' target='_blank' style='color:inherit'>tasks#201 · first of the set</a>"]
   i_tasks_202["<a href='https://example.com/tasks/issues/202' target='_blank' style='color:inherit'>tasks#202 · second of the set</a>"]
-  i_outcomes_1 -.-> i_tasks_200
-  i_outcomes_1 -.-> i_tasks_201
-  i_outcomes_1 -.-> i_tasks_202
   i_tasks_201 ==> i_tasks_200
   i_tasks_202 ==> i_tasks_200
   classDef root stroke:#5319e7,stroke-width:2px

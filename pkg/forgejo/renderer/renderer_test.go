@@ -526,6 +526,78 @@ func TestTrackerEdgesAreStatedNotDrawn(t *testing.T) {
 	}
 }
 
+// TestRootEdgesAreImpliedNotDrawn: a blocking edge out of the ideation root
+// states which issues the forest holds, which the forest's own note line
+// already states, so no source line draws it — in either view. A member's edge
+// into the root is a work order, not a membership statement, and stays drawn
+// (§forgejo/renderer/edge-classes, §forgejo/renderer/note-lines).
+func TestRootEdgesAreImpliedNotDrawn(t *testing.T) {
+	t.Parallel()
+
+	root := ref("example/forest", 1)
+	tracker := ref("example/forest", 2)
+	first := ref("example/forest", 3)
+	second := ref("example/tasks", 4)
+	graph := Graph{
+		Root: Node{Ref: root, Summary: "ideation", HTMLURL: url("forest", 1)},
+		Members: []Node{
+			{Ref: tracker, Role: RoleTracker, Summary: "tracker", HTMLURL: url("forest", 2)},
+			{Ref: first, Summary: "first work", HTMLURL: url("forest", 3)},
+			{Ref: second, Summary: "other work", HTMLURL: url("tasks", 4)},
+		},
+		Edges: []Edge{
+			{From: root, To: tracker},
+			{From: root, To: first},
+			{From: root, To: second},
+			{From: first, To: tracker},
+			{From: first, To: second},
+			{From: second, To: root},
+			{From: tracker, To: root},
+		},
+		Strokes: strokes(),
+	}
+
+	got, err := Render(graph, wideCeiling())
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if strings.Contains(got, "-.-") {
+		t.Errorf("a dotted edge out of the root was drawn:\n%s", got)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "i_forest_1 ") {
+			t.Errorf("an edge out of the root was drawn: %q", line)
+		}
+	}
+	for _, want := range []string{
+		"%% forest forest#1 rendered by maitred",
+		// the drop draws nothing and un-counts nothing: the tracker's edge
+		// into the root still counts the root as a row, as it did before
+		"%% tracker forest#2 fans to 2 issues (fan stated, not drawn)",
+		"i_forest_3 ==> i_tasks_4",
+		// a member's edge into the root is a work order and stays drawn
+		"i_tasks_4 ==> i_forest_1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("want %q in the source, got:\n%s", want, got)
+		}
+	}
+
+	// Collapsed, the root's repository is still declared first and a member's
+	// work order between repositories is still drawn
+	// (§forgejo/renderer/collapsing).
+	collapsed, err := Render(graph, Config{MaxSourceCharacters: len([]rune(got)) - 1, Location: aedt()})
+	if err != nil {
+		t.Fatalf("Render collapsed: %v", err)
+	}
+	if strings.Contains(collapsed, "-.-") {
+		t.Errorf("the collapsed view drew a dotted edge:\n%s", collapsed)
+	}
+	if !strings.Contains(collapsed, "i_forest ==> i_tasks") {
+		t.Errorf("the collapsed view lost the work order between repositories:\n%s", collapsed)
+	}
+}
+
 // TestClosedMember: the mark, the strike on the anchor alone, the class swap,
 // and the timestamp in the configured timezone
 // (§forgejo/renderer/closed-members).
@@ -688,7 +760,7 @@ func TestCollapseNamesItself(t *testing.T) {
 		`i_forest{{"forest (2)"}}`,
 		`i_tasks["✅ tasks (2)"]`,
 		"%% collapsed to one node per repository: the source exceeds 500 characters",
-		"  i_forest -.-> i_tasks\n",
+		"  i_tasks ==> i_forest\n",
 		"  class i_tasks closed\n",
 	} {
 		if !strings.Contains(small, want) {

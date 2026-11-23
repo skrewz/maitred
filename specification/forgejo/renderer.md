@@ -33,11 +33,10 @@ The source is, in this order:
 2. the note lines (§forgejo/renderer/note-lines),
 3. one declaration per node, in **node order**: the root, then the trackers,
    then the members — each group by repository name, then by number,
-4. the gate edges, in the same node order as their targets,
-5. the work-order edges, sorted by source, then target,
-6. the `classDef` declarations, in the order `root`, `tracker`, `member`,
+4. the work-order edges, sorted by source, then target,
+5. the `classDef` declarations, in the order `root`, `tracker`, `member`,
    `closed`,
-7. the `class` statements, in that same order, each naming its members in node
+6. the `class` statements, in that same order, each naming its members in node
    order.
 
 Every line but a note line is indented two spaces, and the source ends with a
@@ -118,21 +117,19 @@ produces sits inside the anchor.
 
 ## Edge classes
 
-The graph states blocking edges: `from` blocks `to`. Each edge's source role
-picks its class, and one edge is one class:
+The graph states blocking edges: `from` blocks `to`. Only a member's blocking
+edge reaches the source, drawn as a **work-order** edge `==>`.
 
-| Source role | Drawn as |
-|---|---|
-| the root | a **gate** edge `-.->`, declared before every work-order edge |
-| a member | a **work-order** edge `==>`, declared after the gate edges |
-
-The one exception is the tracker. The root's membership edge into a tracker
-is drawn — as a gate edge, like every other edge from the root, because the
-forest hangs from its root — and every other blocking edge with a tracker at
-either end is **never drawn**, the fan it would have drawn being stated in a
-note line instead (§forgejo/renderer/note-lines). So the forest hangs visibly
-from its root, its work order reads as a chain, and a tracker — which every
-member waits on and which waits on nothing it must order — stays a single
+Two kinds of edge are stated elsewhere and drawn nowhere, because each says
+what the drawing already says. A **membership** edge out of the ideation root —
+into any row, a tracker included — states which issues the forest holds, which
+the source's first note line states by naming the root
+(§forgejo/renderer/note-lines): a forest hangs from its root by definition, so
+one dotted line per member adds nothing but lines crossing the chart. And every
+blocking edge with a tracker at either end, the root's membership edge aside,
+is never drawn either, the fan it would have drawn being stated in a note line
+instead. So the forest's work order reads as a chain, and a tracker — which
+every member waits on and which waits on nothing it must order — stays a single
 node rather than a hub spraying lines across the chart.
 
 Work-order edges carry no transitive edge: where a path of at least two
@@ -189,7 +186,8 @@ says "closed" without a time is a chart that guessed.
 Every note is a `%%` line at column zero, so it states rather than draws:
 
 1. always, first: `%% forest <repo>#<number> rendered by maitred`, naming the
-   root,
+   root — which is what states the forest's membership now its own edges are
+   drawn nowhere (§forgejo/renderer/edge-classes),
 2. one per tracker sharing a blocking edge with at least one row other than the
    root, in tracker order: `%% tracker <repo>#<number> fans to <K> issues (fan
    stated, not drawn)`, where `<K>` counts the distinct rows on those undrawn
@@ -206,8 +204,8 @@ node per repository. A collapsed node's identifier is `i_<name>`, its label is
 repository is declared first and the rest follow by name. Its shape and
 class follow the roles it holds: the root's shape wins over a tracker's, a
 tracker's over a member's. An edge between two issues in one repository is not
-drawn, edges between two repositories are drawn once apiece in their own
-classes, and the collapse is named in a note line. A collapsed node carries the
+drawn, edges between two repositories are drawn once apiece, and the collapse
+is named in a note line. A collapsed node carries the
 `✅` mark and the `closed` class when every issue it stands for is closed, and
 nothing of closedness otherwise: which of the issues it stands for is closed is
 the graph's, not the drawing's.

@@ -51,9 +51,8 @@ const (
 	// RoleWork is a work item — a rectangle — and the common case, so it is the
 	// value a caller leaves a node at.
 	RoleWork Role = iota
-	// RoleTracker is an outcome tracker: a stadium, and the one row whose
-	// blocking edges are stated rather than drawn
-	// (§forgejo/renderer/edge-classes).
+	// RoleTracker is an outcome tracker: a stadium whose blocking edges are
+	// stated rather than drawn (§forgejo/renderer/edge-classes).
 	RoleTracker
 	// RoleSync is a grouping issue: a rectangle whose label carries the numbers
 	// of the members that block it (§forgejo/renderer/labels).
@@ -163,12 +162,11 @@ type edge struct {
 	from, to *node
 }
 
-// forest is the prepared graph: the nodes in declaration order, the edges in the
-// classes the source declares them in, and each tracker's fan
+// forest is the prepared graph: the nodes in declaration order, the work-order
+// edges the source declares, and each tracker's fan
 // (§forgejo/renderer/edge-classes).
 type forest struct {
 	nodes []*node
-	gate  []edge
 	work  []edge
 }
 
@@ -234,7 +232,6 @@ func prepare(g Graph) (*forest, error) {
 	}
 	root := nodes[0]
 
-	gate := map[string]edge{}
 	work := map[string]edge{}
 	fanPeers := map[*node]map[string]bool{}
 	for _, row := range g.Edges {
@@ -251,17 +248,20 @@ func prepare(g Graph) (*forest, error) {
 			// (§forgejo/renderer/edge-classes).
 			continue
 		}
-		key := from.id + "\x00" + to.id
 		if from.id == root.id {
-			// The root's membership edges are what the forest hangs from,
-			// including the one into a tracker (§forgejo/renderer/edge-classes).
-			gate[key] = edge{from, to}
+			// A membership edge out of the root states which rows the forest
+			// holds, which the forest's own note line states by naming the root:
+			// it is implied, so it is drawn nowhere
+			// (§forgejo/renderer/edge-classes).
 			continue
 		}
+		key := from.id + "\x00" + to.id
 		if from.role == RoleTracker || to.role == RoleTracker {
-			// A tracker's fan is stated, never drawn: the root's membership
-			// edge into it is drawn, so it is not a peer
-			// (§forgejo/renderer/note-lines).
+			// A tracker's fan is stated, never drawn. The root's edge into a
+			// tracker is dropped above with the root's other edges, so the root
+			// never fans; a tracker's edge into the root still counts it as a
+			// row, whichever side of the edge the row sits on, exactly as
+			// before the drop (§forgejo/renderer/note-lines).
 			for _, pair := range [][2]*node{{from, to}, {to, from}} {
 				tracker, peer := pair[0], pair[1]
 				if tracker.role != RoleTracker || peer.id == tracker.id {
@@ -301,7 +301,6 @@ func prepare(g Graph) (*forest, error) {
 
 	return &forest{
 		nodes: nodes,
-		gate:  orderByTarget(values(gate), position),
 		work:  orderBySourceTarget(reduced, position),
 	}, nil
 }
@@ -482,15 +481,6 @@ func findCycle(next map[string][]string, starts []string) string {
 	return ""
 }
 
-// orderByTarget sorts the gate edges in the node order of their targets
-// (§forgejo/renderer/the-source).
-func orderByTarget(edges []edge, position map[string]int) []edge {
-	sort.SliceStable(edges, func(i, j int) bool {
-		return position[edges[i].to.id] < position[edges[j].to.id]
-	})
-	return edges
-}
-
 // orderBySourceTarget sorts the work-order edges by source, then target
 // (§forgejo/renderer/the-source).
 func orderBySourceTarget(edges []edge, position map[string]int) []edge {
@@ -511,13 +501,4 @@ func positions(nodes []*node) map[string]int {
 		position[n.id] = i
 	}
 	return position
-}
-
-// values flattens an edge set keyed for de-duplication.
-func values(set map[string]edge) []edge {
-	out := make([]edge, 0, len(set))
-	for _, e := range set {
-		out = append(out, e)
-	}
-	return out
 }
