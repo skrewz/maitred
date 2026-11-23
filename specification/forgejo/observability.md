@@ -46,10 +46,8 @@ the view shows:
   action and the revision it was dispatched at
   (§forgejo/state/watermark), or none when nothing has been
   dispatched through the main slot. On the issue path that revision is
-  the declared digest, an opaque fold rather than a timestamp a reader
-  can place in the history; the row beside it carries the last
-  decision's reason, and a reason quoting a digest states the facts
-  behind it, so the view stays readable whatever the slot holds
+  the declared digest: an opaque fold of the state rather than a timestamp
+  a reader can place in the history, made readable by the reason beside it
   (§forgejo/state/watermark, §forgejo/observability/the-decision-log,
   s-git/maitred#259). Fan-out dispatches do not touch
   the main slot; the view lists the watermark's **subject slots**

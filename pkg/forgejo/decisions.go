@@ -1974,14 +1974,16 @@ func trackerRevision(issue *Issue) string {
 	return hashInputFacts(trackerFacts(issue))
 }
 
-// trackerFacts are the facts an `outcome` tracker's revision folds, in the order
-// the digest hashes them: the issue's state, one line per label in sorted order
-// so a label toggle moves the digest whichever way the forge lists them, and the
-// description outside the fence pair as a digest, so the folded input is bounded
-// whatever the description holds. This is the one statement of that set: the
-// digest hashes these strings and the reason lines render them, so a fact added
-// to the revision cannot fail to appear in the log line that explains it
-// (§forgejo/state/watermark, §forgejo/observability/the-decision-log).
+// trackerFacts are the facts an `outcome` tracker's revision folds, stated as a
+// set: hashInputFacts sorts before hashing, so the order here is no order the
+// digest sees. The facts are the issue's state, one line per label — sorted
+// here, so the set folded and the lines rendered do not depend on how the forge
+// listed them — and the description outside the fence pair as a digest, so the
+// folded input is bounded whatever the description holds. This is the one
+// statement of that set: the digest hashes these strings and the reason lines
+// render them, so a fact added to the revision cannot fail to appear in the log
+// line that explains it (§forgejo/state/watermark,
+// §forgejo/observability/the-decision-log).
 func trackerFacts(issue *Issue) []string {
 	labels := append([]string(nil), issue.Labels...)
 	sort.Strings(labels)

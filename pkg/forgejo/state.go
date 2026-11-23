@@ -95,10 +95,10 @@ type Watermark struct {
 	// of agent tasks a crash-loop could buy again on every restart.
 	// Recording the fire instant beside the digest carries that stamp
 	// across the process boundary, so the bound stays a rate rather than
-	// a memory (§forgejo/decisions/loop-prevention). Nil where no
-	// singleton dispatch wrote one — a forest digest slot, or a watermark
-	// written before the stamp was durable — which bounds nothing, the
-	// same answer an unrecorded revision gives.
+	// a memory (§forgejo/decisions/loop-prevention). Nil where no singleton
+	// dispatch ever wrote one — a forest's digest slot carries an observation,
+	// never a dispatch — which bounds nothing, the same answer an unrecorded
+	// revision gives.
 	FiredAt *time.Time `json:"fired_at,omitempty"`
 	// Subjects maps each fan-out subject's identity (a review lens's
 	// configured login) to the slot dispatched for it. Empty for

@@ -51,9 +51,9 @@ Alongside the digest the main slot records **when** its action last
 fired at it. That instant is the re-fire bound's durable stamp: the
 engine keeps a stamp in memory too, but memory empties at a restart, and
 what the bound paces is a rate rather than a recollection
-(§forgejo/decisions/loop-prevention). A slot with no recorded instant —
-one written before the stamp was durable, or a forest's digest slot —
-bounds nothing, exactly as an unrecorded revision does. The durable stamp
+(§forgejo/decisions/loop-prevention). A slot with no recorded instant — a forest's digest slot, which carries an
+observation and never a dispatch — bounds nothing, exactly as an
+unrecorded revision does. The durable stamp
 is a wall clock, the monotonic reading not surviving the store, so an
 instant that reads as not yet arrived — the clock corrected backwards at
 boot, a store restored from a host whose clock ran ahead — is an expired
