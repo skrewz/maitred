@@ -51,9 +51,11 @@ func TestReconcile_CatchesMissedIssueOpened(t *testing.T) {
 	}
 }
 
-// TestReconcile_StaleWatermarkRedispatches: a watermark at an older
-// revision than Forgejo's current state is reconciled — the delta is
-// dispatched (§forgejo/reconciliation/the-sweep).
+// TestReconcile_StaleWatermarkRedispatches: a watermark recording a
+// digest other than the one the state folds now is reconciled — the
+// state it records is not the state Forgejo reports, and the row
+// dispatches (§forgejo/reconciliation/the-sweep,
+// §forgejo/state/watermark).
 func TestReconcile_StaleWatermarkRedispatches(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
 	api.repos = []Repository{testRepo("o/r")}
@@ -87,14 +89,17 @@ func TestReconcile_FreshWatermarkImplementRefiresOnce(t *testing.T) {
 	api.issues[7] = issue
 	api.openIssues["r"] = []Issue{*issue}
 	key := Key{Repo: "o/r", Kind: KindIssue, Number: 7}
-	if err := store.Save(key, Watermark{Action: string(ActionImplement), Revision: issueRevision(issue)}); err != nil {
+	if err := store.Save(key, Watermark{
+		Action:   string(ActionImplement),
+		Revision: digestFor(ActionImplement, Event{}, State{Issue: issue}),
+	}); err != nil {
 		t.Fatalf("save watermark: %v", err)
 	}
 
 	eng.Reconcile()
 
 	if tasks := q.all(); len(tasks) != 1 {
-		t.Fatalf("got %d tasks after the first sweep, want 1 (the state, not the revision, decides); all = %+v", len(tasks), tasks)
+		t.Fatalf("got %d tasks after the first sweep, want 1 (the state, not the digest it already recorded, decides); all = %+v", len(tasks), tasks)
 	}
 
 	// A second sweep inside the interval the first one stamped is
@@ -107,10 +112,106 @@ func TestReconcile_FreshWatermarkImplementRefiresOnce(t *testing.T) {
 	// The interval the bound waits out is spent: the same unchanged
 	// state dispatches again — the recovery pace a stranded attempt
 	// was denied under the revision-keyed guard.
-	eng.stampReFireAt(key, ActionImplement, issueRevision(issue), time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+	// The stamp the bound reads is keyed on the digest the dispatch
+	// recorded, which is what "the same unchanged state" means here
+	// (§forgejo/state/watermark, s-git/maitred#259).
+	eng.stampReFireAt(key, ActionImplement, digestFor(ActionImplement, Event{}, State{Issue: issue}), time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
 	eng.Reconcile()
 	if tasks := q.all(); len(tasks) != 2 {
 		t.Fatalf("got %d tasks after the interval is spent, want 2; all = %+v", len(tasks), tasks)
+	}
+}
+
+// TestReconcile_EdgeMoveWithoutDeliveryDispatches: a blocking edge
+// attached or removed emits no webhook and moves no issue's
+// `updated_at`, so the rows that read blockers used to be exempted from
+// the watermark on the sweep. They are not exempt now — the edge is one
+// of their declared inputs, so it moves the digest they are keyed on —
+// and removing the exemption costs no dispatch: an issue the engine
+// already watermarked while a blocker stood open dispatches the sweep
+// after that edge is removed, at a timestamp nothing moved
+// (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#259).
+func TestReconcile_EdgeMoveWithoutDeliveryDispatches(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.repos = []Repository{testRepo("o/r")}
+	issue := &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r"}
+	blocker := Issue{Number: 3, State: "open", Repository: "o/r"}
+	api.issues[7] = issue
+	api.issues[3] = &blocker
+	api.openIssues["r"] = []Issue{*issue}
+	key := Key{Repo: "o/r", Kind: KindIssue, Number: 7}
+
+	// The engine reacted to this issue while it stood blocked: the
+	// watermark records the digest of the inputs that state folds, its
+	// open blocker among them.
+	if err := store.Save(key, Watermark{
+		Action:   string(ActionImplement),
+		Revision: digestFor(ActionImplement, Event{}, State{Issue: issue, Blockers: []Issue{blocker}}),
+	}); err != nil {
+		t.Fatalf("save watermark: %v", err)
+	}
+
+	// A human removes the edge. Nothing is delivered and the issue's
+	// updated_at stands where the watermark records it.
+	api.deps[7] = nil
+
+	eng.Reconcile()
+
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (the edge move is a digest move, not a timestamp the row consults); all = %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=implement") {
+		t.Errorf("prompt = %q, want the implement action", tasks[0].Prompt)
+	}
+}
+
+// TestReconcile_UnchangedDigestRefiresAtTheBoundOnEveryPath: the sweep
+// and an event ask one question of one state and get one answer, and
+// what paces a state that will not move is the re-fire bound — not the
+// path that happened to arrive (§forgejo/reconciliation/the-state-is-the-watermark,
+// §forgejo/decisions/loop-prevention, s-git/maitred#259).
+func TestReconcile_UnchangedDigestRefiresAtTheBoundOnEveryPath(t *testing.T) {
+	issue := &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r"}
+	for _, name := range []string{"the sweep", "an event"} {
+		t.Run(name, func(t *testing.T) {
+			eng, api, q, store := newTestEngine(t)
+			api.repos = []Repository{testRepo("o/r")}
+			api.issues[7] = issue
+			api.openIssues["r"] = []Issue{*issue}
+			key := Key{Repo: "o/r", Kind: KindIssue, Number: 7}
+			if err := store.Save(key, Watermark{
+				Action:   string(ActionImplement),
+				Revision: digestFor(ActionImplement, Event{}, State{Issue: issue}),
+			}); err != nil {
+				t.Fatalf("save watermark: %v", err)
+			}
+
+			arrive := func() {
+				t.Helper()
+				if name == "the sweep" {
+					eng.Reconcile()
+					return
+				}
+				eng.HandleEvent(Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
+			}
+
+			arrive()
+			if tasks := q.all(); len(tasks) != 1 {
+				t.Fatalf("got %d tasks on the first arrival, want 1; all = %+v", len(tasks), tasks)
+			}
+			arrive()
+			if tasks := q.all(); len(tasks) != 1 {
+				t.Fatalf("got %d tasks on the second arrival inside one interval, want 1 (the bound spaces it); all = %+v", len(tasks), tasks)
+			}
+			eng.stampReFireAt(key, ActionImplement, digestFor(ActionImplement, Event{}, State{Issue: issue}),
+				time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+			arrive()
+			if tasks := q.all(); len(tasks) != 2 {
+				t.Fatalf("got %d tasks once the interval is spent, want 2 — no row goes quiet at a digest it cannot move; all = %+v", len(tasks), tasks)
+			}
+		})
 	}
 }
 
@@ -155,22 +256,23 @@ func TestReconcile_RebaseRefiresAtUnmovedHeadBounded(t *testing.T) {
 
 // TestReconcile_RevisionGatedRowConsultsNoStamp: the re-fire bound's
 // stamp is consulted only by state-governed rows. A revision-gated row
-// — the event path's implement row with nothing recorded in the
-// watermark — dispatches whatever a fresh stamp records, so generalising
-// the bound changes no behaviour on the gated rows
+// — the event path's rebase row on a pull request, the shape left for
+// the next member of this chain (s-git/maitred#260) — dispatches
+// whatever a fresh stamp records at its head, so generalising the bound
+// changes no behaviour on the gated rows
 // (§forgejo/decisions/loop-prevention,
 // §forgejo/reconciliation/the-state-is-the-watermark).
 func TestReconcile_RevisionGatedRowConsultsNoStamp(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
 	api.repos = []Repository{testRepo("o/r")}
-	issue := &Issue{Number: 7, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r"}
-	api.issues[7] = issue
-	key := Key{Repo: "o/r", Kind: KindIssue, Number: 7}
-	// A stamp taken moments ago at this revision — the shape a
+	pr := PullRequest{Number: 7, State: "open", Mergeable: false, HeadSHA: "sha-7"}
+	api.pulls[7] = &pr
+	key := Key{Repo: "o/r", Kind: KindPR, Number: 7}
+	// A stamp taken moments ago at this head — the shape a
 	// state-governed row leaves behind. The gated row must ignore it.
-	eng.stampReFireAt(key, ActionImplement, issueRevision(issue), time.Now())
+	eng.stampReFireAt(key, ActionRebase, "sha-7", time.Now())
 
-	eng.HandleEvent(Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"})
+	eng.HandleEvent(Event{Type: EventPRSynced, Repo: "o/r", Kind: KindPR, Number: 7, Sender: "alice"})
 
 	if tasks := q.all(); len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1 (a revision-gated row consults no stamp); all = %+v", len(tasks), tasks)

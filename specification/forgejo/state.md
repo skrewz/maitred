@@ -10,29 +10,49 @@ A watermark records, for one issue or pull request:
 
 - the last dispatched **action** (the named action from the decision
   function), and
-- the **revision/activity** it was dispatched at (e.g. the PR head sha, or
-  the issue's `updated_at`). An `outcome` tracker's revision is the exception:
-  a **digest** of its state, its labels and its body **with the current-state
-  region masked out**, because the engine rewrites that region itself every tick
-  and a revision the engine moves by writing it is a revision no guard can pace
-  (§forgejo/reconciliation/the-tracker-block, §forgejo/decisions/loop-prevention).
-  What a reason line makes of that digest belongs to
-  §forgejo/observability/the-decision-log.
+- the **revision** it was dispatched at, which is that action's
+  **declared digest** (§forgejo/decisions/actions): the digest of the input
+  set the action's declaration names, so the question the row asks and the
+  value its guard compares are derived from one place. For an issue-path
+  action that digest is a hex SHA-256 over the state facts the declaration
+  names — the issue's state and labels, its body outside the region the
+  engine owns, the state of each of its blockers, the pull requests
+  connected to it, the downstream edges a teardown order reads, the forest
+  digest the `decompose` gate observed — folded as a **set**, so the same
+  state yields a byte-identical digest whatever order the listings arrive in
+  and any fact a predicate reads moves it
+  (§forgejo/decisions/actionable-state-digest,
+  §forgejo/reconciliation/the-tracker-block, s-git/maitred#259). No event
+  fact folds into it: which row fired is the event's business, and a digest
+  the sweep and an event must answer with one value cannot contain a fact
+  only one of them carries. No issue timestamp folds in whole either — the
+  `updated_at` of an `outcome` tracker moves when the engine rewrites its
+  current-state region, and a fact the engine moves by writing it is a fact
+  no guard can pace, so a tracker folds the facts its masked revision folds
+  instead (§forgejo/reconciliation/the-tracker-block,
+  §forgejo/decisions/loop-prevention). The pull-request actions and the
+  landing set still name the object revision their rows were keyed on — the
+  PR head sha, and the revision derived from the whole set — and re-keying
+  them is the next member of this chain (s-git/maitred#260).
 
-The revision a dispatch records is that action's **declared digest**
-(§forgejo/decisions/actions); today every action's digest is the revision of
-the object its predicate reads, which is also the revision the decision log
-names for the dispatch and the re-fire bound is keyed on, and the tests keep
-the two derivations answering with one value.
+The digest is the one value the idempotency guard compares, the re-fire
+bound is a rate on, and the task's dedup key carries; the decision log
+names it for a dispatch, and names the object's own revision for a
+hold-off, which reaches no declaration to derive a digest from
+(§forgejo/webhook/the-pipeline, §forgejo/observability/the-decision-log).
+Re-keying an action is an edit to its declaration and to nothing beside it.
 
 The revision records *what the engine last reacted to*, never whether an
 object is actionable: eligibility is a predicate over re-fetched state
-alone (§forgejo/reconciliation/the-state-is-the-watermark). On an event
-path the guard compares the revision as a cursor over events — a newer
-revision is newer information, an unchanged one was already handled. On
-the sweep the guard is not consulted for eligibility at all;
-state-governed rows re-fire on the state and are spaced by the re-fire
-bound (§forgejo/decisions/loop-prevention).
+alone (§forgejo/reconciliation/the-state-is-the-watermark). A digest the
+watermark does not record is new information and dispatches; one it does
+record means the state has not moved since the engine last acted on it,
+and the row dispatches anyway — no action may fall silent at a digest it
+cannot move — leaving the pace of that re-fire to the re-fire bound
+(§forgejo/decisions/loop-prevention). This is the same on both paths, which
+is the point of keying on a digest rather than a timestamp: the sweep and
+the event ask one question of one state and get one answer
+(§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#259).
 
 Fan-out dispatches — the review lenses (§forgejo/decisions/review-lenses) —
 give the record a **per-subject dimension**: alongside that main

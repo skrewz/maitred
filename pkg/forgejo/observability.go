@@ -60,7 +60,7 @@ func (e *Engine) recordDecision(k Key, ev Event, st State, d Decision) {
 		Dispatched: d.Dispatched,
 		Action:     d.Action,
 		Reason:     d.Reason,
-		Revision:   revisionFor(ev, st),
+		Revision:   loggedRevision(d, ev, st),
 		At:         time.Now(),
 	}
 	switch {

@@ -1460,8 +1460,10 @@ func TestHandler_WatermarkAndIdempotency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if w == nil || w.Action != string(ActionImplement) || w.Revision != testUpdatedAt.UTC().Format(time.RFC3339) {
-		t.Errorf("watermark = %+v, want implement @ %s", w, testUpdatedAt.UTC().Format(time.RFC3339))
+	// The watermark records the dispatched action's declared digest, not
+	// the issue's timestamp (§forgejo/state/watermark, s-git/maitred#259).
+	if want := digestFor(ActionImplement, Event{}, State{Issue: api.issues[7]}); w == nil || w.Action != string(ActionImplement) || w.Revision != want {
+		t.Errorf("watermark = %+v, want implement @ the declared digest %s", w, want)
 	}
 
 	// A second identical delivery holds off.
@@ -1547,7 +1549,11 @@ func TestHandler_TaskDedupKey(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1", len(tasks))
 	}
-	want := "forgejoeng-o/r-issue-7-implement-" + testUpdatedAt.UTC().Format(time.RFC3339)
+	// The dedup key carries the digest the dispatch is watermarked on,
+	// so a state relation with no delivery — which moves that digest and
+	// no timestamp — is a different key that dispatches freely
+	// (§forgejo/webhook/the-pipeline, s-git/maitred#259).
+	want := "forgejoeng-o/r-issue-7-implement-" + digestFor(ActionImplement, Event{}, State{Issue: api.issues[7]})
 	if tasks[0].DedupKey != want {
 		t.Errorf("dedup key = %q, want %q", tasks[0].DedupKey, want)
 	}
@@ -1916,8 +1922,14 @@ func TestHandler_IssueClosed_CascadeWatermarkHolds(t *testing.T) {
 	api.issues[10] = testIssue(10, "open")
 	api.blocks[7] = []Issue{*testIssue(10, "open")}
 	api.deps[10] = []Issue{*testIssue(7, "closed")}
+	// The key's watermark records the declared digest of the state the
+	// cascade leg will re-fetch: issue and blocker rows alike
+	// (§forgejo/decisions/inputs, s-git/maitred#259).
 	if err := store.Save(Key{Repo: "o/r", Kind: KindIssue, Number: 10},
-		Watermark{Action: string(ActionImplement), Revision: testUpdatedAt.UTC().Format(time.RFC3339)}); err != nil {
+		Watermark{
+			Action:   string(ActionImplement),
+			Revision: digestFor(ActionImplement, Event{}, State{Issue: api.issues[10], Blockers: api.deps[10]}),
+		}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -2226,9 +2238,8 @@ func TestDispatch_WatermarkNamesTheLoggedRevision(t *testing.T) {
 		if w == nil {
 			t.Fatal("the cascade recorded no watermark")
 		}
-		ev := Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 10, Sender: "alice"}
-		if want := revisionFor(ev, State{Issue: api.issues[10]}); w.Revision != want {
-			t.Errorf("the cascade's watermark records %q, want the revision the leg's own state gives, %q", w.Revision, want)
+		if want := digestFor(ActionImplement, Event{}, State{Issue: api.issues[10], Blockers: api.deps[10]}); w.Revision != want {
+			t.Errorf("the cascade's watermark records %q, want the digest of the leg's own declared inputs, %q", w.Revision, want)
 		}
 	})
 }
@@ -2294,10 +2305,10 @@ func TestHandler_IssueClosed_CascadeWrapUpAcrossRoleBoundary(t *testing.T) {
 }
 
 // TestHandler_IssueClosed_CascadeWrapUpWatermarkHolds: the cascade's
-// wrap-up emission is guarded by the key's own revision-keyed
-// watermark — unlike the sweep's exempt row, a cascade does not
-// re-fire wrap-up at an already-dispatched revision
-// (§forgejo/reconciliation/watermark-exemptions).
+// wrap-up emission is guarded by the key's own watermark, keyed on the
+// digest of the wrap-up declaration's inputs — a cascade does not
+// re-fire wrap-up at a state it has already dispatched at
+// (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#259).
 func TestHandler_IssueClosed_CascadeWrapUpWatermarkHolds(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
 	h := NewHandler(eng, "s3cret", nil)
@@ -2308,7 +2319,10 @@ func TestHandler_IssueClosed_CascadeWrapUpWatermarkHolds(t *testing.T) {
 	api.blocks[7] = []Issue{*tracker}
 	api.deps[10] = []Issue{*testIssue(7, "closed")}
 	if err := store.Save(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 10},
-		Watermark{Action: string(ActionWrapUp), Revision: issueRevision(tracker)}); err != nil {
+		Watermark{
+			Action:   string(ActionWrapUp),
+			Revision: digestFor(ActionWrapUp, Event{}, State{Issue: tracker, Blockers: api.deps[10]}),
+		}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -5526,7 +5540,9 @@ func TestHandler_TeardownSweepRefiresWhileTheForestStands(t *testing.T) {
 	// The interval the bound waits out is spent: the forest standing
 	// is the state that calls for the order again.
 	key := Key{Repo: "o/out", Kind: KindIssue, Number: 7}
-	eng.stampReFireAt(key, ActionTeardownForest, issueRevision(api.issues[7]), time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+	eng.stampReFireAt(key, ActionTeardownForest,
+		digestFor(ActionTeardownForest, Event{}, State{Issue: api.issues[7], Blocked: api.blocks[7]}),
+		time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
 	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "maitred"})
 	tasks = q.all()
 	if len(tasks) != 2 {

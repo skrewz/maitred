@@ -1392,7 +1392,7 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	if action == ActionWrapUp {
 		e.drawTrackerBeforeWrapUp(st.Issue, st.Blockers, ev.Repo)
 	}
-	rev := revisionFor(ev, st)
+	rev := digestFor(action, ev, st)
 	if err := e.dispatchPrompt(ev, st, *pc, "", action, rev); err != nil {
 		return err
 	}
@@ -1447,9 +1447,9 @@ func (e *Engine) boundReFire(key Key, ev Event, st State, d Decision) Decision {
 	if !d.Dispatched || !d.StateGoverned {
 		return d
 	}
-	rev := revisionFor(ev, st)
+	rev := digestFor(d.Action, ev, st)
 	if e.reFiredRecently(key, d.Action, rev) {
-		return holdOffReFireBound(d.Action, revisionFacts(st.Issue, rev), e.cfg.ReconcileInterval)
+		return holdOffReFireBound(d.Action, quotedRevision(d.Action, ev, st, rev), e.cfg.ReconcileInterval)
 	}
 	return d
 }
@@ -1559,7 +1559,7 @@ func (e *Engine) dispatchPrompt(ev Event, st State, pc PromptConfig, subject str
 // slot and the sweep retries it, exactly as a failed singleton dispatch
 // retries.
 func (e *Engine) dispatchLenses(key Key, w *Watermark, ev Event, st State, lenses []LensDispatch) {
-	rev := revisionFor(ev, st)
+	rev := digestFor(ActionReview, ev, st)
 	slots := w.subjectSlots()
 	if slots == nil {
 		slots = map[string]Slot{}
@@ -1718,25 +1718,16 @@ func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
 		e.log.Warn("load watermark (continuing without)", "key", k.String(), "error", err)
 		w = nil
 	}
-	// The cascade's watermark records the emitted action's declared
-	// digest, which for the issue-path actions is the re-fetched
-	// issue's revision. A sync-set candidate never reaches this line:
-	// dispatchCascade hands it to dispatchSyncSet, which reads the set
-	// before deriving anything, so the state built here carries
-	// exactly the object these actions read
-	// (§forgejo/decisions/actions, §forgejo/decisions/unblock-cascade).
-	rev := digestFor(cd.Action, Event{}, State{Issue: issue})
-	if alreadyDispatched(w, cd.Action, rev) {
-		return nil
-	}
-	ev := Event{Type: EventIssueOpened, Repo: k.Repo, Kind: KindIssue, Number: k.Number, Sender: sender}
 	// The vip walk reads the issue's blocker rows for a labelled tracker
 	// (§forgejo/webhook/vip-priority), and this is the one path that
 	// dispatches an issue without holding them — the cascade carries
 	// keys, not state — so the leg pays the one read the decision made
 	// elsewhere. A lost read costs the tier and not the dispatch: the
 	// task goes out at the queue's default with a warn line naming it
-	// (§forgejo/webhook/vip-priority).
+	// (§forgejo/webhook/vip-priority). It is also a declared input of
+	// the actions dispatched here, so the read lands before the digest
+	// that decides the leg is derived over the state
+	// (§forgejo/decisions/inputs, s-git/maitred#259).
 	st := State{Issue: issue}
 	blockers, err := e.api.IssueDependencies(owner, name, k.Number)
 	if err != nil {
@@ -1745,6 +1736,18 @@ func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
 	} else {
 		st.Blockers = blockers
 	}
+	// The cascade's watermark records the emitted action's declared
+	// digest, derived over the state the action's declaration names. A
+	// sync-set candidate never reaches this line: dispatchCascade hands
+	// it to dispatchSyncSet, which reads the set before deriving
+	// anything, so the state built here carries exactly the object
+	// these actions read (§forgejo/decisions/actions,
+	// §forgejo/decisions/unblock-cascade).
+	rev := digestFor(cd.Action, Event{}, st)
+	if alreadyDispatched(w, cd.Action, rev) {
+		return nil
+	}
+	ev := Event{Type: EventIssueOpened, Repo: k.Repo, Kind: KindIssue, Number: k.Number, Sender: sender}
 	if err := e.dispatch(ev, st, cd.Action); err != nil {
 		return err
 	}
@@ -1938,19 +1941,32 @@ func (e *Engine) dispatchSyncSet(cd CascadeDispatch, sender string) error {
 	return e.store.Save(k, watermarkAt(w, string(ActionSync), digestFor(ActionSync, ev, st)))
 }
 
-// revisionFor is the object revision a decision-log entry records and
-// the re-fire stamp is keyed on: the PR head sha for pull requests,
-// the issue's updated_at for issues, and the derived set revision for
-// a landing set — the state of the whole set, not of the grouping
-// issue alone (§forgejo/webhook/the-pipeline, §forgejo/state/watermark,
-// §forgejo/decisions/sync-set). What a dispatch's own watermark
-// records is the dispatched action's declared digest, reached through
-// the declaration table (§forgejo/decisions/actions). Each action
-// reads one object, so its declared digest is the revision this
-// function derives for that object — an agreement the tests keep
-// rather than a coincidence of wording, since nothing in the types
-// forces it (TestDeclaredDigests_AgreeWithTheObjectRevision,
-// TestDispatch_WatermarkNamesTheLoggedRevision).
+// loggedRevision is the revision a decision-log entry records: the
+// dispatched action's declared digest for a dispatch, so the line and
+// the watermark file state one value, and the object's own revision for
+// a hold-off, which names no action whose declaration could be folded
+// (§forgejo/observability/the-decision-log, §forgejo/state/watermark,
+// s-git/maitred#259). A dispatch records that digest in its watermark,
+// in its task's dedup key and in the re-fire stamp alike, so the guard,
+// the pacing and the queue answer on one derivation
+// (§forgejo/decisions/actions, §forgejo/webhook/the-pipeline).
+func loggedRevision(d Decision, ev Event, st State) string {
+	if d.Dispatched && d.Action != "" {
+		return digestFor(d.Action, ev, st)
+	}
+	return revisionFor(ev, st)
+}
+
+// revisionFor is the object revision itself: the PR head sha for a pull
+// request, the issue's updated_at for an issue, and the revision
+// derived from the whole set for a landing set — the state of that set,
+// not of the grouping issue alone (§forgejo/webhook/the-pipeline,
+// §forgejo/state/watermark, §forgejo/decisions/sync-set). The
+// pull-request and landing-set actions declare these as their digest, so
+// for their rows this derivation and the declared digest state one
+// value; the issue-path actions fold their declaration's input set
+// instead, and reach this only where no action was chosen
+// (s-git/maitred#259).
 func revisionFor(ev Event, st State) string {
 	// The set revision describes a landing set, so it takes
 	// precedence only on the path that attached members to the

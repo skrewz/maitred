@@ -1,8 +1,12 @@
 package forgejo
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 )
 
 // Action declarations (§forgejo/decisions/actions).
@@ -24,12 +28,16 @@ import (
 // §forgejo/reconciliation/the-state-is-the-watermark). The digest is
 // the revision the watermark records under the action's name
 // (§forgejo/state/watermark); which fact each action keys on today is
-// what the declarations state. Re-keying one is an edit to that
-// declaration and to revisionFor, which derives the revision the
-// decision log names and the re-fire stamp is keyed on — two
-// derivations answering with one value, which
-// TestDeclaredDigests_AgreeWithTheObjectRevision keeps them doing
-// (§forgejo/decisions/transition-table).
+// what the declarations state. An issue-path action's digest is now
+// derived from its own declared input set, so re-keying one edits this
+// table and nothing beside it; the pull-request actions still name the
+// object revision their rows already keyed on, and re-keying them is
+// the next member of this chain (s-git/maitred#260). The digest is also
+// what the re-fire bound is a rate on and what the task's dedup key
+// carries, so the guard, the pacing and the queue answer on one value
+// (§forgejo/decisions/loop-prevention,
+// §forgejo/webhook/the-pipeline,
+// §forgejo/decisions/transition-table).
 
 // readyAnswer is the predicate's verdict: the state calls for the
 // action (readyYes), does not (readyNo), or the predicate abstains and
@@ -62,6 +70,11 @@ type actionDecl struct {
 	// digest derives the revision a dispatch of this action is
 	// watermarked on (§forgejo/state/watermark).
 	digest func(Event, State) string
+	// digestFoldsInputs records that the digest is the fold of this
+	// declaration's own input set, which is what lets a reason line
+	// name the facts behind the digest it quotes
+	// (§forgejo/state/watermark, §forgejo/observability/the-decision-log).
+	digestFoldsInputs bool
 	// components is the fold's component set, declared by the action
 	// whose dispatch the fold gates: the `decompose` declaration owns
 	// it and the digest reads it from here, so no list lives beside
@@ -83,16 +96,18 @@ func init() {
 				"issue.state", "issue.labels", "issue.updated_at",
 				"blockers.states", "connected PRs",
 			},
-			ready:  implementReady,
-			digest: issueDigest,
+			ready:             implementReady,
+			digest:            declaredDigestFor(ActionImplement),
+			digestFoldsInputs: true,
 		},
 		ActionReassess: {
 			inputs: []string{
 				"issue.state", "issue.labels", "issue.updated_at",
 				"blockers.states", "event.type",
 			},
-			ready:  reassessReady,
-			digest: issueDigest,
+			ready:             reassessReady,
+			digest:            declaredDigestFor(ActionReassess),
+			digestFoldsInputs: true,
 		},
 		ActionReview: {
 			inputs: []string{
@@ -132,25 +147,28 @@ func init() {
 				"blockers.states", "forest digest gate",
 				"event.type", "event.sender",
 			},
-			ready:      decomposeReady,
-			digest:     issueDigest,
-			components: digestComponentSet,
+			ready:             decomposeReady,
+			digest:            declaredDigestFor(ActionDecompose),
+			digestFoldsInputs: true,
+			components:        digestComponentSet,
 		},
 		ActionWrapUp: {
 			inputs: []string{
 				"issue.state", "issue.labels", "issue.updated_at",
 				"blockers.states",
 			},
-			ready:  wrapUpReady,
-			digest: issueDigest,
+			ready:             wrapUpReady,
+			digest:            declaredDigestFor(ActionWrapUp),
+			digestFoldsInputs: true,
 		},
 		ActionTeardownForest: {
 			inputs: []string{
 				"issue.state", "issue.labels", "issue.updated_at",
 				"blocked downstream edges",
 			},
-			ready:  teardownForestReady,
-			digest: issueDigest,
+			ready:             teardownForestReady,
+			digest:            declaredDigestFor(ActionTeardownForest),
+			digestFoldsInputs: true,
 		},
 		ActionSync: {
 			inputs: []string{
@@ -242,21 +260,226 @@ func foldComponents() []digestComponent {
 	return declarationFor(ActionDecompose).components
 }
 
-// The digest derivations the declarations bind to. issueDigest is an
-// issue row's activity revision — a tracker's with the engine-owned
-// region masked out (§forgejo/reconciliation/the-tracker-block);
-// prHeadDigest is the pull request's head sha; and the sync action's
-// digest is the whole landing set's revision. The sync leg of the
-// unblock cascade reads the set before it dispatches
-// (dispatchSyncSet), so no declared digest is ever derived over a
-// state whose members are absent. A later member of this chain
-// re-keys these onto the digest of the declared input set itself
-// (s-git/maitred#258 scope note).
-func issueDigest(_ Event, s State) string {
-	if s.Issue == nil {
-		return ""
+// The digest derivations the declarations bind to. declaredDigestFor is
+// the digest of an issue-path action's declared input set; prHeadDigest
+// is the pull request's head sha; and the sync action's digest is the
+// whole landing set's revision. The sync leg of the unblock cascade
+// reads the set before it dispatches (dispatchSyncSet), so no declared
+// digest is ever derived over a state whose members are absent. The
+// pull-request actions keep the object revision their rows were keyed
+// on before this chain (s-git/maitred#260).
+
+// declaredDigestFor is the digest derivation an issue-path declaration
+// binds to: the digest of that action's declared input set, the hex
+// SHA-256 over exactly the state facts its declaration names, so the
+// same state yields a byte-identical digest whatever order the listings
+// arrive in and a change to any fact the predicate reads moves it
+// (§forgejo/state/watermark, §forgejo/decisions/inputs,
+// s-git/maitred#259).
+//
+// No event fact stands in it, and no issue timestamp stands in it
+// whole. The event names which row fired, and the sweep and the event
+// path must reach one digest for one state — two answers is the split
+// this chain exists to close
+// (§forgejo/reconciliation/the-state-is-the-watermark). The one fact
+// the engine moves by writing it, an outcome tracker's current-state
+// region, is folded out: the body folds as what stands outside the
+// fence the engine owns, and the row's own timestamp as the masked
+// revision (§forgejo/reconciliation/the-tracker-block).
+//
+// A fact a re-keyed declaration names and no fold covers would fold as
+// nothing, silently widening the digest's blind spots, so every state
+// name in one must appear in declaredInputFolds;
+// TestDeclaredDigests_FoldEveryDeclaredFact keeps them doing. An event
+// name is declared in eventInputNames, where folding nothing is the
+// intent.
+func declaredDigestFor(a Action) func(Event, State) string {
+	return func(_ Event, s State) string {
+		facts := declaredInputFacts(a, s)
+		if len(facts) == 0 {
+			// An action reached with none of its declared state present
+			// folds to nothing, and the revision-keyed guard is inert for
+			// a revision that is nothing — the same answer an issue that
+			// was never fetched gave before this digest existed
+			// (§forgejo/state/watermark).
+			return ""
+		}
+		return hashInputFacts(facts)
 	}
-	return issueRevision(s.Issue)
+}
+
+// declaredInputFacts is one declared digest's input, in the words a
+// reason line quotes them: the facts the action's declaration names,
+// each stated so a human can line the quote up against the forge's
+// history (§forgejo/observability/the-decision-log,
+// §forgejo/state/watermark).
+func declaredInputFacts(a Action, s State) []string {
+	var facts []string
+	seen := map[string]bool{}
+	add := func(fact string) {
+		if seen[fact] {
+			return
+		}
+		seen[fact] = true
+		facts = append(facts, fact)
+	}
+	for _, name := range declarationFor(a).inputs {
+		foldFact, ok := declaredInputFolds[name]
+		if !ok {
+			if eventInputNames[name] {
+				continue
+			}
+			panic("forgejo: declared digest: no fold for declared input " + name)
+		}
+		for _, fact := range foldFact(s) {
+			add(fact)
+		}
+	}
+	return facts
+}
+
+// digestFoldsInputs reports whether an action's digest is the fold of
+// its declaration's input set, the case in which a reason quoting it
+// names the facts behind it (§forgejo/state/watermark).
+func digestFoldsInputs(a Action) bool {
+	return declarationFor(a).digestFoldsInputs
+}
+
+// eventInputNames are the declaration names that fold nothing: the
+// event is a notification of which row fired, never part of the state
+// whose digest must be identical across paths
+// (§forgejo/decisions/inputs,
+// §forgejo/reconciliation/the-state-is-the-watermark). The rows still
+// read them — reassess names the event type in its reason, the root's
+// comment row names the sender — they simply cannot enter a digest both
+// paths answer with.
+var eventInputNames = map[string]bool{
+	"event.type":   true,
+	"event.sender": true,
+	"event.kind":   true,
+	"event.repo":   true,
+	"event.number": true,
+}
+
+// declaredInputFolds maps each state fact a declaration may name to how
+// its digest states it. Each fold states the fact the action's own
+// predicate reads, so no fact can be folded that no predicate asks —
+// and, conversely, no fact the predicate asks of can stand still while
+// the digest moves (§forgejo/decisions/inputs).
+var declaredInputFolds = map[string]func(State) []string{
+	"issue.state": func(s State) []string {
+		if s.Issue == nil {
+			return nil
+		}
+		return []string{"state " + s.Issue.State}
+	},
+	"issue.labels": func(s State) []string {
+		if s.Issue == nil {
+			return nil
+		}
+		facts := make([]string, 0, len(s.Issue.Labels))
+		for _, label := range s.Issue.Labels {
+			facts = append(facts, "label "+label)
+		}
+		return facts
+	},
+	"issue.body": func(s State) []string {
+		if s.Issue == nil {
+			return nil
+		}
+		// What stands outside the fence the engine owns: the
+		// current-state region a wrap-up rewrites every tick folds
+		// nowhere (§forgejo/reconciliation/the-tracker-block).
+		return []string{"body " + digestRevision(outsideFence(s.Issue.Body))}
+	},
+	"issue.updated_at": func(s State) []string {
+		if s.Issue == nil {
+			return nil
+		}
+		// An ordinary row states its activity timestamp, one fact among
+		// the set rather than the cursor the whole decision turned on.
+		// An outcome tracker's write of its own current-state region
+		// moves that timestamp, so the tracker states instead the facts
+		// its masked revision folds — the same facts, readable, and none
+		// of them one the engine moves by writing it
+		// (§forgejo/state/watermark,
+		// §forgejo/reconciliation/the-tracker-block).
+		if isTracker(s.Issue) {
+			return trackerFacts(s.Issue)
+		}
+		return []string{"updated " + s.Issue.UpdatedAt.UTC().Format(time.RFC3339)}
+	},
+	"blockers.states": func(s State) []string {
+		facts := make([]string, 0, len(s.Blockers))
+		for i := range s.Blockers {
+			facts = append(facts, blockerRef(s, &s.Blockers[i])+" "+s.Blockers[i].State)
+		}
+		return facts
+	},
+	"connected PRs": func(s State) []string {
+		// A connected pull request is one of the issue's blockers, so it
+		// stands where the issue does and is keyed there
+		// (§forgejo/webhook/re-fetch, §forgejo/decisions/transition-table).
+		repo := ""
+		if s.Issue != nil {
+			repo = s.Issue.Repository
+		}
+		facts := make([]string, 0, len(s.ConnectedPRs))
+		for i := range s.ConnectedPRs {
+			facts = append(facts, forestRef(repo, s.ConnectedPRs[i].Number)+" "+s.ConnectedPRs[i].State)
+		}
+		return facts
+	},
+	"blocked downstream edges": func(s State) []string {
+		// The teardown predicate's read is countDeletableMembers: the
+		// spared tracker says nothing about whether a forest remains, so
+		// it states no fact either (§forgejo/decisions/forest-teardown).
+		var facts []string
+		for i := range s.Blocked {
+			if isTracker(&s.Blocked[i]) {
+				continue
+			}
+			facts = append(facts, blockerRef(s, &s.Blocked[i])+" "+s.Blocked[i].State)
+		}
+		return facts
+	},
+	"forest digest gate": func(s State) []string {
+		if s.ForestGate == nil {
+			return []string{"forest gate unarmed"}
+		}
+		return []string{"forest " + forestRef(s.ForestGate.RootRepo, s.ForestGate.RootNumber) + " " + s.ForestGate.Current}
+	},
+}
+
+// blockerRef is a blocker's identity, which the dependency listing
+// states as its own repository and, where it states none, means the
+// repository of the issue it blocks
+// (§forgejo/decisions/actionable-state-digest).
+func blockerRef(s State, blocker *Issue) string {
+	repo := blocker.Repository
+	if repo == "" && s.Issue != nil {
+		repo = s.Issue.Repository
+	}
+	return forestRef(repo, blocker.Number)
+}
+
+// hashInputFacts is the declared digest's hash: the hex SHA-256 over the
+// facts in sorted order, each length-prefixed so no fact's text can be
+// mistaken for another's structure. The sort is what makes the digest
+// order-insensitive; the prefix is what makes the fold injective. It is
+// hashFacts for a list of plain facts rather than a forest fold's
+// component-tagged ones, which is why the two exist: the forest fold
+// owes a sub-digest per component and this one owes nothing beyond one
+// digest (§forgejo/state/watermark,
+// §forgejo/decisions/actionable-state-digest).
+func hashInputFacts(facts []string) string {
+	encoded := append([]string(nil), facts...)
+	sort.Strings(encoded)
+	h := sha256.New()
+	for _, fact := range encoded {
+		fmt.Fprintf(h, "%d:%s\n", len(fact), fact)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func prHeadDigest(_ Event, s State) string {
@@ -535,9 +758,8 @@ func answerOf(d Decision) readyAnswer {
 }
 
 // wrapUpReady is wrap-up's predicate: an open outcome tracker with no
-// open blocker — on the sweep the state is the watermark, which is
-// why the reason names the revision it dispatches past
-// (§forgejo/reconciliation/watermark-exemptions).
+// open blocker (§forgejo/decisions/actions,
+// §forgejo/reconciliation/watermark-exemptions).
 func wrapUpReady(_ Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
@@ -552,8 +774,8 @@ func wrapUpReady(_ Event, s State) (Decision, readyAnswer) {
 	if open := openBlockers(s.Blockers); len(open) > 0 {
 		return holdOff(fmt.Sprintf("issue %d is an open %s tracker still blocked by %d open issue(s); the curation row asks first", issue.Number, LabelOutcome, len(open))), readyNo
 	}
-	return dispatch(ActionWrapUp, fmt.Sprintf("issue %d is an open, fully unblocked %s tracker; the state calls for wrap-up regardless of revision %s",
-		issue.Number, LabelOutcome, revisionFacts(issue, digestFor(ActionWrapUp, Event{}, s)))), readyYes
+	return dispatch(ActionWrapUp, fmt.Sprintf("issue %d is an open, fully unblocked %s tracker; the state calls for wrap-up",
+		issue.Number, LabelOutcome)), readyYes
 }
 
 // teardownForestReady is teardown-forest's predicate: an open
@@ -581,11 +803,8 @@ func teardownForestReady(e Event, s State) (Decision, readyAnswer) {
 		}
 		return holdOff(fmt.Sprintf("issue %d carries %s but blocks no issue other than an %s tracker, which the order spares: its forest has nothing left to delete", issue.Number, LabelTeardownForest, LabelOutcome)), readyNo
 	}
-	if onSweep(e) {
-		return dispatch(ActionTeardownForest, fmt.Sprintf("issue %d is an open %s root carrying %s and still blocking %d issue(s) the order would delete; the state calls for teardown regardless of revision %s",
-			issue.Number, LabelIdeation, LabelTeardownForest, remaining, digestFor(ActionTeardownForest, e, s))), readyYes
-	}
-	return dispatch(ActionTeardownForest, fmt.Sprintf("issue %d is an open %s root carrying %s: the forest it commissioned is to be deleted", issue.Number, LabelIdeation, LabelTeardownForest)), readyYes
+	return dispatch(ActionTeardownForest, fmt.Sprintf("issue %d is an open %s root carrying %s and still blocking %d issue(s) the order would delete; the forest it commissioned is to be deleted",
+		issue.Number, LabelIdeation, LabelTeardownForest, remaining)), readyYes
 }
 
 // syncReady is the landing-set predicate: an open sync issue
