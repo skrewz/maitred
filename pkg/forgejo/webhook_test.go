@@ -6080,14 +6080,18 @@ func TestDispatchCascade_LostBlockerReadHoldsTheLegBack(t *testing.T) {
 // TestDispatchCascade_IssueLegRecordsTheRefetchedDigest: one state, one
 // digest. The cascade's issue leg carries keys rather than state, so the
 // digest it records must be the one the re-fetch's state shape yields —
-// open PR blockers projected into the connected PRs as refetch projects
-// them, or the same unblocking would read as unseen state on the next
-// sweep (§forgejo/webhook/re-fetch, §forgejo/decisions/inputs,
-// s-git/maitred#259).
+// open PR blockers projected into the connected PRs by the projection the
+// re-fetch calls, or the same unblocking would read as unseen state on the
+// next sweep (§forgejo/webhook/re-fetch, §forgejo/decisions/inputs,
+// s-git/maitred#259). The blocker lives in another repository on purpose:
+// the blocker fold states it as o/other#3 and the connected-PR fold states
+// it as o/r#3, so a state left unprojected folds a digest this assertion
+// cannot match. Folded from one repository both folds state the same fact,
+// and the assertion could not see whether the projection ran at all.
 func TestDispatchCascade_IssueLegRecordsTheRefetchedDigest(t *testing.T) {
 	eng, api, _, store := newTestEngine(t)
 	api.issues[10] = testIssue(10, "open")
-	blocker := Issue{Number: 3, State: "open", IsPull: true, Repository: "o/r"}
+	blocker := Issue{Number: 3, State: "open", IsPull: true, Repository: "o/other"}
 	api.deps[10] = []Issue{blocker}
 
 	key := Key{Repo: "o/r", Kind: KindIssue, Number: 10}

@@ -315,12 +315,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 			if err != nil {
 				return ev, State{}, err
 			}
-			st.Blockers = blockers
-			for i := range blockers {
-				if blockers[i].IsPull && blockers[i].State == "open" {
-					st.ConnectedPRs = append(st.ConnectedPRs, pullRequestFromIssue(blockers[i]))
-				}
-			}
+			projectPRBlockers(&st, blockers)
 			// A root under a teardown order is the one issue whose
 			// *downstream* edges are read, because the order is only
 			// actionable while the forest stands: whether the root blocks
@@ -1742,8 +1737,8 @@ func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
 	// dispatched here (§forgejo/decisions/inputs), so the leg derives the
 	// digest that decides it over the state shape the re-fetch builds:
 	// the blocker rows, and the open PR blockers projected into the
-	// connected PRs exactly as refetch projects them, so one state
-	// reaches one digest whichever path observed it
+	// connected PRs through the same projection the re-fetch calls, so one
+	// state reaches one digest whichever path observed it
 	// (§forgejo/webhook/re-fetch, §forgejo/decisions/actions). A read
 	// that fails costs this leg and not merely the tier: folding a
 	// digest over a state missing a declared input would derive a value
@@ -1757,12 +1752,7 @@ func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
 	if err != nil {
 		return fmt.Errorf("cascade leg: reading %s's blockers: %w", k.String(), err)
 	}
-	st.Blockers = blockers
-	for i := range blockers {
-		if blockers[i].IsPull && blockers[i].State == "open" {
-			st.ConnectedPRs = append(st.ConnectedPRs, pullRequestFromIssue(blockers[i]))
-		}
-	}
+	projectPRBlockers(&st, blockers)
 	// The cascade's watermark records the emitted action's declared
 	// digest, derived over the state the action's declaration names. A
 	// sync-set candidate never reaches this line: dispatchCascade hands
@@ -2036,6 +2026,21 @@ func pullRequestFromIssue(issue Issue) PullRequest {
 		Title:   issue.Title,
 		State:   issue.State,
 		HTMLURL: issue.HTMLURL,
+	}
+}
+
+// projectPRBlockers records a dependency listing on st and projects its
+// open pull-request blockers into the connected pull requests — the one
+// statement of that projection, so every path that builds a state from a
+// blocker listing builds the same state and the declaration's digest folds
+// the same facts whichever path observed them
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/inputs).
+func projectPRBlockers(st *State, blockers []Issue) {
+	st.Blockers = blockers
+	for i := range blockers {
+		if blockers[i].IsPull && blockers[i].State == "open" {
+			st.ConnectedPRs = append(st.ConnectedPRs, pullRequestFromIssue(blockers[i]))
+		}
 	}
 }
 
