@@ -179,6 +179,7 @@ func init() {
 			digest: syncSetDigest,
 		},
 	}
+	validateFoldingDeclarations()
 }
 
 // digestComponent is one component of a forest's actionable state:
@@ -266,8 +267,9 @@ func foldComponents() []digestComponent {
 // whole landing set's revision. The sync leg of the unblock cascade
 // reads the set before it dispatches (dispatchSyncSet), so no declared
 // digest is ever derived over a state whose members are absent. The
-// pull-request actions keep the object revision their rows were keyed
-// on before this chain (s-git/maitred#260).
+// pull-request actions key on an object revision — a head sha — and
+// re-keying them onto the fold of their declared inputs is the next
+// member of this chain (s-git/maitred#260).
 
 // declaredDigestFor is the digest derivation an issue-path declaration
 // binds to: the digest of that action's declared input set, the hex
@@ -288,11 +290,9 @@ func foldComponents() []digestComponent {
 // revision (§forgejo/reconciliation/the-tracker-block).
 //
 // A fact a re-keyed declaration names and no fold covers would fold as
-// nothing, silently widening the digest's blind spots, so every state
-// name in one must appear in declaredInputFolds;
-// TestDeclaredDigests_FoldEveryDeclaredFact keeps them doing. An event
-// name is declared in eventInputNames, where folding nothing is the
-// intent.
+// nothing, silently widening the digest's blind spots, so
+// validateFoldingDeclarations refuses it when the declaration table is
+// built (§forgejo/decisions/inputs).
 func declaredDigestFor(a Action) func(Event, State) string {
 	return func(_ Event, s State) string {
 		facts := declaredInputFacts(a, s)
@@ -324,12 +324,19 @@ func declaredInputFacts(a Action, s State) []string {
 		facts = append(facts, fact)
 	}
 	for _, name := range declarationFor(a).inputs {
+		if strings.HasPrefix(name, "event.") {
+			// An event fact names which row fired, never part of the
+			// state whose digest both paths must answer with, so it
+			// folds nowhere (§forgejo/decisions/inputs,
+			// §forgejo/reconciliation/the-state-is-the-watermark). The
+			// rows still read them — reassess names the event type in
+			// its reason, the root's comment row names the sender — they
+			// simply cannot enter a digest both paths answer with.
+			continue
+		}
 		foldFact, ok := declaredInputFolds[name]
 		if !ok {
-			if eventInputNames[name] {
-				continue
-			}
-			panic("forgejo: declared digest: no fold for declared input " + name)
+			panic(fmt.Sprintf("forgejo: %s declares %s, which no digest fold states", a, name))
 		}
 		for _, fact := range foldFact(s) {
 			add(fact)
@@ -338,27 +345,26 @@ func declaredInputFacts(a Action, s State) []string {
 	return facts
 }
 
+// validateFoldingDeclarations refuses a declaration whose digest is the
+// fold of its own inputs while naming a state fact no fold states. A
+// silent gap there would widen the digest's blind spots — a fact the
+// predicate reads could move while the digest stands still — so the
+// table is checked once as it is built, where a mistake takes the
+// process down at startup rather than in the middle of serving a
+// delivery (§forgejo/decisions/inputs).
+func validateFoldingDeclarations() {
+	for a, decl := range actionDecls {
+		if decl.digestFoldsInputs {
+			declaredInputFacts(a, State{})
+		}
+	}
+}
+
 // digestFoldsInputs reports whether an action's digest is the fold of
 // its declaration's input set, the case in which a reason quoting it
 // names the facts behind it (§forgejo/state/watermark).
 func digestFoldsInputs(a Action) bool {
 	return declarationFor(a).digestFoldsInputs
-}
-
-// eventInputNames are the declaration names that fold nothing: the
-// event is a notification of which row fired, never part of the state
-// whose digest must be identical across paths
-// (§forgejo/decisions/inputs,
-// §forgejo/reconciliation/the-state-is-the-watermark). The rows still
-// read them — reassess names the event type in its reason, the root's
-// comment row names the sender — they simply cannot enter a digest both
-// paths answer with.
-var eventInputNames = map[string]bool{
-	"event.type":   true,
-	"event.sender": true,
-	"event.kind":   true,
-	"event.repo":   true,
-	"event.number": true,
 }
 
 // declaredInputFolds maps each state fact a declaration may name to how
@@ -463,15 +469,15 @@ func blockerRef(s State, blocker *Issue) string {
 	return forestRef(repo, blocker.Number)
 }
 
-// hashInputFacts is the declared digest's hash: the hex SHA-256 over the
-// facts in sorted order, each length-prefixed so no fact's text can be
-// mistaken for another's structure. The sort is what makes the digest
-// order-insensitive; the prefix is what makes the fold injective. It is
-// hashFacts for a list of plain facts rather than a forest fold's
-// component-tagged ones, which is why the two exist: the forest fold
-// owes a sub-digest per component and this one owes nothing beyond one
-// digest (§forgejo/state/watermark,
-// §forgejo/decisions/actionable-state-digest).
+// hashInputFacts is the package's one length-prefixed hash: the hex
+// SHA-256 over the facts in sorted order, each length-prefixed so no
+// fact's text can be mistaken for another's structure. The sort is what
+// makes the digest order-insensitive; the prefix is what makes the fold
+// injective. Both the declared digest and a tracker's masked revision
+// run through it, so no derivation can be re-encoded half-way
+// (§forgejo/state/watermark). The forest fold's hashFacts is separate
+// because it owes a sub-digest per tagged component, which no plain
+// fact list can express (§forgejo/decisions/actionable-state-digest).
 func hashInputFacts(facts []string) string {
 	encoded := append([]string(nil), facts...)
 	sort.Strings(encoded)
@@ -697,8 +703,8 @@ func decomposeReady(e Event, s State) (Decision, readyAnswer) {
 			// §forgejo/decisions/loop-prevention, s-git/maitred#147).
 			subject = fmt.Sprintf("issue %d is an open %s root: a comment by %s", issue.Number, LabelIdeation, e.Sender)
 		}
-		// Unarmed, the root's standing is the answer and the row
-		// paces the re-fire with the revision-keyed guard.
+		// Unarmed, the root's standing is the answer and the re-fire
+		// bound paces the row, one attempt per interval.
 		return digestGateAnswer(s.ForestGate, subject, dispatch(ActionDecompose, subject))
 	}
 	if isTracker(issue) {

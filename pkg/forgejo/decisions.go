@@ -647,7 +647,7 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 // dispatch from the forest's digest wherever the gate is armed; where
 // it is unarmed — an event on a root whose kind labels conflict, an
 // issue the sweep holds off as a conflict before any decompose row —
-// the row is paced by the declared digest alone. The row
+// the row is paced by its declared digest and the re-fire bound. The row
 // is author-scoped, not blanket: a comment
 // authored by the configured decomposer identity holds off naming the
 // authorship, so the decomposer's own question never re-triggers it
@@ -692,8 +692,10 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 // §forgejo/decisions/actionable-state-digest, s-git/maitred#209). The
 // gate is unarmed only for a root whose kind labels conflict: the
 // sweep holds that issue off as a conflict before any decompose row,
-// while the event path's row for it is paced by the declared digest
-// alone (§forgejo/decisions/transition-table, s-git/maitred#259). A
+// while the event path's row for it is paced by the digest of its
+// declared inputs and the re-fire bound, one attempt per interval
+// whichever path arrived (§forgejo/decisions/transition-table,
+// s-git/maitred#259). A
 // root is decomposed whatever blocks it; a closed root holds off
 // upstream, because closing it commissions the forest and the unblock
 // cascade dispatches the forest members
@@ -1282,8 +1284,7 @@ func holdOffPRNotOwned(pr *PullRequest, identity string) (Decision, bool) {
 // pull-request rows still run on, where the revision the row quotes is
 // an object revision — a head sha — and re-keying them onto the digest
 // of their declared inputs is the next member of this chain
-// (s-git/maitred#260); the issue-path rows moved to
-// dispatchOnDeclaredDigest. When the watermark does happen to already
+// (s-git/maitred#260). When the watermark does happen to already
 // record the action at this revision — the stalled shape the exemption
 // exists to recover — the reason names the revision the state carries
 // past it, so the decision log keeps stating the state fact and never
@@ -1962,18 +1963,15 @@ func issueRevision(issue *Issue) string {
 }
 
 // trackerRevision is a tracker's revision: the facts trackerFacts folds,
-// hashed. The digest folds no tracker body at all for the mirror reason — the
+// hashed through the one length-prefixed hash the declared digests use.
+// The digest folds no tracker body at all for the mirror reason — the
 // engine rewrites that region every tick, and a fact the engine moves by
 // writing it cannot be the fact that decides whether to dispatch
 // (§forgejo/decisions/actionable-state-digest). Everything a decision reads
 // about a tracker still moves this revision: closing it, labelling it, and an
 // edit to the outcome prose. The drawing never does.
 func trackerRevision(issue *Issue) string {
-	h := sha256.New()
-	for _, fact := range trackerFacts(issue) {
-		fmt.Fprintf(h, "%d:%s\n", len(fact), fact)
-	}
-	return hex.EncodeToString(h.Sum(nil))
+	return hashInputFacts(trackerFacts(issue))
 }
 
 // trackerFacts are the facts an `outcome` tracker's revision folds, in the order
@@ -1994,24 +1992,6 @@ func trackerFacts(issue *Issue) []string {
 	return append(folded, "body "+digestRevision(outsideFence(issue.Body)))
 }
 
-// revisionFacts is a revision in the words a reason line carries: the strings
-// trackerFacts folds, joined, for an `outcome` tracker whose revision is a digest
-// the current-state write cannot move, and the revision as quoted for every row
-// the engine never writes. A bare digest tells an operator nothing they can line
-// up against the forge's history when the question is why a tracker woke an agent
-// at an odd hour (§forgejo/state/watermark, §forgejo/observability/the-decision-log).
-// The equality leg is the landing set's exception: where the revision quoted is a
-// digest of a whole set rather than of the row in hand, more than one issue lies
-// behind it, and naming one row's facts for it would be a guess. A tracker's
-// reasons reach this from the wrap-up row and from the re-fire bound; the reassess
-// row's guard is reached only by rows a tracker's reserved labels hold off first.
-func revisionFacts(issue *Issue, quoted string) string {
-	if issue == nil || !isTracker(issue) || quoted != issueRevision(issue) {
-		return quoted
-	}
-	return strings.Join(trackerFacts(issue), ", ")
-}
-
 // digestRevision is a fact too long, or too little its own, to quote whole — a
 // description, a landing prompt — as the hex the revision digests it to: one
 // change anywhere inside it moves the digest, and its length says nothing about
@@ -2030,8 +2010,12 @@ func digestRevision(fact string) string {
 // line stating a digest an operator cannot read still names what the
 // engine saw (§forgejo/state/watermark,
 // §forgejo/observability/the-decision-log, s-git/maitred#259). Every
-// other revision is quoted as it stands, a tracker's through
-// revisionFacts.
+// other revision is an object revision — a PR head sha, a landing set's
+// derived revision, an issue's `updated_at` — and is quoted as it
+// stands, being a value an operator can already place in the forge's
+// history. A tracker's revision is stated through the fold like any
+// other issue-path row's, since the rows that quote one all ask a
+// re-keyed declaration (§forgejo/reconciliation/the-tracker-block).
 func quotedRevision(a Action, e Event, s State, rev string) string {
 	if digestFoldsInputs(a) && rev == digestFor(a, e, s) {
 		facts := declaredInputFacts(a, s)
@@ -2040,20 +2024,25 @@ func quotedRevision(a Action, e Event, s State, rev string) string {
 			return "digest " + strings.Join(facts, ", ")
 		}
 	}
-	return "revision " + revisionFacts(s.Issue, rev)
+	return "revision " + rev
 }
 
 // alreadyDispatched reports whether the watermark already records
-// action at revision — the idempotency guard, revision-keyed on every
-// path: the same (event, state, revision) does not re-dispatch the same
-// action (§forgejo/decisions/loop-prevention). The watermark exemption
-// is not implemented here: it is scoped to the sweep, whose exempt rows
-// in decideIssueReconcile, the sweep's per-lens fan-out exemption in
-// decideReviewFanOut, and the sweep's fix-feedback and labelled
-// merge-or-wait rows in decidePRReconcile simply never consult the
-// watermark (§forgejo/reconciliation/watermark-exemptions). Keying the
-// bypass on the action instead of the path would hand every future
-// event row for those actions a suppression-free path by accident.
+// action at revision — the idempotency guard, keyed on the one value
+// the action's declaration derives (§forgejo/state/watermark). What the
+// caller makes of a true answer is the row's, not the guard's: a
+// pull-request row holds off on it, while an issue-path row dispatched
+// through dispatchOnDeclaredDigest dispatches anyway and leaves the
+// pace of the re-fire to the re-fire bound, because no action may fall
+// silent at a digest it cannot move
+// (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/the-state-is-the-watermark). The rows still
+// exempt from the watermark are the pull-request rows named in
+// §forgejo/reconciliation/watermark-exemptions, which on the sweep
+// simply never consult it; the guard itself is not where that
+// exemption lives. Keying the bypass on the action instead of the path
+// would hand every future event row for those actions a
+// suppression-free path by accident.
 func alreadyDispatched(w *Watermark, action Action, revision string) bool {
 	return w != nil && w.Action == string(action) && w.Revision == revision
 }

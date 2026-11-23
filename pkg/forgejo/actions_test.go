@@ -83,10 +83,11 @@ func TestActionDeclarations_FoldComponentsAreDeclaredByDecompose(t *testing.T) {
 
 // TestActionDeclarations_DigestsAreDeclared pins what each declaration's
 // digest derives from: an issue-path action's digest is the fold of its
-// own input set, and the pull-request and landing-set actions still name
-// the object revision the rows were keyed on before this chain — the
-// next member of the chain re-keys them (s-git/maitred#260).
-// (§forgejo/state/watermark, s-git/maitred#258, s-git/maitred#259.)
+// own input set, and the pull-request and landing-set actions name an
+// object revision — a head sha, the landing set's derived revision —
+// until the next member of the chain re-keys them
+// (s-git/maitred#260). (§forgejo/state/watermark, s-git/maitred#258,
+// s-git/maitred#259.)
 func TestActionDeclarations_DigestsAreDeclared(t *testing.T) {
 	issue := trackerIssue()
 	pr := openPR("sha-head")
@@ -113,22 +114,17 @@ func TestActionDeclarations_DigestsAreDeclared(t *testing.T) {
 	}
 }
 
-// TestDeclaredDigests_FoldEveryDeclaredFact checks that no fact a
-// re-keyed declaration names folds as nothing, and that no event fact
-// folds into a digest the two paths must answer with one value: a
-// missing fold would silently widen the digest's blind spots, and an
-// event fact would make one state yield two digests
+// TestDeclaredDigests_FoldEveryDeclaredFact checks that no event fact
+// folds into a digest the two paths must answer with one value: an event
+// fact would make one state yield two digests
 // (§forgejo/decisions/inputs,
 // §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#259).
+// The companion claim — that a declaration naming a state fact no fold
+// states is a mistake rather than a digest — is no longer this test's to
+// make: validateFoldingDeclarations refuses it as the declaration table
+// is built, so no test binary with such a gap ever reaches a
+// table walk.
 func TestDeclaredDigests_FoldEveryDeclaredFact(t *testing.T) {
-	for _, a := range []Action{ActionImplement, ActionReassess, ActionDecompose, ActionWrapUp, ActionTeardownForest} {
-		for _, in := range declarationFor(a).inputs {
-			_, folded := declaredInputFolds[in]
-			if !folded && !eventInputNames[in] {
-				t.Errorf("action %q declares input %q, which folds nothing and is no event fact", a, in)
-			}
-		}
-	}
 	// One state, every path: the sweep's synthetic event and an issue's
 	// activity events must reach one digest, whatever row brought them.
 	st := State{ReviewLenses: testLenses, Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "closed", Repository: "o/r"}}}
@@ -243,6 +239,17 @@ func TestQuotedRevision_NamesTheFactsBehindTheDigest(t *testing.T) {
 	for _, want := range []string{"state open", "updated ", "o/r#3 closed"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("quoted revision %q names no %q", got, want)
+		}
+	}
+	// An `outcome` tracker's fold states the facts its masked revision
+	// hashes rather than the region the engine rewrites every tick, so
+	// the wrap-up row that quotes its digest names what an operator can
+	// place in the forge's history (§forgejo/reconciliation/the-tracker-block).
+	tracker := State{Issue: trackerIssue()}
+	got = quotedRevision(ActionWrapUp, Event{}, tracker, digestFor(ActionWrapUp, Event{}, tracker))
+	for _, want := range []string{"state open", "label " + LabelOutcome, "body " + digestRevision(outsideFence(tracker.Issue.Body))} {
+		if !strings.Contains(got, want) {
+			t.Errorf("a tracker's quoted revision %q names no %q", got, want)
 		}
 	}
 	// A revision the action does not fold — a pull request's head sha,

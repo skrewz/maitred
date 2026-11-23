@@ -965,36 +965,6 @@ func TestTrackerRevision_IgnoresTheFencedRegion(t *testing.T) {
 	}
 }
 
-// TestRevisionFacts_NamesWhatTheDigestHides: a tracker's revision is a digest,
-// so the reasons that quote one say what it folds instead — the strings the digest
-// folds, the revision as quoted for a row the engine never writes, and the same
-// for a set digest, which describes more than the row in hand
-// (§forgejo/state/watermark, §forgejo/observability/the-decision-log).
-func TestRevisionFacts_NamesWhatTheDigestHides(t *testing.T) {
-	tracker := chartTracker("prose\n\n" + fenceBegin + "\nthe chart\n\n" + fenceEnd + "\n")
-	got := revisionFacts(&tracker, issueRevision(&tracker))
-	for _, want := range []string{
-		"state open",
-		"label " + LabelOutcome,
-		"body " + digestRevision(outsideFence(tracker.Body)),
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("revisionFacts = %q, carries no %q", got, want)
-		}
-	}
-
-	root := chartRoot()
-	if want := root.UpdatedAt.UTC().Format(time.RFC3339); revisionFacts(&root, issueRevision(&root)) != want {
-		t.Errorf("revisionFacts of a row the engine never writes = %q, want its updated_at %q", revisionFacts(&root, issueRevision(&root)), want)
-	}
-
-	// A landing set's digest is not the tracker's own, so naming one row's facts
-	// for it would describe more than they cover.
-	if got := revisionFacts(&tracker, "set-digest"); got != "set-digest" {
-		t.Errorf("revisionFacts of a set digest = %q, want it quoted as it stands", got)
-	}
-}
-
 // TestTrackerBlock_BoundReFireNamesTheFolds: the line a bounded wrap-up re-fire
 // leaves is the one an operator reads when a tracker seems not to wake an agent,
 // and a tracker's revision is a digest — so that third quote names the facts

@@ -336,9 +336,9 @@ will not move (s-git/maitred#259).
   an order whose deletable member arrived with no delivery moves it, and a
   teardown that died half way through re-fires until nothing but a spared
   tracker remains (§forgejo/decisions/forest-teardown).
-- `decompose` was the first of them: its rows on every path consult the
-  forest's **actionable-state digest gate**, dispatching only when the
-  digest has moved since the store last observed it
+- `decompose` consults the forest's **actionable-state digest gate** on
+  every path, dispatching only when the forest's fold has moved since
+  the store last observed it
   (§forgejo/decisions/actionable-state-digest, s-git/maitred#209); the
   engine account the gate folds its comments against is a required key
   (§forgejo/config/engine-account), so no sweep runs without the gate.

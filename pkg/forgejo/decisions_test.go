@@ -4695,9 +4695,10 @@ func TestDecide_DecomposeDigestGate_SweepTracker(t *testing.T) {
 // give the same answer for this action — and the gate replaces the
 // revision-keyed guard there, because an edge move changes the digest
 // and no revision (§forgejo/reconciliation/watermark-exemptions,
-// s-git/maitred#209). The row's revision guard stands only where the
-// gate is unarmed: an event on a root whose kind labels conflict, an
-// issue the sweep holds off as a conflict before any decompose row.
+// s-git/maitred#209). Where the gate is unarmed — an event on a root
+// whose kind labels conflict, an issue the sweep holds off as a
+// conflict before any decompose row — the row is paced by the declared
+// digest and the re-fire bound, one attempt per interval on every path.
 func TestDecide_DecomposeDigestGate_EventPath(t *testing.T) {
 	edited := func() *Issue {
 		i := ideationIssue()
@@ -4743,17 +4744,34 @@ func TestDecide_DecomposeDigestGate_EventPath(t *testing.T) {
 			t.Errorf("decision = %+v, want the authorship hold-off kept ahead of the gate", d)
 		}
 	})
-	t.Run("a kind-conflicting root keeps the revision-keyed guard", func(t *testing.T) {
-		// The gate arms only where a gated row is reachable; the
-		// sweep holds this issue off as a conflict before any
-		// decompose row, so the event path's root row keeps its
-		// revision guard — pre-existing routing, unchanged.
+	t.Run("a kind-conflicting root is paced by the re-fire bound", func(t *testing.T) {
+		// The gate arms only where a gated row is reachable; the sweep
+		// holds this issue off as a conflict before any decompose row,
+		// so the event path's root row is the digest's alone — and the
+		// bound's, since the row may not fall silent at a digest it
+		// cannot move. The sweep's refusal of the same issue is
+		// pre-existing routing, unchanged here.
 		conflicted := labelledIssue(LabelIdeation, LabelSync)
 		conflicted.Number = 7
 		st := State{ReviewLenses: testLenses, Issue: conflicted}
-		d := Decide(issueEvent(EventIssueEdited), st, nil)
+		ev := issueEvent(EventIssueEdited)
+		d := Decide(ev, st, nil)
 		if d.Action != ActionDecompose || !strings.Contains(d.Reason, "the label makes the root") {
-			t.Errorf("decision = %+v, want the unarmed row's revision-guarded dispatch", d)
+			t.Errorf("decision = %+v, want the unarmed row's dispatch", d)
+		}
+		// StateGoverned is the flag the bound reads: without it the row
+		// would re-fire on every arrival rather than once per interval.
+		if !d.StateGoverned {
+			t.Errorf("decision = %+v, want a state-governed dispatch the re-fire bound spaces", d)
+		}
+		// A digest the watermark already records still dispatches — no
+		// suppression returns to this row — and says who spaces it.
+		d = Decide(ev, st, &Watermark{Action: string(ActionDecompose), Revision: digestFor(ActionDecompose, ev, st)})
+		if d.Action != ActionDecompose {
+			t.Errorf("decision = %+v, want the recorded digest to dispatch, paced rather than suppressed", d)
+		}
+		if !strings.Contains(d.Reason, "re-fire bound") {
+			t.Errorf("reason = %q, want it to name the bound that paces the re-fire", d.Reason)
 		}
 	})
 }
