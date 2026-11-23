@@ -571,9 +571,9 @@ func TestRootEdgesAreImpliedNotDrawn(t *testing.T) {
 	}
 	for _, want := range []string{
 		"%% forest forest#1 rendered by maitred",
-		// the tracker's edge into the root counts no peer into the fan, so
-		// it stays the one it had before that edge arrived
-		"%% tracker forest#2 fans to 1 issue (fan stated, not drawn)",
+		// the drop draws nothing and un-counts nothing: the tracker's edge
+		// into the root still counts the root as a row, as it did before
+		"%% tracker forest#2 fans to 2 issues (fan stated, not drawn)",
 		"i_forest_3 ==> i_tasks_4",
 		// a member's edge into the root is a work order and stays drawn
 		"i_tasks_4 ==> i_forest_1",

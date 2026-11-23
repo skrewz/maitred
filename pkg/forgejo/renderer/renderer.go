@@ -257,13 +257,14 @@ func prepare(g Graph) (*forest, error) {
 		}
 		key := from.id + "\x00" + to.id
 		if from.role == RoleTracker || to.role == RoleTracker {
-			// A tracker's fan is stated, never drawn. The root is never among
-			// the rows the fan counts: its edge into a tracker is dropped above
-			// with the root's other edges, and a tracker's edge into the root
-			// skips the root as peer here (§forgejo/renderer/note-lines).
+			// A tracker's fan is stated, never drawn. The root's edge into a
+			// tracker is dropped above with the root's other edges, so the root
+			// never fans; a tracker's edge into the root still counts it as a
+			// row, whichever side of the edge the row sits on, exactly as
+			// before the drop (§forgejo/renderer/note-lines).
 			for _, pair := range [][2]*node{{from, to}, {to, from}} {
 				tracker, peer := pair[0], pair[1]
-				if tracker.role != RoleTracker || peer.id == tracker.id || peer.id == root.id {
+				if tracker.role != RoleTracker || peer.id == tracker.id {
 					continue
 				}
 				if fanPeers[tracker] == nil {
