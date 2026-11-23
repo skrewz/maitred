@@ -74,7 +74,10 @@ subject**, keyed by the subject's identity (the lens's configured
 login). The idempotency guard for a fan-out dispatch reads its own
 subject's slot, so two lenses dispatched at the same revision do not
 hold each other off, and a singleton dispatch's write keeps the
-subject slots a previous fan-out left behind (§forgejo/state/storage).
+subject slots a previous fan-out left behind (§forgejo/state/storage). The
+fan-out's own write keeps that main slot whole, its fire instant included,
+so the pace a singleton dispatch stamped outlives the fan-out that follows
+it (§forgejo/decisions/loop-prevention).
 Storage stays **one file per object**: the slots live in the same
 record, and the per-key lock stays on the object.
 

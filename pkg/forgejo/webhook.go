@@ -1618,13 +1618,20 @@ func watermarkAt(prev *Watermark, action, revision string) Watermark {
 	return Watermark{Action: action, Revision: revision, FiredAt: &fired, Subjects: prev.subjectSlots()}
 }
 
-// watermarkKeepSlots returns a watermark keeping prev's main slot and
-// adding/overwriting the given subject slots — the fan-out's write.
+// watermarkKeepSlots returns a watermark keeping prev's main slot — the
+// action, the digest it dispatched at and the fire instant beside it — and
+// adding/overwriting the given subject slots: the fan-out's write. The
+// instant rides this write because the pair it is read with does: the re-fire
+// bound keys on (action, digest) and paces on the instant recorded beside
+// that pair, so a fan-out keeping the pair and dropping the instant would
+// leave a slot that reads as recorded answering as though nothing had ever
+// fired (§forgejo/state/watermark, §forgejo/decisions/loop-prevention).
 func watermarkKeepSlots(prev *Watermark, slots map[string]Slot) Watermark {
 	next := Watermark{Subjects: prev.subjectSlots()}
 	if prev != nil {
 		next.Action = prev.Action
 		next.Revision = prev.Revision
+		next.FiredAt = prev.FiredAt
 	}
 	if next.Subjects == nil {
 		next.Subjects = map[string]Slot{}

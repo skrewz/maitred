@@ -6044,6 +6044,72 @@ func TestHandler_IssueEdited_DurableStampBoundsTheReFireAcrossARestart(t *testin
 	}
 }
 
+// TestHandler_PRFanOut_KeepsTheDurableStampForARestart: the review fan-out is
+// the other writer of a key's main slot, so the fire instant that paces a
+// re-fire must ride that write as it rides a singleton's. A fan-out that kept
+// the (action, digest) pair and dropped the instant would leave the store
+// looking recorded with nothing in it to pace on, and the first sweep after a
+// restart would re-fire the sweep's exempt pull-request rows at a head that has
+// not moved (§forgejo/state/watermark, §forgejo/decisions/loop-prevention).
+func TestHandler_PRFanOut_KeepsTheDurableStampForARestart(t *testing.T) {
+	lenses := []ReviewLens{
+		{Identity: "lens-a", Prompt: "/pr-review-a {{.PRURL}}", Timeout: 30 * time.Minute},
+		{Identity: "lens-b", Prompt: "/pr-review-b {{.PRURL}}", Timeout: 30 * time.Minute},
+	}
+	eng, api, q, store := newTestEngine(t)
+	eng.cfg.Reviews = lenses
+	api.pulls[9] = testPR(9, "open", false)
+	key := Key{Repo: "o/r", Kind: KindPR, Number: 9}
+
+	// The PR is behind: rebase lands in the main slot and stamps the instant
+	// beside the head it dispatched at.
+	eng.HandleEvent(Event{Type: EventPRSynced, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "alice"})
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want rebase dispatched once; all = %+v", len(tasks), tasks)
+	}
+	w, err := store.Load(key)
+	if err != nil || w == nil || w.Action != string(ActionRebase) || w.Revision != "sha-9" || w.FiredAt == nil {
+		t.Fatalf("watermark = %+v, %v, want rebase at the head with its fire instant", w, err)
+	}
+	fired := *w.FiredAt
+
+	// The forge re-reads mergeability, and the next sweep finds both lenses
+	// still owed a review at this head: the fan-out dispatches, and its write
+	// is the main slot's last writer.
+	api.pulls[9].Mergeable = true
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 3 {
+		t.Fatalf("got %d tasks, want one review task per lens; all = %+v", len(tasks), tasks)
+	}
+	w, err = store.Load(key)
+	if err != nil || w == nil {
+		t.Fatalf("Load = %+v, %v, want the fan-out's watermark", w, err)
+	}
+	if w.Action != string(ActionRebase) || w.Revision != "sha-9" {
+		t.Fatalf("main slot = %s @ %s, want the fan-out to keep the dispatch it found there", w.Action, w.Revision)
+	}
+	if w.FiredAt == nil || !w.FiredAt.Equal(fired) {
+		t.Fatalf("fire instant = %v, want the fan-out's write to carry the instant the dispatch stamped (%v)", w.FiredAt, fired)
+	}
+	for _, lens := range lenses {
+		if _, ok := w.Subjects[lens.Identity]; !ok {
+			t.Fatalf("subject slots = %+v, want a slot per dispatched lens", w.Subjects)
+		}
+	}
+
+	// A restart — a fresh engine over the same store, holding no stamp of its
+	// own — and mergeability retracted, so the sweep's exempt rebase row asks
+	// the bound again at the head it already dispatched at. What spaces that
+	// re-fire is the instant in the slot the fan-out wrote last.
+	api.pulls[9].Mergeable = false
+	restarted := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	restarted.cfg.Reviews = lenses
+	restarted.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 3 {
+		t.Fatalf("got %d tasks on the sweep after the restart, want the durable stamp to hold the re-fire back; all = %+v", len(tasks), tasks)
+	}
+}
+
 // TestDispatchCascade_LostBlockerReadHoldsTheLegBack: the read the
 // cascade's issue leg pays is a declared input of the digest that decides
 // the leg, so a lost read holds the leg back rather than dispatching at —
