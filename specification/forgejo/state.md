@@ -40,7 +40,20 @@ bound is a rate on, and the task's dedup key carries; the decision log
 names it for a dispatch, and names the object's own revision for a
 hold-off, which reaches no declaration to derive a digest from
 (§forgejo/webhook/the-pipeline, §forgejo/observability/the-decision-log).
-Re-keying an action is an edit to its declaration and to nothing beside it.
+Re-keying an action is an edit to its declaration and to nothing beside
+it — but a revision the store recorded before a re-key is a digest no
+state of that row folds, so the first sweep after a re-key reads every
+tracked object as a state the engine has never reacted to and re-fires
+each once. Rows whose digest did not move are not re-fired, so the cost
+falls on the re-keyed action alone.
+
+Alongside the digest the main slot records **when** its action last
+fired at it. That instant is the re-fire bound's durable stamp: the
+engine keeps a stamp in memory too, but memory empties at a restart, and
+what the bound paces is a rate rather than a recollection
+(§forgejo/decisions/loop-prevention). A slot with no recorded instant —
+one written before the stamp was durable, or a forest's digest slot —
+bounds nothing, exactly as an unrecorded revision does.
 
 The revision records *what the engine last reacted to*, never whether an
 object is actionable: eligibility is a predicate over re-fetched state
@@ -70,7 +83,9 @@ record, and the per-key lock stays on the object.
 The watermark is stored as local JSON under the data directory (e.g.
 `/var/lib/maitred/forgejoeng/`), keyed by
 `repo + kind(issue|pr|forest) + number` (the forest kind is the
-[Forest digest](#forest-digest) slot below).
+[Forest digest](#forest-digest) slot below). A dispatched slot carries
+its action, the digest it dispatched at, and the instant it fired
+(§forgejo/state/watermark).
 Writes are **atomic**: a reader never observes a torn or partially written
 watermark.
 

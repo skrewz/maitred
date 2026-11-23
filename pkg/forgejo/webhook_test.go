@@ -6001,26 +6001,111 @@ func TestHandler_IssueClosed_CascadeVIPMemberDispatchesAtTeacher(t *testing.T) {
 	}
 }
 
-// TestDispatchCascade_VIPReadFailureDispatchesAtDefault: the blocker read
-// the cascade's issue leg makes for the walk is an addition to the
-// dispatch, not a precondition — a lost read sends the task out at the
-// queue's default tier rather than holding the woken member back
-// (§forgejo/webhook/vip-priority).
-func TestDispatchCascade_VIPReadFailureDispatchesAtDefault(t *testing.T) {
-	eng, api, q, _ := newTestEngine(t)
+// TestHandler_IssueEdited_DurableStampBoundsTheReFireAcrossARestart: the
+// watermark no longer suppresses these rows, so what spaces their
+// re-fire must outlive the process — otherwise every restart, and with
+// it every crash-loop, admits one agent task per tracked key per
+// still-ready action with no interval spent. The fire instant the
+// dispatch records beside the digest is what the bound reads when the
+// new process holds no stamp of its own
+// (§forgejo/decisions/loop-prevention, §forgejo/state/watermark).
+func TestHandler_IssueEdited_DurableStampBoundsTheReFireAcrossARestart(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.issues[7] = &Issue{Number: 7, State: "open", Repository: "o/r", UpdatedAt: testUpdatedAt}
+	key := Key{Repo: "o/r", Kind: KindIssue, Number: 7}
+	ev := Event{Type: EventIssueEdited, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"}
+
+	eng.HandleEvent(ev)
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want the edited issue to dispatch once", len(tasks))
+	}
+	w, err := store.Load(key)
+	if err != nil || w == nil || w.FiredAt == nil {
+		t.Fatalf("watermark = %+v, %v, want the dispatch to stamp when it fired", w, err)
+	}
+
+	// A restart: a fresh engine over the same store, holding no stamp.
+	restarted := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	restarted.HandleEvent(ev)
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks after the restart, want the durable stamp to hold the re-fire back; all = %+v", len(tasks), tasks)
+	}
+
+	// The instant the store records is a clock, not a latch: once the
+	// interval has passed the same state re-fires again.
+	aged := time.Now().Add(-eng.cfg.ReconcileInterval - time.Minute)
+	w.FiredAt = &aged
+	if err := store.Save(key, *w); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	restarted.HandleEvent(ev)
+	if tasks := q.all(); len(tasks) != 2 {
+		t.Fatalf("got %d tasks with the interval spent, want 2; all = %+v", len(tasks), tasks)
+	}
+}
+
+// TestDispatchCascade_LostBlockerReadHoldsTheLegBack: the read the
+// cascade's issue leg pays is a declared input of the digest that decides
+// the leg, so a lost read holds the leg back rather than dispatching at —
+// and recording — a digest folded over a state missing that input. The
+// sweep is the backstop for the member the cascade woke
+// (§forgejo/webhook/vip-priority, §forgejo/reconciliation/the-sweep,
+// §forgejo/decisions/inputs).
+func TestDispatchCascade_LostBlockerReadHoldsTheLegBack(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
 	api.issues[10] = testIssue(10, "open")
 	api.depsErr = errors.New("dependencies unavailable")
 
-	cd := CascadeDispatch{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 10}, Action: ActionImplement}
+	key := Key{Repo: "o/r", Kind: KindIssue, Number: 10}
+	cd := CascadeDispatch{Key: key, Action: ActionImplement}
+	if err := eng.dispatchCascade(cd, "alice"); err == nil {
+		t.Error("dispatchCascade succeeded, want the lost declared read to hold the leg back")
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Errorf("got %d tasks, want none; all = %+v", len(tasks), tasks)
+	}
+	// A digest no other path derives must not enter the store either —
+	// the sweep would read it as a state the engine had reacted to,
+	// dispatch again at the real one, and spend two agent runs on one
+	// unblocking.
+	w, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want the leg to leave the store as it found it", w)
+	}
+}
+
+// TestDispatchCascade_IssueLegRecordsTheRefetchedDigest: one state, one
+// digest. The cascade's issue leg carries keys rather than state, so the
+// digest it records must be the one the re-fetch's state shape yields —
+// open PR blockers projected into the connected PRs as refetch projects
+// them, or the same unblocking would read as unseen state on the next
+// sweep (§forgejo/webhook/re-fetch, §forgejo/decisions/inputs,
+// s-git/maitred#259).
+func TestDispatchCascade_IssueLegRecordsTheRefetchedDigest(t *testing.T) {
+	eng, api, _, store := newTestEngine(t)
+	api.issues[10] = testIssue(10, "open")
+	blocker := Issue{Number: 3, State: "open", IsPull: true, Repository: "o/r"}
+	api.deps[10] = []Issue{blocker}
+
+	key := Key{Repo: "o/r", Kind: KindIssue, Number: 10}
+	cd := CascadeDispatch{Key: key, Action: ActionImplement}
 	if err := eng.dispatchCascade(cd, "alice"); err != nil {
 		t.Fatalf("dispatchCascade: %v", err)
 	}
-	tasks := q.all()
-	if len(tasks) != 1 {
-		t.Fatalf("got %d tasks, want 1 (implement for issue 10)", len(tasks))
+	w, err := store.Load(key)
+	if err != nil || w == nil {
+		t.Fatalf("Load = %+v, %v, want the leg's watermark", w, err)
 	}
-	if tasks[0].Priority != "" {
-		t.Errorf("priority = %q, want unset — the lost read costs the tier, not the dispatch", tasks[0].Priority)
+	want := digestFor(ActionImplement, Event{}, State{
+		Issue:        api.issues[10],
+		Blockers:     api.deps[10],
+		ConnectedPRs: []PullRequest{pullRequestFromIssue(blocker)},
+	})
+	if w.Revision != want {
+		t.Errorf("watermark revision = %q, want the re-fetch's digest %q", w.Revision, want)
 	}
 }
 

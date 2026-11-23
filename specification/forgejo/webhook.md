@@ -342,14 +342,26 @@ unblock cascade's issue leg (§forgejo/decisions/unblock-cascade) is the
 one path that dispatches an issue without holding its blocker rows, so
 it reads them once per dispatch; the cascade's PR leg dispatches the
 state the re-fetch assembled, so the delivered issue is judged there on
-the same rows every other delivery path judges it on.
+the same rows every other delivery path judges it on. That read is also
+a **declared input** of the actions the issue leg dispatches, so the leg
+builds the state the re-fetch builds — open PR blockers projected into
+the connected pull requests as §forgejo/webhook/re-fetch projects them —
+and one state reaches one digest whichever path observed it
+(§forgejo/decisions/inputs).
 
-A graph read that **fails** costs the tier and not the dispatch: an
-object whose forest cannot be read is scheduled at the queue's default
-like any unlabelled object, with one warn line naming the lost read —
-the level every other degraded continuation in the engine logs at.
-Holding the work back over an annotation would leave the queue poorer and
-the issue unattended, which is the opposite of what the label asks for.
+A graph read made **only** for the tier costs the tier and not the
+dispatch: an object whose forest cannot be read is scheduled at the
+queue's default like any unlabelled object, with one warn line naming
+the lost read — the level every other degraded continuation in the
+engine logs at. Holding the work back over an annotation would leave the
+queue poorer and the issue unattended, which is the opposite of what the
+label asks for. Where the same read is a declared input of the digest
+that decides the leg, though, it is not an annotation: a digest folded
+over a state missing one of its inputs is a value no other path derives,
+which would mis-space the re-fire and leave the store holding a digest
+the next sweep reads as unseen state — two agent runs where one belongs.
+There the lost read costs the leg, the sweep being the backstop the
+specification already names (§forgejo/reconciliation/the-sweep).
 
 The tier is an **ask**, made in the queue's own words: the one value the
 engine ever puts in the field is a word the queue documents

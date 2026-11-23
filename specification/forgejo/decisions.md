@@ -939,23 +939,30 @@ Six mechanisms, in this order:
    the *next* transition, never a re-run of the same one: a review
    does not push commits; a commit push triggers a review; a
    changes-requested review triggers a fix; a fix pushes commits.
-2. **Idempotency + watermark.** The same `(event, state, revision)`
-   does not re-dispatch the same action: when the watermark already
-   records the action at the current revision (the PR head sha, or the
-   issue's `updated_at` — a tracker's revision being its state, labels and
-   body outside the current-state region, §forgejo/state/watermark), the
-   decision holds off. The guard is
-   revision-keyed on every path, and for the review fan-out it is
+2. **Idempotency + watermark.** The same `(event, state, digest)` does
+   not re-dispatch the same action: where a row consults the watermark,
+   it does not dispatch ahead of what the record holds — the revision a
+   pull-request row keys on being the PR
+   head sha, an issue-path row's the digest of its declared inputs
+   (§forgejo/state/watermark), and a landing set's the revision derived
+   from the whole set (§forgejo/decisions/sync-set). The guard is
+   digest-keyed on every path, and for the review fan-out it is
    **subject-keyed** as well: each lens is guarded by its own slot at
-   the revision, so three lenses dispatched at one head are three
+   the digest, so three lenses dispatched at one head are three
    dispatches, and a lens already mid-flight at the head is not
    duplicated (§forgejo/state/watermark, §forgejo/decisions/review-lenses).
-   The watermark-exempt actions `wrap-up`, `review`, and `fix-feedback`
-   are exempt only **on the sweep**, whose rows for
+   The issue-path rows — `implement`, `reassess`, `decompose`, `wrap-up`
+   and `teardown-forest` — are not held off by that record: a digest the
+   store already holds means only that the state has not moved since the
+   engine last acted on it, and the row dispatches anyway rather than
+   falling silent at a digest it cannot move, the re-fire bound spacing
+   the attempt (§forgejo/reconciliation/the-state-is-the-watermark,
+   s-git/maitred#259). The watermark-exempt actions `review` and
+   `fix-feedback` are exempt only **on the sweep**, whose rows for
    them decide without consulting the watermark:
    state is their watermark (§forgejo/reconciliation/watermark-exemptions),
    and the agent's silence-on-noop keeps the re-firing quiet.
-   `decompose` is no longer among them: its re-firing is bounded on
+   `decompose` is not among them: its re-firing is bounded on
    every path by the forest's **actionable-state digest gate** — an
    unchanged fold holds the row off, so the dispatch is limited by the
    forest's state rather than by any guard keyed on a revision
@@ -974,9 +981,11 @@ Six mechanisms, in this order:
    decision, its hold-off recorded in the decision log like any other —
    lets one unchanged `(action, digest)` dispatch at most once per
    `reconcile_interval`, whichever path reached it. The bound reads the
-   engine's own stamp, so a watermark the store cannot read narrows the
-   re-fire rather than lifting the bound; the stamp is in memory, so a
-   restart admits one re-fire per key before the bound reasserts itself.
+   engine's own stamp — the fire instant the dispatch records beside the
+   digest, in memory and in the watermark's slot for the same
+   `(action, digest)` — so neither a store the engine cannot read nor a
+   restart that empties its memory admits a re-fire the interval has not
+   already paid for (§forgejo/state/watermark).
    The bound is the engine's general guard for state-governed re-fires,
    not a property of any one action: every landed singleton dispatch
    stamps its key, action and **declared digest** — the same value its
