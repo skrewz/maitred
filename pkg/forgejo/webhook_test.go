@@ -6044,6 +6044,42 @@ func TestHandler_IssueEdited_DurableStampBoundsTheReFireAcrossARestart(t *testin
 	}
 }
 
+// TestHandler_IssueEdited_FutureStampedInstantCountsAsSpent: the durable
+// instant is a wall clock — the monotonic reading does not survive the store —
+// so it can read as an instant that has not arrived yet: the clock corrected
+// backwards at boot, or a store restored from a host whose clock ran ahead.
+// Read as unspent it would hold every state-governed row on the key off until
+// the clock caught up, restarts included. The bound spaces a re-fire and never
+// silences a row, so a stamp dated ahead of the clock is an expired one
+// (§forgejo/state/watermark, §forgejo/decisions/loop-prevention,
+// s-git/maitred#259).
+func TestHandler_IssueEdited_FutureStampedInstantCountsAsSpent(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.issues[7] = &Issue{Number: 7, State: "open", Repository: "o/r", UpdatedAt: testUpdatedAt}
+	key := Key{Repo: "o/r", Kind: KindIssue, Number: 7}
+	ev := Event{Type: EventIssueEdited, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"}
+
+	eng.HandleEvent(ev)
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want the edited issue to dispatch once", len(tasks))
+	}
+	w, err := store.Load(key)
+	if err != nil || w == nil || w.FiredAt == nil {
+		t.Fatalf("watermark = %+v, %v, want the dispatch to stamp when it fired", w, err)
+	}
+	ahead := time.Now().Add(eng.cfg.ReconcileInterval + time.Hour)
+	w.FiredAt = &ahead
+	if err := store.Save(key, *w); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	restarted := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	restarted.HandleEvent(ev)
+	if tasks := q.all(); len(tasks) != 2 {
+		t.Fatalf("got %d tasks with the stamp dated ahead of the clock, want it read as spent and the row dispatched; all = %+v", len(tasks), tasks)
+	}
+}
+
 // TestHandler_PRFanOut_KeepsTheDurableStampForARestart: the review fan-out is
 // the other writer of a key's main slot, so the fire instant that paces a
 // re-fire must ride that write as it rides a singleton's. A fan-out that kept

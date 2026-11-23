@@ -1459,7 +1459,8 @@ func (e *Engine) boundReFire(key Key, ev Event, st State, w *Watermark, d Decisi
 // the durable fire instant the watermark records for that same
 // `(action, revision)` answers instead, so a deploy, a crash-loop or an
 // OOM kill buys no fan-out the interval had not already bought
-// (§forgejo/state/watermark).
+// (§forgejo/state/watermark). An instant that has not arrived yet counts as
+// spent: the bound may pace a re-fire, never silence a row.
 func (e *Engine) reFiredRecently(key Key, action Action, revision string, w *Watermark) bool {
 	e.reFireMu.Lock()
 	defer e.reFireMu.Unlock()
@@ -1469,7 +1470,19 @@ func (e *Engine) reFiredRecently(key Key, action Action, revision string, w *Wat
 	if w == nil || w.FiredAt == nil || w.Action != string(action) || w.Revision != revision {
 		return false
 	}
-	return time.Since(*w.FiredAt) < e.cfg.ReconcileInterval
+	// The durable instant is a wall clock, the monotonic reading being lost
+	// when the slot was marshalled, so a boot-time correction — or a store
+	// restored from a host whose clock ran ahead — can hand it an instant
+	// that has not arrived yet. Such a stamp is an expired one, the answer a
+	// missing stamp already gives: read as unspent it would hold every
+	// state-governed row on this key off until the clock caught up, outliving
+	// every restart taken meanwhile, which is an action falling silent at a
+	// digest it cannot move — the case s-git/maitred#259 exists to rule out.
+	// The memory stamp above is paced by the monotonic clock and cannot be
+	// read this way (§forgejo/state/watermark,
+	// §forgejo/decisions/loop-prevention).
+	spent := time.Since(*w.FiredAt)
+	return spent >= 0 && spent < e.cfg.ReconcileInterval
 }
 
 // stampReFire records a landed singleton dispatch for the bound. A

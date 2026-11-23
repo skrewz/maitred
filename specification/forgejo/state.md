@@ -53,7 +53,14 @@ engine keeps a stamp in memory too, but memory empties at a restart, and
 what the bound paces is a rate rather than a recollection
 (§forgejo/decisions/loop-prevention). A slot with no recorded instant —
 one written before the stamp was durable, or a forest's digest slot —
-bounds nothing, exactly as an unrecorded revision does.
+bounds nothing, exactly as an unrecorded revision does. The durable stamp
+is a wall clock, the monotonic reading not surviving the store, so an
+instant that reads as not yet arrived — the clock corrected backwards at
+boot, a store restored from a host whose clock ran ahead — is an expired
+one: the bound spaces a re-fire and never holds a row quiet, and read the
+other way it would hold every state-governed row on that key off until the
+clock caught up, restarts included, which is an action falling silent at a
+digest it cannot move (s-git/maitred#259).
 
 The revision records *what the engine last reacted to*, never whether an
 object is actionable: eligibility is a predicate over re-fetched state
