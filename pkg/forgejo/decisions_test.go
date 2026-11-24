@@ -4625,8 +4625,9 @@ func TestDecide_PRSyncedRebaseStaysRevisionGated(t *testing.T) {
 // action — the sweep's unlabelled-issue row is implement, whether or not
 // the watermark records a reassess at this revision
 // (§forgejo/decisions/actions). It is why the sweep's re-fetch reads no
-// comments: no row on that path derives reassess's digest, so no read of
-// a declared input would answer any question there (s-git/maitred#262).
+// comments: no row on that path derives reassess's digest, and the sweep
+// test that counts the call is TestReconcile_CatchesMissedIssueOpened
+// (s-git/maitred#262).
 func TestDecide_ReassessGainsNoSweepRow(t *testing.T) {
 	w := &Watermark{Action: string(ActionReassess), Revision: testRev}
 	d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: openIssue()}, w)

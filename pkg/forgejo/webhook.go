@@ -319,13 +319,14 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 			// Comments stand among reassess's declared inputs, so the three
 			// activity paths — an edit, a label change, a comment — read
 			// them: a digest is never derived over a state whose declared
-			// input went unread (§forgejo/webhook/re-fetch,
-			// s-git/maitred#262). The opened row dispatches implement and
-			// the sweep has no reassess row at all, so neither pays for a
-			// read no row consults. The listing is carried whole: which
-			// comments count belongs to the declaration's fold, not to the
-			// read.
-			if ev.Type != EventIssueOpened && ev.Type != EventReconcile {
+			// input went unread (§forgejo/webhook/re-fetch). The opened row
+			// and the sweep derive no reassess digest, so neither reads;
+			// an `ideation` root arriving on one of these three paths reads
+			// the thread twice, once here and once for the gate below, and
+			// that is what the read costs. The listing is carried whole:
+			// which comments count belongs to the declaration's fold, not
+			// to the read (s-git/maitred#262).
+			if readsComments(ev.Type) {
 				comments, err := e.api.ListIssueComments(owner, name, ev.Number)
 				if err != nil {
 					return ev, State{}, err
@@ -435,6 +436,17 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		return ev, st, nil
 	}
 	return ev, State{}, fmt.Errorf("unknown kind %q", ev.Kind)
+}
+
+// readsComments reports whether one re-fetch's path has a row that
+// derives reassess's digest — the three activity paths, the opened row
+// dispatching implement and the sweep carrying no reassess row at all
+// (§forgejo/decisions/transition-table). It is the only reason to read a
+// thread the decision itself never quotes, so the question is asked of
+// the event type once rather than of two lists that must agree
+// (§forgejo/webhook/re-fetch, s-git/maitred#262).
+func readsComments(t EventType) bool {
+	return t == EventIssueEdited || t == EventIssueLabelsChanged || t == EventIssueCommented
 }
 
 // forestGate assembles the digest gate's observation for one issue

@@ -25,7 +25,11 @@ func testRepo(fullName string) Repository {
 
 // TestReconcile_CatchesMissedIssueOpened is the backstop case: an issue
 // opened while the engine missed the webhook (no watermark) is caught by
-// the sweep and dispatched (§forgejo/reconciliation/the-sweep).
+// the sweep and dispatched (§forgejo/reconciliation/the-sweep). The sweep
+// reads no comments on its way there, which is the claim the call count
+// below is for: no row on that path derives reassess's digest, so no
+// read of that declared input would answer any question there
+// (§forgejo/decisions/transition-table, s-git/maitred#262).
 func TestReconcile_CatchesMissedIssueOpened(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
 	api.repos = []Repository{testRepo("o/r")}
@@ -48,6 +52,9 @@ func TestReconcile_CatchesMissedIssueOpened(t *testing.T) {
 	}
 	if w == nil || w.Action != string(ActionImplement) {
 		t.Errorf("watermark = %+v, want implement recorded", w)
+	}
+	if n := api.callCount("Comments:r/7"); n != 0 {
+		t.Errorf("the sweep read the issue's comments %d time(s), want none", n)
 	}
 }
 

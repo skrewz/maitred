@@ -1161,13 +1161,13 @@ func TestHandler_IssueActivity_BlockersFetchFailureHoldsOff(t *testing.T) {
 	}
 }
 
-// TestHandler_IssueActivity_FetchesComments pins that the three paths
-// whose row can dispatch `reassess` — an edit, a label change, a
-// comment — read the issue's comments, the declared input that member
-// names, exactly once, and that the opened path, whose row dispatches
-// `implement`, pays for no read no row consults
-// (§forgejo/webhook/re-fetch, §forgejo/decisions/actions,
-// s-git/maitred#262).
+// TestHandler_IssueActivity_FetchesComments pins which paths of one
+// issue re-fetch read the comments: the three whose row can derive
+// reassess's digest — an edit, a label change, a comment — read them
+// exactly once, the opened path reads none, and the sweep's silence is
+// pinned where the sweep itself runs, in
+// TestReconcile_CatchesMissedIssueOpened (§forgejo/webhook/re-fetch,
+// §forgejo/decisions/actions, s-git/maitred#262).
 func TestHandler_IssueActivity_FetchesComments(t *testing.T) {
 	for _, tc := range []struct {
 		eventType string
