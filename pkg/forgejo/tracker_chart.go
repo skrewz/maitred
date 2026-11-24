@@ -170,9 +170,7 @@ func (e *Engine) cascadeRoots(d Decision, drawn []Issue) []Issue {
 				"tracker", forestRef(cd.Key.Repo, cd.Key.Number), "error", err)
 			continue
 		}
-		for _, blocker := range ideationRoots(blockers) {
-			root := blocker
-			root.Repository = rowRepository(&root, cd.Key.Repo) // a listing names no repository for a row that lives where it was made (§forgejo/client/operations)
+		for _, root := range rootsOf(blockers, cd.Key.Repo) {
 			if holdsRoot(drawn, root.Repository, root.Number) || holdsRoot(roots, root.Repository, root.Number) {
 				continue
 			}
@@ -228,7 +226,19 @@ func (e *Engine) forestRoots(ev Event, st State) []Issue {
 		}
 		blockers = rows
 	}
-	for _, blocker := range ideationRoots(blockers) {
+	return append(roots, rootsOf(blockers, home)...)
+}
+
+// rootsOf names the forests one object's blocker rows name — the membership
+// relation, stated once so no reader of the graph keeps a second copy of it
+// (§forgejo/decisions/commissioning): each `ideation` issue among the rows is a
+// root, and a listing names no repository for a row that lives where it was
+// made, so home fills that in (§forgejo/client/operations). Both roads to a
+// forest's root apply it: the event object's own blockers, and a cascade
+// `wrap-up`'s tracker.
+func rootsOf(rows []Issue, home string) []Issue {
+	roots := []Issue{}
+	for _, blocker := range ideationRoots(rows) {
 		root := blocker
 		root.Repository = rowRepository(&root, home)
 		roots = append(roots, root)

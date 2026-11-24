@@ -1365,8 +1365,6 @@ func TestWrapUpDrawMovesOnlyTheStampOnACurrentBlock(t *testing.T) {
 	}
 }
 
-// TestWrapUpDrawsWithNoRootGate: a tracker gated by no ideation issue has no
-// forest to draw — the dispatch says so quietly (the sentence is pinned by
 // The redraw: an admissible event that lands on an object of a forest draws that
 // forest as part of handling the event, in both sinks, instead of leaving the
 // picture to the next tick's step 5 (s-git/maitred#274,
