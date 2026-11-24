@@ -8,12 +8,11 @@ import (
 )
 
 // everyAction lists the actions the decision function can name
-// (§forgejo/decisions/actions).
-var everyAction = []Action{
-	ActionImplement, ActionReassess, ActionReview, ActionFixFeedback,
-	ActionMergeOrWait, ActionRebase, ActionDecompose, ActionWrapUp,
-	ActionTeardownForest, ActionSync,
-}
+// (§forgejo/decisions/actions). It is read from the enum that declares them
+// rather than restated as a list beside it, so an action added to the enum is
+// in front of every guard that walks this list whether or not the list was
+// edited (§forgejo/decisions/actions, s-git/maitred#263).
+var everyAction = readActionEnum()
 
 // TestActionDeclarations_Complete checks the declaration table carries
 // exactly one declaration per action, each naming a non-empty input

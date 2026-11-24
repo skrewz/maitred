@@ -17,9 +17,10 @@ import (
 // decision path reaches an action's predicate and digest through this
 // table — the rows in decisions.go neither restate the digest beside a
 // dispatch nor carry a private readiness rule the declaration does not
-// name. The input set is recorded rather than consulted: the refusal
-// of undeclared reads that will one day check a predicate against it
-// is a later member of this chain (§forgejo/decisions/inputs).
+// name. The input set is consulted as well as recorded: an action the
+// enum names without a declaration cannot dispatch, and a predicate
+// reading a fact its own declaration does not name is refused
+// (§forgejo/decisions/inputs, §forgejo/decisions/actions).
 //
 // The predicate answers the question "does this state call for this
 // action", one answer whichever path asks it; how a ready row is
@@ -57,9 +58,9 @@ type actionDecl struct {
 	// inputs names every input fact the predicate reads, in the
 	// vocabulary of §forgejo/decisions/inputs (state fields, event
 	// fields, and the declared configuration inputs the engine passes
-	// verbatim). It is the set the refusal of undeclared reads will
-	// one day check against; today it is the action's declaration of
-	// what it looks at, in one place.
+	// verbatim). It is the set the refusal of undeclared reads checks
+	// the predicate against, and so the action's declaration of what it
+	// looks at, in one place.
 	inputs []string
 	// ready is the action's predicate. The returned Decision carries
 	// the dispatch reason (readyYes) or the hold-off reason

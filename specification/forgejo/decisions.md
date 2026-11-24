@@ -182,11 +182,15 @@ prompts. Each action carries exactly one declaration in the decision
 code: its input set, its ready predicate over that set, and the
 digest a dispatch is watermarked on. The decision path reaches an
 action's predicate and digest through that declaration, so no row
-states those facts beside it a second time; the declaration *records*
-the input set — the refusal of undeclared reads that will one day
-check a predicate against it is a later member of this chain
-(§forgejo/decisions/inputs). The digest an action declares is the one
-value its dispatch is watermarked on, the decision log names, the task's
+states those facts beside it a second time. Two checks keep the table
+and the code from drifting apart: an action the enum names that carries
+no declaration cannot dispatch, and the refusal names the action; and a
+predicate that reads a fact its action's declaration does not name is
+refused, by file, field and action (§forgejo/decisions/inputs). Both
+run from the repository's ordinary test targets, and each fails loudly
+rather than passing when the source or the enum it reads cannot be
+read (s-git/maitred#263). The digest an action declares is the one value
+its dispatch is watermarked on, the decision log names, the task's
 dedup key carries and the re-fire bound is a rate on, so re-keying an
 action edits this declaration and nothing beside it — the tests keep
 those four answering with the value the declaration derives
@@ -1184,8 +1188,17 @@ facts it names into the digest its dispatch is watermarked on
 (s-git/maitred#260). An event fact is the exception and folds nothing:
 which row fired is not
 part of the state, and a digest both the sweep and an event must answer
-with cannot contain it. The refusal of undeclared reads that will one
-day check a predicate against the set is a later member of this chain.
+with cannot contain it. The refusal of undeclared reads checks each
+predicate's reads against the set its action declares, and refuses by
+file, field and action a read that set does not name. The reads the
+digest machinery writes are the declaration's own implementation and
+answer to it rather than to the predicate, so no call site is excused
+by a list; a read of a row's identity — which row a reason names, and
+what kind of row it is — states no fact and is no input. A predicate
+reads no activity timestamp: the fold states the timestamp so the
+digest a row dispatches on moves, and a row that turned on the cursor
+itself would decide on the clock rather than on the state
+(§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#263).
 
 ## Actionable-state digest
 
