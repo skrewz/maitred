@@ -232,9 +232,10 @@ answers `405`.
 description and it is not composed per request: the engine draws it from
 the forest's graph with the engine's own renderer
 (§forgejo/renderer/the-contract) — the sweep tick once for every current
-forest it enumerated, and the event path whenever an admissible event
-lands on an object of that forest
-(§forgejo/reconciliation/the-tracker-block) — and that one drawing is the
+forest it enumerated, and the event path whenever an admissible event lands
+on an object of that forest or its cascade dispatches that forest's
+`wrap-up` (§forgejo/reconciliation/the-tracker-block,
+§forgejo/decisions/unblock-cascade) — and that one drawing is the
 payload's `chart`. The same drawing is also what splices into the tracker's
 current-state block, so the payload and the tracker cannot disagree
 about what the graph looks like: the chart matches what the block would

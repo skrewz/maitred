@@ -115,31 +115,83 @@ func trackerRef(forest Forest) string {
 // tracker's current-state block and the outcomes view's pair — as part of
 // handling the event, so a forest's chart states the graph as it stands rather
 // than as it stood at the last tick (§forgejo/webhook/the-pipeline,
-// §forgejo/reconciliation/the-tracker-block, s-git/maitred#274). Nothing is asked
-// of the decision first and nothing is asked of the event kind: the redraw reads
-// the live graph, so an event that moved no row composes the bytes already there
-// and writes nothing.
+// §forgejo/reconciliation/the-tracker-block, s-git/maitred#274). The forests it
+// reaches are the event object's own membership and the forests the unblock
+// cascade's `wrap-up` emissions named — the graph a closing row moved from
+// outside a forest is moved no less — and each forest is drawn once however
+// many roads named it.
 //
-// Two of the three events that draw nothing are decided here, for rules rather
-// than carve-outs. The sweep's synthetic `reconcile` event, because the tick that
-// sends it draws every current forest it enumerated at step 5
-// (§forgejo/reconciliation/the-sweep): this is the event path's work, not a second
-// drawing per row a sweep walks. An event on a pull request, which no drawing
-// gives a node or an edge (§forgejo/renderer/edge-classes) — what a merge delivers
-// arrives as the issue events it causes. The third, an event on a finished
-// forest, is redrawForest's to refuse.
-func (e *Engine) redrawForestsOnEvent(ev Event, st State) {
-	if ev.Kind != KindIssue || ev.Type == EventReconcile {
-		return
-	}
+// Nothing is asked of the decision first: the redraw reads the live graph, so
+// an event that moved no row composes the bytes already there and writes
+// nothing. Two of the three events that draw nothing of an object are decided
+// here, for rules rather than carve-outs. The sweep's synthetic `reconcile`
+// event, because the tick that sends it draws every current forest it
+// enumerated at step 5 (§forgejo/reconciliation/the-sweep) — and a `wrap-up`
+// the sweep's own cascade dispatched fires only on an open tracker, a forest
+// step 5 therefore still finds current. An event on a pull request, of which
+// no drawing gives a node or an edge (§forgejo/renderer/edge-classes) — what a
+// merge delivers arrives as the issue events it causes; the cascade a PR close
+// wakes still draws whatever wrap-up it dispatched. The third, an event on a
+// finished forest, is redrawForest's to refuse.
+func (e *Engine) redrawForestsOnEvent(ev Event, st State, d Decision) {
 	// One clock read for an event's drawings, as one stands for a tick's, so
 	// every forest an event draws states the same instant in both sinks
 	// (§forgejo/config/tracker-chart).
 	at := time.Now()
-	roots := e.forestRoots(ev, st)
+	var roots []Issue
+	if ev.Kind == KindIssue && ev.Type != EventReconcile {
+		roots = e.forestRoots(ev, st)
+	}
+	roots = append(roots, e.cascadeRoots(d, roots)...)
 	for i := range roots {
 		e.redrawForest(&roots[i], ev.Repo, at)
 	}
+}
+
+// cascadeRoots names the forests the unblock cascade reached: a `wrap-up`
+// emission's key is a tracker the closing object blocked directly, and the
+// `ideation` issues gating that tracker name the forests whose picture the
+// close just moved — including forests the event's object belongs to by no
+// membership edge, which no other step of this event draws
+// (§forgejo/decisions/unblock-cascade, §forgejo/webhook/the-pipeline,
+// s-git/maitred#232). Roots the event's own membership already named are not
+// repeated: one forest is drawn once per event, by the road that found it
+// first.
+func (e *Engine) cascadeRoots(d Decision, drawn []Issue) []Issue {
+	roots := []Issue{}
+	for _, cd := range d.Cascade {
+		if cd.Action != ActionWrapUp || cd.Key.Kind != KindIssue {
+			continue // only a tracker's wrap-up says a forest's picture just moved
+		}
+		owner, name := splitRepo(cd.Key.Repo)
+		blockers, err := e.api.IssueDependencies(owner, name, cd.Key.Number)
+		if err != nil {
+			e.log.Warn("redraw: cannot tell which forest this wrap-up's tracker belongs to; the sweep draws it",
+				"tracker", forestRef(cd.Key.Repo, cd.Key.Number), "error", err)
+			continue
+		}
+		for _, blocker := range ideationRoots(blockers) {
+			root := blocker
+			root.Repository = rowRepository(&root, cd.Key.Repo) // a listing names no repository for a row that lives where it was made (§forgejo/client/operations)
+			if holdsRoot(drawn, root.Repository, root.Number) || holdsRoot(roots, root.Repository, root.Number) {
+				continue
+			}
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
+// holdsRoot asks whether this root is already on the drawing list: the forge
+// addresses a repository case-insensitively, so that is the equality the
+// drawing applies to a root's address.
+func holdsRoot(roots []Issue, repo string, number int) bool {
+	for i := range roots {
+		if roots[i].Number == number && strings.EqualFold(roots[i].Repository, repo) {
+			return true
+		}
+	}
+	return false
 }
 
 // forestRoots names the forests an event's object belongs to by the one

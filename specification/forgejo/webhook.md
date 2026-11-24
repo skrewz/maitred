@@ -157,15 +157,20 @@ On each `POST`:
    has that forest's drawing redrawn — the tracker's current-state block and the
    outcomes view's picture pair, one drawing feeding both sinks
    (§forgejo/reconciliation/the-tracker-block, §forgejo/observability/the-outcomes-view,
-   s-git/maitred#274). The step reads the live graph rather than asking what the
-   event kind could have changed, so an event that moved no row writes nothing;
-   it draws nothing for the sweep's synthetic `reconcile` event, whose own tick
-   draws every current forest at step 5 (§forgejo/reconciliation/the-sweep), and
-   nothing for an event on a pull request, which no drawing gives a node
-   (§forgejo/renderer/edge-classes). It comes **after** the dispatch and the
-   cascade, because the drawing is the one work no decision waits on
-   (§forgejo/reconciliation/the-sweep), and after the watermark, because a
-   redraw can neither move nor delay what was decided.
+   s-git/maitred#274). Every forest whose `wrap-up` the cascade at step 7
+   dispatched is drawn too, whether or not the event's object belongs to it —
+   the wrap-up dispatching is the sign that graph moved, and the forest the
+   cascade reaches past the object is otherwise left the picture its last tick
+   drew (§forgejo/decisions/unblock-cascade, s-git/maitred#232). The step reads
+   the live graph rather than asking what the event kind could have changed, so
+   an event that moved no row writes nothing; it draws nothing for the sweep's
+   synthetic `reconcile` event, whose own tick draws every current forest at
+   step 5 (§forgejo/reconciliation/the-sweep), and nothing of an event on a pull
+   request, which no drawing gives a node (§forgejo/renderer/edge-classes) —
+   whatever a PR's own cascade wraps up is drawn by the rule above. It comes
+   **after** the dispatch and the cascade, because the drawing is the one work
+   no decision waits on (§forgejo/reconciliation/the-sweep), and after the
+   watermark, because a redraw can neither move nor delay what was decided.
 9. **Acknowledge.** The response is `204` once the pipeline has run; the
    engine does not block on the dispatched agent — dispatch only enqueues.
    A slow pipeline (several re-fetch calls) can exceed Forgejo's delivery
@@ -205,6 +210,10 @@ repositories the graph may be **read through**:
   blocks, each emission's admissibility still judged by the roles of
   the repository holding its key — never by the roles of the
   repository the event arrived from (§forgejo/decisions/unblock-cascade).
+  The wake-up runs the pipeline's drawing step too: every forest whose
+  `wrap-up` that cascade dispatched is redrawn, under the same roles —
+  the closed issue stays inert, the graph it moved does not
+  (§forgejo/reconciliation/the-tracker-block, s-git/maitred#232).
   This extra read is restricted to **closes**: opens, edits, labels and
   comments in an inert repository keep the zero-cost pre-re-fetch
   hold-off, and no other decision — no `implement`, no `reassess`, no

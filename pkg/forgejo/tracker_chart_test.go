@@ -1518,6 +1518,101 @@ func TestRedrawClosesTheForestItWasDispatchedFrom(t *testing.T) {
 	}
 }
 
+// TestRedrawDrawsTheForestTheCascadeReaches: the cascade walks the graph
+// outward, past the forests the event's object belongs to — a closed member
+// blocking a second forest's tracker directly newly unblocks that tracker,
+// and its forest has no membership edge to the closing row. The wrap-up the
+// cascade dispatches is the sign that forest's picture moved, so the drawing
+// step reaches it too, in the same event and after the dispatch it follows
+// (§forgejo/decisions/unblock-cascade, §forgejo/webhook/the-pipeline,
+// s-git/maitred#232, s-git/maitred#274).
+func TestRedrawDrawsTheForestTheCascadeReaches(t *testing.T) {
+	eng, api, q, log := chartForestQueue(t, chartFenced())
+	wrapUpWire(api)
+	secondForestWire(api)
+	// The closing member blocks its own tracker and the second forest's
+	// tracker directly — the edge whose closure newly unblocks that tracker.
+	api.blocks[3] = []Issue{*api.issues[2], *api.issues[9]}
+	redrawSeed(t, eng)
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+
+	var forSecond bool
+	for _, task := range q.all() {
+		if strings.Contains(task.Prompt, "action=wrap-up repo=o/out kind=issue number=9") {
+			forSecond = true
+		}
+	}
+	if !forSecond {
+		t.Fatalf("the cascade queued no wrap-up for the second forest's tracker: %v", q.all())
+	}
+	// The second forest's block moves although the closing row belongs to no
+	// forest of its own; the drawing follows the dispatch it describes, the
+	// pipeline's tail step for both forests the event reached.
+	body := mustWritten(t, api, "out", 9)
+	if region := regionOf(body); !strings.Contains(region, "i_out_9") || !strings.Contains(region, "i_out_8") {
+		t.Errorf("the second forest's block draws neither its tracker nor its root:\n%s", region)
+	}
+	if wrote, queued := callIndex(api, "UpdateIssueBody:out/9"), wrapUpQueuedAt(api); queued >= 0 && wrote < queued {
+		t.Errorf("the write at %d came before a wrap-up dispatch queued at %d: the redraw is the event's last step", wrote, queued)
+	}
+	// The forest the event's own membership named is drawn once, not once per
+	// road that named it.
+	if got := api.writeCount(); got != 2 {
+		t.Errorf("wrote %d issues, want the two forests' trackers: one drawing per forest the event reached", got)
+	}
+	// The payload refuses to invent the row the head record never held: the
+	// closed root's forest arrives with the next tick's enumeration, its block
+	// none the worse for landing now (§forgejo/observability/the-outcomes-view).
+	if !strings.Contains(log.String(), "holds no row to record this drawing onto") || !strings.Contains(log.String(), "o/out#8") {
+		t.Errorf("log = %s, want the refuse-to-invent line naming the forest the enumeration never held", log.String())
+	}
+}
+
+// TestRedrawDrawsTheForestAnOutOfRemitCloseWakes: a close in a repository
+// holding no maitred role is inert for its own issue, but it wakes the
+// cascade through the graph, and the cascade's wrap-up dispatch draws — the
+// drawing step belongs to that path too, judged by the roles of the
+// repositories the forest actually stands in
+// (§forgejo/webhook/repository-roles, §forgejo/decisions/unblock-cascade,
+// s-git/maitred#232).
+func TestRedrawDrawsTheForestAnOutOfRemitCloseWakes(t *testing.T) {
+	eng, api, q, _ := chartForestQueue(t, chartFenced())
+	root, tracker := secondForestWire(api)
+	// The closing issue stands in a repository no maitred role names, and it
+	// blocks the second forest's tracker directly.
+	inert := Issue{Number: 11, Title: "a stranger's ticket", State: "closed", Repository: "o/off", ClosedAt: chartClosedAt, UpdatedAt: testUpdatedAt}
+	api.issues[11] = &inert
+	api.blocks[11] = []Issue{tracker}
+	api.deps[9] = []Issue{root, inert}
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/off", Kind: KindIssue, Number: 11, Sender: "alice"})
+
+	if tasks := q.all(); len(tasks) != 1 || !strings.Contains(tasks[0].Prompt, "action=wrap-up repo=o/out kind=issue number=9") {
+		t.Fatalf("got %v, want the one wrap-up the inert close woke", tasks)
+	}
+	body := mustWritten(t, api, "out", 9)
+	if region := regionOf(body); !strings.Contains(region, "i_out_9") {
+		t.Errorf("the forest an inert close woke drew no tracker:\n%s", region)
+	}
+}
+
+// secondForestWire hangs a whole second forest on the fixtures: a closed root
+// 8 gating an open tracker 9, both in the outcomes repository — a forest no
+// membership edge of the first forest's objects reaches
+// (§forgejo/decisions/commissioning).
+func secondForestWire(api *fakeAPI) (Issue, Issue) {
+	root := chartRoot()
+	root.Number, root.Title = 8, "the second forest"
+	root.State, root.ClosedAt = "closed", chartClosedAt
+	tracker := chartTracker(chartFenced())
+	tracker.Number, tracker.Title = 9, "outcome tracker of the second forest"
+	api.issues[8], api.issues[9] = &root, &tracker
+	api.blocks[8] = []Issue{tracker}
+	api.deps[9] = []Issue{root, *api.issues[3]}
+	return root, tracker
+}
+
 // TestRedrawDrawsNothingOnAnObjectNoEdgeReaches: a repository's role admits the
 // read, it does not make a forest — an object no membership edge reaches and
 // whose own labels name no root is not in a forest, and nothing is drawn for it

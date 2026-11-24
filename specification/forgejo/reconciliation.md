@@ -93,8 +93,10 @@ An outcome tracker's description carries its forest's drawing between a pair of
 HTML comments — `<!-- maitred:forest:begin -->` and `<!-- maitred:forest:end -->`
 — under a `## Current state` heading. On every tick the engine writes that
 region for every current forest it enumerated (§forgejo/reconciliation/the-sweep), and
-as part of handling any admissible event that lands on an object of a forest it
-writes that one forest's region once more
+as part of handling any admissible event that lands on an object of a forest —
+or whose cascade dispatches that forest's `wrap-up`, the event's object being
+no member of it (§forgejo/decisions/unblock-cascade) — it writes that one
+forest's region once more
 (§forgejo/reconciliation/the-tracker-block, s-git/maitred#274): it gathers the
 graph, renders it
 (§forgejo/renderer/the-contract), and splices the
