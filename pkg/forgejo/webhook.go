@@ -316,16 +316,14 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 				return ev, State{}, err
 			}
 			projectPRBlockers(&st, blockers)
-			// Comments stand among reassess's declared inputs, so the three
-			// activity paths — an edit, a label change, a comment — read
-			// them: a digest is never derived over a state whose declared
-			// input went unread (§forgejo/webhook/re-fetch). The opened row
-			// and the sweep derive no reassess digest, so neither reads;
-			// an `ideation` root arriving on one of these three paths reads
-			// the thread twice, once here and once for the gate below, and
-			// that is what the read costs. The listing is carried whole:
-			// which comments count belongs to the declaration's fold, not
-			// to the read (s-git/maitred#262).
+			// Comments stand among reassess's declared inputs and a digest is
+			// never derived over a state whose declared input went unread, so
+			// whichever of these paths reads them is asked of the event type
+			// (§forgejo/webhook/re-fetch). An `ideation` root arriving here
+			// reads the thread twice, once for this digest and once for the
+			// gate below, and that is what the read costs. The listing is
+			// carried whole: which comments count belongs to the
+			// declaration's fold, not to the read (s-git/maitred#262).
 			if readsComments(ev.Type) {
 				comments, err := e.api.ListIssueComments(owner, name, ev.Number)
 				if err != nil {
