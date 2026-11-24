@@ -176,13 +176,9 @@ func (e *Engine) forestRoots(ev Event, st State) []Issue {
 		}
 		blockers = rows
 	}
-	for i := range blockers {
-		blocker := &blockers[i]
-		if blocker.IsPull || !hasLabel(blocker, LabelIdeation) {
-			continue // a delivery is no root, and a work-order edge admits no member
-		}
-		root := *blocker
-		root.Repository = rowRepository(blocker, home)
+	for _, blocker := range ideationRoots(blockers) {
+		root := blocker
+		root.Repository = rowRepository(&root, home)
 		roots = append(roots, root)
 	}
 	return roots
