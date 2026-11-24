@@ -15,8 +15,9 @@ the revision the decision was made at are discrete fields, so a human
 or a tool can filter the log per object and follow the engine's
 reasoning. Where a reason quotes a revision, it names the facts behind it: for
 an issue-path row the facts its declaration's digest folds — state, labels, each
-blocker's state, the connected pull requests, the edges a teardown order reads —
-for a row keyed on `updated_at` the instant it carries, and for a landing set the
+blocker's state, the connected pull requests, the comments `reassess` counts, the
+edges a teardown order reads — for a row keyed on `updated_at` the instant it
+carries, and for a landing set the
 set revision as it stands, since more than one row lies behind it. A log line
 therefore stays readable against the forge's history whatever the guard keyed
 itself on (§forgejo/state/watermark, §forgejo/decisions/sync-set,

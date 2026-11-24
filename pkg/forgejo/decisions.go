@@ -234,6 +234,22 @@ type State struct {
 	// merge-or-wait, the sync-set member test) are decided per lens
 	// (§forgejo/decisions/review-lenses).
 	ReviewLenses []ReviewLens
+	// Comments are the issue's comments as the re-fetch found them, read
+	// on the paths whose row can dispatch `reassess` — an edit, a label
+	// change or a comment — because comments stand among that action's
+	// declared inputs (§forgejo/decisions/actions,
+	// §forgejo/decisions/inputs, s-git/maitred#262). Every author is
+	// carried: which comments count is the fold's one statement, not a
+	// filter the read applies. Empty wherever no row reads them — the
+	// opened row, the sweep's rows and every pull-request path.
+	Comments []Comment
+	// EngineAccount is the login `engine_account` names
+	// (§forgejo/config/engine-account), a declared configuration input
+	// the engine passes verbatim on the state like the two identities
+	// above it. It is read in one place: naming whose comments are no
+	// input to `reassess`, alongside DecomposerIdentity
+	// (§forgejo/decisions/actions, s-git/maitred#262).
+	EngineAccount string
 	// CascadeRoot is the closed issue the unblock cascade walks from,
 	// for close events.
 	CascadeRoot *IssueNode

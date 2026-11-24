@@ -303,7 +303,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		if err != nil {
 			return ev, State{}, err
 		}
-		st := State{Issue: issue, DecomposerIdentity: e.cfg.DecomposerIdentity, ReviewLenses: e.cfg.Reviews}
+		st := State{Issue: issue, DecomposerIdentity: e.cfg.DecomposerIdentity, EngineAccount: e.cfg.EngineAccount, ReviewLenses: e.cfg.Reviews}
 		switch ev.Type {
 		case EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged,
 			EventIssueCommented, EventReconcile:
@@ -316,6 +316,22 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 				return ev, State{}, err
 			}
 			projectPRBlockers(&st, blockers)
+			// Comments stand among reassess's declared inputs, so the three
+			// activity paths — an edit, a label change, a comment — read
+			// them: a digest is never derived over a state whose declared
+			// input went unread (§forgejo/webhook/re-fetch,
+			// s-git/maitred#262). The opened row dispatches implement and
+			// the sweep has no reassess row at all, so neither pays for a
+			// read no row consults. The listing is carried whole: which
+			// comments count belongs to the declaration's fold, not to the
+			// read.
+			if ev.Type != EventIssueOpened && ev.Type != EventReconcile {
+				comments, err := e.api.ListIssueComments(owner, name, ev.Number)
+				if err != nil {
+					return ev, State{}, err
+				}
+				st.Comments = comments
+			}
 			// A root under a teardown order is the one issue whose
 			// *downstream* edges are read, because the order is only
 			// actionable while the forest stands: whether the root blocks

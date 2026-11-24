@@ -100,10 +100,19 @@ func init() {
 			digest:            declaredDigestFor(ActionImplement),
 			digestFoldsInputs: true,
 		},
+		// Comments are an input to reassess, and whose comments count is
+		// stated in this declaration alone: one authored by neither the
+		// account engine_account names nor the configured decomposer
+		// identity, the test commentCountsAsInput applies and no row
+		// restates. No issue timestamp stands in the set — the digest of
+		// these facts is what fires the row, never the moment the issue
+		// was last touched, which a comment moves whatever its author
+		// (§forgejo/config/engine-account, §forgejo/config/decomposer-identity,
+		// s-git/maitred#262).
 		ActionReassess: {
 			inputs: []string{
-				"issue.state", "issue.labels", "issue.updated_at",
-				"blockers.states", "event.type",
+				"issue.state", "issue.labels", "issue.comments",
+				"blockers.states", "event.type", "event.sender",
 			},
 			ready:             reassessReady,
 			digest:            declaredDigestFor(ActionReassess),
@@ -415,6 +424,24 @@ var declaredInputFolds = map[string]func(State) []string{
 		}
 		return []string{"updated " + s.Issue.UpdatedAt.UTC().Format(time.RFC3339)}
 	},
+	"issue.comments": func(s State) []string {
+		// The comments are carried as the forge lists them; which of
+		// them count is commentCountsAsInput's one statement, applied
+		// here and nowhere else, so an excluded author's comment moves
+		// no digest while every other author's moves it
+		// (§forgejo/config/engine-account, §forgejo/config/decomposer-identity,
+		// s-git/maitred#262). A body is quoted as the hex its text
+		// digests to, the way an issue's own body is: what an operator
+		// can place in the forge's history is the comment beside it.
+		var facts []string
+		for _, c := range s.Comments {
+			if !commentCountsAsInput(c.Author, s.EngineAccount, s.DecomposerIdentity) {
+				continue
+			}
+			facts = append(facts, "comment "+c.Author+" "+digestRevision(c.Body))
+		}
+		return facts
+	},
 	"blockers.states": func(s State) []string {
 		facts := make([]string, 0, len(s.Blockers))
 		for i := range s.Blockers {
@@ -540,8 +567,14 @@ func implementReady(_ Event, s State) (Decision, readyAnswer) {
 
 // reassessReady is reassess's predicate: an open issue with no open
 // blocker carried activity — the event row it is reached from is the
-// edited/labelled/commented row; the firing rule itself is unchanged
-// (§forgejo/decisions/actions, s-git/maitred#262 stands).
+// edited/labelled/commented row. A comment counts only when
+// commentCountsAsInput does not exclude its author: the engine's own
+// report, or the decomposer's own question, on an ordinary work item is
+// no input, so the row holds off naming whose authorship it read rather
+// than re-firing at the re-fire bound's pace for as long as the issue
+// stands (§forgejo/decisions/actions,
+// §forgejo/decisions/loop-prevention, s-git/maitred#262). No timestamp
+// is asked of: what moves this row is a fact it declares.
 func reassessReady(e Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
@@ -561,6 +594,12 @@ func reassessReady(e Event, s State) (Decision, readyAnswer) {
 	}
 	if open := openBlockers(s.Blockers); len(open) > 0 {
 		return holdOff(fmt.Sprintf("issue %d is blocked by %s; not reassessing", issue.Number, issueRefs(open))), readyNo
+	}
+	// The authorship is asked last: every hold-off above it already
+	// names a state the row has nothing to do with, and this one names
+	// the delivery.
+	if e.Type == EventIssueCommented && !commentCountsAsInput(e.Sender, s.EngineAccount, s.DecomposerIdentity) {
+		return holdOff(fmt.Sprintf("issue %d: comment authored by %s, whose comments are no input; nothing reassessed", issue.Number, e.Sender)), readyNo
 	}
 	return dispatch(ActionReassess, fmt.Sprintf("issue %d: %s", issue.Number, e.Type)), readyYes
 }
