@@ -213,12 +213,16 @@ func (e *Engine) repoInRemit(repo string) (bool, error) {
 // one a maitred role names. Its readers are the graph's four
 // (§forgejo/reconciliation/the-tracker-block), alongside the warning walk
 // and the merge reads (§forgejo/webhook/repository-roles,
-// §forgejo/webhook/re-fetch). A
-// non-nil error means the scope is unknown, which is the caller's
+// §forgejo/webhook/re-fetch). The premise of the first clause is that the
+// caller established the entry: a pass that admitted no repository — the
+// inert close, which runs because the repository it arrived in holds no
+// role — passes the empty string, which admits nothing, so every
+// repository is named by a role in its own right.
+// A non-nil error means the scope is unknown, which is the caller's
 // failure to name, not a hold-off; a false answer is the caller's
 // ordinary silence to log in its own words.
 func (e *Engine) remitAdmits(repo, entered string) (bool, error) {
-	if strings.EqualFold(repo, entered) {
+	if entered != "" && strings.EqualFold(repo, entered) {
 		return true, nil // the walk's own repository is admitted already
 	}
 	return e.repoInRemit(repo)

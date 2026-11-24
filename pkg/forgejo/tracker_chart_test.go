@@ -1594,6 +1594,109 @@ func TestRedrawDrawsTheForestAnOutOfRemitCloseWakes(t *testing.T) {
 	}
 }
 
+// TestRedrawDrawsNothingForAForestWhollyInTheInertRepository: the inert close
+// runs because the repository the event arrived in holds no maitred role, so
+// that repository admits nothing to the drawing — a forest standing wholly
+// inside it is no forest this path may write to, and its tracker's body stays
+// as its own forge left it (§forgejo/webhook/repository-roles,
+// §forgejo/decisions/unblock-cascade, s-git/maitred#232).
+func TestRedrawDrawsNothingForAForestWhollyInTheInertRepository(t *testing.T) {
+	eng, api, q, log := chartForestQueue(t, chartFenced())
+	root := chartRoot()
+	root.Number, root.Title, root.Repository = 12, "a stranger's forest", "o/off"
+	root.State, root.ClosedAt = "closed", chartClosedAt
+	tracker := chartTracker(chartFenced())
+	tracker.Number, tracker.Title, tracker.Repository = 13, "stranger's outcome tracker", "o/off"
+	closing := Issue{
+		Number: 11, Title: "a stranger's ticket", State: "closed",
+		Repository: "o/off", ClosedAt: chartClosedAt, UpdatedAt: testUpdatedAt,
+	}
+	api.issues[11], api.issues[12], api.issues[13] = &closing, &root, &tracker
+	api.blocks[11] = []Issue{tracker}
+	api.blocks[12] = []Issue{tracker}
+	api.deps[13] = []Issue{root, closing}
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/off", Kind: KindIssue, Number: 11, Sender: "alice"})
+
+	// The cascade still woke — the graph is read through an inert repository —
+	// but the emission holds off there, and so does its drawing.
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("queued %v, want nothing: no role names the repository the close arrived in", tasks)
+	}
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("wrote %d issues, want none: a repository this path established holds no role admits no forest's block to it", got)
+	}
+	if body := api.issues[13].Body; body != chartFenced() {
+		t.Error("the inert repository's tracker body changed: a chart was spliced in from outside the remit")
+	}
+	// The walk of the closed issue's downstream edges pays its own read of the
+	// tracker; the drawing step pays none beside it — the admission test says
+	// no before any request of that repository is made.
+	if n := api.callCount("IssueDependencies:off/13"); n != 1 {
+		t.Errorf("the inert tracker's rows were read %d times, want the cascade walk's one read and none from the drawing", n)
+	}
+	if !strings.Contains(log.String(), "no maitred role names") || !strings.Contains(log.String(), "o/off#13") {
+		t.Errorf("log = %s, want the drawing's silence named with the tracker it refused", log.String())
+	}
+}
+
+// TestRedrawNamesTheCascadeReadItCouldNotMake: the pairing read a cascade
+// `wrap-up` pays is the redraw's one read whose failure no other test
+// breaks — the line an operator reads must name the tracker whose rows went
+// unread, the next emission may not be dropped with it, and a tracker in a
+// role-less repository is refused before its rows are asked for at all
+// (§forgejo/webhook/repository-roles, §forgejo/observability/the-decision-log,
+// s-git/maitred#232).
+func TestRedrawNamesTheCascadeReadItCouldNotMake(t *testing.T) {
+	eng, api, log := chartForestEngine(t, chartFenced())
+	secondForestWire(api) // root 8 gates tracker 9, both in the outcomes repository
+	wrapUpWire(api)       // tracker 2 is gated by root 1
+	api.issueDepsErrOn = map[int]error{9: errors.New("the tracker's rows unread")}
+	d := Decision{Cascade: []CascadeDispatch{
+		{Key: Key{Repo: "o/out", Kind: KindIssue, Number: 9}, Action: ActionWrapUp},
+		{Key: Key{Repo: "o/out", Kind: KindIssue, Number: 2}, Action: ActionWrapUp},
+		{Key: Key{Repo: "o/off", Kind: KindIssue, Number: 13}, Action: ActionWrapUp},
+	}}
+
+	roots := eng.cascadeRoots(d, "o/out", nil)
+
+	if len(roots) != 1 || roots[0].Number != 1 {
+		t.Errorf("the cascade named %v, want root 1 alone: one tracker's unread rows cost that forest alone, and no role-less repository names a root", roots)
+	}
+	if !strings.Contains(log.String(), "the tracker's rows unread") || !strings.Contains(log.String(), "o/out#9") {
+		t.Errorf("log = %s, want the failed read named with the tracker it broke on", log.String())
+	}
+	if n := api.callCount("IssueDependencies:off/13"); n != 0 {
+		t.Errorf("the role-less tracker's rows were read %d times, want 0: the admission test is paid before the request", n)
+	}
+	if !strings.Contains(log.String(), "o/off#13") {
+		t.Errorf("log = %s, want the refused emission named with the tracker it refused", log.String())
+	}
+}
+
+// TestRedrawNamesTheCascadeScopeItCouldNotAsk: the admission test this road
+// pays is a scope lookup, and a lookup that fails is a forest drawn from an
+// answer nobody has — nothing is read of it and the line names the scope
+// failure the sweep is the backstop for
+// (§forgejo/webhook/the-scope-cache, §forgejo/webhook/repository-roles).
+func TestRedrawNamesTheCascadeScopeItCouldNotAsk(t *testing.T) {
+	eng, api, log := chartForestEngine(t, chartFenced())
+	api.listReposErr = errors.New("the org listing failed")
+	d := Decision{Cascade: []CascadeDispatch{
+		{Key: Key{Repo: "o/off", Kind: KindIssue, Number: 13}, Action: ActionWrapUp},
+	}}
+
+	if roots := eng.cascadeRoots(d, "", nil); len(roots) != 0 {
+		t.Errorf("the cascade named %v, want nothing while the scope is unknown", roots)
+	}
+	if n := api.callCount("IssueDependencies:off/13"); n != 0 {
+		t.Errorf("the tracker's rows were read %d times, want none: an unknown scope is not an admission", n)
+	}
+	if !strings.Contains(log.String(), "the org listing failed") || !strings.Contains(log.String(), "o/off#13") {
+		t.Errorf("log = %s, want the refused read to name the scope failure and the tracker it concerns", log.String())
+	}
+}
+
 // secondForestWire hangs a whole second forest on the fixtures: a closed root
 // 8 gating an open tracker 9, both in the outcomes repository — a forest no
 // membership edge of the first forest's objects reaches

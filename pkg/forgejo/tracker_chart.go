@@ -133,7 +133,17 @@ func trackerRef(forest Forest) string {
 // merge delivers arrives as the issue events it causes; the cascade a PR close
 // wakes still draws whatever wrap-up it dispatched. The third, an event on a
 // finished forest, is redrawForest's to refuse.
-func (e *Engine) redrawForestsOnEvent(ev Event, st State, d Decision) {
+//
+// admitted is the repository this pass was admitted through, and it admits no
+// repository a maitred role does not name: the event's own repository on the
+// event path, which the pipeline's role test granted before the re-fetch
+// (§forgejo/webhook/the-pipeline), or the empty string where the pass
+// established no admission — the inert close, which runs precisely because the
+// repository the event arrived in holds no role. Naming a role-less repository
+// here would give `remitAdmits`' equality clause a premise the pass never
+// established, and a forest standing wholly outside the remit would be written
+// to from outside it (§forgejo/webhook/repository-roles).
+func (e *Engine) redrawForestsOnEvent(ev Event, st State, d Decision, admitted string) {
 	// One clock read for an event's drawings, as one stands for a tick's, so
 	// every forest an event draws states the same instant in both sinks
 	// (§forgejo/config/tracker-chart).
@@ -142,9 +152,9 @@ func (e *Engine) redrawForestsOnEvent(ev Event, st State, d Decision) {
 	if ev.Kind == KindIssue && ev.Type != EventReconcile {
 		roots = e.forestRoots(ev, st)
 	}
-	roots = append(roots, e.cascadeRoots(d, roots)...)
+	roots = append(roots, e.cascadeRoots(d, admitted, roots)...)
 	for i := range roots {
-		e.redrawForest(&roots[i], ev.Repo, at)
+		e.redrawForest(&roots[i], admitted, at)
 	}
 }
 
@@ -157,17 +167,43 @@ func (e *Engine) redrawForestsOnEvent(ev Event, st State, d Decision) {
 // s-git/maitred#232). Roots the event's own membership already named are not
 // repeated: one forest is drawn once per event, by the road that found it
 // first.
-func (e *Engine) cascadeRoots(d Decision, drawn []Issue) []Issue {
+//
+// Which repository holds a cascade's tracker is graph data a blocking edge
+// named, so that repository pays the admission test before its blocker rows are
+// read, the way every other hop pays it before its first request: an emission
+// the dispatch leg refused as out of remit, or one standing in a repository no
+// role names, costs this step a comparison rather than a read
+// (§forgejo/webhook/repository-roles). admitted is the repository
+// redrawForestsOnEvent describes.
+func (e *Engine) cascadeRoots(d Decision, admitted string, drawn []Issue) []Issue {
 	roots := []Issue{}
 	for _, cd := range d.Cascade {
 		if cd.Action != ActionWrapUp || cd.Key.Kind != KindIssue {
 			continue // only a tracker's wrap-up says a forest's picture just moved
 		}
+		tracker := forestRef(cd.Key.Repo, cd.Key.Number)
+		admits, err := e.remitAdmits(cd.Key.Repo, admitted)
+		if err != nil {
+			e.log.Warn("redraw: cannot tell whether this wrap-up's tracker is in the remit; the sweep draws its forest",
+				"tracker", tracker, "error", err)
+			continue
+		}
+		if !admits {
+			// Debug, the level every other hop keeps this sentence at: a
+			// role-less repository is a deployment's deliberate silence
+			// (§forgejo/webhook/repository-roles, §forgejo/observability/the-decision-log).
+			e.log.Debug("redraw: this wrap-up's tracker is in a repository no maitred role names; nothing drawn",
+				"tracker", tracker)
+			continue
+		}
 		owner, name := splitRepo(cd.Key.Repo)
 		blockers, err := e.api.IssueDependencies(owner, name, cd.Key.Number)
 		if err != nil {
+			// The next emission's tracker may read fine, so this one forest and
+			// no more is what the sweep backstops — an operator reading a stale
+			// forest needs the line naming which tracker's rows could not be read.
 			e.log.Warn("redraw: cannot tell which forest this wrap-up's tracker belongs to; the sweep draws it",
-				"tracker", forestRef(cd.Key.Repo, cd.Key.Number), "error", err)
+				"tracker", tracker, "error", err)
 			continue
 		}
 		for _, root := range rootsOf(blockers, cd.Key.Repo) {
@@ -255,9 +291,11 @@ func rootsOf(rows []Issue, home string) []Issue {
 // the root's repository pays the admission test every other cross-repository hop
 // pays here — before a row of it is read, so a repository no maitred role names
 // costs this path a comparison rather than a request
-// (§forgejo/webhook/repository-roles). foundIn is the repository the event came
-// from: the one the pipeline's own role test already admitted, and the fallback
-// for a row that names none of its own (§forgejo/client/operations).
+// (§forgejo/webhook/repository-roles). foundIn is the repository this pass was
+// admitted through — the one whose admission the pipeline established, and the
+// fallback for a row that names none of its own (§forgejo/client/operations) —
+// or the empty string where the pass established none, which admits nothing and
+// leaves every repository to be named by a role in its own right.
 //
 // A root that gates no tracker is a forest with no region to land in, said at
 // `Debug` the way the tick says it; a forest whose tickets are both closed is

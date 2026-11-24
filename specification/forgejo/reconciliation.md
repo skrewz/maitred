@@ -212,7 +212,14 @@ a forest whose picture an event moved states that instant in both of them
   repository pays the admission test every other cross-repository hop pays
   (§forgejo/webhook/repository-roles) **before** its rows are read: a root
   standing where no maitred role names its repository is drawn nowhere, its titles
-  left unpublished, and the event's decision is none the worse. A root the
+  left unpublished, and the event's decision is none the worse — and the same
+  test is paid before the drawing reads a cascade `wrap-up`'s tracker rows, so a
+  forest the cascade reaches through a role-less repository costs a comparison,
+  not a read. The repository a drawing is admitted by is the one whose admission
+  the pass established — the event's own, on the event path, where the pipeline's
+  role test granted it ahead of any read. A pass that established no admission,
+  the inert close among them, names none, and every repository such a drawing then
+  reaches must be one a role names in its own right. A root the
   pairing reaches no tracker is a forest with no region to land in: nothing is
   drawn, the absence stated at `Debug` the way the tick states it. A failed read
   is named at `Warn` with the forest it could not read — the sweep is the

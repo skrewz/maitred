@@ -161,7 +161,11 @@ On each `POST`:
    dispatched is drawn too, whether or not the event's object belongs to it —
    the wrap-up dispatching is the sign that graph moved, and the forest the
    cascade reaches past the object is otherwise left the picture its last tick
-   drew (§forgejo/decisions/unblock-cascade, s-git/maitred#232). The step reads
+   drew (§forgejo/decisions/unblock-cascade, s-git/maitred#232). The tracker whose
+   `wrap-up` the cascade dispatched pays the admission test before its blocker
+   rows are read, so a forest standing wholly outside the remit costs this step a
+   comparison rather than a read, and draws nothing
+   (§forgejo/webhook/repository-roles). The step reads
    the live graph rather than asking what the event kind could have changed, so
    an event that moved no row writes nothing; it draws nothing for the sweep's
    synthetic `reconcile` event, whose own tick draws every current forest at
@@ -211,9 +215,14 @@ repositories the graph may be **read through**:
   the repository holding its key — never by the roles of the
   repository the event arrived from (§forgejo/decisions/unblock-cascade).
   The wake-up runs the pipeline's drawing step too: every forest whose
-  `wrap-up` that cascade dispatched is redrawn, under the same roles —
-  the closed issue stays inert, the graph it moved does not
-  (§forgejo/reconciliation/the-tracker-block, s-git/maitred#232).
+  `wrap-up` that cascade dispatched is redrawn, judged by the roles of
+  the repositories the forest itself stands in — the closed issue stays
+  inert, the graph it moved does not. Nothing the role-less repository
+  holds is drawn from it there: this path runs precisely because that
+  repository holds no role, so it admits no repository to the drawing,
+  every repository a forest then stands in is judged in its own right,
+  and a forest standing wholly inside the role-less repository draws
+  nothing (§forgejo/reconciliation/the-tracker-block, s-git/maitred#232).
   This extra read is restricted to **closes**: opens, edits, labels and
   comments in an inert repository keep the zero-cost pre-re-fetch
   hold-off, and no other decision — no `implement`, no `reassess`, no
