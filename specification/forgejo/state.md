@@ -44,16 +44,28 @@ Re-keying an action is an edit to its declaration and to nothing beside
 it — but a revision the store recorded before a re-key is a digest no
 state of that row folds, so the first sweep after a re-key reads every
 tracked object as a state the engine has never reacted to and re-fires
-each once. Rows whose digest did not move are not re-fired, so the cost
+each once. One cost is not the re-keyed action's alone: a row still
+keyed on an object revision — a pull-request action, the landing set —
+stores the digest it still folds, so at the deploy that introduces the
+fire instant its slot names a digest the state still produces while
+holding nothing to pace on, and its first sweep re-fires it once.
+Otherwise rows whose digest did not move are not re-fired, and the cost
 falls on the re-keyed action alone.
 
 Alongside the digest the main slot records **when** its action last
 fired at it. That instant is the re-fire bound's durable stamp: the
 engine keeps a stamp in memory too, but memory empties at a restart, and
 what the bound paces is a rate rather than a recollection
-(§forgejo/decisions/loop-prevention). A slot with no recorded instant — a forest's digest slot, which carries an
-observation and never a dispatch — bounds nothing, exactly as an
-unrecorded revision does. The durable stamp
+(§forgejo/decisions/loop-prevention). A slot with no recorded instant
+bounds nothing, exactly as an unrecorded revision does, and two write
+one. A forest's digest slot carries an observation and never a
+dispatch, so the bound never reads it for an instant at all. The slot
+an earlier release wrote for a row still keyed on an object revision is
+the case that does reach that read holding nothing: its action and
+revision are the pair the bound matches, and it stores no instant, so
+the first sweep after that release's deploy re-fires each such row
+whose state still calls for an action, and that row's own next dispatch
+rewrites the slot with an instant. The durable stamp
 is a wall clock, the monotonic reading not surviving the store, so an
 instant that reads as not yet arrived — the clock corrected backwards at
 boot, a store restored from a host whose clock ran ahead — is an expired

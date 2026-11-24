@@ -97,8 +97,10 @@ type Watermark struct {
 	// across the process boundary, so the bound stays a rate rather than
 	// a memory (§forgejo/decisions/loop-prevention). Nil where no singleton
 	// dispatch ever wrote one — a forest's digest slot carries an observation,
-	// never a dispatch — which bounds nothing, the same answer an unrecorded
-	// revision gives.
+	// never a dispatch, and a slot an earlier release wrote for a row still
+	// keyed on an object revision names the pair the bound matches without
+	// an instant to pace on — which bounds nothing, the same answer an
+	// unrecorded revision gives.
 	FiredAt *time.Time `json:"fired_at,omitempty"`
 	// Subjects maps each fan-out subject's identity (a review lens's
 	// configured login) to the slot dispatched for it. Empty for

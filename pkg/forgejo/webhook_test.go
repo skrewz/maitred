@@ -6146,6 +6146,39 @@ func TestHandler_PRFanOut_KeepsTheDurableStampForARestart(t *testing.T) {
 	}
 }
 
+// TestReconcile_PRSlotWithoutAFireInstantRefiresOnceAndIsRestamped: the slot an
+// earlier release left behind for a pull-request row names the action and the
+// head it dispatched at and carries no fire instant, because that stamp did not
+// exist when the slot was written. The head has not moved, so the pair the
+// bound matches is the pair the slot holds and there is no instant beside it to
+// pace on: the deploy's first sweep re-fires the row, and that dispatch's write
+// carries the instant, so the missing stamp costs one re-fire and no more
+// (§forgejo/state/watermark, §forgejo/decisions/loop-prevention).
+func TestReconcile_PRSlotWithoutAFireInstantRefiresOnceAndIsRestamped(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.pulls[9] = testPR(9, "open", false) // an unmoved head the rebase row reads
+	key := Key{Repo: "o/r", Kind: KindPR, Number: 9}
+	if err := store.Save(key, Watermark{Action: string(ActionRebase), Revision: "sha-9"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// No dispatch of this process's own, so memory holds no stamp and the
+	// bound reads the slot the store holds.
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks on the first sweep over that slot, want the row a slot cannot pace to dispatch; all = %+v", len(tasks), tasks)
+	}
+	w, err := store.Load(key)
+	if err != nil || w == nil || w.Action != string(ActionRebase) || w.Revision != "sha-9" || w.FiredAt == nil {
+		t.Fatalf("watermark = %+v, %v, want the dispatch to rewrite the slot with an instant", w, err)
+	}
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks at the same head inside one interval, want the instant the row wrote to pace the re-fire; all = %+v", len(tasks), tasks)
+	}
+}
+
 // TestDispatchCascade_LostBlockerReadHoldsTheLegBack: the read the
 // cascade's issue leg pays is a declared input of the digest that decides
 // the leg, so a lost read holds the leg back rather than dispatching at —
