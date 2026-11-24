@@ -1103,11 +1103,10 @@ func lastLines(s string, n int) string {
 }
 
 // The wrap-up path (s-git/maitred#232): a forest whose tracker is finished
-// leaves behind the picture of its completion. The dispatch used to draw that
-// picture itself, ahead of queuing; it is now the event's redraw that draws it —
-// the same render function, the same graph, landed as part of handling the event
-// (s-git/maitred#274). The tests below drive the same fixtures the tick's own
-// write uses, and a test pins that the two paths share one renderer.
+// leaves behind the picture of its completion — the event's redraw draws it,
+// the same render function, the same graph, landed as part of handling the
+// event (s-git/maitred#274). The tests below drive the same fixtures the tick's
+// own write uses, and a test pins that the two paths share one renderer.
 
 // wrapUpWire closes the members chartWire left open and hangs the tracker's
 // gate on its dependencies, as the graph stands the moment a wrap-up fires:
