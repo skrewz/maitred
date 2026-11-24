@@ -355,6 +355,9 @@ func TestActionNames(t *testing.T) {
 // TestDecide covers every transition in the table, the idempotency
 // (watermark) guard, and the sender guard
 // (§forgejo/decisions/transition-table, §forgejo/decisions/loop-prevention).
+// A row may name the phrase its hold-off reason must carry, so a decision
+// an acceptance criterion pins in its words is pinned here rather than in
+// a function of its own.
 func TestDecide(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -362,6 +365,7 @@ func TestDecide(t *testing.T) {
 		state       State
 		watermark   *Watermark
 		wantAction  Action
+		wantReason  string
 		wantCascade []CascadeDispatch
 		wantHolds   []CascadeHoldOff
 	}{
@@ -478,6 +482,8 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionReassess,
 		},
 		{
+			// Neither identity the declaration excludes is configured,
+			// so the guard is inert and any author's comment is an input.
 			name:       "issue feedback comment dispatches reassess",
 			event:      issueEvent(EventIssueCommented),
 			state:      State{ReviewLenses: testLenses, Issue: openIssue()},
@@ -488,14 +494,16 @@ func TestDecide(t *testing.T) {
 			// outside the engine's own identities: the row holds off and
 			// names whose authorship it is (§forgejo/decisions/actions,
 			// §forgejo/decisions/loop-prevention, s-git/maitred#262).
-			name:  "issue comment authored by the engine account holds off, naming the authorship",
-			event: issueEventBy(EventIssueCommented, "maitred"),
-			state: State{ReviewLenses: testLenses, Issue: openIssue(), EngineAccount: "maitred"},
+			name:       "issue comment authored by the engine account holds off, naming the authorship",
+			event:      issueEventBy(EventIssueCommented, "maitred"),
+			state:      State{ReviewLenses: testLenses, Issue: openIssue(), EngineAccount: "maitred"},
+			wantReason: "comment authored by maitred, whose comments are no input",
 		},
 		{
-			name:  "issue comment authored by the configured decomposer holds off, naming the authorship",
-			event: issueEventBy(EventIssueCommented, "decomposer"),
-			state: State{ReviewLenses: testLenses, Issue: openIssue(), DecomposerIdentity: "decomposer"},
+			name:       "issue comment authored by the configured decomposer holds off, naming the authorship",
+			event:      issueEventBy(EventIssueCommented, "decomposer"),
+			state:      State{ReviewLenses: testLenses, Issue: openIssue(), DecomposerIdentity: "decomposer"},
+			wantReason: "comment authored by decomposer, whose comments are no input",
 		},
 		{
 			// An empty sender names no identity, so the guard is inert on
@@ -1776,6 +1784,9 @@ func TestDecide(t *testing.T) {
 			} else if !d.HoldOff() {
 				t.Fatalf("HoldOff() = false with action %q, want hold-off (reason: %s)", d.Action, d.Reason)
 			}
+			if tt.wantReason != "" && !strings.Contains(d.Reason, tt.wantReason) {
+				t.Errorf("reason %q names no %q", d.Reason, tt.wantReason)
+			}
 			if !reflect.DeepEqual(d.Cascade, tt.wantCascade) {
 				t.Errorf("Cascade = %v, want %v", d.Cascade, tt.wantCascade)
 			}
@@ -1784,59 +1795,6 @@ func TestDecide(t *testing.T) {
 			}
 			if d.Reason == "" {
 				t.Error("Reason is empty; every decision carries a reason")
-			}
-		})
-	}
-}
-
-// TestDecide_ReassessCommentHoldOffNamesTheAuthor pins the acceptance
-// that a comment authored by an identity whose comments are no input to
-// `reassess` dispatches nothing and holds off naming that authorship —
-// the engine's own account and the configured decomposer identity are
-// the two the declaration excludes (§forgejo/decisions/actions,
-// §forgejo/decisions/loop-prevention, s-git/maitred#262).
-func TestDecide_ReassessCommentHoldOffNamesTheAuthor(t *testing.T) {
-	cases := []struct {
-		name     string
-		event    Event
-		state    State
-		wantName string
-	}{
-		{
-			name:     "comment authored by the engine account",
-			event:    issueEventBy(EventIssueCommented, "maitred"),
-			state:    State{ReviewLenses: testLenses, Issue: openIssue(), EngineAccount: "maitred"},
-			wantName: "maitred",
-		},
-		{
-			name:     "comment authored by the configured decomposer identity",
-			event:    issueEventBy(EventIssueCommented, "decomposer"),
-			state:    State{ReviewLenses: testLenses, Issue: openIssue(), DecomposerIdentity: "decomposer"},
-			wantName: "decomposer",
-		},
-		{
-			// An unset decomposer identity leaves that half of the guard
-			// inert, exactly as the root-comment guard's is
-			// (§forgejo/config/decomposer-identity).
-			name:  "comment authored by anyone else, neither identity configured",
-			event: issueEventBy(EventIssueCommented, "alice"),
-			state: State{ReviewLenses: testLenses, Issue: openIssue()},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			d := Decide(tc.event, tc.state, nil)
-			if tc.wantName == "" {
-				if d.HoldOff() {
-					t.Fatalf("HoldOff() = true, want the comment to dispatch reassess (reason: %s)", d.Reason)
-				}
-				return
-			}
-			if !d.HoldOff() {
-				t.Fatalf("HoldOff() = false with action %q, want hold-off (reason: %s)", d.Action, d.Reason)
-			}
-			if !strings.Contains(d.Reason, tc.wantName) {
-				t.Errorf("reason %q does not name the author %q", d.Reason, tc.wantName)
 			}
 		})
 	}
