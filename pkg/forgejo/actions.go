@@ -23,7 +23,8 @@ import (
 //
 // The predicate answers the question "does this state call for this
 // action", one answer whichever path asks it; how a ready row is
-// paced (a revision-keyed guard, an exemption, the re-fire bound)
+// paced (the digest it declares, and the re-fire bound that
+// spaces a re-fire of it)
 // belongs to the row, not the predicate (§forgejo/decisions/loop-prevention,
 // §forgejo/reconciliation/the-state-is-the-watermark). The digest is
 // the revision the watermark records under the action's name
@@ -70,11 +71,12 @@ type actionDecl struct {
 	// digest derives the revision a dispatch of this action is
 	// watermarked on (§forgejo/state/watermark).
 	digest func(Event, State) string
-	// digestFoldsInputs records that the digest is the fold of this
-	// declaration's own input set, which is what lets a reason line
-	// name the facts behind the digest it quotes
-	// (§forgejo/state/watermark, §forgejo/observability/the-decision-log).
-	digestFoldsInputs bool
+	// digestSubject derives the digest one subject of this action's
+	// fan-out is paced on: the fold of the declared inputs that one
+	// subject's dispatch reads, so a sibling's move cannot re-fire it
+	// (§forgejo/state/watermark, §forgejo/decisions/review-lenses).
+	// Only the review fan-out declares one.
+	digestSubject func(Event, State, string) string
 	// components is the fold's component set, declared by the action
 	// whose dispatch the fold gates: the `decompose` declaration owns
 	// it and the digest reads it from here, so no list lives beside
@@ -96,9 +98,8 @@ func init() {
 				"issue.state", "issue.labels", "issue.updated_at",
 				"blockers.states", "connected PRs",
 			},
-			ready:             implementReady,
-			digest:            declaredDigestFor(ActionImplement),
-			digestFoldsInputs: true,
+			ready:  implementReady,
+			digest: declaredDigestFor(ActionImplement),
 		},
 		// Comments stand among reassess's inputs, and this declaration is
 		// the one place whose comments count is stated: a comment authored
@@ -114,17 +115,17 @@ func init() {
 				"issue.state", "issue.labels", "issue.body", "issue.comments",
 				"blockers.states", "event.type", "event.sender",
 			},
-			ready:             reassessReady,
-			digest:            declaredDigestFor(ActionReassess),
-			digestFoldsInputs: true,
+			ready:  reassessReady,
+			digest: declaredDigestFor(ActionReassess),
 		},
 		ActionReview: {
 			inputs: []string{
 				"PR.state", "PR.mergeable", "PR.head sha", "PR.labels",
 				"reviews", "config.review lenses", "event.type", "event.sender",
 			},
-			ready:  reviewReady,
-			digest: prHeadDigest,
+			ready:         reviewReady,
+			digest:        declaredDigestFor(ActionReview),
+			digestSubject: declaredSubjectDigestFor(ActionReview),
 		},
 		ActionFixFeedback: {
 			inputs: []string{
@@ -133,7 +134,7 @@ func init() {
 				"event.type",
 			},
 			ready:  fixFeedbackReady,
-			digest: prHeadDigest,
+			digest: declaredDigestFor(ActionFixFeedback),
 		},
 		ActionMergeOrWait: {
 			inputs: []string{
@@ -143,12 +144,12 @@ func init() {
 				"config.review lenses", "event.kind", "event.repo", "event.number",
 			},
 			ready:  mergeOrWaitReady,
-			digest: prHeadDigest,
+			digest: declaredDigestFor(ActionMergeOrWait),
 		},
 		ActionRebase: {
 			inputs: []string{"PR.state", "PR.mergeable", "PR.head sha", "event.type"},
 			ready:  rebaseReady,
-			digest: prHeadDigest,
+			digest: declaredDigestFor(ActionRebase),
 		},
 		ActionDecompose: {
 			inputs: []string{
@@ -156,28 +157,25 @@ func init() {
 				"blockers.states", "forest digest gate",
 				"event.type", "event.sender",
 			},
-			ready:             decomposeReady,
-			digest:            declaredDigestFor(ActionDecompose),
-			digestFoldsInputs: true,
-			components:        digestComponentSet,
+			ready:      decomposeReady,
+			digest:     declaredDigestFor(ActionDecompose),
+			components: digestComponentSet,
 		},
 		ActionWrapUp: {
 			inputs: []string{
 				"issue.state", "issue.labels", "issue.updated_at",
 				"blockers.states",
 			},
-			ready:             wrapUpReady,
-			digest:            declaredDigestFor(ActionWrapUp),
-			digestFoldsInputs: true,
+			ready:  wrapUpReady,
+			digest: declaredDigestFor(ActionWrapUp),
 		},
 		ActionTeardownForest: {
 			inputs: []string{
 				"issue.state", "issue.labels", "issue.updated_at",
 				"blocked downstream edges",
 			},
-			ready:             teardownForestReady,
-			digest:            declaredDigestFor(ActionTeardownForest),
-			digestFoldsInputs: true,
+			ready:  teardownForestReady,
+			digest: declaredDigestFor(ActionTeardownForest),
 		},
 		ActionSync: {
 			inputs: []string{
@@ -185,7 +183,7 @@ func init() {
 				"members' PRs", "members' PR reviews", "config.review lenses",
 			},
 			ready:  syncReady,
-			digest: syncSetDigest,
+			digest: declaredDigestFor(ActionSync),
 		},
 	}
 	validateFoldingDeclarations()
@@ -263,6 +261,19 @@ func digestFor(a Action, e Event, s State) string {
 	return declarationFor(a).digest(e, s)
 }
 
+// digestForSubject derives the revision one subject of a fan-out is
+// paced on, through the same declaration: the fold of the declared inputs
+// that subject's own dispatch reads. An action with no fan-out has no
+// subject digest, which is a programming error rather than a state
+// (§forgejo/state/watermark, §forgejo/decisions/review-lenses).
+func digestForSubject(a Action, subject string, e Event, s State) string {
+	decl := declarationFor(a)
+	if decl.digestSubject == nil {
+		panic("forgejo: subject digest: " + string(a) + " declares no fan-out digest")
+	}
+	return decl.digestSubject(e, s, subject)
+}
+
 // foldComponents is the actionable-state fold's component set, drawn
 // from the `decompose` declaration rather than a list beside the fold
 // (§forgejo/decisions/actionable-state-digest).
@@ -271,24 +282,23 @@ func foldComponents() []digestComponent {
 }
 
 // The digest derivations the declarations bind to. declaredDigestFor is
-// the digest of an issue-path action's declared input set; prHeadDigest
-// is the pull request's head sha; and the sync action's digest is the
-// whole landing set's revision. The sync leg of the unblock cascade
-// reads the set before it dispatches (dispatchSyncSet), so no declared
-// digest is ever derived over a state whose members are absent. The
-// pull-request actions key on an object revision — a head sha — and
-// re-keying them onto the fold of their declared inputs is the next
-// member of this chain (s-git/maitred#260).
+// the digest of an action's declared input set, which every declaration
+// binds to now: the issue-path actions had it first (s-git/maitred#259),
+// and the pull-request actions — whose rows once keyed themselves on the
+// head sha they name among their inputs — took it here
+// (s-git/maitred#260). The sync leg of the unblock cascade reads the set
+// before it dispatches (dispatchSyncSet), so no declared digest is ever
+// derived over a state whose members are absent.
 
-// declaredDigestFor is the digest derivation an issue-path declaration
-// binds to: the digest of that action's declared input set, the hex
-// SHA-256 over exactly the state facts its declaration names, so the
-// same state yields a byte-identical digest whatever order the listings
-// arrive in and a change to any fact the predicate reads moves it
+// declaredDigestFor is the digest derivation a declaration binds to: the
+// digest of that action's declared input set, the hex SHA-256 over
+// exactly the state facts its declaration names, so the same state yields
+// a byte-identical digest whatever order the listings arrive in and a
+// change to any fact the predicate reads moves it
 // (§forgejo/state/watermark, §forgejo/decisions/inputs,
 // s-git/maitred#259).
 //
-// No event fact stands in it, and no issue timestamp stands in it
+// No event fact stands in it, and no object timestamp stands in it
 // whole. The event names which row fired, and the sweep and the event
 // path must reach one digest for one state — two answers is the split
 // this chain exists to close
@@ -298,36 +308,63 @@ func foldComponents() []digestComponent {
 // fence the engine owns, and the row's own timestamp as the masked
 // revision (§forgejo/reconciliation/the-tracker-block).
 //
-// A fact a re-keyed declaration names and no fold covers would fold as
-// nothing, silently widening the digest's blind spots, so
+// A fact a declaration names and no fold covers would fold as nothing,
+// silently widening the digest's blind spots, so
 // validateFoldingDeclarations refuses it when the declaration table is
 // built (§forgejo/decisions/inputs).
 func declaredDigestFor(a Action) func(Event, State) string {
 	return func(_ Event, s State) string {
-		facts := declaredInputFacts(a, s)
-		if len(facts) == 0 {
-			// An action reached with none of its declared state present
-			// folds to nothing, and the revision-keyed guard is inert for
-			// a revision that is nothing — the same answer an issue that
-			// was never fetched gave before this digest existed
-			// (§forgejo/state/watermark).
-			return ""
-		}
-		return hashInputFacts(facts)
+		return digestFacts(declaredInputFacts(a, "", s))
 	}
+}
+
+// declaredSubjectDigestFor is the derivation one subject of a fan-out is
+// paced on: the same fold of the same declared inputs, read from that
+// subject's side. A fan-out's subjects share the object but not its
+// standing against it — the review lenses each owe their own report at
+// head — and a digest that folded a sibling's reviews would move when the
+// sibling reported and re-dispatch a lens whose own dispatch was already
+// in flight. Scoping the fold to the subject is what keeps one lens's
+// dispatch one dispatch (§forgejo/decisions/review-lenses,
+// §forgejo/decisions/loop-prevention).
+func declaredSubjectDigestFor(a Action) func(Event, State, string) string {
+	return func(_ Event, s State, subject string) string {
+		return digestFacts(declaredInputFacts(a, subject, s))
+	}
+}
+
+// digestFacts is a declared digest's answer over its facts: nothing for
+// an action reached with none of its declared state present, which makes
+// the guard inert for a revision that is nothing — the same answer an
+// object that was never fetched gave before declared digests existed
+// (§forgejo/state/watermark).
+func digestFacts(facts []string) string {
+	if len(facts) == 0 {
+		return ""
+	}
+	return hashInputFacts(facts)
 }
 
 // declaredInputFacts is one declared digest's input, in the words a
 // reason line quotes them: the facts the action's declaration names,
 // each stated so a human can line the quote up against the forge's
 // history (§forgejo/observability/the-decision-log,
-// §forgejo/state/watermark). The digest folds every fact; a quote of
-// them bounds the thread (§forgejo/observability/the-decision-log). A
-// fact an earlier input already stated is collected once, so two folds
-// that name the same fact move one digest and quote it once.
-func declaredInputFacts(a Action, s State) []string {
+// §forgejo/state/watermark). subject is the fan-out subject whose
+// dispatch the digest paces, empty for a singleton row. The digest
+// folds every fact; a quote of them bounds the thread
+// (§forgejo/observability/the-decision-log). A fact an earlier input
+// already stated is collected once, so two folds that name the same
+// fact move one digest and quote it once.
+func declaredInputFacts(a Action, subject string, s State) []string {
 	var facts []string
 	seen := map[string]bool{}
+	add := func(fact string) {
+		if seen[fact] {
+			return
+		}
+		seen[fact] = true
+		facts = append(facts, fact)
+	}
 	for _, name := range declarationFor(a).inputs {
 		if strings.HasPrefix(name, "event.") {
 			// An event fact names which row fired, never part of the
@@ -343,15 +380,9 @@ func declaredInputFacts(a Action, s State) []string {
 		if !ok {
 			panic(fmt.Sprintf("forgejo: %s declares %s, which no digest fold states", a, name))
 		}
-		var folded []string
-		for _, fact := range foldFact(s) {
-			if seen[fact] {
-				continue
-			}
-			seen[fact] = true
-			folded = append(folded, fact)
+		for _, fact := range foldFact(subject, s) {
+			add(fact)
 		}
-		facts = append(facts, folded...)
 	}
 	return facts
 }
@@ -396,33 +427,29 @@ func quoteThread(facts []string) []string {
 // process down at startup rather than in the middle of serving a
 // delivery (§forgejo/decisions/inputs).
 func validateFoldingDeclarations() {
-	for a, decl := range actionDecls {
-		if decl.digestFoldsInputs {
-			declaredInputFacts(a, State{})
+	for a := range actionDecls {
+		declaredInputFacts(a, "", State{})
+		if declarationFor(a).digestSubject != nil {
+			declaredInputFacts(a, "subject", State{})
 		}
 	}
-}
-
-// digestFoldsInputs reports whether an action's digest is the fold of
-// its declaration's input set, the case in which a reason quoting it
-// names the facts behind it (§forgejo/state/watermark).
-func digestFoldsInputs(a Action) bool {
-	return declarationFor(a).digestFoldsInputs
 }
 
 // declaredInputFolds maps each state fact a declaration may name to how
 // its digest states it. Each fold states the fact the action's own
 // predicate reads, so no fact can be folded that no predicate asks —
 // and, conversely, no fact the predicate asks of can stand still while
-// the digest moves (§forgejo/decisions/inputs).
-var declaredInputFolds = map[string]func(State) []string{
-	"issue.state": func(s State) []string {
+// the digest moves (§forgejo/decisions/inputs). subject is the fan-out
+// subject whose dispatch the digest paces; only the review fold reads it,
+// because only a fan-out's subject reads a standing of its own.
+var declaredInputFolds = map[string]func(subject string, s State) []string{
+	"issue.state": func(_ string, s State) []string {
 		if s.Issue == nil {
 			return nil
 		}
 		return []string{"state " + s.Issue.State}
 	},
-	"issue.labels": func(s State) []string {
+	"issue.labels": func(_ string, s State) []string {
 		if s.Issue == nil {
 			return nil
 		}
@@ -432,7 +459,7 @@ var declaredInputFolds = map[string]func(State) []string{
 		}
 		return facts
 	},
-	"issue.body": func(s State) []string {
+	"issue.body": func(_ string, s State) []string {
 		if s.Issue == nil {
 			return nil
 		}
@@ -441,7 +468,7 @@ var declaredInputFolds = map[string]func(State) []string{
 		// nowhere (§forgejo/reconciliation/the-tracker-block).
 		return []string{"body " + digestRevision(outsideFence(s.Issue.Body))}
 	},
-	"issue.updated_at": func(s State) []string {
+	"issue.updated_at": func(_ string, s State) []string {
 		if s.Issue == nil {
 			return nil
 		}
@@ -458,7 +485,7 @@ var declaredInputFolds = map[string]func(State) []string{
 		}
 		return []string{"updated " + s.Issue.UpdatedAt.UTC().Format(time.RFC3339)}
 	},
-	"issue.comments": func(s State) []string {
+	"issue.comments": func(_ string, s State) []string {
 		// One comment, one fact: the login that authored it and the hex
 		// its body digests to, the way an issue's own description is
 		// stated. Whose comments reach the fold is commentCountsAsInput's
@@ -486,14 +513,14 @@ var declaredInputFolds = map[string]func(State) []string{
 		}
 		return facts
 	},
-	"blockers.states": func(s State) []string {
+	"blockers.states": func(_ string, s State) []string {
 		facts := make([]string, 0, len(s.Blockers))
 		for i := range s.Blockers {
 			facts = append(facts, blockerRef(s, &s.Blockers[i])+" "+s.Blockers[i].State)
 		}
 		return facts
 	},
-	"connected PRs": func(s State) []string {
+	"connected PRs": func(_ string, s State) []string {
 		// A connected pull request is one of the issue's blockers, so it
 		// stands where the issue does and is keyed there
 		// (§forgejo/webhook/re-fetch, §forgejo/decisions/transition-table).
@@ -507,7 +534,7 @@ var declaredInputFolds = map[string]func(State) []string{
 		}
 		return facts
 	},
-	"blocked downstream edges": func(s State) []string {
+	"blocked downstream edges": func(_ string, s State) []string {
 		// The teardown predicate's read is countDeletableMembers: the
 		// spared tracker says nothing about whether a forest remains, so
 		// it states no fact either (§forgejo/decisions/forest-teardown).
@@ -520,12 +547,168 @@ var declaredInputFolds = map[string]func(State) []string{
 		}
 		return facts
 	},
-	"forest digest gate": func(s State) []string {
+	"forest digest gate": func(_ string, s State) []string {
 		if s.ForestGate == nil {
 			return []string{"forest gate unarmed"}
 		}
 		return []string{"forest " + forestRef(s.ForestGate.RootRepo, s.ForestGate.RootNumber) + " " + s.ForestGate.Current}
 	},
+	// The pull-request folds: the facts the pull-request rows read, each
+	// stated as the row reads it. The head sha is here as an input the
+	// declaration names, which is what the rows used to key themselves on
+	// beside any declaration (s-git/maitred#260).
+	"PR.state": func(_ string, s State) []string {
+		if s.PR == nil {
+			return nil
+		}
+		return []string{"pr state " + s.PR.State}
+	},
+	"PR.mergeable": func(_ string, s State) []string {
+		if s.PR == nil {
+			return nil
+		}
+		return []string{fmt.Sprintf("pr mergeable %t", s.PR.Mergeable)}
+	},
+	"PR.head sha": func(_ string, s State) []string {
+		if s.PR == nil {
+			return nil
+		}
+		return []string{"pr head " + s.PR.HeadSHA}
+	},
+	"PR.labels": func(_ string, s State) []string {
+		if s.PR == nil {
+			return nil
+		}
+		facts := make([]string, 0, len(s.PR.Labels))
+		for _, label := range s.PR.Labels {
+			facts = append(facts, "pr label "+label)
+		}
+		return facts
+	},
+	"PR.author": func(_ string, s State) []string {
+		if s.PR == nil {
+			return nil
+		}
+		return []string{"pr author " + s.PR.Author}
+	},
+	"reviews": func(subject string, s State) []string {
+		facts := make([]string, 0, len(s.Reviews))
+		for i := range s.Reviews {
+			r := &s.Reviews[i]
+			if reviewIsDismissed(r) {
+				continue // a voided verdict states no standing
+			}
+			if subject != "" && r.Author != subject {
+				continue // a sibling's report is no subject's fact
+			}
+			facts = append(facts, fmt.Sprintf("review %s %s at %s", r.Author, r.Event, r.CommitID))
+		}
+		return facts
+	},
+	"config.review lenses": func(_ string, s State) []string {
+		facts := make([]string, 0, len(s.ReviewLenses))
+		for _, lens := range s.ReviewLenses {
+			facts = append(facts, "lens "+lens.Identity)
+		}
+		return facts
+	},
+	"config.implementer identity": func(_ string, s State) []string {
+		if s.ImplementerIdentity == "" {
+			return []string{"implementer identity unset"}
+		}
+		return []string{"implementer " + s.ImplementerIdentity}
+	},
+	"connected issues": func(_ string, s State) []string {
+		var facts []string
+		for i := range s.ConnectedIssues {
+			c := &s.ConnectedIssues[i]
+			facts = append(facts, issueFacts(&c.Issue)...)
+		}
+		return facts
+	},
+	"connected issues' blockers": func(_ string, s State) []string {
+		var facts []string
+		for i := range s.ConnectedIssues {
+			for j := range s.ConnectedIssues[i].Blockers {
+				b := &s.ConnectedIssues[i].Blockers[j]
+				facts = append(facts, forestRef(b.Repository, b.Number)+" "+b.State)
+			}
+		}
+		return facts
+	},
+	"connected issues' sync sets": func(_ string, s State) []string {
+		var facts []string
+		for i := range s.ConnectedIssues {
+			for j := range s.ConnectedIssues[i].SyncSets {
+				facts = append(facts, syncSetFact(&s.ConnectedIssues[i].SyncSets[j]))
+			}
+		}
+		return facts
+	},
+	"sync sets": func(_ string, s State) []string {
+		facts := make([]string, 0, len(s.SyncSets))
+		for i := range s.SyncSets {
+			facts = append(facts, syncSetFact(&s.SyncSets[i]))
+		}
+		return facts
+	},
+	"sync members": func(_ string, s State) []string {
+		var facts []string
+		for i := range s.SyncMembers {
+			m := &s.SyncMembers[i]
+			facts = append(facts, issueFacts(&m.Issue)...)
+		}
+		return facts
+	},
+	"members' PRs": func(_ string, s State) []string {
+		var facts []string
+		for i := range s.SyncMembers {
+			m := &s.SyncMembers[i]
+			if m.PR == nil {
+				facts = append(facts, fmt.Sprintf("%s delivers nothing", forestRef(m.Issue.Repository, m.Issue.Number)))
+				continue
+			}
+			facts = append(facts, fmt.Sprintf("member pr %d state %s mergeable %t head %s",
+				m.PR.Number, m.PR.State, m.PR.Mergeable, m.PR.HeadSHA))
+		}
+		return facts
+	},
+	"members' PR reviews": func(_ string, s State) []string {
+		// The member test's read is the chain's standing at the member's
+		// head, not the review listing whole: a set re-fires when a member
+		// becomes approved at head, and holds while it does not
+		// (§forgejo/decisions/sync-set).
+		var facts []string
+		for i := range s.SyncMembers {
+			m := &s.SyncMembers[i]
+			if m.PR == nil {
+				continue
+			}
+			facts = append(facts, fmt.Sprintf("member %s approved at head %t",
+				forestRef(m.Issue.Repository, m.Issue.Number), allLensesApproved(m.Reviews, s.ReviewLenses, m.PR.HeadSHA)))
+		}
+		return facts
+	},
+}
+
+// issueFacts states an issue as a digest's fact: its identity and state,
+// and each label it carries. The merge gate and the landing set both
+// read a work item's labels for the opt-ins, so a label move is a fact
+// for the digest too (§forgejo/decisions/merge-gate,
+// §forgejo/decisions/sync-set).
+func issueFacts(issue *Issue) []string {
+	ref := forestRef(issue.Repository, issue.Number)
+	facts := []string{"issue " + ref + " " + issue.State}
+	for _, label := range issue.Labels {
+		facts = append(facts, "issue "+ref+" label "+label)
+	}
+	return facts
+}
+
+// syncSetFact states a grouping issue as a landing-set fact: the set
+// stands or falls with its own state.
+func syncSetFact(set *Issue) string {
+	return "sync set " + forestRef(set.Repository, set.Number) + " " + set.State
 }
 
 // blockerRef is a blocker's identity, which the dependency listing
@@ -557,20 +740,6 @@ func hashInputFacts(facts []string) string {
 		fmt.Fprintf(h, "%d:%s\n", len(fact), fact)
 	}
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-func prHeadDigest(_ Event, s State) string {
-	if s.PR == nil {
-		return ""
-	}
-	return s.PR.HeadSHA
-}
-
-func syncSetDigest(_ Event, s State) string {
-	if s.Issue == nil {
-		return ""
-	}
-	return syncSetRevision(s.Issue, s.SyncMembers, s.ReviewLenses)
 }
 
 // The predicates, one per action, written over the re-fetched state
@@ -647,24 +816,31 @@ func reassessReady(e Event, s State) (Decision, readyAnswer) {
 }
 
 // reviewReady is the review fan-out's predicate, the one the
-// specification states whole: the lenses to consider are the
-// configured lenses with no undismissed approving review at the PR's
-// current head (§forgejo/decisions/review-lenses). When at least one
-// lens is outstanding the fan-out row composes the per-lens dispatch
-// and applies each lens's pacing; when every lens is satisfied the
-// review-following rows own the PR, and that is the hold-off named.
+// specification states whole: the lenses owed a dispatch are the
+// configured lenses that have reported nothing at the PR's current head
+// (§forgejo/decisions/review-lenses). A lens whose report landed at head
+// is not owed another — the standing is an input this action declares,
+// and a lens that reported feedback stands for the review-following rows
+// to decide, not for a second reading of the same head. When at least one
+// lens is owed the fan-out row composes the per-lens dispatch and applies
+// each lens's pacing; when every lens has reported the PR belongs to the
+// review-following rows, and that is the hold-off named.
 func reviewReady(_ Event, s State) (Decision, readyAnswer) {
 	pr := s.PR
 	if pr == nil {
 		return holdOff("no PR state re-fetched"), readyNo
 	}
-	head := digestFor(ActionReview, Event{}, s)
+	head := s.PR.HeadSHA
+	var owed []string
 	for _, lens := range s.ReviewLenses {
-		if !lensStandingAtHead(s.Reviews, lens, head).approved {
-			return dispatch(ActionReview, fmt.Sprintf("lens %s has no undismissed approval at head %s", lens.Identity, head)), readyYes
+		if !lensStandingAtHead(s.Reviews, lens, head).reported {
+			owed = append(owed, lens.Identity)
 		}
 	}
-	return holdOff(fmt.Sprintf("PR %d: every review lens (%s) holds an undismissed approval at head %s; the review-following rows decide", pr.Number, strings.Join(lensIdentities(s.ReviewLenses), ", "), head)), readyNo
+	if len(owed) > 0 {
+		return dispatch(ActionReview, fmt.Sprintf("lens %s has no undismissed report at head %s", strings.Join(owed, ", "), head)), readyYes
+	}
+	return holdOff(fmt.Sprintf("PR %d: every review lens (%s) has an undismissed report at head %s; the review-following rows decide", pr.Number, strings.Join(lensIdentities(s.ReviewLenses), ", "), head)), readyNo
 }
 
 // rebaseReady is rebase's predicate: an open pull request the forge
@@ -701,7 +877,7 @@ func fixFeedbackReady(e Event, s State) (Decision, readyAnswer) {
 	if pr == nil {
 		return holdOff("no PR state re-fetched"), readyNo
 	}
-	gate := prReviewGate(s.Reviews, s.ReviewLenses, digestFor(ActionFixFeedback, e, s))
+	gate := prReviewGate(s.Reviews, s.ReviewLenses, pr.HeadSHA)
 	if !gate.allReported || !gate.fixFires(e.Type != EventPRReviewed) {
 		return Decision{}, readyNotApplicable
 	}
@@ -727,7 +903,7 @@ func mergeOrWaitReady(e Event, s State) (Decision, readyAnswer) {
 	if pr == nil {
 		return holdOff("no PR state re-fetched"), readyNo
 	}
-	gate := prReviewGate(s.Reviews, s.ReviewLenses, digestFor(ActionMergeOrWait, e, s))
+	gate := prReviewGate(s.Reviews, s.ReviewLenses, pr.HeadSHA)
 	if !gate.mergeFires() {
 		return Decision{}, readyNotApplicable
 	}
@@ -741,8 +917,8 @@ func mergeOrWaitReady(e Event, s State) (Decision, readyAnswer) {
 	if !optedIn {
 		return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens but no issue its body closes carries the %s label; an approved PR with no merge opt-in waits on a human (connected issues: %s)", pr.Number, LabelAgenticAutoMerge, connectedIssueNames(s))), readyNo
 	}
-	return dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d stands at approving reviews from every lens and %s; the state calls for merge-or-wait regardless of revision %s",
-		pr.Number, issueOptInClause(ref), digestFor(ActionMergeOrWait, e, s))), readyYes
+	return dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d stands at approving reviews from every lens and %s",
+		pr.Number, issueOptInClause(ref))), readyYes
 }
 
 // decomposeReady is decompose's predicate, the digest gate's
@@ -751,7 +927,7 @@ func mergeOrWaitReady(e Event, s State) (Decision, readyAnswer) {
 // only case the sweep never reaches, keeps its revision-keyed pacing
 // in the row rather than in the predicate
 // (§forgejo/decisions/actionable-state-digest,
-// §forgejo/reconciliation/watermark-exemptions, s-git/maitred#209).
+// §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#209).
 // A teardown order stands above the root's row, so a root carrying
 // the order answers "not ready" — the teardown declaration's row
 // decides that forest (§forgejo/decisions/forest-teardown). The order
@@ -813,7 +989,7 @@ func decomposeReady(e Event, s State) (Decision, readyAnswer) {
 // gate carries no observation at all — a hold-off on the sweep's
 // gated rows (through the pipeline it cannot happen), the root's
 // standing on the event path (§forgejo/decisions/actionable-state-digest,
-// §forgejo/reconciliation/watermark-exemptions, s-git/maitred#209).
+// §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#209).
 func digestGateAnswer(g *ForestDigestGate, subject string, gateUnarmed Decision) (Decision, readyAnswer) {
 	if unarmedDigestGate(g) {
 		return gateUnarmed, answerOf(gateUnarmed)
@@ -846,7 +1022,7 @@ func answerOf(d Decision) readyAnswer {
 
 // wrapUpReady is wrap-up's predicate: an open outcome tracker with no
 // open blocker (§forgejo/decisions/actions,
-// §forgejo/reconciliation/watermark-exemptions).
+// §forgejo/reconciliation/the-state-is-the-watermark).
 func wrapUpReady(_ Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {

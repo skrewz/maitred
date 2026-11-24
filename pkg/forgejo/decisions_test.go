@@ -53,7 +53,7 @@ func labelledIssue(labels ...string) *Issue {
 }
 
 // trackerIssue returns an open issue carrying the reserved outcome
-// label (§forgejo/reconciliation/watermark-exemptions).
+// label (§forgejo/reconciliation/the-state-is-the-watermark).
 func trackerIssue() *Issue {
 	issue := openIssue()
 	issue.Labels = append(issue.Labels, LabelOutcome)
@@ -61,7 +61,7 @@ func trackerIssue() *Issue {
 }
 
 // ideationIssue returns an open issue carrying the reserved ideation
-// label (§forgejo/reconciliation/watermark-exemptions).
+// label (§forgejo/reconciliation/the-state-is-the-watermark).
 func ideationIssue() *Issue {
 	issue := openIssue()
 	issue.Labels = append(issue.Labels, LabelIdeation)
@@ -310,6 +310,42 @@ func lensWatermark(revision string, lenses ...string) *Watermark {
 	w := &Watermark{Subjects: map[string]Slot{}}
 	for _, l := range lenses {
 		w.Subjects[l] = Slot{Action: string(ActionReview), Revision: revision}
+	}
+	return w
+}
+
+// lensDigest is the digest one lens's dispatch is paced on: the fold of
+// the review declaration's inputs read from that lens's side
+// (§forgejo/state/watermark, §forgejo/decisions/review-lenses,
+// s-git/maitred#260).
+func lensDigest(pr *PullRequest, reviews []Review, lenses []ReviewLens, lens string) string {
+	return digestForSubject(ActionReview, lens, Event{}, State{PR: pr, Reviews: reviews, ReviewLenses: lenses})
+}
+
+// reviewAt is a review submitted against a named commit — the shape a
+// push leaves behind, the report standing at the head it was written
+// against and not at the one the pull request now holds.
+func reviewAt(event, author, sha string, at time.Time) Review {
+	r := review(event, author, at)
+	r.CommitID = sha
+	return r
+}
+
+// standingWatermark is the watermark a singleton row leaves behind once
+// it dispatched: the digest of the inputs its declaration names over st,
+// which is the value the row's next arrival compares against
+// (§forgejo/state/watermark, s-git/maitred#260).
+func standingWatermark(a Action, st State) *Watermark {
+	return &Watermark{Action: string(a), Revision: digestFor(a, Event{}, st)}
+}
+
+// lensStandingWatermark is the same record for a fan-out: one subject
+// slot per lens, each holding that lens's own digest
+// (§forgejo/state/watermark, §forgejo/decisions/review-lenses).
+func lensStandingWatermark(st State, lenses ...string) *Watermark {
+	w := &Watermark{Subjects: map[string]Slot{}}
+	for _, l := range lenses {
+		w.Subjects[l] = Slot{Action: string(ActionReview), Revision: digestForSubject(ActionReview, l, Event{}, st)}
 	}
 	return w
 }
@@ -757,10 +793,13 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionReview,
 		},
 		{
-			name:       "PR synced after a review re-fires the lenses without an approval at the new head",
-			event:      prEvent(EventPRSynced, "alice"),
-			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
-			wantAction: ActionReview,
+			// The lens's report landed at head: its standing is an
+			// input the declaration names, the fan-out has nothing left
+			// to ask it for, and the review-following rows own the PR
+			// (§forgejo/decisions/review-lenses, s-git/maitred#260).
+			name:  "PR synced where the lens reported a comment at head holds off — its dispatch landed",
+			event: prEvent(EventPRSynced, "alice"),
+			state: State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
 		},
 		{
 			name:       "PR synced not mergeable dispatches rebase",
@@ -776,18 +815,18 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "PR synced pushed by the reviewing author of an older review dispatches every lens — the push predates any lens standing at head",
 			event:      prEvent(EventPRSynced, "bob"),
-			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "bob", testTime), review("COMMENT", "carol", testTime2)}},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{reviewAt("APPROVED", "bob", "sha-prev", testTime), reviewAt("COMMENT", "carol", "sha-prev", testTime2)}},
 			wantAction: ActionReview,
 		},
 		{
 			name:  "PR synced pushed by the latest reviewing author holds off",
 			event: prEvent(EventPRSynced, "carol"),
-			state: State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("APPROVED", "bob", testTime), review("COMMENT", "carol", testTime2)}},
+			state: State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{reviewAt("APPROVED", "bob", "sha-prev", testTime), reviewAt("COMMENT", "carol", "sha-prev", testTime2)}},
 		},
 		{
 			name:       "PR synced pushed by the implementer after a review dispatches every lens",
 			event:      prEvent(EventPRSynced, "alice"),
-			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{reviewAt(ReviewChangesRequested, "carol", "sha-prev", testTime)}},
 			wantAction: ActionReview,
 		},
 		{
@@ -821,14 +860,14 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionReview,
 		},
 		{
-			// Keyed to the label's presence at the current revision:
-			// the label merely present does not re-fire the review
-			// (§forgejo/decisions/label-triggered-review,
-			// §forgejo/decisions/loop-prevention).
-			name:      "PR synced carrying trigger-review already dispatched at the revision holds off",
+			// Keyed to the label's presence at a standing the engine has
+			// not dispatched against: the label merely present does not
+			// re-fire the review (§forgejo/decisions/label-triggered-review,
+			// §forgejo/decisions/loop-prevention, s-git/maitred#260).
+			name:      "PR synced carrying trigger-review already dispatched at this standing holds off",
 			event:     prEvent(EventPRSynced, "alice"),
 			state:     State{ReviewLenses: testLenses, PR: labelledPR("abc", LabelTriggerReview), Reviews: []Review{review("APPROVED", "carol", testTime)}},
-			watermark: lensWatermark("abc", "carol"),
+			watermark: lensWatermark(lensDigest(labelledPR("abc", LabelTriggerReview), []Review{review("APPROVED", "carol", testTime)}, testLenses, "carol"), "carol"),
 		},
 		{
 			// The label requests a review of mergeable work; a
@@ -1035,7 +1074,7 @@ func TestDecide(t *testing.T) {
 			event: prEvent(EventPRSynced, "alice"),
 			state: State{
 				ReviewLenses: testLenses,
-				PR:           openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)},
+				PR:           openPR("abc"), Reviews: []Review{reviewAt("COMMENT", "carol", "sha-prev", testTime)},
 				ConnectedIssues: []ConnectedIssue{connectedIssueOf(7, gateBlocker("o/r", 3, "open"))},
 			},
 			wantAction: ActionReview,
@@ -1212,18 +1251,17 @@ func TestDecide(t *testing.T) {
 			}},
 		},
 		{
-			name:  "reconcile sync issue already dispatched at the set revision holds off",
+			name:  "reconcile sync issue already dispatched at the set digest holds off",
 			event: issueEvent(EventReconcile),
 			state: State{ReviewLenses: testLenses, Issue: syncIssueFixture(7), SyncMembers: []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}},
-			watermark: &Watermark{Action: string(ActionSync), Revision: syncSetRevision(syncIssueFixture(7), []SyncMember{
-				closedSyncMemberFixture(5), syncMemberFixture(4, 40),
-			}, testLenses)},
+			watermark: &Watermark{Action: string(ActionSync), Revision: setDigest(syncIssueFixture(7),
+				closedSyncMemberFixture(5), syncMemberFixture(4, 40))},
 		},
 		{
 			name:       "reconcile sync issue whose set state moved re-dispatches over the watermark",
 			event:      issueEvent(EventReconcile),
 			state:      State{ReviewLenses: testLenses, Issue: syncIssueFixture(7), SyncMembers: []SyncMember{syncMemberFixture(4, 40), syncMemberFixture(5, 50)}},
-			watermark:  &Watermark{Action: string(ActionSync), Revision: syncSetRevision(syncIssueFixture(7), []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}, testLenses)},
+			watermark:  &Watermark{Action: string(ActionSync), Revision: setDigest(syncIssueFixture(7), []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}...)},
 			wantAction: ActionSync,
 		},
 		{
@@ -1427,10 +1465,16 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionReassess,
 		},
 		{
-			name:      "review already dispatched at the revision holds off",
-			event:     prEvent(EventPROpened, "alice"),
-			state:     State{ReviewLenses: testLenses, PR: openPR("abc")},
-			watermark: lensWatermark("abc", "carol"),
+			// A pull-request row reads the digest of its declared inputs
+			// the way an issue-path row does, so a watermark holding an
+			// older kind of value records nothing this row can answer with
+			// and the state dispatches; its re-fire is the bound's to pace
+			// (s-git/maitred#260).
+			name:       "review watermarked at a revision dispatches: the digest is what the row compares",
+			event:      prEvent(EventPROpened, "alice"),
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc")},
+			watermark:  lensWatermark("abc", "carol"),
+			wantAction: ActionReview,
 		},
 		{
 			name:      "lens review already dispatched at the revision holds off",
@@ -1439,15 +1483,16 @@ func TestDecide(t *testing.T) {
 			watermark: lensWatermark("abc", "carol"),
 		},
 		{
-			name:      "fix-feedback already dispatched at the revision holds off",
-			event:     prEvent(EventPRReviewed, "carol"),
-			state:     State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
-			watermark: &Watermark{Action: "fix-feedback", Revision: "abc"},
+			name:       "fix-feedback watermarked at a revision dispatches: the digest is what the row compares",
+			event:      prEvent(EventPRReviewed, "carol"),
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}},
+			watermark:  &Watermark{Action: "fix-feedback", Revision: "abc"},
+			wantAction: ActionFixFeedback,
 		},
 		{
 			// A PR with no merge opt-in holds off on the event path
 			// whatever the watermark records: the opt-in gates the
-			// dispatch on every path, the exemption is scoped to the
+			// dispatch on every path, the re-fire is scoped to the
 			// labelled PR (§forgejo/decisions/merge-gate,
 			// s-git/maitred#179, s-git/maitred#197).
 			name:      "merge-or-wait already dispatched at the revision holds off without the opt-in",
@@ -1510,10 +1555,11 @@ func TestDecide(t *testing.T) {
 			state: State{ReviewLenses: testLenses, Issue: openIssue()},
 		},
 		{
-			name:      "rebase already dispatched at the revision holds off",
-			event:     prEvent(EventPRSynced, "alice"),
-			state:     State{ReviewLenses: testLenses, PR: notMergeablePR("abc")},
-			watermark: &Watermark{Action: "rebase", Revision: "abc"},
+			name:       "rebase watermarked at a revision dispatches: the digest is what the row compares",
+			event:      prEvent(EventPRSynced, "alice"),
+			state:      State{ReviewLenses: testLenses, PR: notMergeablePR("abc")},
+			watermark:  &Watermark{Action: "rebase", Revision: "abc"},
+			wantAction: ActionRebase,
 		},
 		{
 			name:       "a different revision dispatches",
@@ -1532,7 +1578,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:       "a review watermark does not block the fan-out at a new revision",
 			event:      prEvent(EventPRSynced, "alice"),
-			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review("COMMENT", "carol", testTime)}},
+			state:      State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{reviewAt("COMMENT", "carol", "sha-prev", testTime)}},
 			watermark:  &Watermark{Action: "review", Revision: "abc"},
 			wantAction: ActionReview,
 		},
@@ -1540,9 +1586,9 @@ func TestDecide(t *testing.T) {
 			name:  "an unknown event type holds off",
 			event: Event{Type: EventType("bogus"), Repo: "o/r", Kind: KindIssue, Number: 7},
 		},
-		// Watermark exemptions: state is the watermark for the exempt
+		// State is the watermark for the rows whose dispatch
 		// actions, revision notwithstanding
-		// (§forgejo/reconciliation/watermark-exemptions).
+		// (§forgejo/reconciliation/the-state-is-the-watermark).
 		{
 			name:       "reconcile open fully unblocked outcome tracker dispatches wrap-up",
 			event:      issueEvent(EventReconcile),
@@ -1564,7 +1610,7 @@ func TestDecide(t *testing.T) {
 		// A commissioned forest stays under curation: closing the ideation issue
 		// removes the root from the sweep's enumeration, so the tracker's own
 		// row carries the curation until the forest is finished
-		// (§forgejo/reconciliation/watermark-exemptions).
+		// (§forgejo/reconciliation/the-state-is-the-watermark).
 		{
 			name:  "reconcile commissioned unfinished tracker dispatches decompose",
 			event: issueEvent(EventReconcile),
@@ -1752,7 +1798,7 @@ func TestDecide(t *testing.T) {
 			// Reserved label names match case-insensitively: label
 			// names are user-authored strings, and a miss must not
 			// silently decide as implement
-			// (§forgejo/reconciliation/watermark-exemptions).
+			// (§forgejo/reconciliation/the-state-is-the-watermark).
 			name:       "reconcile open issue carrying a differently cased ideation label dispatches decompose",
 			event:      issueEvent(EventReconcile),
 			state:      State{ReviewLenses: testLenses, Issue: &Issue{Number: 7, State: "open", UpdatedAt: testTime, Repository: "o/r", Labels: []string{"Ideation"}}, ForestGate: firstObservation()},
@@ -1938,25 +1984,30 @@ func TestDecide_MergeGateHoldOffNamesBlockers(t *testing.T) {
 	}
 }
 
-// TestDecide_HoldOffReasons distinguishes the two hold-off families:
-// revision-keyed actions hold off with "already dispatched at
-// revision", watermark-exempt actions with the state fact that calls
-// for no action (§forgejo/reconciliation/watermark-exemptions,
-// §forgejo/observability/the-decision-log).
+// TestDecide_HoldOffReasons distinguishes the hold-off families: the one
+// row a digest suppresses — the landing set's — names the facts behind the
+// digest, and every other hold-off names the state fact that calls for no
+// action. No row any longer names a revision it has reacted to: every
+// action is keyed on the digest of the inputs its declaration names, and
+// the rows the digest does not suppress are paced by the re-fire bound
+// (§forgejo/observability/the-decision-log, s-git/maitred#260).
 func TestDecide_HoldOffReasons(t *testing.T) {
-	t.Run("a revision-keyed hold-off names the revision", func(t *testing.T) {
-		// The pull-request rows are the ones left keyed on an object
-		// revision (s-git/maitred#260), so this is the family whose
-		// hold-off names the revision it has already reacted to.
-		d := Decide(prEvent(EventPRReviewed, "carol"), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}}, &Watermark{Action: "fix-feedback", Revision: "abc"})
+	t.Run("the digest-suppressed row names the facts behind its digest", func(t *testing.T) {
+		set := syncIssueFixture(7)
+		members := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
+		d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: set, SyncMembers: members},
+			&Watermark{Action: string(ActionSync), Revision: setDigest(set, members...)})
 		if !d.HoldOff() {
 			t.Fatalf("expected hold-off, got dispatch of %q", d.Action)
 		}
-		if !strings.Contains(d.Reason, "already dispatched at revision") {
-			t.Errorf("reason = %q, want it to name the already-dispatched revision", d.Reason)
+		if !strings.Contains(d.Reason, "already dispatched at digest ") {
+			t.Errorf("reason = %q, want it to name the digest's facts", d.Reason)
+		}
+		if !strings.Contains(d.Reason, "body ") {
+			t.Errorf("reason = %q, want the set's declared facts stated, not a bare hex", d.Reason)
 		}
 	})
-	t.Run("a watermark-exempt hold-off names the state, not the revision", func(t *testing.T) {
+	t.Run("a state hold-off names the state, not a digest", func(t *testing.T) {
 		d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: trackerIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}}, &Watermark{Action: "wrap-up", Revision: testRev})
 		if !d.HoldOff() {
 			t.Fatalf("expected hold-off, got dispatch of %q", d.Action)
@@ -1979,12 +2030,12 @@ func TestDecide_HoldOffReasons(t *testing.T) {
 	})
 }
 
-// TestAlreadyDispatched pins the idempotency guard as a plain
-// revision-keyed comparison on every path
-// (§forgejo/decisions/loop-prevention). The watermark exemption is not
-// implemented here: it is the sweep's exempt rows, which decide without
-// consulting the watermark
-// (§forgejo/reconciliation/watermark-exemptions).
+// TestAlreadyDispatched pins the idempotency guard as a plain comparison
+// of one digest against the one the watermark records, on every path
+// (§forgejo/decisions/loop-prevention, §forgejo/state/watermark). What a
+// row makes of a true answer is the row's: the landing set holds off,
+// every other row dispatches and leaves the pace to the re-fire bound
+// (§forgejo/reconciliation/the-state-is-the-watermark).
 func TestAlreadyDispatched(t *testing.T) {
 	if alreadyDispatched(&Watermark{Action: "implement", Revision: testRev2}, ActionImplement, testRev) {
 		t.Error("a different revision must not suppress implement")
@@ -1996,7 +2047,7 @@ func TestAlreadyDispatched(t *testing.T) {
 		t.Error("a different revision must not suppress wrap-up")
 	}
 	if !alreadyDispatched(&Watermark{Action: "wrap-up", Revision: testRev}, ActionWrapUp, testRev) {
-		t.Error("the guard is revision-keyed on every path; the sweep's exempt rows never reach it")
+		t.Error("the guard compares one digest on every path")
 	}
 	if alreadyDispatched(nil, ActionImplement, testRev) {
 		t.Error("a key with no watermark recorded must never be suppressed")
@@ -2313,7 +2364,7 @@ func TestUnblockCascade(t *testing.T) {
 			// #101 widened the commissioned forest to a tracker gated by a
 			// closed root one hop away: the sweep curates it, so the hold-off
 			// must not promise a wrap-up the state does not call for
-			// (§forgejo/reconciliation/watermark-exemptions).
+			// (§forgejo/reconciliation/the-state-is-the-watermark).
 			name: "a tracker in a commissioned forest names the curation, not wrap-up",
 			root: &IssueNode{
 				Issue: Issue{Number: 1, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
@@ -3010,52 +3061,61 @@ func TestDecide_ForestTeardownRows(t *testing.T) {
 	}
 }
 
-// TestSyncSetRevision pins the set revision's properties: it depends
-// on what the sync predicate reads about every member — state, member
-// label, PR open and mergeable, approval at head — and never on the
-// order the members are enumerated in, so the sweep does not re-fire at
-// an unchanged set state, any member's readiness moving re-fires, and
-// an edit that cannot move readiness does not
-// (§forgejo/decisions/sync-set, §forgejo/state/watermark).
+// setDigest is the digest a landing set is suppressed by: the fold of
+// the sync declaration's own inputs, so the test states the set and the
+// declaration derives the value (s-git/maitred#260).
+func setDigest(set *Issue, members ...SyncMember) string {
+	return digestFor(ActionSync, Event{}, State{Issue: set, SyncMembers: members, ReviewLenses: testLenses})
+}
+
+// TestSyncSetRevision pins the landing set's digest: it depends on what
+// the sync predicate reads about every member — state, member label, PR
+// open and mergeable, approval at head — and on the grouping issue's
+// body as the content a landing decision must honour, never on the
+// moment any of them was touched, and never on the order the members are
+// enumerated in, so the sweep does not re-fire at an unchanged set state,
+// any member's readiness moving re-fires, and an edit that cannot move
+// readiness does not (§forgejo/decisions/sync-set,
+// §forgejo/state/watermark, s-git/maitred#260).
 func TestSyncSetRevision(t *testing.T) {
 	setIssue := syncIssueFixture(7)
 	members := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	reversed := []SyncMember{closedSyncMemberFixture(5), syncMemberFixture(4, 40)}
-	if syncSetRevision(setIssue, members, testLenses) != syncSetRevision(setIssue, reversed, testLenses) {
+	if setDigest(setIssue, members...) != setDigest(setIssue, reversed...) {
 		t.Error("set revision must not depend on member order")
 	}
 
 	pushed := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	pushed[0].PR.HeadSHA = "sha-new"
-	if syncSetRevision(setIssue, members, testLenses) == syncSetRevision(setIssue, pushed, testLenses) {
+	if setDigest(setIssue, members...) == setDigest(setIssue, pushed...) {
 		t.Error("a member PR head moving must change the set revision")
 	}
 
 	edited := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	edited[1].Issue.UpdatedAt = testTime2
-	if syncSetRevision(setIssue, members, testLenses) != syncSetRevision(setIssue, edited, testLenses) {
+	if setDigest(setIssue, members...) != setDigest(setIssue, edited...) {
 		t.Error("an edit that cannot move readiness must not change the set revision: the digest records what the predicate reads, not the members' activity")
 	}
 
 	unlabelled := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	unlabelled[0].Issue.Labels = nil
-	if syncSetRevision(setIssue, members, testLenses) == syncSetRevision(setIssue, unlabelled, testLenses) {
+	if setDigest(setIssue, members...) == setDigest(setIssue, unlabelled...) {
 		t.Error("a member losing the member label must change the set revision")
 	}
 
 	staleApproval := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	staleApproval[0].Reviews = []Review{{Event: ReviewApproved, Author: "carol", CommitID: "sha-before-the-push", SubmittedAt: testTime}}
-	if syncSetRevision(setIssue, members, testLenses) == syncSetRevision(setIssue, staleApproval, testLenses) {
+	if setDigest(setIssue, members...) == setDigest(setIssue, staleApproval...) {
 		t.Error("a member PR no longer approved at head must change the set revision")
 	}
 
 	conflicted := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	conflicted[0].PR.Mergeable = false
-	if syncSetRevision(setIssue, members, testLenses) == syncSetRevision(setIssue, conflicted, testLenses) {
+	if setDigest(setIssue, members...) == setDigest(setIssue, conflicted...) {
 		t.Error("a member PR that stopped being mergeable must change the set revision")
 	}
 
-	if syncSetRevision(setIssue, nil, testLenses) == syncSetRevision(setIssue, members, testLenses) {
+	if setDigest(setIssue, nil...) == setDigest(setIssue, members...) {
 		t.Error("an empty set must not share a revision with a populated one")
 	}
 
@@ -3063,10 +3123,10 @@ func TestSyncSetRevision(t *testing.T) {
 	// landing run reported an error is re-dispatched when the body — the
 	// order the prompt must honour — is restated, which is the human's
 	// only lever on such a report
-	// (§forgejo/decisions/sync-set, §forgejo/reconciliation/watermark-exemptions).
+	// (§forgejo/decisions/sync-set, §forgejo/reconciliation/the-state-is-the-watermark).
 	restated := syncIssueFixture(7)
 	restated.Body = "Land 4, then 5."
-	if syncSetRevision(setIssue, members, testLenses) == syncSetRevision(restated, members, testLenses) {
+	if setDigest(setIssue, members...) == setDigest(restated, members...) {
 		t.Error("restating the grouping issue's body must change the set revision: a ready set that never landed must not be a fixed point")
 	}
 	// The grouping issue's activity is not: its updated_at moves on a
@@ -3075,7 +3135,7 @@ func TestSyncSetRevision(t *testing.T) {
 	// restatement, not the touch (§forgejo/decisions/sync-set).
 	touched := syncIssueFixture(7)
 	touched.UpdatedAt = testTime2
-	if syncSetRevision(setIssue, members, testLenses) != syncSetRevision(touched, members, testLenses) {
+	if setDigest(setIssue, members...) != setDigest(touched, members...) {
 		t.Error("a touch of the grouping issue that restates nothing must not change the set revision: the landing prompt would re-run on activity")
 	}
 }
@@ -3289,9 +3349,9 @@ func TestDecide_TeardownNamesTheLabelAndTheRoot(t *testing.T) {
 }
 
 // TestDecide_TeardownRefiresOnTheSweepWhateverTheWatermark pins the
-// sweep's exemption: the trigger is the forest still standing, so a
+// state-governed re-fire: the trigger is the forest still standing, so a
 // teardown that died half way through re-fires until the graph is empty
-// (§forgejo/reconciliation/watermark-exemptions).
+// (§forgejo/reconciliation/the-state-is-the-watermark).
 func TestDecide_TeardownRefiresOnTheSweepWhateverTheWatermark(t *testing.T) {
 	root := teardownRoot()
 	w := &Watermark{Action: string(ActionTeardownForest), Revision: issueRevision(root)}
@@ -3371,11 +3431,11 @@ func TestDecide_TeardownDispatchesOnlyWhileTheForestStands(t *testing.T) {
 	}
 }
 
-// TestDecide_EmptyForestStopsTheTeardownRefiring is the exemption's
+// TestDecide_EmptyForestStopsTheTeardownRefiring is the re-fire's
 // terminus: the sweep re-fires a teardown while the forest stands, and
 // stops the moment it does not — so a completed teardown costs no further
 // agent runs, and a label left standing on a root that never had a forest
-// costs none at all (§forgejo/reconciliation/watermark-exemptions).
+// costs none at all (§forgejo/reconciliation/the-state-is-the-watermark).
 func TestDecide_EmptyForestStopsTheTeardownRefiring(t *testing.T) {
 	root := teardownRoot()
 	for i := 0; i < 2; i++ {
@@ -3423,23 +3483,23 @@ func TestDecide_SyncSetMemberEdgeCaseReasons(t *testing.T) {
 	})
 }
 
-// TestDecide_AutoMergeRowIsWatermarkExemptOnEveryPath: the
-// merge-or-wait row is watermark-exempt when the state calls for it —
-// the PR is open, every lens approves at head, no connected issue has
-// an open blocker, and its delivered issue carries the
-// agentic-auto-merge label — on
-// the review event, the PR-commented event, the unblock cascade's PR
-// leg and the sweep alike (s-git/maitred#197, s-git/maitred#228). An
-// approved opted-in PR sits at a frozen head once the chain
-// approves, so a revision-keyed guard on the event paths is a fixed
-// point: a dispatch that went nowhere, or a merge run that died, never
-// recovers on an event. The label is the opt-in and the precondition
-// of the dispatch on every path: an approved PR without it waits on a
-// human, its hold-off naming the missing label and the connected
-// issues (§forgejo/reconciliation/watermark-exemptions,
-// §forgejo/decisions/merge-gate, §forgejo/decisions/loop-prevention,
+// TestDecide_MergeRowIsStateGovernedOnEveryPath: the merge-or-wait row
+// dispatches whenever the state calls for it — the PR is open, every lens
+// approves at head, no connected issue has an open blocker, and its
+// delivered issue carries the agentic-auto-merge label — on the review
+// event, the PR-commented event, the unblock cascade's PR leg and the
+// sweep alike (s-git/maitred#197, s-git/maitred#228). An approved
+// opted-in PR sits at a frozen head once the chain approves, so the
+// digest the row declares is a value the engine cannot move: the row
+// dispatches at a digest the watermark records and the re-fire bound
+// spaces the attempt, which is what keeps a merge run that died
+// recoverable on an event (s-git/maitred#260). The label is the opt-in
+// and the precondition of the dispatch on every path: an approved PR
+// without it waits on a human, its hold-off naming the missing label and
+// the connected issues (§forgejo/decisions/merge-gate,
+// §forgejo/decisions/loop-prevention, §forgejo/decisions/review-lenses,
 // s-git/maitred#179, s-git/maitred#197).
-func TestDecide_AutoMergeRowIsWatermarkExemptOnEveryPath(t *testing.T) {
+func TestDecide_MergeRowIsStateGovernedOnEveryPath(t *testing.T) {
 	// bare is an approved chain at head abc with no merge opt-in —
 	// the shape the opt-in precondition holds off; the opted-in shape
 	// is this one's, opted into merging through the issue seat.
@@ -3453,9 +3513,9 @@ func TestDecide_AutoMergeRowIsWatermarkExemptOnEveryPath(t *testing.T) {
 	approvedAtHead := func() State {
 		return optedIntoMerge(bare())
 	}
-	watermark := &Watermark{Action: string(ActionMergeOrWait), Revision: "abc"}
+	watermark := standingWatermark(ActionMergeOrWait, approvedAtHead())
 
-	t.Run("every path re-fires the labelled PR at the recorded revision", func(t *testing.T) {
+	t.Run("every path re-fires the labelled PR at the digest it records", func(t *testing.T) {
 		for _, ev := range []Event{
 			prEvent(EventPRReviewed, "carol"),
 			prEvent(EventPRCommented, "alice"),
@@ -3469,8 +3529,11 @@ func TestDecide_AutoMergeRowIsWatermarkExemptOnEveryPath(t *testing.T) {
 			if strings.Contains(d.Reason, "already dispatched") {
 				t.Errorf("event %q: reason = %q, want the state that calls for the action, not the watermark", ev.Type, d.Reason)
 			}
-			if !strings.Contains(d.Reason, "regardless of revision abc") {
-				t.Errorf("event %q: reason = %q, want it to name the revision the state overrides", ev.Type, d.Reason)
+			if !strings.Contains(d.Reason, "the watermark already records merge-or-wait at digest ") {
+				t.Errorf("event %q: reason = %q, want it to name the digest the state still calls for", ev.Type, d.Reason)
+			}
+			if !d.StateGoverned {
+				t.Errorf("event %q: decision = %+v, want the re-fire bound to pace this row", ev.Type, d)
 			}
 		}
 	})
@@ -3653,7 +3716,7 @@ func TestMergeOptedIn(t *testing.T) {
 // precondition holds off, naming the missing label and the connected
 // issues exactly as a PR-only read holds off (s-git/maitred#179), and
 // the delivered issues never widen the merge gate itself
-// (§forgejo/decisions/merge-gate, §forgejo/reconciliation/watermark-exemptions).
+// (§forgejo/decisions/merge-gate, §forgejo/reconciliation/the-state-is-the-watermark).
 func TestDecide_MergeOptInReadFromTheIssueSeat(t *testing.T) {
 	watermark := &Watermark{Action: string(ActionMergeOrWait), Revision: "abc"}
 	const missingHoldOff = "an approved PR with no merge opt-in waits on a human"
@@ -3750,8 +3813,8 @@ func TestDecide_MergeOptInReadFromTheIssueSeat(t *testing.T) {
 			if !strings.Contains(d.Reason, tc.wantSeat) {
 				t.Errorf("reason = %q, want it to name where the opt-in was found: %q", d.Reason, tc.wantSeat)
 			}
-			if !strings.Contains(d.Reason, "regardless of revision abc") {
-				t.Errorf("reason = %q, want the state that calls for the action, not the watermark", d.Reason)
+			if strings.Contains(d.Reason, "already dispatched") {
+				t.Errorf("reason = %q, want the state that calls for the action, never a hold-off", d.Reason)
 			}
 		})
 	}
@@ -3783,22 +3846,22 @@ func TestDecide_MergeOptInReadFromTheIssueSeat(t *testing.T) {
 		}
 	})
 
-	t.Run("the event paths share the row's exemption", func(t *testing.T) {
-		// The exemption is a property of the row, not of the path that
+	t.Run("the event paths pace the row the same way", func(t *testing.T) {
+		// The pacing is a property of the row, not of the path that
 		// reaches it: "every lens approves at head" answers as truly on
 		// an event as on the sweep, so an approved PR whose opt-in sits on
 		// the issue it delivers re-fires merge-or-wait whatever the
 		// watermark records, and the engine's re-fire bound — not the
 		// watermark — is what keeps one unchanged head to one dispatch
 		// per reconcile interval
-		// (§forgejo/reconciliation/watermark-exemptions,
-		// §forgejo/decisions/loop-prevention).
+		// (§forgejo/decisions/loop-prevention,
+		// §forgejo/reconciliation/the-state-is-the-watermark,
+		// s-git/maitred#260).
 		for _, ev := range []Event{prEvent(EventPRReviewed, "carol"), prEvent(EventPRCommented, "alice")} {
 			s := sweepState(nil, connectedIssueLabelled("o/r", 4, LabelAgenticAutoMerge))
-			d := Decide(ev, s, watermark)
-			if d.Action != ActionMergeOrWait || !strings.Contains(d.Reason, "regardless of revision abc") {
-				t.Errorf("event %q: decision = %+v, want merge-or-wait naming the revision the state overrides: the exemption is the row's on every path",
-					ev.Type, d)
+			d := Decide(ev, s, standingWatermark(ActionMergeOrWait, s))
+			if d.Action != ActionMergeOrWait || !d.StateGoverned {
+				t.Errorf("event %q: decision = %+v, want merge-or-wait paced by the re-fire bound, as on the sweep", ev.Type, d)
 			}
 		}
 	})
@@ -3950,90 +4013,98 @@ func TestDecide_SyncSetDualOptInReadFromTheIssueSeat(t *testing.T) {
 	}
 }
 
-// TestDecide_SweepReviewRowsAreWatermarkExempt: the sweep's rows for
-// the lens fan-out and fix-feedback are watermark-exempt — the state
-// is their watermark, so a dispatch that went nowhere recovers on the
-// next sweep while the head stands still. Each exempt state is
-// self-limiting: a lens reporting at head ends that lens' exemption, a push
-// ends fix-feedback, and the sweep enumerates open pull requests only.
-// The exemption is the sweep's rows alone: the same states reached
-// from an event (pr_synced, pr_reviewed, pr_commented) keep the
-// revision-keyed guard, so a push or a review never re-fires on its own
-// (§forgejo/reconciliation/watermark-exemptions,
-// §forgejo/decisions/loop-prevention).
-func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
+// TestDecide_PullRequestRowsAreStateGovernedOnEveryPath: the rows for
+// the lens fan-out, fix-feedback and rebase dispatch on the state — the
+// digest of their declared inputs — so a dispatch that went nowhere
+// recovers on the next sweep while the head stands still, and the
+// re-fire bound spaces the attempt. Each state is self-limiting: a lens
+// reporting at head ends its own fanning, a push ends fix-feedback, and
+// the sweep enumerates open pull requests only. The pacing is the same
+// on the event paths (pr_synced, pr_reviewed, pr_commented), which is
+// what closes the split between the sweep's rows and the event's
+// (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#260).
+func TestDecide_PullRequestRowsAreStateGovernedOnEveryPath(t *testing.T) {
+	// standing is the watermark a row leaves behind once it dispatched:
+	// the digest of the inputs its declaration names, which is the value
+	// its next arrival compares against (s-git/maitred#260).
+	standing := func(a Action, st State) *Watermark {
+		return &Watermark{Action: string(a), Revision: digestFor(a, Event{}, st)}
+	}
+	lensStanding := func(st State, lenses ...string) *Watermark {
+		w := &Watermark{Subjects: map[string]Slot{}}
+		for _, l := range lenses {
+			w.Subjects[l] = Slot{Action: string(ActionReview), Revision: digestForSubject(ActionReview, l, Event{}, st)}
+		}
+		return w
+	}
 	oldReview := func(event string) Review {
 		return Review{Event: event, Author: "carol", CommitID: "old", SubmittedAt: testTime}
 	}
 
-	t.Run("sweep re-fires review for a PR with no reviews at the recorded revision", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: openPR("abc")}, lensWatermark("abc", "carol"))
+	t.Run("sweep re-fires review for a PR whose lens has still reported nothing", func(t *testing.T) {
+		st := State{ReviewLenses: testLenses, PR: openPR("abc")}
+		d := Decide(prEvent(EventReconcile, ""), st, lensStanding(st, "carol"))
 		if d.Action != ActionReview {
 			t.Fatalf("decision = %+v, want review: the review the sweep asked for has still not happened", d)
 		}
 		if strings.Contains(d.Reason, "already dispatched") {
-			t.Errorf("reason = %q, want the state that calls for the action, not the watermark", d.Reason)
+			t.Errorf("reason = %q, want the state that calls for the action, not a hold-off", d.Reason)
 		}
-		if !strings.Contains(d.Reason, "regardless of revision abc") {
-			t.Errorf("reason = %q, want it to name the revision the state overrides", d.Reason)
+		if !strings.Contains(d.Reason, "the re-fire bound spaces the attempt") {
+			t.Errorf("reason = %q, want it to name the pacing the digest leaves to the bound", d.Reason)
 		}
 	})
 
 	t.Run("sweep re-fires the lens review when the latest review stands at an older revision", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{oldReview(ReviewApproved)}}, lensWatermark("abc", "carol"))
+		st := State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{oldReview(ReviewApproved)}}
+		d := Decide(prEvent(EventReconcile, ""), st, lensStanding(st, "carol"))
 		if d.Action != ActionReview {
 			t.Fatalf("decision = %+v, want review: the head carries work no reviewer has looked at", d)
 		}
-		if strings.Contains(d.Reason, "already dispatched") {
-			t.Errorf("reason = %q, want the state that calls for the action, not the watermark", d.Reason)
-		}
-		if !strings.Contains(d.Reason, "regardless of revision abc") {
-			t.Errorf("reason = %q, want it to name the revision the state overrides", d.Reason)
+		if !strings.Contains(d.Reason, "the re-fire bound spaces the attempt") {
+			t.Errorf("reason = %q, want the owed lens's standing named as the state that re-calls it", d.Reason)
 		}
 	})
 
 	t.Run("sweep re-fires fix-feedback at a changes-requested review standing at head", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}}, &Watermark{Action: string(ActionFixFeedback), Revision: "abc"})
+		st := State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}}
+		d := Decide(prEvent(EventReconcile, ""), st, standing(ActionFixFeedback, st))
 		if d.Action != ActionFixFeedback {
 			t.Fatalf("decision = %+v, want fix-feedback: feedback was asked for and the head has not moved since", d)
 		}
-		if strings.Contains(d.Reason, "already dispatched") {
-			t.Errorf("reason = %q, want the state that calls for the action, not the watermark", d.Reason)
-		}
-		if !strings.Contains(d.Reason, "regardless of revision abc") {
-			t.Errorf("reason = %q, want it to name the revision the state overrides", d.Reason)
+		if !d.StateGoverned {
+			t.Errorf("decision = %+v, want the re-fire bound to pace this row", d)
 		}
 	})
 
 	t.Run("sweep re-fires fix-feedback at a comment review standing at head", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewComment, "carol", testTime)}}, &Watermark{Action: string(ActionFixFeedback), Revision: "abc"})
+		st := State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewComment, "carol", testTime)}}
+		d := Decide(prEvent(EventReconcile, ""), st, standing(ActionFixFeedback, st))
 		if d.Action != ActionFixFeedback {
 			t.Fatalf("decision = %+v, want fix-feedback: the sweep moves the PR along by triggering the implementer", d)
-		}
-		if strings.Contains(d.Reason, "already dispatched") {
-			t.Errorf("reason = %q, want the state that calls for the action, not the watermark", d.Reason)
 		}
 	})
 
 	t.Run("the trigger-review label is not needed to ask again on the sweep", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: labelledPR("abc", LabelTriggerReview)}, lensWatermark("abc", "carol"))
+		st := State{ReviewLenses: testLenses, PR: labelledPR("abc", LabelTriggerReview)}
+		d := Decide(prEvent(EventReconcile, ""), st, lensStanding(st, "carol"))
 		if d.Action != ActionReview {
-			t.Fatalf("decision = %+v, want review: a labelled hold-off at the recorded revision would leave the PR stranded like an unlabelled one", d)
-		}
-		if strings.Contains(d.Reason, "already dispatched") {
-			t.Errorf("reason = %q, want the state that calls for the action, not the watermark", d.Reason)
+			t.Fatalf("decision = %+v, want review: a labelled PR whose lens never reported is owed the dispatch like an unlabelled one", d)
 		}
 	})
 
-	// Green controls: the exemption is exactly the three sweep rows.
+	// Green controls: a lens whose report landed at head is not owed a
+	// dispatch, and the review-following rows decide the PR.
 
 	t.Run("an approving review at head still belongs to merge-or-wait and none of the three fires", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewApproved, "carol", testTime)}}, &Watermark{Action: string(ActionMergeOrWait), Revision: "abc"})
+		st := State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewApproved, "carol", testTime)}}
+		d := Decide(prEvent(EventReconcile, ""), st, standing(ActionMergeOrWait, st))
 		if d.Dispatched {
 			t.Fatalf("decision = %+v, want the merge-or-wait hold-off: an approved PR without the opt-in waits on a human", d)
 		}
 		if d.Action == ActionReview || d.Action == ActionFixFeedback {
-			t.Errorf("decision = %+v, want no review-side action: a review at head ends the review rows", d)
+			t.Errorf("decision = %+v, want no review-side action: a report at head ends the review rows", d)
 		}
 		if !strings.Contains(d.Reason, LabelAgenticAutoMerge) {
 			t.Errorf("reason = %q, want the merge-side hold-off naming the missing opt-in", d.Reason)
@@ -4041,7 +4112,8 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 	})
 
 	t.Run("a PR that is not mergeable decides rebase on the sweep, state-governed", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: notMergeablePR("abc")}, &Watermark{Action: string(ActionRebase), Revision: "abc"})
+		st := State{ReviewLenses: testLenses, PR: notMergeablePR("abc")}
+		d := Decide(prEvent(EventReconcile, ""), st, standing(ActionRebase, st))
 		if d.HoldOff() {
 			t.Fatalf("decision = %+v, want the sweep's rebase row to dispatch: a head a dead rebase left unmoved is the state that calls for it again", d)
 		}
@@ -4051,27 +4123,26 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 		if !d.StateGoverned {
 			t.Errorf("decision = %+v, want the dispatch marked state-governed so the re-fire bound spaces it", d)
 		}
-		if !strings.Contains(d.Reason, "regardless of revision abc") {
-			t.Errorf("reason = %q, want it to state the revision the state carries past", d.Reason)
-		}
 	})
 
-	t.Run("a PR whose connected issue is blocked by an open ideation issue still dispatches the exempt review row", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{
+	t.Run("a PR whose connected issue is blocked by an open ideation issue still dispatches the fan-out", func(t *testing.T) {
+		st := State{
 			ReviewLenses: testLenses,
 			PR:           openPR("abc"),
 			ConnectedIssues: []ConnectedIssue{{
 				Issue:    *connectedIssue(),
 				Blockers: []Issue{{Number: 1, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}},
 			}},
-		}, lensWatermark("abc", "carol"))
+		}
+		d := Decide(prEvent(EventReconcile, ""), st, lensStanding(st, "carol"))
 		if d.Action != ActionReview {
-			t.Fatalf("decision = %+v, want review: nothing about a connected issue's blockers decides ahead of the exempt rows (s-git/maitred#151)", d)
+			t.Fatalf("decision = %+v, want review: nothing about a connected issue's blockers decides ahead of the fan-out (s-git/maitred#151)", d)
 		}
 	})
 
 	t.Run("a closed PR holds off: the re-fire ends where the PR does", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: closedPR("abc")}, lensWatermark("abc", "carol"))
+		st := State{ReviewLenses: testLenses, PR: closedPR("abc")}
+		d := Decide(prEvent(EventReconcile, ""), st, lensStanding(st, "carol"))
 		if !d.HoldOff() {
 			t.Fatalf("decision = %+v, want a hold-off: the sweep enumerates open pull requests only", d)
 		}
@@ -4080,26 +4151,36 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 		}
 	})
 
-	t.Run("event paths keep the revision-keyed guard", func(t *testing.T) {
-		cases := []struct {
-			name      string
-			event     Event
-			state     State
-			watermark *Watermark
+	t.Run("the event paths pace themselves the same way", func(t *testing.T) {
+		// The same states reached from an event dispatch as the sweep
+		// does; what spaces them is the bound, not a guard the sweep
+		// alone skips (s-git/maitred#260).
+		states := []struct {
+			ev   Event
+			st   State
+			want Action
 		}{
-			{"pr_synced with no review at a recorded revision", prEvent(EventPRSynced, "alice"), State{ReviewLenses: testLenses, PR: openPR("abc")}, lensWatermark("abc", "carol")},
-			{"pr_synced with a review at an older revision", prEvent(EventPRSynced, "alice"), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{oldReview(ReviewApproved)}}, lensWatermark("abc", "carol")},
-			{"pr_synced carrying trigger-review with no review", prEvent(EventPRSynced, "alice"), State{ReviewLenses: testLenses, PR: labelledPR("abc", LabelTriggerReview)}, lensWatermark("abc", "carol")},
-			{"pr_reviewed requesting changes at head", prEvent(EventPRReviewed, "carol"), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}}, &Watermark{Action: string(ActionFixFeedback), Revision: "abc"}},
-			{"pr_commented standing at a changes-requested review at head", prEvent(EventPRCommented, "alice"), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}}, &Watermark{Action: string(ActionFixFeedback), Revision: "abc"}},
+			{prEvent(EventPRSynced, "alice"), State{ReviewLenses: testLenses, PR: openPR("abc")}, ActionReview},
+			{prEvent(EventPRReviewed, "bob"), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}}, ActionFixFeedback},
+			{prEvent(EventPRSynced, "alice"), State{ReviewLenses: testLenses, PR: notMergeablePR("abc")}, ActionRebase},
 		}
-		for _, tt := range cases {
-			d := Decide(tt.event, tt.state, tt.watermark)
-			if !d.HoldOff() {
-				t.Errorf("%s: decision = %+v, want a hold-off: the exemption is the sweep's rows alone", tt.name, d)
+		for _, tc := range states {
+			st := tc.st
+			w := standing(tc.want, st)
+			if tc.want == ActionReview {
+				w = lensStanding(st, "carol")
 			}
-			if !strings.Contains(d.Reason, "already dispatched at revision abc") {
-				t.Errorf("%s: reason = %q, want the revision-keyed hold-off", tt.name, d.Reason)
+			d := Decide(tc.ev, st, w)
+			if d.Action != tc.want {
+				t.Errorf("event %q: decision = %+v, want %s", tc.ev.Type, d, tc.want)
+				continue
+			}
+			governed := d.StateGoverned
+			for _, ld := range d.Lenses {
+				governed = governed || ld.StateGoverned
+			}
+			if !governed {
+				t.Errorf("event %q: decision = %+v, want %s paced by the re-fire bound", tc.ev.Type, d, tc.want)
 			}
 		}
 	})
@@ -4113,9 +4194,10 @@ func TestDecide_SweepReviewRowsAreWatermarkExempt(t *testing.T) {
 // mid-flight (§forgejo/config/review-lenses).
 func TestDecide_FanOutReasonFlagsNeverSeenLensIdentity(t *testing.T) {
 	t.Run("the sweep reason names a lens identity never seen on the PR", func(t *testing.T) {
-		d := Decide(prEvent(EventReconcile, ""), State{ReviewLenses: testLenses, PR: openPR("abc")}, lensWatermark("abc", "carol"))
+		st := State{ReviewLenses: testLenses, PR: openPR("abc")}
+		d := Decide(prEvent(EventReconcile, ""), st, lensStandingWatermark(st, "carol"))
 		if d.Action != ActionReview {
-			t.Fatalf("decision = %+v, want the exempt sweep re-fire", d)
+			t.Fatalf("decision = %+v, want the owed lens re-fired", d)
 		}
 		if !strings.Contains(d.Reason, "no review by carol has been seen on this PR at all") {
 			t.Errorf("reason = %q, want it to name the identity the PR has never seen", d.Reason)
@@ -4129,7 +4211,7 @@ func TestDecide_FanOutReasonFlagsNeverSeenLensIdentity(t *testing.T) {
 			Reviews:      []Review{{Event: ReviewApproved, Author: "carol", CommitID: "old", SubmittedAt: testTime}},
 		}, lensWatermark("abc", "carol"))
 		if d.Action != ActionReview {
-			t.Fatalf("decision = %+v, want the exempt sweep re-fire", d)
+			t.Fatalf("decision = %+v, want the lens still owed its report re-fired", d)
 		}
 		if strings.Contains(d.Reason, "has been seen on this PR at all") {
 			t.Errorf("reason = %q, want no identity warning: the login has reviewed, its approval is merely stale", d.Reason)
@@ -4171,18 +4253,24 @@ func TestDecide_ReviewLenses(t *testing.T) {
 		}
 	})
 
-	t.Run("partial: mid-flight lenses hold off, named as outstanding", func(t *testing.T) {
+	t.Run("partial: mid-flight lenses are re-asked only at the bound's pace", func(t *testing.T) {
 		// All three were dispatched at the head; lens-min approved.
-		// The other two are mid-flight — their subject slots keep
-		// the fan-out from duplicating them, and the hold-off names
-		// them (§forgejo/decisions/review-lenses).
+		// The other two still owe a report, so the row asks them again
+		// and marks them state-governed: their own standing has not
+		// moved, so the re-fire bound spaces them and the queue's
+		// (action, subject, digest) key squelches a task still pending
+		// (§forgejo/decisions/review-lenses,
+		// §forgejo/decisions/loop-prevention, §forgejo/webhook/the-pipeline,
+		// s-git/maitred#260).
 		st := stateWith(at("lens-min", ReviewApproved, "head-1", 1))
-		d := Decide(prEvent(EventPRReviewed, "lens-min"), st, lensWatermark("head-1", "lens-min", "lens-maint", "lens-sec"))
-		if d.Dispatched {
-			t.Fatalf("decision = %+v, want a hold-off: the outstanding lenses are mid-flight", d)
+		d := Decide(prEvent(EventPRReviewed, "lens-min"), st, lensStandingWatermark(st, "lens-min", "lens-maint", "lens-sec"))
+		if d.Action != ActionReview || len(d.Lenses) != 2 {
+			t.Fatalf("decision = %+v, want the two lenses still owed a report", d)
 		}
-		if !strings.Contains(d.Reason, "lens-maint") || !strings.Contains(d.Reason, "lens-sec") {
-			t.Errorf("reason = %q, want the outstanding lenses named", d.Reason)
+		for _, ld := range d.Lenses {
+			if !ld.StateGoverned {
+				t.Errorf("lens %s = %+v, want the re-fire bound to pace it", ld.Lens, ld)
+			}
 		}
 		// Without the slots — a dispatch that went nowhere — the
 		// sweep re-fires exactly those two.
@@ -4238,9 +4326,13 @@ func TestDecide_ReviewLenses(t *testing.T) {
 			at("lens-min", ReviewChangesRequested, "head-1", 1),
 			at("lens-maint", ReviewApproved, "head-1", 2),
 		)
-		d := Decide(prEvent(EventPRReviewed, "lens-maint"), st, lensWatermark("head-1", "lens-maint"))
-		if d.Action != ActionReview || len(d.Lenses) != 2 || d.Lenses[0].Lens != "lens-min" || d.Lenses[1].Lens != "lens-sec" {
-			t.Fatalf("decision = %+v, want the unreported lenses dispatched, not fix-feedback", d)
+		d := Decide(prEvent(EventPRReviewed, "lens-maint"), st, lensStandingWatermark(st, "lens-maint"))
+		// lens-min's report landed — a rejection is still a report — so
+		// the round owes only lens-sec, and the rejection waits for the
+		// review-following rows rather than for a second reading
+		// (§forgejo/decisions/review-lenses, s-git/maitred#260).
+		if d.Action != ActionReview || len(d.Lenses) != 1 || d.Lenses[0].Lens != "lens-sec" {
+			t.Fatalf("decision = %+v, want the one lens still owing a report dispatched, not fix-feedback", d)
 		}
 		if strings.Contains(d.Reason, "fix") {
 			t.Errorf("reason = %q, must not dispatch fix-feedback while the round is open", d.Reason)
@@ -4288,7 +4380,7 @@ func blockedTracker() Issue {
 // holds off on the event path and on the sweep, naming the state fact,
 // while a root still blocking a work item dispatches on both paths
 // (§forgejo/decisions/forest-teardown,
-// §forgejo/reconciliation/watermark-exemptions, s-git/maitred#173).
+// §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#173).
 func TestDecide_TeardownSparesTheTrackerInCount(t *testing.T) {
 	sweep := func(root *Issue, blocked []Issue, w *Watermark) Decision {
 		return Decide(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: root.Number},
@@ -4549,7 +4641,7 @@ func TestDecide_IssuePathRowsPaceOnTheDeclaredDigest(t *testing.T) {
 		// blocker stood open; the edge was then removed, which moves no
 		// delivery and no updated_at. The row must dispatch rather than
 		// be suppressed by a timestamp it no longer consults
-		// (§forgejo/reconciliation/watermark-exemptions).
+		// (§forgejo/reconciliation/the-state-is-the-watermark).
 		blocker := Issue{Number: 3, State: "open", Repository: "o/r"}
 		at := digestFor(ActionImplement, ev, State{ReviewLenses: testLenses, Issue: openIssue(), Blockers: []Issue{blocker}})
 		w := &Watermark{Action: string(ActionImplement), Revision: at}
@@ -4563,19 +4655,21 @@ func TestDecide_IssuePathRowsPaceOnTheDeclaredDigest(t *testing.T) {
 	})
 }
 
-// TestDecide_PRSyncedRebaseStaysRevisionGated: the PR-synced event path
-// keeps the revision-keyed rebase guard; the exemption is the sweep's
-// row alone (§forgejo/reconciliation/the-state-is-the-watermark).
-func TestDecide_PRSyncedRebaseStaysRevisionGated(t *testing.T) {
+// TestDecide_PRSyncedRebaseIsStateGoverned: an event at a head a dead
+// rebase left unmoved dispatches again, marked state-governed — the same
+// answer the sweep's row gives, its pace the re-fire bound's
+// (§forgejo/reconciliation/the-state-is-the-watermark,
+// s-git/maitred#260).
+func TestDecide_PRSyncedRebaseIsStateGoverned(t *testing.T) {
 	pr := openPR("abc")
 	pr.Mergeable = false
-	w := &Watermark{Action: string(ActionRebase), Revision: "abc"}
-	d := Decide(prEvent(EventPRSynced, "alice"), State{ReviewLenses: testLenses, PR: pr}, w)
-	if !d.HoldOff() {
-		t.Fatalf("decision = %+v, want the event path to hold off at the recorded head", d)
+	st := State{ReviewLenses: testLenses, PR: pr}
+	d := Decide(prEvent(EventPRSynced, "alice"), st, standingWatermark(ActionRebase, st))
+	if d.Action != ActionRebase {
+		t.Fatalf("decision = %+v, want the rebase the state still calls for", d)
 	}
-	if d.StateGoverned {
-		t.Errorf("decision = %+v, want the event-path dispatch unmarked: a revision-gated row consults no stamp", d)
+	if !d.StateGoverned {
+		t.Errorf("decision = %+v, want the dispatch marked state-governed so the bound spaces it", d)
 	}
 }
 
@@ -4638,7 +4732,7 @@ func firstObservation() *ForestDigestGate {
 
 // commissionedTrackerFixture is the sweep's commissioned tracker: open,
 // carrying the outcome label, still blocked by an open member, its
-// ideation gate closed (§forgejo/reconciliation/watermark-exemptions).
+// ideation gate closed (§forgejo/reconciliation/the-state-is-the-watermark).
 func commissionedTrackerFixture() State {
 	return State{
 		ReviewLenses: testLenses,
@@ -4654,7 +4748,7 @@ func commissionedTrackerFixture() State {
 // dispatches only when the forest's actionable-state digest moved, the
 // reason naming which component moved; an unchanged digest dispatches
 // nothing, and a row arriving with no observation holds off like any
-// missing digest does (§forgejo/reconciliation/watermark-exemptions,
+// missing digest does (§forgejo/reconciliation/the-state-is-the-watermark,
 // §forgejo/decisions/actionable-state-digest, s-git/maitred#209).
 func TestDecide_DecomposeDigestGate_SweepRoot(t *testing.T) {
 	t.Run("unchanged digest dispatches nothing", func(t *testing.T) {
@@ -4734,7 +4828,7 @@ func TestDecide_DecomposeDigestGate_SweepRoot(t *testing.T) {
 
 // TestDecide_DecomposeDigestGate_SweepTracker: the commissioned
 // tracker's row consults the same gate — one forest, one answer
-// (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#209).
+// (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#209).
 func TestDecide_DecomposeDigestGate_SweepTracker(t *testing.T) {
 	t.Run("unchanged digest dispatches nothing", func(t *testing.T) {
 		st := commissionedTrackerFixture()
@@ -4776,7 +4870,7 @@ func TestDecide_DecomposeDigestGate_SweepTracker(t *testing.T) {
 // row consults the same gate wherever the gate is armed, so both paths
 // give the same answer for this action — and the gate replaces the
 // revision-keyed guard there, because an edge move changes the digest
-// and no revision (§forgejo/reconciliation/watermark-exemptions,
+// and no revision (§forgejo/reconciliation/the-state-is-the-watermark,
 // s-git/maitred#209). Where the gate is unarmed — an event on a root
 // whose kind labels conflict, an issue the sweep holds off as a
 // conflict before any decompose row — the row is paced by the declared

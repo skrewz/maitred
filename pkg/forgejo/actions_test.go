@@ -83,35 +83,44 @@ func TestActionDeclarations_FoldComponentsAreDeclaredByDecompose(t *testing.T) {
 }
 
 // TestActionDeclarations_DigestsAreDeclared pins what each declaration's
-// digest derives from: an issue-path action's digest is the fold of its
-// own input set, and the pull-request and landing-set actions name an
-// object revision — a head sha, the landing set's derived revision —
-// until the next member of the chain re-keys them
-// (s-git/maitred#260). (§forgejo/state/watermark, s-git/maitred#258,
+// digest derives from: every action's digest is the fold of its own
+// declared input set, the pull-request rows included now that the head
+// sha they once keyed on beside the declaration is one of the inputs they
+// name (s-git/maitred#260). A fan-out's subject digest is the same fold
+// read from that subject's side (§forgejo/state/watermark,
 // s-git/maitred#259.)
 func TestActionDeclarations_DigestsAreDeclared(t *testing.T) {
 	issue := trackerIssue()
 	pr := openPR("sha-head")
 	members := []SyncMember{syncMemberFixture(4, 40)}
 	st := State{Issue: issue, PR: pr, SyncMembers: members, ReviewLenses: testLenses}
-	for _, a := range []Action{ActionImplement, ActionReassess, ActionDecompose, ActionWrapUp, ActionTeardownForest} {
-		if !digestFoldsInputs(a) {
-			t.Errorf("digestFor(%s) does not fold the declaration's input set", a)
-		}
-		if got, want := digestFor(a, Event{}, st), hashInputFacts(declaredInputFacts(a, st)); got != want {
+	for _, a := range []Action{
+		ActionImplement, ActionReassess, ActionDecompose, ActionWrapUp,
+		ActionTeardownForest, ActionReview, ActionFixFeedback, ActionMergeOrWait, ActionRebase, ActionSync,
+	} {
+		if got, want := digestFor(a, Event{}, st), hashInputFacts(declaredInputFacts(a, "", st)); got != want {
 			t.Errorf("digestFor(%s) = %q, want the declared fold %q", a, got, want)
 		}
 	}
-	for _, a := range []Action{ActionReview, ActionFixFeedback, ActionMergeOrWait, ActionRebase} {
-		if digestFoldsInputs(a) {
-			t.Errorf("digestFor(%s) folds a declared input set; the pull-request rows are the next member of this chain", a)
-		}
-		if got, want := digestFor(a, Event{}, st), pr.HeadSHA; got != want {
-			t.Errorf("digestFor(%s) = %q, want the PR head sha %q", a, got, want)
-		}
+	// The pull-request rows fold the head sha as an input the declaration
+	// names, never as a revision held beside it: the digest states more
+	// than the sha, and moves when the reviews at it move.
+	if !strings.Contains(strings.Join(declaredInputFacts(ActionReview, "", st), "|"), "pr head sha-head") {
+		t.Errorf("digestFor(review) states no head sha: %+v", declaredInputFacts(ActionReview, "", st))
 	}
-	if got, want := digestFor(ActionSync, Event{}, st), syncSetRevision(issue, members, testLenses); got != want {
-		t.Errorf("digestFor(sync) = %q, want the set revision %q", got, want)
+	headMoved := State{Issue: issue, PR: openPR("sha-next"), SyncMembers: members, ReviewLenses: testLenses}
+	if digestFor(ActionMergeOrWait, Event{}, st) == digestFor(ActionMergeOrWait, Event{}, headMoved) {
+		t.Error("digestFor(merge-or-wait) holds while the head moves")
+	}
+	// A fan-out's subject digest states that subject's own standing and
+	// none of a sibling's, which is what keeps one lens's dispatch one
+	// dispatch (§forgejo/decisions/review-lenses).
+	lensed := State{
+		PR: openPR("sha-head"), ReviewLenses: testLenses,
+		Reviews: []Review{{Event: ReviewApproved, Author: "lens-a", CommitID: "sha-head"}},
+	}
+	if digestForSubject(ActionReview, "lens-a", Event{}, lensed) == digestForSubject(ActionReview, "lens-b", Event{}, lensed) {
+		t.Error("every lens folds the same digest; a sibling's report would re-fire its dispatch")
 	}
 }
 
@@ -147,7 +156,7 @@ func TestDeclaredDigests_FoldEveryDeclaredFact(t *testing.T) {
 // digest answers a state relation the forge delivers no event for — a
 // blocker edge attached or removed — and answers the listings' order
 // once, so the guard cannot be the reason an edge move goes unhandled
-// (§forgejo/reconciliation/watermark-exemptions,
+// (§forgejo/reconciliation/the-state-is-the-watermark,
 // §forgejo/decisions/actionable-state-digest, s-git/maitred#259).
 func TestDeclaredDigests_MoveWithTheFactsThePredicatesRead(t *testing.T) {
 	issue := openIssue()
@@ -193,7 +202,7 @@ func TestDeclaredDigests_MoveWithTheFactsThePredicatesRead(t *testing.T) {
 	root := ideationIssue()
 	root.Labels = append(root.Labels, LabelTeardownForest)
 	teardown := State{Issue: root, Blocked: []Issue{*trackerIssue()}}
-	if got := declaredInputFacts(ActionTeardownForest, teardown); len(got) == 0 {
+	if got := declaredInputFacts(ActionTeardownForest, "", teardown); len(got) == 0 {
 		t.Error("a root blocking only a spared tracker states no fact at all; want the kind labels folded besides")
 	}
 	spared := State{Issue: root, Blocked: []Issue{*trackerIssue()}}

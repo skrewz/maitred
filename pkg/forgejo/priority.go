@@ -71,7 +71,7 @@ func (e *Engine) vipObject(st State) bool {
 //
 // A forest's tracker is the `outcome` issue blocked by the `ideation` root
 // that gates the forest (§forgejo/decisions/forest-teardown,
-// §forgejo/reconciliation/watermark-exemptions), so the tracker is read from
+// §forgejo/reconciliation/the-state-is-the-watermark), so the tracker is read from
 // an issue's blocker rows. Two shapes carry the label into an issue's
 // scheduling:
 //

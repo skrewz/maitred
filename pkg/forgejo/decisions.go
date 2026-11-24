@@ -33,7 +33,7 @@ const (
 	// actionable-state digest gate, dispatching only when the digest
 	// moved, and are paced by the digest of the declaration's input set
 	// like every other issue-path action
-	// (§forgejo/reconciliation/watermark-exemptions,
+	// (§forgejo/reconciliation/the-state-is-the-watermark,
 	// §forgejo/decisions/actionable-state-digest, s-git/maitred#209).
 	ActionDecompose Action = "decompose"
 	// ActionWrapUp is an issue-path action: its rows pace themselves on
@@ -54,7 +54,7 @@ const (
 	// label (§forgejo/decisions/forest-teardown). Its trigger is a state
 	// relation like decompose's, so its digest folds the downstream
 	// edges an attached or removed edge moves — no delivery, and no
-	// timestamp, need be involved (§forgejo/reconciliation/watermark-exemptions,
+	// timestamp, need be involved (§forgejo/reconciliation/the-state-is-the-watermark,
 	// s-git/maitred#259).
 	ActionTeardownForest Action = "teardown-forest"
 )
@@ -85,7 +85,7 @@ func reviewIsDismissed(r *Review) bool {
 // issue, a human claim — not what it is *not yet*. A transient gate
 // is recognised by transientHoldOffLabel instead
 // (§forgejo/decisions/transition-table,
-// §forgejo/reconciliation/watermark-exemptions).
+// §forgejo/reconciliation/the-state-is-the-watermark).
 func neverWorkItemLabel(labels []string) string {
 	issue := &Issue{Labels: labels}
 	if label := reservedLabel(issue); label != "" {
@@ -137,10 +137,10 @@ const (
 	// EventReconcile is the synthetic current-state event the
 	// reconciliation sweep feeds through the same decision function
 	// (§forgejo/reconciliation): for an issue it decides like
-	// EventIssueOpened — the issue-path rows need no exemption now that
-	// each is paced by the digest of its declared inputs
-	// (§forgejo/reconciliation/watermark-exemptions) — for a pull
-	// request like EventPRSynced — except when the last activity is a
+	// EventIssueOpened — the issue-path rows are each paced by the digest
+	// of their declared inputs
+	// (§forgejo/reconciliation/the-state-is-the-watermark) — for a pull
+	// request as EventPRSynced is — except when the last activity is a
 	// review: changes-requested or comment dispatches fix-feedback,
 	// approved dispatches merge-or-wait
 	// (§forgejo/decisions/transition-table).
@@ -257,7 +257,7 @@ type State struct {
 	// decompose row this decision considers, assembled exactly when the
 	// issue under consideration can reach a digest-gated decompose row
 	// (§forgejo/decisions/actionable-state-digest,
-	// §forgejo/reconciliation/watermark-exemptions, s-git/maitred#209).
+	// §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#209).
 	// Nil exactly when the gate is unarmed for this issue: no gated row
 	// is reachable (the issue is closed, under a teardown order, or a
 	// kind conflict the sweep holds off before any decompose row; on
@@ -432,13 +432,22 @@ type Decision struct {
 }
 
 // LensDispatch is one emission of the review fan-out: the identity of
-// the lens to dispatch and the reason its approval is outstanding at
-// the head (§forgejo/decisions/review-lenses).
+// the lens to dispatch, the reason its report is outstanding at the head,
+// and the digest of that lens's declared inputs the dispatch is paced on
+// (§forgejo/decisions/review-lenses, §forgejo/state/watermark).
 type LensDispatch struct {
 	// Lens is the configured lens identity to dispatch.
 	Lens string
 	// Reason is a human-readable explanation for this lens's dispatch.
 	Reason string
+	// Revision is the digest of this lens's declared inputs — the value
+	// its subject slot, its task's dedup key and its re-fire stamp all
+	// record (§forgejo/state/watermark, §forgejo/webhook/the-pipeline).
+	Revision string
+	// StateGoverned reports that the watermark already recorded this
+	// lens at this digest, so the lens's re-fire is the bound's to pace
+	// (§forgejo/decisions/loop-prevention).
+	StateGoverned bool
 }
 
 // HoldOff reports whether the decision dispatches nothing for the
@@ -494,7 +503,7 @@ func Decide(e Event, s State, w *Watermark) Decision {
 // row the event path takes: the same predicate, paced by the same
 // digest of the declaration's input set, so the sweep and an event
 // cannot answer one state two ways
-// (§forgejo/reconciliation/watermark-exemptions,
+// (§forgejo/reconciliation/the-state-is-the-watermark,
 // §forgejo/reconciliation/the-state-is-the-watermark,
 // s-git/maitred#259). What differs is only how a re-fire at a digest
 // the watermark already records is paced, and that is the re-fire
@@ -533,18 +542,21 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 		}
 		// The sweep is the backstop for landing sets: a set that
 		// changed through a delivery-less move (an edge edit, a
-		// human closing a member) is found here, evaluated under
-		// the set-revision guard like every other sync row
-		// (§forgejo/decisions/sync-set). The predicate answers the set
-		// question; this row owns only its pacing
-		// (§forgejo/decisions/actions).
+		// human closing a member) is found here, evaluated under the set's
+		// own digest guard. The predicate answers the set question; this row
+		// owns only its pacing (§forgejo/decisions/actions), and that pacing
+		// is the digest of the set's declared inputs: it moves when a
+		// member's pull request is approved at head or a member's opt-in
+		// changes, and holds while nothing in the set moved
+		// (§forgejo/decisions/sync-set, s-git/maitred#260).
 		d, ready := readyAtRow(ActionSync, e, s)
 		if !ready {
 			return d
 		}
 		rev := digestFor(ActionSync, e, s)
 		if alreadyDispatched(w, ActionSync, rev) {
-			return holdOff(fmt.Sprintf("sync already dispatched at set revision %s", rev))
+			return holdOff(fmt.Sprintf("sync already dispatched at %s",
+				quotedRevision(ActionSync, e, s, rev)))
 		}
 		return d
 	}
@@ -566,7 +578,7 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 		}
 		// A root is decomposed even when a tracker's wrap-up would
 		// also apply: decompose wins over wrap-up
-		// (§forgejo/reconciliation/watermark-exemptions). The digest
+		// (§forgejo/reconciliation/the-state-is-the-watermark). The digest
 		// gate is this row's whole decision — the declaration's
 		// predicate — the forest dispatching only when its
 		// actionable-state digest moved since the store last observed
@@ -588,7 +600,7 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 			// A commissioned forest stays under curation: closing the root removes
 			// it from the sweep's enumeration of open issues, so the tracker's
 			// own row carries the curation until the forest is finished
-			// (§forgejo/reconciliation/watermark-exemptions). The
+			// (§forgejo/reconciliation/the-state-is-the-watermark). The
 			// decompose declaration's predicate is the whole question:
 			// no gate, an open gate, or the digest comparison — one
 			// forest, one answer, whichever row asks
@@ -698,7 +710,7 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 // the same comparison the sweep's rows make, so both paths give the
 // same answer for this action, and an edge move — which moves the
 // digest and no delivery — cannot be suppressed by a watermark
-// (§forgejo/reconciliation/watermark-exemptions,
+// (§forgejo/reconciliation/the-state-is-the-watermark,
 // §forgejo/decisions/actionable-state-digest, s-git/maitred#209). The
 // gate is unarmed only for a root whose kind labels conflict: the
 // sweep holds that issue off as a conflict before any decompose row,
@@ -722,7 +734,7 @@ func decideDecompose(e Event, issue *Issue, s State, w *Watermark) Decision {
 	// forest, and the digest of the declaration's input set is what
 	// paces the row on every path: an edge move moves that digest, so no
 	// timestamp can suppress the re-curation the gate exists to allow
-	// (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#209).
+	// (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#209).
 	return dispatchOnDeclaredDigest(ActionDecompose, w, e, s, d)
 }
 
@@ -731,7 +743,7 @@ func decideDecompose(e Event, issue *Issue, s State, w *Watermark) Decision {
 // declaration's input set, which the downstream edges are part of — the
 // same reading the sweep's row takes, so an order that arrived with no
 // delivery still dispatches here
-// (§forgejo/reconciliation/watermark-exemptions,
+// (§forgejo/reconciliation/the-state-is-the-watermark,
 // §forgejo/decisions/forest-teardown, s-git/maitred#259).
 func decideTeardown(e Event, issue *Issue, s State, w *Watermark) Decision {
 	d, ready := readyAtRow(ActionTeardownForest, e, s)
@@ -812,11 +824,7 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 		if !ready {
 			return d
 		}
-		rev := digestFor(ActionRebase, e, s)
-		if alreadyDispatched(w, ActionRebase, rev) {
-			return holdOff(fmt.Sprintf("rebase already dispatched at revision %s", rev))
-		}
-		return dispatch(ActionRebase, d.Reason)
+		return dispatchOnDeclaredDigest(ActionRebase, w, e, s, d)
 	}
 	return decideReviewFanOut(e, pr, s, w, false)
 }
@@ -840,12 +848,12 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 // request, not a lens's own push — while the revision-keyed
 // per-subject watermark guard keeps the label merely present from
 // re-firing (§forgejo/decisions/label-triggered-review).
-// The sweep's fan-out row is watermark-exempt per lens: a lens that
-// has reported nothing at the current head is a lens whose dispatch
-// may have gone nowhere, and a revision-keyed watermark at a frozen
-// head sha would strand the PR (§forgejo/reconciliation/watermark-exemptions).
-// The exemption is keyed on the event, not the state: the same rows
-// reached from the PR-synced event keep the revision-keyed guard.
+// The fan-out row is owed per lens, on every path: a lens with no
+// undismissed review at head is owed the dispatch — a run that went
+// nowhere would otherwise strand a PR at a head it cannot move — and a
+// lens whose report landed is owed none, whatever else moved
+// (§forgejo/reconciliation/the-state-is-the-watermark,
+// §forgejo/decisions/review-lenses, s-git/maitred#260).
 func decidePRSynced(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
 	if pr == nil {
@@ -859,81 +867,97 @@ func decidePRSynced(e Event, s State, w *Watermark) Decision {
 		if !ready {
 			return d
 		}
-		rev := digestFor(ActionRebase, e, s)
-		if !onSweep(e) && alreadyDispatched(w, ActionRebase, rev) {
-			return holdOff(fmt.Sprintf("rebase already dispatched at revision %s", rev))
-		}
-		return dispatchOnState(w, onSweep(e), ActionRebase, rev, d.Reason)
+		return dispatchOnDeclaredDigest(ActionRebase, w, e, s, d)
 	}
 	return decideReviewFanOut(e, pr, s, w, carriesLabel(pr.Labels, LabelTriggerReview))
 }
 
 // decideReviewFanOut is the review dispatch predicate
 // (§forgejo/decisions/review-lenses): the lenses to dispatch are the
-// configured lenses with no undismissed approving review at the PR's
-// current head. Each outstanding lens passes under its own guard —
-// the subject-keyed watermark slot for its identity at this revision,
-// exempt on the sweep while the lens has reported nothing at the head
-// (§forgejo/reconciliation/watermark-exemptions) — and under the
-// per-lens sender guard: a lens's own push does not re-fire that lens
-// (§forgejo/decisions/loop-prevention). A label-requested fan-out
-// overrides the sender guard alone; the revision-keyed per-subject
-// guard still holds the label's mere presence from re-firing
-// (§forgejo/decisions/label-triggered-review). When every lens is
-// satisfied the decision holds off naming that fact — the
-// review-following rows own the PR then; when the outstanding lenses
-// are all suppressed, the hold-off names them.
+// configured lenses that have reported nothing at the PR's current head.
+// A lens whose report landed at head is not fanned again — that standing
+// is one of the inputs this action declares, and from there the
+// review-following rows own the PR. Holding that standing to the lens
+// alone is what keeps a sibling's report from re-asking it
+// (s-git/maitred#260). Each owed lens passes under the per-lens sender
+// guard — a lens's own push does not re-fire that lens
+// (§forgejo/decisions/loop-prevention) — and is paced by the digest of its
+// own declared inputs, folded from that lens's side so a sibling's report
+// cannot re-dispatch a lens whose task is already in flight. A digest the
+// watermark records for that lens dispatches too, because a review
+// dispatch that went nowhere leaves the lens's standing exactly as it was,
+// and only the re-fire bound spaces the attempt
+// (§forgejo/reconciliation/the-state-is-the-watermark). A lens whose report
+// landed at head is re-asked only when a `trigger-review` request arrives
+// at a digest the watermark does not record: the label merely present is
+// not a request re-made (§forgejo/decisions/label-triggered-review). When
+// every lens has reported the decision holds off naming that fact; when the
+// owed lenses are all suppressed, the hold-off names them.
 func decideReviewFanOut(e Event, pr *PullRequest, s State, w *Watermark, labelRequested bool) Decision {
-	rev := digestFor(ActionReview, e, s)
 	var dispatched []LensDispatch
-	var satisfied, suppressed []string
+	var suppressed []string
 	for _, lens := range s.ReviewLenses {
 		st := lensStandingAtHead(s.Reviews, lens, pr.HeadSHA)
-		if st.approved && !labelRequested {
-			satisfied = append(satisfied, lens.Identity)
+		rev := digestForSubject(ActionReview, lens.Identity, e, s)
+		guarded := alreadyDispatchedSubject(w, lens.Identity, ActionReview, rev)
+		if st.reported {
+			if !labelRequested {
+				continue
+			}
+			if guarded {
+				// The request arrived at a standing the engine already
+				// dispatched against: nothing in the state moved, so the
+				// label is merely present and no lens re-reads a head it
+				// reported (§forgejo/decisions/label-triggered-review).
+				suppressed = append(suppressed, fmt.Sprintf("%s (the %s request already dispatched at this standing)", lens.Identity, LabelTriggerReview))
+				continue
+			}
+			dispatched = append(dispatched, LensDispatch{
+				Lens:     lens.Identity,
+				Revision: rev,
+				Reason: fmt.Sprintf("lens %s carries the %s label's explicit request over its report at head %s",
+					lens.Identity, LabelTriggerReview, pr.HeadSHA),
+			})
 			continue
 		}
 		if !labelRequested && lens.Identity == e.Sender && lensHasAnyReview(s.Reviews, lens) {
-			// The per-lens sender guard, the per-lens shape of the
-			// retired reviewing-author guard: a lens's own push does
-			// not re-fire that lens, but the other lenses' dispatches
-			// go on (§forgejo/decisions/loop-prevention). Like the
-			// retired guard it speaks only when the lens has actually
-			// reviewed — a push that no lens has looked at yet is
-			// reviewed by everyone.
+			// The per-lens sender guard, the per-lens shape of the retired
+			// reviewing-author guard: a lens's own push does not re-fire
+			// that lens, while the other lenses' dispatches go on. Like
+			// the retired guard it speaks only when the lens has actually
+			// reviewed — a push that no lens has looked at yet is reviewed
+			// by everyone (§forgejo/decisions/loop-prevention).
 			suppressed = append(suppressed, fmt.Sprintf("%s (its own push at head %s)", lens.Identity, pr.HeadSHA))
 			continue
 		}
-		exempt := onSweep(e) && !st.reported
-		guarded := alreadyDispatchedSubject(w, lens.Identity, ActionReview, rev)
-		if !exempt && guarded {
-			suppressed = append(suppressed, lens.Identity)
-			continue
+		ld := LensDispatch{
+			Lens:     lens.Identity,
+			Revision: rev,
+			Reason:   fmt.Sprintf("lens %s has reported nothing at head %s", lens.Identity, pr.HeadSHA),
 		}
-		reason := fmt.Sprintf("lens %s has no undismissed approval at head %s", lens.Identity, pr.HeadSHA)
-		if labelRequested && st.approved {
-			// The label re-asks a lens that already approved at head:
-			// an explicit human request outranks the standing approval
-			// (§forgejo/decisions/label-triggered-review).
-			reason = fmt.Sprintf("lens %s carries the %s label's explicit request over its approval at head %s", lens.Identity, LabelTriggerReview, pr.HeadSHA)
+		if labelRequested {
+			ld.Reason = fmt.Sprintf("lens %s is owed its report at head %s and the PR carries the %s label's request",
+				lens.Identity, pr.HeadSHA, LabelTriggerReview)
 		}
-		if exempt && guarded {
-			// The stalled shape the exemption exists to recover: the
-			// state fact carries past the recorded revision, and the
-			// log says so rather than "already dispatched".
-			reason += fmt.Sprintf("; the state calls for the lens regardless of revision %s", rev)
+		if guarded {
+			// A lens still owed arrives at the digest its own slot
+			// already holds, since nothing that lens did moved it: the
+			// state still calls for the report, so the row dispatches and
+			// the re-fire bound spaces the attempt.
+			ld.StateGoverned = true
+			ld.Reason += fmt.Sprintf("; the watermark already records this lens at %s, which the state still calls for: the re-fire bound spaces the attempt",
+				quotedFacts(declaredInputFacts(ActionReview, lens.Identity, s), rev))
 			if !lensHasAnyReview(s.Reviews, lens) {
-				// The slot names this revision yet no review by the
-				// lens's login has ever been seen — the shape a
-				// mistyped identity produces (the lens can never
-				// report, so the sweep re-fires it forever), shared
-				// with a dispatch still mid-flight. Name what the
-				// state shows so an operator can tell them apart
-				// (§forgejo/config/review-lenses).
-				reason += fmt.Sprintf("; no review by %s has been seen on this PR at all — if this persists, check the lens's configured identity", lens.Identity)
+				// No review by the lens's login has ever been seen — the
+				// shape a mistyped identity produces (the lens can never
+				// report, so the row re-fires at the bound's pace for as
+				// long as the state stands), shared with a dispatch still
+				// mid-flight. Name what the state shows so an operator can
+				// tell them apart (§forgejo/config/review-lenses).
+				ld.Reason += fmt.Sprintf("; no review by %s has been seen on this PR at all — if this persists, check the lens's configured identity", lens.Identity)
 			}
 		}
-		dispatched = append(dispatched, LensDispatch{Lens: lens.Identity, Reason: reason})
+		dispatched = append(dispatched, ld)
 	}
 	if len(dispatched) > 0 {
 		reasons := make([]string, len(dispatched))
@@ -945,13 +969,13 @@ func decideReviewFanOut(e Event, pr *PullRequest, s State, w *Watermark, labelRe
 		return d
 	}
 	if len(suppressed) > 0 {
-		return holdOff(fmt.Sprintf("review already dispatched at revision %s for the outstanding lens(es) of PR %d: %s", pr.HeadSHA, pr.Number, strings.Join(suppressed, ", ")))
+		return holdOff(fmt.Sprintf("PR %d at head %s: no lens fanned — %s", pr.Number, pr.HeadSHA, strings.Join(suppressed, "; ")))
 	}
 	// Nothing was dispatched and nothing was suppressed, so every lens
-	// holds an undismissed approval at head: that is the declaration's
+	// holds an undismissed report at head: that is the declaration's
 	// answer, and the row asks it rather than restating it
-	// (§forgejo/decisions/actions). A label-requested fan-out re-asks an
-	// approving lens, so it never reaches here
+	// (§forgejo/decisions/actions). A label-requested fan-out re-asks a
+	// reported lens, so it never reaches here
 	// (§forgejo/decisions/label-triggered-review). Reaching this line
 	// means the loop above classified every lens through the same facts
 	// reviewReady reads — the same s.ReviewLenses, s.Reviews and head —
@@ -963,7 +987,7 @@ func decideReviewFanOut(e Event, pr *PullRequest, s State, w *Watermark, labelRe
 	// fault readyAtRow names an abstain as.
 	held, ready := readyAtRow(ActionReview, e, s)
 	if ready {
-		return holdOff("the review declaration answered ready at the fan-out's tail, where every lens holds an undismissed approval at head; a ready answer here would dispatch a review with no lenses, so this is a wiring fault")
+		return holdOff("the review declaration answered ready at the fan-out's tail, where every lens holds an undismissed report at head; a ready answer here would dispatch a review with no lenses, so this is a wiring fault")
 	}
 	return held
 }
@@ -1129,12 +1153,12 @@ func lensIdentities(lenses []ReviewLens) []string {
 // author is not the configured implementer identity holds off
 // (§forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention,
 // s-git/maitred#143).
-// The fix-feedback row is watermark-exempt on the sweep; the approved
-// merge row is exempt wherever it is reached once the work it delivers
+// The fix-feedback row and the merge row are state-governed wherever
+// they are reached: an approved PR once the work it delivers
 // opts into merging — the agentic-auto-merge label on the issue its
 // body closes (§forgejo/decisions/merge-gate) — its re-fire
 // bounded by the engine rather than by the watermark
-// (§forgejo/reconciliation/watermark-exemptions,
+// (§forgejo/reconciliation/the-state-is-the-watermark,
 // §forgejo/decisions/loop-prevention).
 // A fix-feedback dispatch that died recovers on the next sweep the
 // same way an approved auto-merge PR's merge does: the state — an
@@ -1154,7 +1178,7 @@ func decidePRReconcile(e Event, s State, w *Watermark) Decision {
 // has reported at head: the merge-or-wait and fix-feedback
 // declarations' predicates answer whether the state calls for either,
 // and the row owns only the pacing — fix-feedback's revision-keyed
-// guard on the guarded paths, merge-or-wait's standing exemption
+// comparison on every path, merge-or-wait's being state-governed
 // (§forgejo/decisions/review-lenses, §forgejo/decisions/actions).
 // Whether a comment report counts towards "not all approvals" is the
 // path's reading rule, derived from the event: the sweep and the
@@ -1173,14 +1197,14 @@ func decideChainReported(e Event, s State, w *Watermark) (Decision, bool) {
 	}
 	if d, ans := readyTo(ActionMergeOrWait, e, s); ans != readyNotApplicable {
 		if ans == readyYes {
-			// The exempt merge row: an opted-into-merging PR sits at a
-			// frozen head sha once the chain approves, so a
-			// revision-keyed watermark makes it a fixed point no path
-			// can fire on again — the state is its watermark on every
-			// path, the re-fire the engine's to bound, not this row's
-			// (§forgejo/reconciliation/watermark-exemptions,
-			// §forgejo/decisions/loop-prevention).
-			return stateGoverned(d), true
+			// An approved opted-in PR sits at a frozen head once the chain
+			// reports, so the digest this row declares is a value the engine
+			// cannot move: the row dispatches at a digest the watermark
+			// records and leaves the pace to the re-fire bound, which is why
+			// a merge run that died recovers within one interval instead of
+			// stranding (§forgejo/decisions/loop-prevention,
+			// §forgejo/reconciliation/the-state-is-the-watermark).
+			return dispatchOnDeclaredDigest(ActionMergeOrWait, w, e, s, d), true
 		}
 		return d, true
 	}
@@ -1189,11 +1213,7 @@ func decideChainReported(e Event, s State, w *Watermark) (Decision, bool) {
 	case readyNo:
 		return d, true
 	case readyYes:
-		rev := digestFor(ActionFixFeedback, e, s)
-		if !onSweep(e) && alreadyDispatched(w, ActionFixFeedback, rev) {
-			return holdOff(fmt.Sprintf("fix-feedback already dispatched at revision %s", rev)), true
-		}
-		return dispatchOnState(w, onSweep(e), ActionFixFeedback, rev, d.Reason), true
+		return dispatchOnDeclaredDigest(ActionFixFeedback, w, e, s, d), true
 	}
 	return Decision{}, false
 }
@@ -1256,13 +1276,12 @@ func prReviewGate(reviews []Review, lenses []ReviewLens, head string) reviewGate
 }
 
 // onSweep reports whether the event is the reconciliation sweep's
-// synthetic current-state event — the path the per-lens review and
-// fix-feedback watermark exemptions belong to. Those two rows are
-// shared with the PR-commented event, which decides the same state
-// under the ordinary revision-keyed guard, so an exemption keyed on
-// them is keyed on the event, not on the function that reads the
-// state; the merge-or-wait exemption is not keyed on it at all
-// (§forgejo/reconciliation/watermark-exemptions).
+// synthetic current-state event. No row paces itself by the answer —
+// every row asks the same predicate and is paced by the digest of the
+// inputs its declaration names, whichever path arrived
+// (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#260)
+// — the helper remains where a reason line names the row that fired, as
+// the decompose and teardown rows do.
 func onSweep(e Event) bool {
 	return e.Type == EventReconcile
 }
@@ -1285,44 +1304,15 @@ func holdOffPRNotOwned(pr *PullRequest, identity string) (Decision, bool) {
 	return holdOff(fmt.Sprintf("PR %d is authored by %s, not the implementer identity %s; fix-feedback is theirs to fix, not the implementer's", pr.Number, pr.Author, identity)), true
 }
 
-// dispatchOnState dispatches a row whose answer the state alone gives:
-// the row never consults the guard, and the dispatch is marked
-// state-governed — the engine paces its re-fire with the re-fire bound
-// instead of the watermark
-// (§forgejo/decisions/loop-prevention,
-// §forgejo/reconciliation/the-state-is-the-watermark). It is what the
-// pull-request rows still run on, where the revision the row quotes is
-// an object revision — a head sha — and re-keying them onto the digest
-// of their declared inputs is the next member of this chain
-// (s-git/maitred#260). When the watermark does happen to already
-// record the action at this revision — the stalled shape the exemption
-// exists to recover — the reason names the revision the state carries
-// past it, so the decision log keeps stating the state fact and never
-// "already dispatched at this revision"
-// (§forgejo/reconciliation/watermark-exemptions,
-// §forgejo/observability/the-decision-log). On a guarded row
-// (exempt false) it is a plain dispatch, gated by the guard its caller
-// applied and consulting no stamp.
-func dispatchOnState(w *Watermark, exempt bool, action Action, revision, reason string) Decision {
-	d := dispatch(action, reason)
-	if !exempt {
-		return d
-	}
-	if alreadyDispatched(w, action, revision) {
-		d.Reason = fmt.Sprintf("%s; the state calls for %s regardless of revision %s", reason, action, revision)
-	}
-	return stateGoverned(d)
-}
-
-// dispatchOnDeclaredDigest paces an issue-path row: the declaration's
-// predicate has answered that the state calls for the action, and the
-// digest of the action's declared input set (§forgejo/decisions/actions)
-// says whether this state is news or a state the engine has already
-// reacted to. A digest the watermark does not record dispatches at
+// dispatchOnDeclaredDigest paces a row on either side of the engine: the
+// declaration's predicate has answered that the state calls for the
+// action, and the digest of the action's declared input set
+// (§forgejo/decisions/actions) says whether this state is news or a state
+// the engine has already reacted to. A digest the watermark does not record dispatches at
 // once: some fact the predicate reads moved — including the relations
 // that emit no delivery, a blocker edge attached or removed, which is
 // why no issue timestamp is asked of at all here
-// (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#259). A
+// (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#259). A
 // digest the watermark does record dispatches too, because no row may
 // fall silent at a digest it cannot move: an attempt that landed with
 // no visible effect left the state — and so the digest — exactly as it
@@ -1568,7 +1558,7 @@ func cascadeAction(issue *Issue) Action {
 // which the sweep curates, so the reason says that instead of
 // promising a wrap-up the state does not call for
 // (§forgejo/decisions/unblock-cascade,
-// §forgejo/reconciliation/watermark-exemptions).
+// §forgejo/reconciliation/the-state-is-the-watermark).
 func trackerStillBlocked(issue *Issue, blockers []IssueNode) (CascadeHoldOff, bool) {
 	if !isTracker(issue) || allClosed(blockers) {
 		return CascadeHoldOff{}, false
@@ -1683,7 +1673,7 @@ func ideationRoots(blockers []Issue) []Issue {
 // any other and carries the membership edge from its root; the engine never
 // walks a graph to find the gate. A closed gate is a commissioned forest; an
 // open one is not (§forgejo/decisions/commissioning,
-// §forgejo/reconciliation/watermark-exemptions).
+// §forgejo/reconciliation/the-state-is-the-watermark).
 func ideationGate(blockers []Issue) *Issue {
 	roots := ideationRoots(blockers)
 	if len(roots) == 0 {
@@ -1809,55 +1799,6 @@ func syncMemberSetHoldOff(pr *PullRequest, prRepo string, s State) (Decision, bo
 	d := holdOff(reason)
 	d.Cascade = emissions
 	return d, true
-}
-
-// syncSetRevision derives the set revision the sync dispatch's
-// watermark records: what the predicate reads about each member — its
-// state, whether it carries the member label, and its delivering PR's
-// head sha, open and mergeable state, and approval at that head —
-// ordered by key so the API's enumeration order cannot change the
-// digest, plus the grouping issue's **body** (§forgejo/decisions/sync-set,
-// §forgejo/state/watermark).
-// The members' updated_at is deliberately absent: it records any edit
-// to any member — a comment, a title fix, an unrelated label toggle —
-// and a digest that moved with it would re-dispatch the landing
-// prompt on an unchanged predicate result, most noisily for a set
-// stalled on a member awaiting a human. Nothing is lost by narrowing
-// the digest: the sweep re-evaluates the set every interval whatever
-// it says, so a change that does move readiness still re-fires within
-// one interval, and one that does not stops re-firing at all.
-//
-// The grouping issue's body is in the digest precisely because the
-// object under consideration is not that noise: it is the set, whose
-// body names the order the landing prompt must honour. A ready set
-// whose landing run reported an error — a joint conflict between
-// individually-mergeable members, a repository the agent cannot merge
-// in — is otherwise a fixed point of the digest: every later sweep
-// reads the same readiness, finds the watermark already there, and
-// dispatches nothing. Restating the order on the grouping issue is the
-// human's lever on that report, and the row §reconciliation calls the
-// set's backstop has to be able to answer it
-// (§forgejo/reconciliation/watermark-exemptions). The digest takes the
-// body itself and not the grouping issue's updated_at, which moves on a
-// comment, a title fix or an unrelated label toggle: for the members the
-// same narrowing was argued as "activity is not readiness", and the
-// lever this section names is a restatement, not a touch
-// (§forgejo/decisions/sync-set).
-func syncSetRevision(issue *Issue, members []SyncMember, lenses []ReviewLens) string {
-	lines := make([]string, 0, len(members)+1)
-	lines = append(lines, fmt.Sprintf("set %s#%d body=%s", issue.Repository, issue.Number, digestRevision(issue.Body)))
-	for i := range members {
-		m := &members[i]
-		line := fmt.Sprintf("%s#%d state=%s %s=%t", m.Issue.Repository, m.Issue.Number, m.Issue.State, LabelAgenticSyncMerge, hasLabel(&m.Issue, LabelAgenticSyncMerge))
-		if m.PR != nil {
-			approvedAtHead := allLensesApproved(m.Reviews, lenses, m.PR.HeadSHA)
-			line += fmt.Sprintf(" pr=%d open=%t mergeable=%t head=%s approved-at-head=%t", m.PR.Number, prOpen(m.PR), m.PR.Mergeable, m.PR.HeadSHA, approvedAtHead)
-		}
-		lines = append(lines, line)
-	}
-	sort.Strings(lines)
-	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
-	return hex.EncodeToString(sum[:])
 }
 
 // mergeOptedIn answers the one question every merge row asks: did this
@@ -2031,20 +1972,17 @@ func digestRevision(fact string) string {
 }
 
 // quotedRevision is a revision in the words a reason line carries,
-// naming what kind of value it is: for an action whose digest is the
-// fold of its declaration's input set, the facts that fold into it, so a
-// line stating a digest an operator cannot read still names what the
-// engine saw (§forgejo/state/watermark,
-// §forgejo/observability/the-decision-log, s-git/maitred#259). Every
-// other revision is an object revision — a PR head sha, a landing set's
-// derived revision, an issue's `updated_at` — and is quoted as it
-// stands, being a value an operator can already place in the forge's
-// history. A tracker's revision is stated through the fold like any
-// other issue-path row's, since the rows that quote one all ask a
-// re-keyed declaration (§forgejo/reconciliation/the-tracker-block).
+// naming what kind of value it is: every action's digest is now the fold
+// of its declaration's input set, so a line stating a digest an operator
+// cannot read still names the facts the engine saw
+// (§forgejo/state/watermark, §forgejo/observability/the-decision-log,
+// s-git/maitred#259, s-git/maitred#260). A value that is not that fold —
+// an object revision named where no action was chosen to be folded — is
+// quoted as it stands, being a value an operator can already place in the
+// forge's history.
 func quotedRevision(a Action, e Event, s State, rev string) string {
-	if digestFoldsInputs(a) && rev == digestFor(a, e, s) {
-		facts := quoteThread(declaredInputFacts(a, s))
+	if rev == digestFor(a, e, s) {
+		facts := quoteThread(declaredInputFacts(a, "", s))
 		if len(facts) > 0 {
 			sort.Strings(facts)
 			return "digest " + strings.Join(facts, ", ")
@@ -2053,22 +1991,33 @@ func quotedRevision(a Action, e Event, s State, rev string) string {
 	return "revision " + rev
 }
 
+// quotedFacts states a digest as the facts behind it when the value in
+// hand is that digest, and as a bare revision when it is not — which is
+// how a fan-out subject's digest, folded from that subject's side, is
+// quoted without pretending to be the whole action's
+// (§forgejo/observability/the-decision-log).
+func quotedFacts(facts []string, rev string) string {
+	if len(facts) > 0 && rev == digestFacts(facts) {
+		sort.Strings(facts)
+		return "digest " + strings.Join(facts, ", ")
+	}
+	return "revision " + rev
+}
+
 // alreadyDispatched reports whether the watermark already records
 // action at revision — the idempotency guard, keyed on the one value
 // the action's declaration derives (§forgejo/state/watermark). What the
-// caller makes of a true answer is the row's, not the guard's: a
-// pull-request row holds off on it, while an issue-path row dispatched
-// through dispatchOnDeclaredDigest dispatches anyway and leaves the
-// pace of the re-fire to the re-fire bound, because no action may fall
-// silent at a digest it cannot move
-// (§forgejo/decisions/loop-prevention,
-// §forgejo/reconciliation/the-state-is-the-watermark). The rows still
-// exempt from the watermark are the pull-request rows named in
-// §forgejo/reconciliation/watermark-exemptions, which on the sweep
-// simply never consult it; the guard itself is not where that
-// exemption lives. Keying the bypass on the action instead of the path
-// would hand every future event row for those actions a
-// suppression-free path by accident.
+// caller makes of a true answer is the row's, not the guard's. Every
+// row dispatched through dispatchOnDeclaredDigest dispatches anyway and
+// leaves the pace of the re-fire to the re-fire bound, because no action
+// may fall silent at a digest it cannot move; the landing set's row is
+// the one that holds off, its digest naming the readiness its own
+// dispatch lands (§forgejo/decisions/loop-prevention,
+// §forgejo/reconciliation/the-state-is-the-watermark,
+// §forgejo/reconciliation/the-landing-sets-row). The guard itself is
+// where the comparison lives and not where that answer lives: keying the
+// answer on the event kind instead of the declaration would hand a future
+// path for the same action a suppression-free route by accident.
 func alreadyDispatched(w *Watermark, action Action, revision string) bool {
 	return w != nil && w.Action == string(action) && w.Revision == revision
 }
@@ -2087,7 +2036,7 @@ func alreadyDispatchedSubject(w *Watermark, subject string, action Action, revis
 // hasLabel reports whether the issue carries the label. Label names are
 // user-authored strings, so the reserved names match
 // case-insensitively: a label created as "Ideation" must not silently
-// decide as implement (§forgejo/reconciliation/watermark-exemptions).
+// decide as implement (§forgejo/reconciliation/the-state-is-the-watermark).
 func hasLabel(issue *Issue, label string) bool {
 	return carriesLabel(issue.Labels, label)
 }
@@ -2109,7 +2058,7 @@ func carriesLabel(labels []string, label string) bool {
 // the label that makes it something other than a work item — or the
 // empty string when it carries none. Ideation is reported first: the
 // decompose-wins precedence applies to the hold-off reason too
-// (§forgejo/reconciliation/watermark-exemptions, §forgejo/decisions/sync-set).
+// (§forgejo/reconciliation/the-state-is-the-watermark, §forgejo/decisions/sync-set).
 func reservedLabel(issue *Issue) string {
 	switch {
 	case hasLabel(issue, LabelIdeation):

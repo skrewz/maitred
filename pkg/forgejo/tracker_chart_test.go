@@ -1179,7 +1179,7 @@ func wantEveryMemberClosed(t *testing.T, region string) {
 // TestWrapUpDrawsTheFinishedForestOnTheSweep: the sweep's wrap-up row queues
 // its task behind exactly one current-state write, and the drawing it follows
 // shows every member closed (§forgejo/reconciliation/the-tracker-block,
-// §forgejo/reconciliation/watermark-exemptions, s-git/maitred#232).
+// §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#232).
 func TestWrapUpDrawsTheFinishedForestOnTheSweep(t *testing.T) {
 	eng, api, q, _ := chartForestQueue(t, chartFenced())
 	wrapUpWire(api)

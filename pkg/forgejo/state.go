@@ -67,8 +67,16 @@ func (k Key) fileName() string {
 type Slot struct {
 	// Action is the named action dispatched for this subject.
 	Action string `json:"action"`
-	// Revision is the activity revision the action was dispatched at.
+	// Revision is the digest of this subject's declared inputs the
+	// action was dispatched at (§forgejo/state/watermark).
 	Revision string `json:"revision"`
+	// FiredAt is when this subject last dispatched at Revision, the
+	// fan-out's share of the re-fire bound's durable stamp: memory alone
+	// would let a crash-loop buy the owed lenses another fan-out every
+	// restart (§forgejo/decisions/loop-prevention). Nil where no
+	// fan-out landed here since the field existed, which bounds nothing
+	// — the same answer an unrecorded revision gives.
+	FiredAt *time.Time `json:"fired_at,omitempty"`
 }
 
 // Watermark is the "what have I dispatched" record for a single issue or
@@ -84,10 +92,9 @@ type Watermark struct {
 	// Action is the named action last dispatched for this key (the
 	// decision function's action names).
 	Action string `json:"action"`
-	// Revision is the activity revision the action was dispatched at:
-	// the declared digest for an action whose declaration folds its
-	// inputs, the PR head sha for pull requests, and the revision the
-	// landing set derives (§forgejo/state/watermark).
+	// Revision is the digest of the action's declared input set — the
+	// one derivation every row, issue-path or pull-request, is watermarked
+	// on (§forgejo/state/watermark, s-git/maitred#260).
 	Revision string `json:"revision"`
 	// FiredAt is when this action last dispatched at Revision. The
 	// re-fire bound keeps its stamp in memory, so a restart would admit

@@ -122,7 +122,7 @@ func TestReconcile_FreshWatermarkImplementRefiresOnce(t *testing.T) {
 	// The stamp the bound reads is keyed on the digest the dispatch
 	// recorded, which is what "the same unchanged state" means here
 	// (§forgejo/state/watermark, s-git/maitred#259).
-	eng.stampReFireAt(key, ActionImplement, digestFor(ActionImplement, Event{}, State{Issue: issue}), time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+	eng.stampReFireAt(key, ActionImplement, "", digestFor(ActionImplement, Event{}, State{Issue: issue}), time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
 	eng.Reconcile()
 	if tasks := q.all(); len(tasks) != 2 {
 		t.Fatalf("got %d tasks after the interval is spent, want 2; all = %+v", len(tasks), tasks)
@@ -131,13 +131,13 @@ func TestReconcile_FreshWatermarkImplementRefiresOnce(t *testing.T) {
 
 // TestReconcile_EdgeMoveWithoutDeliveryDispatches: a blocking edge
 // attached or removed emits no webhook and moves no issue's
-// `updated_at`, so the rows that read blockers used to be exempted from
-// the watermark on the sweep. They are not exempt now — the edge is one
+// `updated_at`, so the rows that read blockers used to skip the
+// watermark on the sweep. They skip nothing now — the edge is one
 // of their declared inputs, so it moves the digest they are keyed on —
-// and removing the exemption costs no dispatch: an issue the engine
+// and dropping the skip costs no dispatch: an issue the engine
 // already watermarked while a blocker stood open dispatches the sweep
 // after that edge is removed, at a timestamp nothing moved
-// (§forgejo/reconciliation/watermark-exemptions,
+// (§forgejo/reconciliation/the-state-is-the-watermark,
 // §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#259).
 func TestReconcile_EdgeMoveWithoutDeliveryDispatches(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
@@ -212,7 +212,7 @@ func TestReconcile_UnchangedDigestRefiresAtTheBoundOnEveryPath(t *testing.T) {
 			if tasks := q.all(); len(tasks) != 1 {
 				t.Fatalf("got %d tasks on the second arrival inside one interval, want 1 (the bound spaces it); all = %+v", len(tasks), tasks)
 			}
-			eng.stampReFireAt(key, ActionImplement, digestFor(ActionImplement, Event{}, State{Issue: issue}),
+			eng.stampReFireAt(key, ActionImplement, "", digestFor(ActionImplement, Event{}, State{Issue: issue}),
 				time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
 			arrive()
 			if tasks := q.all(); len(tasks) != 2 {
@@ -254,35 +254,42 @@ func TestReconcile_RebaseRefiresAtUnmovedHeadBounded(t *testing.T) {
 		t.Fatalf("got %d tasks after the second sweep, want 1 (the re-fire is bounded); all = %+v", len(tasks), tasks)
 	}
 
-	eng.stampReFireAt(key, ActionRebase, "sha-1", time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+	eng.stampReFireAt(key, ActionRebase, "", digestFor(ActionRebase, Event{}, State{PR: &pr, ReviewLenses: testLenses}),
+		time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
 	eng.Reconcile()
 	if tasks := q.all(); len(tasks) != 2 {
 		t.Fatalf("got %d tasks after the interval is spent, want 2; all = %+v", len(tasks), tasks)
 	}
 }
 
-// TestReconcile_RevisionGatedRowConsultsNoStamp: the re-fire bound's
-// stamp is consulted only by state-governed rows. A revision-gated row
-// — the event path's rebase row on a pull request, the shape left for
-// the next member of this chain (s-git/maitred#260) — dispatches
-// whatever a fresh stamp records at its head, so generalising the bound
-// changes no behaviour on the gated rows
+// TestReconcile_EventPathRowConsultsTheStamp: a pull-request row is
+// paced the same way on every path — the event's re-fire is the re-fire
+// bound's to space, exactly as the sweep's is, so an event arriving
+// inside one interval of a landed dispatch adds no task and one after
+// the interval is spent adds the next
 // (§forgejo/decisions/loop-prevention,
-// §forgejo/reconciliation/the-state-is-the-watermark).
-func TestReconcile_RevisionGatedRowConsultsNoStamp(t *testing.T) {
+// §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#260).
+func TestReconcile_EventPathRowConsultsTheStamp(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
 	api.repos = []Repository{testRepo("o/r")}
 	pr := PullRequest{Number: 7, State: "open", Mergeable: false, HeadSHA: "sha-7"}
 	api.pulls[7] = &pr
 	key := Key{Repo: "o/r", Kind: KindPR, Number: 7}
-	// A stamp taken moments ago at this head — the shape a
-	// state-governed row leaves behind. The gated row must ignore it.
-	eng.stampReFireAt(key, ActionRebase, "sha-7", time.Now())
+	ev := Event{Type: EventPRSynced, Repo: "o/r", Kind: KindPR, Number: 7, Sender: "alice"}
+	// A stamp taken moments ago at this state — the shape the sweep's
+	// own rebase left behind. The event consults it and adds nothing.
+	eng.stampReFireAt(key, ActionRebase, "", digestFor(ActionRebase, Event{}, State{PR: &pr, ReviewLenses: testLenses}), time.Now())
 
-	eng.HandleEvent(Event{Type: EventPRSynced, Repo: "o/r", Kind: KindPR, Number: 7, Sender: "alice"})
+	eng.HandleEvent(ev)
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Fatalf("got %d tasks, want 0 (the interval the sweep started is unspent); all = %+v", len(tasks), tasks)
+	}
 
+	eng.stampReFireAt(key, ActionRebase, "", digestFor(ActionRebase, Event{}, State{PR: &pr, ReviewLenses: testLenses}),
+		time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+	eng.HandleEvent(ev)
 	if tasks := q.all(); len(tasks) != 1 {
-		t.Fatalf("got %d tasks, want 1 (a revision-gated row consults no stamp); all = %+v", len(tasks), tasks)
+		t.Fatalf("got %d tasks after the interval is spent, want 1; all = %+v", len(tasks), tasks)
 	}
 }
 
@@ -314,9 +321,9 @@ func TestReconcile_PullRequests(t *testing.T) {
 			want: "action=rebase",
 		},
 		{
-			// The sweep's review row is watermark-exempt: no review at
+			// The sweep's review row dispatches on standing: no review at
 			// head is the state that calls for asking again, revision
-			// notwithstanding (§forgejo/reconciliation/watermark-exemptions).
+			// notwithstanding (§forgejo/reconciliation/the-state-is-the-watermark).
 			name:      "review already dispatched at this revision re-fires while no review has landed",
 			pr:        PullRequest{Number: 4, State: "open", Mergeable: true, HeadSHA: "sha-4"},
 			watermark: &Watermark{Action: string(ActionReview), Revision: "sha-4"},
@@ -388,17 +395,17 @@ func TestReconcile_PRStandingAtReview(t *testing.T) {
 			want:   "action=fix-feedback",
 		},
 		{
-			// The sweep's fix-feedback rows are watermark-exempt: an open,
+			// The sweep's fix-feedback rows are state-governed: an open,
 			// mergeable PR standing at a changes-requested or comment review
 			// at head is the state that calls for the implementer, revision
-			// notwithstanding (§forgejo/reconciliation/watermark-exemptions).
+			// notwithstanding (§forgejo/reconciliation/the-state-is-the-watermark).
 			name:      "fix-feedback already dispatched at the revision re-fires while the changes-requested review stands at head",
 			review:    Review{Event: ReviewChangesRequested, Author: "bob", CommitID: "sha-1", SubmittedAt: testUpdatedAt},
 			watermark: &Watermark{Action: string(ActionFixFeedback), Revision: "sha-1"},
 			want:      "action=fix-feedback",
 		},
 		{
-			// The merge-or-wait row is watermark-exempt on every path once
+			// The merge-or-wait row is state-governed on every path once
 			// the PR is opted in: the approved labelled PR at a frozen head
 			// is the state that is its own watermark, sweep included
 			// (s-git/maitred#197).
@@ -622,10 +629,10 @@ func TestReconcile_ListOrgRepositoriesError(t *testing.T) {
 }
 
 // TestReconcile_WatermarkExemptRefiresAtUnchangedRevision: the sweep
-// re-fires the watermark-exempt actions whenever the state calls for
+// re-fires the state-governed actions whenever the state calls for
 // them, an unchanged updated_at notwithstanding — the dependency edge
 // that unblocks the work emits no delivery and moves no revision
-// (§forgejo/reconciliation/watermark-exemptions).
+// (§forgejo/reconciliation/the-state-is-the-watermark).
 func TestReconcile_WatermarkExemptRefiresAtUnchangedRevision(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -651,7 +658,7 @@ func TestReconcile_WatermarkExemptRefiresAtUnchangedRevision(t *testing.T) {
 
 			tasks := q.all()
 			if len(tasks) != 1 {
-				t.Fatalf("expected the exempt action re-fired at the unchanged revision, got %d tasks", len(tasks))
+				t.Fatalf("expected the state-governed action re-fired at the unchanged digest, got %d tasks", len(tasks))
 			}
 			if !strings.Contains(tasks[0].Prompt, "action="+string(tc.action)) {
 				t.Errorf("prompt = %q, want the %s action", tasks[0].Prompt, tc.action)
@@ -889,11 +896,12 @@ func TestReconcile_OtherAuthorIssueDispatches(t *testing.T) {
 }
 
 // TestReconcile_ReviewRowsRefireAtUnchangedRevision: the sweep's rows
-// for the lens fan-out and fix-feedback are watermark-exempt — the
+// for the lens fan-out and fix-feedback dispatch on the state they
+// declare — the
 // state is the watermark, so a dispatch the queue lost, a task that
 // died, or a reviewer that finished without posting recovers on the
 // next sweep while the head stands frozen at the recorded revision
-// (§forgejo/reconciliation/watermark-exemptions).
+// (§forgejo/reconciliation/the-state-is-the-watermark).
 func TestReconcile_ReviewRowsRefireAtUnchangedRevision(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -935,7 +943,7 @@ func TestReconcile_ReviewRowsRefireAtUnchangedRevision(t *testing.T) {
 
 			tasks := q.all()
 			if len(tasks) != 1 {
-				t.Fatalf("expected the exempt row to re-fire at the recorded revision, got %d tasks", len(tasks))
+				t.Fatalf("expected the row to re-fire at the recorded digest, got %d tasks", len(tasks))
 			}
 			if !strings.Contains(tasks[0].Prompt, tc.want) {
 				t.Errorf("prompt = %q, want %q", tasks[0].Prompt, tc.want)
@@ -945,7 +953,7 @@ func TestReconcile_ReviewRowsRefireAtUnchangedRevision(t *testing.T) {
 }
 
 // TestReconcile_ApprovedAutoMergePRRefires: the sweep's merge-or-wait
-// row is watermark-exempt for an open, approved-at-head PR whose work is
+// row is state-governed for an open, approved-at-head PR whose work is
 // opted into merging with no connected open blocker — the state is the
 // watermark, so a PR that stalled at a frozen head sha recovers on the
 // next sweep instead of sitting forever at "already dispatched at
@@ -956,7 +964,7 @@ func TestReconcile_ReviewRowsRefireAtUnchangedRevision(t *testing.T) {
 // answers first: an approved PR with no opted-in delivery waits on a
 // human whatever the watermark records, so the
 // revision-keyed guard never decides it (§forgejo/decisions/merge-gate,
-// s-git/maitred#179; §forgejo/reconciliation/watermark-exemptions).
+// s-git/maitred#179; §forgejo/reconciliation/the-state-is-the-watermark).
 func TestReconcile_ApprovedAutoMergePRRefires(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -967,7 +975,7 @@ func TestReconcile_ApprovedAutoMergePRRefires(t *testing.T) {
 	}{
 		{
 			// The pull request's own label grants nothing: with no
-			// opted-in issue behind it the exempt row does not fire,
+			// opted-in issue behind it the row does not fire,
 			// and the PR waits on a human whatever the watermark
 			// records (§forgejo/decisions/merge-gate,
 			// s-git/maitred#228).
@@ -1015,7 +1023,7 @@ func TestReconcile_ApprovedAutoMergePRRefires(t *testing.T) {
 				return
 			}
 			if len(tasks) != 1 {
-				t.Fatalf("expected the exempt row to re-fire, got %d tasks", len(tasks))
+				t.Fatalf("expected the row to re-fire, got %d tasks", len(tasks))
 			}
 			if !strings.Contains(tasks[0].Prompt, tc.want) {
 				t.Errorf("prompt = %q, want %q", tasks[0].Prompt, tc.want)
@@ -1054,7 +1062,7 @@ func quietForest(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store) {
 // over a quiet forest cost one digest computation each and no second
 // dispatch — the first observation commissions the run, the unchanged
 // second buys silence; and the refresh leaves the forest slot holding
-// the digest and its parts (§forgejo/reconciliation/watermark-exemptions,
+// the digest and its parts (§forgejo/reconciliation/the-state-is-the-watermark,
 // §forgejo/state/forest-digest, s-git/maitred#209).
 func TestReconcile_DecomposeDigestGate_QuietForest(t *testing.T) {
 	eng, api, q, store := quietForest(t)
@@ -1097,7 +1105,7 @@ func TestReconcile_DecomposeDigestGate_QuietForest(t *testing.T) {
 // digest computation each and no second dispatch, and the slot is
 // keyed by the closed root the tracker's row fetched, not by the
 // tracker whose row armed the gate
-// (§forgejo/reconciliation/watermark-exemptions,
+// (§forgejo/reconciliation/the-state-is-the-watermark,
 // §forgejo/state/forest-digest, s-git/maitred#209).
 func TestReconcile_DecomposeDigestGate_CommissionedForest(t *testing.T) {
 	eng, api, q, store := quietForest(t)
