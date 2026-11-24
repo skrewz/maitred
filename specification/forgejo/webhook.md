@@ -152,7 +152,21 @@ On each `POST`:
    unblock cascade (§forgejo/decisions/unblock-cascade) has its own
    watermark applied before its dispatch, so an already-dispatched
    `(action, digest)` is not re-dispatched.
-8. **Acknowledge.** The response is `204` once the pipeline has run; the
+8. **Draw the forests the event touched.** An event whose object is a forest, or
+   a row of one by the membership relation (§forgejo/decisions/commissioning),
+   has that forest's drawing redrawn — the tracker's current-state block and the
+   outcomes view's picture pair, one drawing feeding both sinks
+   (§forgejo/reconciliation/the-tracker-block, §forgejo/observability/the-outcomes-view,
+   s-git/maitred#274). The step reads the live graph rather than asking what the
+   event kind could have changed, so an event that moved no row writes nothing;
+   it draws nothing for the sweep's synthetic `reconcile` event, whose own tick
+   draws every current forest at step 5 (§forgejo/reconciliation/the-sweep), and
+   nothing for an event on a pull request, which no drawing gives a node
+   (§forgejo/renderer/edge-classes). It comes **after** the dispatch and the
+   cascade, because the drawing is the one work no decision waits on
+   (§forgejo/reconciliation/the-sweep), and after the watermark, because a
+   redraw can neither move nor delay what was decided.
+9. **Acknowledge.** The response is `204` once the pipeline has run; the
    engine does not block on the dispatched agent — dispatch only enqueues.
    A slow pipeline (several re-fetch calls) can exceed Forgejo's delivery
    timeout, in which case Forgejo records the delivery as failed without

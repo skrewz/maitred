@@ -1102,11 +1102,12 @@ func lastLines(s string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
-// The wrap-up path's drawing (s-git/maitred#232): the dispatch of wrap-up
-// redraws the tracker's current-state block before the task is queued, so the
-// finished forest leaves behind the picture of its completion. The tests below
-// drive the same fixtures the tick's own write uses — the two paths must share
-// one render function, and a test pins it.
+// The wrap-up path (s-git/maitred#232): a forest whose tracker is finished
+// leaves behind the picture of its completion. The dispatch used to draw that
+// picture itself, ahead of queuing; it is now the event's redraw that draws it —
+// the same render function, the same graph, landed as part of handling the event
+// (s-git/maitred#274). The tests below drive the same fixtures the tick's own
+// write uses, and a test pins that the two paths share one renderer.
 
 // wrapUpWire closes the members chartWire left open and hangs the tracker's
 // gate on its dependencies, as the graph stands the moment a wrap-up fires:
@@ -1128,6 +1129,12 @@ func wrapUpWire(api *fakeAPI) {
 	gate := *api.issues[1] // the root stands closed: an open root would hold the tracker off
 	gate.State = "closed"
 	api.deps[2] = []Issue{gate}
+	// The member's blockers name both edges reaching it: the root's membership
+	// edge, which is what makes it a member of this forest, and the tracker
+	// whose work it delivers (§forgejo/decisions/commissioning). The close that
+	// wakes the cascade is read through these rows by the redraw
+	// (§forgejo/webhook/the-pipeline, s-git/maitred#274).
+	api.deps[3] = []Issue{gate, *api.issues[2]}
 }
 
 // wrapUpQueuedAt is where a wrap-up dispatch stands in the fake's ordered log,
@@ -1181,22 +1188,26 @@ func TestWrapUpDrawsTheFinishedForestOnTheSweep(t *testing.T) {
 
 	wrapUpTask(t, q)
 	if got := api.writeCount(); got != 1 {
-		t.Fatalf("the sweep wrote %d issues, want the one write the dispatch makes", got)
+		t.Fatalf("the sweep wrote %d issues, want the one write its own pass makes", got)
 	}
+	// The drawing is the tick's last step, not the dispatch's errand: the
+	// write follows the task it describes rather than preceding it
+	// (§forgejo/reconciliation/the-sweep, s-git/maitred#274).
 	wrote, queued := callIndex(api, "UpdateIssueBody:out/2"), wrapUpQueuedAt(api)
 	if queued < 0 {
 		t.Fatal("the queue recorded no wrap-up dispatch")
 	}
-	if wrote >= queued {
-		t.Errorf("the write at %d did not precede the wrap-up dispatch queued at %d", wrote, queued)
+	if wrote < queued {
+		t.Errorf("the write at %d came before the wrap-up dispatch queued at %d: the tick draws after the walk it decided on", wrote, queued)
 	}
 	wantEveryMemberClosed(t, regionOf(mustWritten(t, api, "out", 2)))
 }
 
 // TestWrapUpDrawsTheFinishedForestOnTheCascade: the unblock cascade fires the
 // moment the last member closes, ahead of any sweep — so this is the path a
-// stale chart survives on, and the one the redraw matters most for
-// (§forgejo/decisions/unblock-cascade, s-git/maitred#232).
+// stale chart survived on, and the one the redraw takes over: the close that
+// woke the wrap-up draws the finished forest itself, in the block and in the
+// payload (§forgejo/decisions/unblock-cascade, s-git/maitred#232, s-git/maitred#274).
 func TestWrapUpDrawsTheFinishedForestOnTheCascade(t *testing.T) {
 	eng, api, q, _ := chartForestQueue(t, chartFenced())
 	wrapUpWire(api)
@@ -1207,14 +1218,16 @@ func TestWrapUpDrawsTheFinishedForestOnTheCascade(t *testing.T) {
 
 	wrapUpTask(t, q)
 	if got := api.writeCount(); got != 1 {
-		t.Fatalf("the cascade wrote %d issues, want the one write the dispatch makes", got)
+		t.Fatalf("the cascade wrote %d issues, want the one write the event's redraw makes", got)
 	}
+	// The drawing is the pipeline's tail: the dispatch it follows is the one
+	// the same event woke (§forgejo/webhook/the-pipeline, s-git/maitred#274).
 	wrote, queued := callIndex(api, "UpdateIssueBody:out/2"), wrapUpQueuedAt(api)
 	if queued < 0 {
 		t.Fatal("the queue recorded no wrap-up dispatch")
 	}
-	if wrote >= queued {
-		t.Errorf("the write at %d did not precede the wrap-up dispatch queued at %d", wrote, queued)
+	if wrote < queued {
+		t.Errorf("the write at %d came before the wrap-up dispatch queued at %d: the redraw is the event's last step", wrote, queued)
 	}
 	wantEveryMemberClosed(t, regionOf(mustWritten(t, api, "out", 2)))
 }
@@ -1269,7 +1282,7 @@ func TestWrapUpDrawFailureStillDispatches(t *testing.T) {
 	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
 
 	wrapUpTask(t, q)
-	if !strings.Contains(log.String(), "wrap-up: tracker current-state block not written") ||
+	if !strings.Contains(log.String(), "redraw: tracker current-state block not written") ||
 		!strings.Contains(log.String(), "o/out#2") || !strings.Contains(log.String(), "403") {
 		t.Errorf("log = %s, want the refused write named with the tracker it failed on", log.String())
 	}
@@ -1355,144 +1368,443 @@ func TestWrapUpDrawMovesOnlyTheStampOnACurrentBlock(t *testing.T) {
 
 // TestWrapUpDrawsWithNoRootGate: a tracker gated by no ideation issue has no
 // forest to draw — the dispatch says so quietly (the sentence is pinned by
-// TestWrapUpDrawNamesWhichAbsenceItFound, whose table owns the which-absence
-// pair) and queues regardless, and the chart still lands, from the tick's own
-// pass afterwards — that ordering is this test's own
-// (§forgejo/reconciliation/the-tracker-block, s-git/maitred#232).
-func TestWrapUpDrawsWithNoRootGate(t *testing.T) {
-	eng, api, q, _ := chartForestQueue(t, chartFenced()) // chartWire as-is: the tracker's gate is wired to nothing
-	eng.Reconcile()
+// The redraw: an admissible event that lands on an object of a forest draws that
+// forest as part of handling the event, in both sinks, instead of leaving the
+// picture to the next tick's step 5 (s-git/maitred#274,
+// §forgejo/reconciliation/the-tracker-block, §forgejo/webhook/the-pipeline).
+// Membership is the relation every other reader of the graph applies, so the
+// tests below hang membership edges on the fixtures rather than restating a rule.
 
-	wrapUpTask(t, q)
-	if got := api.writeCount(); got != 1 {
-		t.Fatalf("the sweep wrote %d issues, want the one write its own pass makes", got)
-	}
-	wrote, queued := callIndex(api, "UpdateIssueBody:out/2"), wrapUpQueuedAt(api)
-	if queued < 0 {
-		t.Fatal("the queue recorded no wrap-up dispatch")
-	}
-	if wrote < queued {
-		t.Errorf("the write at %d came before the wrap-up dispatch queued at %d: the dispatch drew no chart, so only the tick's pass could", wrote, queued)
+// redrawWire hangs the membership edges an event on the member reads: its
+// blockers name the root that makes it a member and the tracker that gates its
+// work (§forgejo/decisions/commissioning).
+func redrawWire(api *fakeAPI) {
+	api.deps[3] = []Issue{*api.issues[1], *api.issues[2]}
+}
+
+// redrawSeed records the forest set the outcomes view serves, so a test can see
+// the payload's picture pair move from the empty the head records to the drawing
+// an event made (§forgejo/observability/the-outcomes-view).
+func redrawSeed(t *testing.T, eng *Engine) {
+	t.Helper()
+	if _, err := eng.recordForests(); err != nil {
+		t.Fatalf("recordForests: %v", err)
 	}
 }
 
-// TestWrapUpDrawSkipsARootNoRoleNames: the tracker's ideation gate arrives on a
-// blocking edge, so which repository holds it is forge data rather than
-// configuration — and a root sitting where no maitred role names the repository
-// is drawn nowhere, because drawing it would publish that repository's titles
-// into a tracker body the outcomes view shows. The wrap-up queues all the same
-// (§forgejo/webhook/repository-roles, §forgejo/reconciliation/the-tracker-block,
-// s-git/maitred#242 review 2888).
-func TestWrapUpDrawSkipsARootNoRoleNames(t *testing.T) {
-	eng, api, q, log := chartForestQueue(t, chartFenced())
+// fencedChart is the Mermaid source a block's region carries — the bytes the
+// payload's chart field is supposed to hold beside it
+// (§forgejo/observability/the-outcomes-view).
+func fencedChart(t *testing.T, region string) string {
+	t.Helper()
+	const open = "```mermaid\n"
+	start := strings.Index(region, open)
+	if start < 0 {
+		t.Fatalf("the region holds no fenced Mermaid block:\n%s", region)
+	}
+	rest := region[start+len(open):]
+	end := strings.Index(rest, "```")
+	if end < 0 {
+		t.Fatalf("the region's Mermaid fence never closes:\n%s", region)
+	}
+	return rest[:end]
+}
+
+// TestRedrawOnAnEventLandsBothSinks: an event on a member draws its forest
+// within the event, and the one drawing lands in the tracker's block and the
+// outcomes payload together — the same bytes, the same stamp, neither sink a
+// tick behind the other (s-git/maitred#274, §forgejo/reconciliation/the-tracker-block).
+func TestRedrawOnAnEventLandsBothSinks(t *testing.T) {
+	eng, api, _, _ := chartForestQueue(t, chartFenced())
+	redrawWire(api)
+	redrawSeed(t, eng)
+	if got := mustForests(t, eng)[0]; got.Chart != "" || got.ChartRevisited != "" {
+		t.Fatal("the recorded set already carries a picture, so this test would prove nothing")
+	}
+
+	eng.HandleEvent(Event{Type: EventIssueEdited, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+
+	body := mustWritten(t, api, "out", 2)
+	region := regionOf(body)
+	if !strings.Contains(region, "i_work_3") {
+		t.Errorf("the block the event landed draws no member:\n%s", region)
+	}
+	after := mustForests(t, eng)[0]
+	if after.Chart != fencedChart(t, region) {
+		t.Errorf("the payload's chart is not the bytes the block carries:\npayload %q\nblock %q", after.Chart, fencedChart(t, region))
+	}
+	if stamp := strings.TrimPrefix(stampLine(body), stampLabel+" "); after.ChartRevisited != stamp {
+		t.Errorf("the payload's stamp %q is not the block's %q: the two sinks state two drawings",
+			after.ChartRevisited, stampLine(body))
+	}
+}
+
+// TestRedrawOnTheRootsOwnEvent: the root is the forest, so an event on it needs
+// no membership edge to read and draws the forest all the same
+// (§forgejo/decisions/commissioning, s-git/maitred#274).
+func TestRedrawOnTheRootsOwnEvent(t *testing.T) {
+	eng, api, _, _ := chartForestQueue(t, chartFenced())
+	redrawSeed(t, eng)
+
+	eng.HandleEvent(Event{Type: EventIssueCommented, Repo: "o/out", Kind: KindIssue, Number: 1, Sender: "alice"})
+
+	// The re-fetch reads the root's blockers for the decision it makes; the
+	// redraw asks for no read of its own, the root being the forest
+	// (§forgejo/webhook/re-fetch).
+	if got := api.callCount("IssueDependencies:out/1"); got != 1 {
+		t.Errorf("the root's blockers were read %d times, want the one read the re-fetch made", got)
+	}
+	body := mustWritten(t, api, "out", 2)
+	if after := mustForests(t, eng)[0]; after.Chart != fencedChart(t, regionOf(body)) {
+		t.Error("an event on the root left the payload's picture behind the block")
+	}
+}
+
+// TestRedrawDrawsEveryForestTheObjectBelongsTo: membership is a relation, and
+// two roots' membership edges can reach one row. Both forests are drawn, and
+// each draws its own tracker — the second forest is a whole forest in the second
+// repository, not a variant of the first (§forgejo/decisions/commissioning).
+func TestRedrawDrawsEveryForestTheObjectBelongsTo(t *testing.T) {
+	eng, api, _, _ := chartForestQueue(t, chartFenced())
+	root := chartRoot()
+	root.Number, root.Title = 8, "the second forest"
+	tracker := chartTracker(chartFenced())
+	tracker.Number, tracker.Title, tracker.Repository = 9, "outcome tracker of the second forest", "o/work"
+	member := *api.issues[3]
+	api.issues[8], api.issues[9] = &root, &tracker
+	api.blocks[8] = []Issue{tracker, member}
+	api.deps[3] = []Issue{root, *api.issues[1], tracker, *api.issues[2]}
+	api.openIssues["work"] = append(api.openIssues["work"], tracker)
+	redrawSeed(t, eng)
+
+	eng.HandleEvent(Event{Type: EventIssueEdited, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+
+	for _, ref := range []struct {
+		repo   string
+		number int
+	}{{"out", 2}, {"work", 9}} {
+		if _, ok := api.writtenBody(ref.repo, ref.number); !ok {
+			t.Errorf("%s#%d was never drawn: the redraw drew one forest where the object belongs to two", ref.repo, ref.number)
+		}
+	}
+	// Each forest's pair is its own: the one forest's drawing lands on its own
+	// row and leaves its sibling's picture as the tick drew it
+	// (§forgejo/observability/the-outcomes-view).
+	for _, forest := range mustForests(t, eng) {
+		if forest.Chart == "" {
+			t.Errorf("forest %s#%d carries no picture: one forest's redraw moved only its own pair", forest.Repository, forest.Root.Number)
+		}
+	}
+}
+
+// TestRedrawClosesTheForestItWasDispatchedFrom: a member's close wakes the
+// cascade's wrap-up and redraws the finished forest in the same event, so the
+// picture the forest leaves behind is the completion the task describes and the
+// outcomes view answers it without waiting for a tick (§forgejo/decisions/unblock-cascade,
+// s-git/maitred#232, s-git/maitred#274).
+func TestRedrawClosesTheForestItWasDispatchedFrom(t *testing.T) {
+	eng, api, q, _ := chartForestQueue(t, chartFenced())
 	wrapUpWire(api)
 	api.blocks[3] = []Issue{*api.issues[2]}
-	// The gate row names a repository carrying no maitred topic at all.
-	api.mu.Lock()
-	gate := api.deps[2][0]
-	gate.Repository = "o/archive"
-	api.deps[2] = []Issue{gate}
-	api.mu.Unlock()
+	redrawSeed(t, eng)
 
 	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
 
 	wrapUpTask(t, q)
+	body := mustWritten(t, api, "out", 2)
+	wantEveryMemberClosed(t, regionOf(body))
+	if after := mustForests(t, eng)[0]; after.Chart != fencedChart(t, regionOf(body)) {
+		t.Error("the finished forest's picture never left the last tick")
+	}
+}
+
+// TestRedrawDrawsNothingOnAnObjectNoEdgeReaches: a repository's role admits the
+// read, it does not make a forest — an object no membership edge reaches and
+// whose own labels name no root is not in a forest, and nothing is drawn for it
+// (§forgejo/webhook/repository-roles, §forgejo/decisions/commissioning).
+func TestRedrawDrawsNothingOnAnObjectNoEdgeReaches(t *testing.T) {
+	eng, api, _, _ := chartForestQueue(t, chartFenced())
+	api.deps[3] = []Issue{*api.issues[2]} // gated by its tracker, reached by no root
+	redrawSeed(t, eng)
+
+	eng.HandleEvent(Event{Type: EventIssueEdited, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("wrote %d issues, want none: no membership edge, no forest, no drawing", got)
+	}
+	if got := mustForests(t, eng)[0]; got.Chart != "" || got.ChartRevisited != "" {
+		t.Errorf("the payload carries a picture %q drawn for a forest that does not hold the object", got.Chart)
+	}
+}
+
+// TestRedrawSkipsTheSweepOwnEventAndFinishedForests: the two events that draw
+// nothing for a rule rather than a guess — the tick's synthetic row, whose tick
+// draws every current forest at step 5, and an event on a forest whose tickets
+// are both closed, a history the engine does not edit
+// (§forgejo/reconciliation/the-sweep, §forgejo/observability/the-outcomes-view).
+func TestRedrawSkipsTheSweepOwnEventAndFinishedForests(t *testing.T) {
+	eng, api, _, _ := chartForestQueue(t, chartFenced())
+	redrawWire(api)
+	redrawSeed(t, eng)
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/work", Kind: KindIssue, Number: 3})
+
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("the sweep's synthetic event drew %d trackers, want none: step 5 draws that tick's forests", got)
+	}
+
+	bothClosed := *api.issues[1]
+	bothClosed.State, bothClosed.ClosedAt = "closed", chartClosedAt
+	api.issues[1] = &bothClosed
+	tracker := *api.issues[2]
+	tracker.State, tracker.ClosedAt = "closed", chartClosedAt
+	api.issues[2] = &tracker
+	api.blocks[1][0] = tracker // the pairing reads the finished tracker as finished
+	api.deps[3] = []Issue{bothClosed, tracker}
+
+	eng.HandleEvent(Event{Type: EventIssueEdited, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("a finished forest was drawn %d times, want none: a finished forest is history", got)
+	}
+}
+
+// TestRedrawDrawsNothingForAPullRequest: a delivery is drawn no node and no
+// edge, so no event on one can move a picture — what a merge delivers arrives
+// as the issue events it causes (§forgejo/renderer/edge-classes).
+func TestRedrawDrawsNothingForAPullRequest(t *testing.T) {
+	eng, api, _, _ := chartForestQueue(t, chartFenced())
+	redrawWire(api)
+	delivery := Issue{Number: 7, Title: "the purge", State: "open", Repository: "o/work", IsPull: true}
+	pr := pullRequestFromIssue(delivery)
+	api.pulls[7] = &pr
+
+	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/work", Kind: KindPR, Number: 7, Sender: "carol"})
+
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("a pull request's comment drew %d trackers, want none: no drawing gives a delivery a node", got)
+	}
+}
+
+// TestRedrawNamesTheMembershipReadItCouldNotMake: the read that names the
+// forests an event concerns can break, and a broken read is not the graph
+// saying there are none — the line an operator reads names the failure, the
+// sweep being the backstop (§forgejo/observability/the-decision-log,
+// §forgejo/webhook/re-fetch).
+func TestRedrawNamesTheMembershipReadItCouldNotMake(t *testing.T) {
+	eng, api, log := chartForestEngine(t, chartFenced())
+	redrawSeed(t, eng)
+	api.issueDepsErrOn = map[int]error{3: errors.New("the blocker read failed")}
+
+	eng.HandleEvent(Event{Type: EventIssueClosed, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+
+	if !strings.Contains(log.String(), "the blocker read failed") {
+		t.Errorf("log = %s, want the failed membership read named", log.String())
+	}
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("wrote %d issues on a graph nobody read, want none", got)
+	}
+}
+
+// TestRedrawUnknownScopeFailsClosed: an unknown scope is a failure, not a
+// no-role answer — the redraw reads nothing of a repository it cannot place and
+// names the failure, the tick's TestTrackerBlock_UnknownScopeWritesNothing being
+// the twin (§forgejo/webhook/the-scope-cache, §forgejo/webhook/repository-roles).
+func TestRedrawUnknownScopeFailsClosed(t *testing.T) {
+	eng, api, log := chartForestEngine(t, chartFenced())
+	api.listReposErr = errors.New("the org listing failed")
+	root := chartRoot()
+	root.Repository = "o/work" // a second repository, so the answer is a scope lookup
+
+	eng.redrawForest(&root, "o/out", time.Now())
+
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("wrote %d issues, want none while the scope is unknown", got)
+	}
+	if got := api.callCount("IssueBlocks:work/1"); got != 0 {
+		t.Errorf("read the root's rows %d times, want none: the admission test comes before the read", got)
+	}
+	if !strings.Contains(log.String(), "the org listing failed") {
+		t.Errorf("log = %s, want the refused draw to name the scope failure", log.String())
+	}
+}
+
+// TestRedrawSkipsARootNoRoleNames: a root an edge reached stands in whichever
+// repository the edge named, and a repository no maitred role names is read
+// nothing of — its rows, its titles and its charts stay where they are, and the
+// event's own decision is none the worse (§forgejo/webhook/repository-roles).
+func TestRedrawSkipsARootNoRoleNames(t *testing.T) {
+	eng, api, log := chartForestEngine(t, chartFenced())
+	root := *api.issues[1]
+	root.Repository = "o/archive" // a repository carrying no maitred topic at all
+	api.deps[3] = []Issue{root, *api.issues[2]}
+
+	eng.HandleEvent(Event{Type: EventIssueEdited, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+
 	if got := api.writeCount(); got != 0 {
 		t.Errorf("wrote %d issues, want none: a root no role names is drawn nowhere", got)
 	}
-	if got := api.callCount("GetIssue:archive/"); got != 0 {
-		t.Errorf("the draw read %d issues out of o/archive, wanting none: the admission test comes before the read", got)
+	if got := api.callCount("IssueBlocks:archive/1"); got != 0 {
+		t.Errorf("read the unadmitted repository's rows %d times, want none: the test comes before the read", got)
 	}
-	if !strings.Contains(log.String(), "no maitred role names") || !strings.Contains(log.String(), "o/out#2") {
-		t.Errorf("log = %s, want the skipped draw to name the tracker and the rule", log.String())
-	}
-}
-
-// TestWrapUpDrawAddressesTheTrackerNotTheRoot: a tracker read that names no
-// repository of its own is addressed where the dispatch found it, never at the
-// root's repository — the two are unrelated places, and addressing the forest
-// would write somebody else's issue number (§forgejo/client/operations,
-// §forgejo/reconciliation/the-tracker-block, s-git/maitred#242 review 2888).
-func TestWrapUpDrawAddressesTheTrackerNotTheRoot(t *testing.T) {
-	eng, api, q, _ := chartForestQueue(t, chartFenced())
-	wrapUpWire(api)
-	// The gate — and so the forest — lives in a second admitted repository,
-	// while the tracker's own read names no repository at all.
-	api.mu.Lock()
-	gate := api.deps[2][0]
-	gate.Repository = "o/work"
-	api.deps[2] = []Issue{gate}
-	api.issues[2].Repository = ""
-	api.mu.Unlock()
-
-	eng.Reconcile()
-
-	wrapUpTask(t, q)
-	if _, ok := api.writtenBody("out", 2); !ok {
-		t.Error("the tracker was never written: its own repository was unresolvable")
-	}
-	if got := api.callCount("UpdateIssueBody:work/2"); got != 0 {
-		t.Errorf("wrote issue 2 of the root's repository %d times, want none: the write addresses the tracker", got)
+	if !strings.Contains(log.String(), "no maitred role names") || !strings.Contains(log.String(), "o/archive#1") {
+		t.Errorf("log = %s, want the skipped root named with the rule that skipped it", log.String())
 	}
 }
 
-// TestWrapUpDrawNamesWhichAbsenceItFound: a tracker with no ideation gate and a
-// dispatch holding no blocker rows at all both draw nothing, and they are not
-// the same fact — one is the graph, the other a read that failed. The cascade's
-// own re-read is the same request the walk already made, so a fake that fails
-// one fails the walk and nothing dispatches at all: the two lines are pinned at
-// the draw's own boundary (§forgejo/observability/the-decision-log,
-// s-git/maitred#242 review 2887).
-func TestWrapUpDrawNamesWhichAbsenceItFound(t *testing.T) {
+// TestRedrawOfAFinishedForestDrawsNothing: a forest whose tickets are both
+// closed is history, and the engine does not edit history — the pair both sinks
+// hold stands frozen under the stamp of the drawing that ended the forest
+// (§forgejo/observability/the-outcomes-view).
+func TestRedrawOfAFinishedForestDrawsNothing(t *testing.T) {
+	eng, api, log := chartForestEngine(t, chartFenced())
+	root := *api.issues[1]
+	root.State, root.ClosedAt = "closed", chartClosedAt
+	tracker := *api.issues[2]
+	tracker.State, tracker.ClosedAt = "closed", chartClosedAt
+	api.issues[1], api.issues[2] = &root, &tracker
+	api.blocks[1][0] = tracker // the pairing reads the finished tracker as finished
+
+	eng.redrawForest(&root, "o/out", time.Now())
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("wrote %d issues, want none: the forest is finished", got)
+	}
+	if !strings.Contains(log.String(), "finished forest") {
+		t.Errorf("log = %s, want the finished forest named as the reason nothing was drawn", log.String())
+	}
+}
+
+// TestRedrawLeavesTheStandingPictureOnAFailedDraw: a drawing that broke dresses
+// no new stamp over the picture both sinks hold — the pair is never written
+// apart, and a remembered chart never meets a stamp it did not earn
+// (§forgejo/observability/the-outcomes-view).
+func TestRedrawLeavesTheStandingPictureOnAFailedDraw(t *testing.T) {
+	eng, api, _, _ := chartForestQueue(t, chartFenced())
+	redrawWire(api)
+	redrawSeed(t, eng)
+	eng.writeTrackerBlocks(mustForests(t, eng), chartAt)
+	before := mustForests(t, eng)[0]
+	if before.Chart == "" {
+		t.Fatal("the tick drew no picture, so this test would prove nothing")
+	}
+	api.getIssueErrOn = map[int]error{1: errors.New("the root read failed")}
+
+	eng.HandleEvent(Event{Type: EventIssueEdited, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+
+	after := mustForests(t, eng)[0]
+	if after.Chart != before.Chart || after.ChartRevisited != before.ChartRevisited {
+		t.Errorf("the failed draw moved the pair from %q/%q to %q/%q", before.Chart, before.ChartRevisited, after.Chart, after.ChartRevisited)
+	}
+	if got := api.writeCount(); got != 1 {
+		t.Errorf("wrote %d issues, want only the tick's own write", got)
+	}
+}
+
+// TestRedrawRecordsTheChartTheWriteRefused: an ambiguous fence pair is a
+// refusal to write, not a refusal to draw, so the block stands as its deployment
+// left it while the payload carries the drawing — as it does on the tick's own
+// write (§forgejo/observability/the-outcomes-view, s-git/maitred#232).
+func TestRedrawRecordsTheChartTheWriteRefused(t *testing.T) {
+	body := chartFenced() + "\n" + fenceBegin + "\n\nanother forest\n\n" + fenceEnd + "\n"
+	eng, api, _, _ := chartForestQueue(t, body)
+	redrawWire(api)
+	redrawSeed(t, eng)
+
+	eng.HandleEvent(Event{Type: EventIssueEdited, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+
+	if got := api.writeCount(); got != 0 {
+		t.Errorf("wrote %d issues, want none: the ambiguous tracker stays as found", got)
+	}
+	if after := mustForests(t, eng)[0]; after.Chart == "" {
+		t.Error("the payload carries no picture: a refused write was taken for a failed drawing")
+	}
+}
+
+// TestRedrawOverAnUnchangedForestWritesNothing: the redraw reads the live graph
+// rather than asking what the event kind could have changed, and an event that
+// moved no row composes the bytes already there — so what it does not write is
+// the answer to "did this change the picture?", whatever minute the clock is in
+// (§forgejo/reconciliation/the-tracker-block, s-git/maitred#274).
+func TestRedrawOverAnUnchangedForestWritesNothing(t *testing.T) {
+	eng, api, _, _ := chartForestQueue(t, chartFenced())
+	redrawWire(api)
+	redrawSeed(t, eng)
+
+	eng.HandleEvent(Event{Type: EventIssueEdited, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
+	first := mustWritten(t, api, "out", 2)
+	eng.HandleEvent(Event{Type: EventIssueCommented, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "bob"})
+
+	switch writes := api.callCount("UpdateIssueBody:out/2"); writes {
+	case 1:
+		// The stamp had not moved: the redraw found the body current.
+	case 2:
+		second := mustWritten(t, api, "out", 2)
+		if got := strings.Replace(second, stampLine(second), stampLine(first), 1); got != first {
+			t.Error("the second event changed more than the stamp over an unchanged graph")
+		}
+	default:
+		t.Errorf("two events over an unchanged forest wrote the tracker %d times, want one write or a second that only moved the stamp", writes)
+	}
+}
+
+// TestRedrawNamesWhichAbsenceItFound: the redraw reaching no forest does it two
+// ways that are not the same fact — a read that broke, which the sweep is the
+// backstop for, and a graph whose root gates no tracker, which is the forest
+// being what it is. The read that broke says so where an operator reads; the
+// absence says it quietly (§forgejo/observability/the-decision-log,
+// §forgejo/webhook/re-fetch).
+func TestRedrawNamesWhichAbsenceItFound(t *testing.T) {
 	tests := []struct {
-		name     string
-		blockers []Issue
-		want     string
+		name   string
+		wire   func(api *fakeAPI)
+		expect string
 	}{
-		{"a blocker read that failed", nil, "tracker blocker rows unread"},
-		{"a tracker gated by nothing", []Issue{}, "gated by no ideation issue"},
+		{
+			name: "a pairing read that failed",
+			wire: func(api *fakeAPI) {
+				api.issueBlocksErrOn = map[int]error{1: errors.New("the root's rows unread")}
+			},
+			expect: "the root's rows unread",
+		},
+		{
+			name: "a root gating no tracker",
+			wire: func(api *fakeAPI) {
+				member := chartRow(3, "the purge, one command", nil, "open", time.Time{})
+				api.blocks[1] = []Issue{member}
+			},
+			expect: "the root gates no tracker",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			eng, api, log := chartForestEngine(t, chartFenced())
-			tracker := chartTracker(chartFenced())
+			tt.wire(api)
+			root := chartRoot()
 
-			eng.drawTrackerBeforeWrapUp(&tracker, tt.blockers, "o/out")
+			eng.redrawForest(&root, "o/out", time.Now())
 
 			if got := api.writeCount(); got != 0 {
-				t.Errorf("wrote %d issues, want none: no gate is no forest", got)
+				t.Errorf("wrote %d issues, want none: no tracker is no region to draw into", got)
 			}
-			if !strings.Contains(log.String(), tt.want) || !strings.Contains(log.String(), "o/out#2") {
-				t.Errorf("log = %s, want %q named with the tracker it concerns", log.String(), tt.want)
+			if !strings.Contains(log.String(), tt.expect) || !strings.Contains(log.String(), "o/out#1") {
+				t.Errorf("log = %s, want %q named with the root it concerns", log.String(), tt.expect)
 			}
 		})
 	}
 }
 
-// TestWrapUpDrawUnknownScopeFailsClosed: an unknown scope is a failure, not a
-// no-role answer — the wrap-up's draw writes nothing and names the failure,
-// the tick's TestTrackerBlock_UnknownScopeWritesNothing being the twin
-// (§forgejo/webhook/the-scope-cache, s-git/maitred#242 review 2923). The fake
-// cannot queue a wrap-up while the org listing fails — the cascade's own
-// repoRoles test holds the dispatch off and the sweep cannot enumerate — so
-// the draw is pinned at its own boundary, and the half that still queues
-// stays with TestWrapUpDrawFailureStillDispatches.
-func TestWrapUpDrawUnknownScopeFailsClosed(t *testing.T) {
-	eng, api, log := chartForestEngine(t, chartFenced())
-	api.listReposErr = errors.New("the org listing failed")
-	tracker := chartTracker(chartFenced())
-	gate := chartRoot()
-	// The gate stands in a second repository, so its admission is a scope
-	// lookup rather than the equality shortcut.
-	gate.Repository = "o/work"
+// TestRedrawDrawsAForestTheViewDoesNotHoldYet: the set the outcomes view serves
+// is what an enumeration vouches for, and a redraw invents no row for a forest no
+// enumeration named — the block lands now, the payload carries the forest from
+// the tick's head (§forgejo/observability/the-outcomes-view).
+func TestRedrawDrawsAForestTheViewDoesNotHoldYet(t *testing.T) {
+	eng, api, _, _ := chartForestQueue(t, chartFenced())
+	redrawWire(api)
 
-	eng.drawTrackerBeforeWrapUp(&tracker, []Issue{gate}, "o/out")
+	eng.HandleEvent(Event{Type: EventIssueEdited, Repo: "o/work", Kind: KindIssue, Number: 3, Sender: "alice"})
 
-	if got := api.writeCount(); got != 0 {
-		t.Errorf("wrote %d issues, want none while the scope is unknown", got)
-	}
-	if !strings.Contains(log.String(), "wrap-up: tracker current-state block not written") ||
-		!strings.Contains(log.String(), "the org listing failed") {
-		t.Errorf("log = %s, want the refused draw to name the scope failure on the tracker it failed on", log.String())
+	mustWritten(t, api, "out", 2)
+	if _, err := eng.Forests(); !errors.Is(err, errForestsUnavailable) {
+		t.Errorf("Forests = %v, want the view still saying nothing was enumerated: the redraw invented no row", err)
 	}
 }

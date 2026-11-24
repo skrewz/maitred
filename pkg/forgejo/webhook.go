@@ -139,9 +139,10 @@ func NewEngine(api API, store *Store, cfg *Config, q queue.TaskQueueProvider, lo
 }
 
 // HandleEvent processes one event end to end — scope test, re-fetch,
-// decide, dispatch, watermark — under the key's lock, so concurrent
-// events for the same key cannot race the watermark
-// (§forgejo/webhook/serialisation). A repository holding no maitred
+// decide, dispatch, watermark, and the redraw of every forest the object
+// belongs to — under the key's lock, so concurrent
+// events for the same key cannot race the watermark or the drawing
+// (§forgejo/webhook/serialisation, §forgejo/webhook/the-pipeline). A repository holding no maitred
 // role is outside the engine's remit: it holds off before the re-fetch
 // (§forgejo/webhook/repository-roles) — except a close, which is inert
 // for its own issue but reads through the graph to wake the unblock
@@ -231,6 +232,12 @@ func (e *Engine) HandleEvent(ev Event) {
 			}
 		}
 		e.emitCascade(d, key, ev.Sender)
+		// The drawing is the pipeline's own step, not a dispatch's errand: the
+		// forest an event touched is redrawn once that event has been decided,
+		// dispatched and cascaded, because the drawing is the one work no
+		// decision waits on (§forgejo/webhook/the-pipeline,
+		// §forgejo/reconciliation/the-tracker-block, s-git/maitred#274).
+		e.redrawForestsOnEvent(ev, st)
 	})
 }
 
@@ -1378,14 +1385,6 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	pc, err := e.cfg.PromptFor(action)
 	if err != nil {
 		return err
-	}
-	// A wrap-up dispatch redraws its tracker's current-state block before
-	// queuing, so the picture the finished forest leaves behind is the one
-	// the wrap-up describes; a drawing that fails costs the dispatch nothing
-	// (§forgejo/reconciliation/the-tracker-block, §forgejo/decisions/unblock-cascade,
-	// s-git/maitred#232).
-	if action == ActionWrapUp {
-		e.drawTrackerBeforeWrapUp(st.Issue, st.Blockers, ev.Repo)
 	}
 	rev := digestFor(action, ev, st)
 	if err := e.dispatchPrompt(ev, st, *pc, "", action, rev); err != nil {

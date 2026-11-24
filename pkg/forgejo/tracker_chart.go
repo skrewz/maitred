@@ -10,7 +10,8 @@ import (
 )
 
 // The tracker block: the region of an outcome tracker's own description the
-// engine writes on every sweep tick (§forgejo/reconciliation/the-tracker-block).
+// engine writes on every sweep tick and on every admissible event that lands on
+// an object of the forest (§forgejo/reconciliation/the-tracker-block).
 // The drawing comes from the renderer (§forgejo/renderer/the-contract); this
 // file makes the write narrow enough that the drawing is the only thing the
 // write can change.
@@ -109,53 +110,151 @@ func trackerRef(forest Forest) string {
 	return forestRef(forest.Tracker.Repository, forest.Tracker.Number)
 }
 
-// drawTrackerBeforeWrapUp is the wrap-up path's call to the tracker block:
-// the same write the tick makes, at the one moment a finished forest would
-// otherwise be left holding a stale drawing (§forgejo/reconciliation/the-tracker-block,
-// s-git/maitred#232). The root comes from the blocker rows the dispatch
-// already holds — the gate relation is the one every other walk of the graph
-// reads — and a tracker gated by no ideation issue, never commissioned, has
-// no forest to draw. Which of those two absences it is matters to whoever
-// reads the log: no blocker rows at all is a read that failed, not a graph
-// fact, so the two say so apart. The rows the dispatch holds were read for a
-// tracker — the sweep's wrap-up row and the cascade's classifier both decide
-// wrap-up on the outcome label first (§forgejo/reconciliation/watermark-exemptions,
-// §forgejo/decisions/unblock-cascade) — so the write addresses that issue in
-// the repository the dispatch found it in, and the root — which a blocking
-// edge placed in whichever repository it likes — is admitted by the shared
-// write's own test of both ends of the forest, stated there once so every
-// caller inherits it (§forgejo/webhook/repository-roles). A failure is logged
-// naming the tracker and costs the dispatch nothing: the chart is UX, the
-// wrap-up is the work. The drawing's other sink is not fed here: step 5's fold
-// is a whole-set fold and this path holds one ad-hoc forest, so the source is
-// discarded and the payload catches up with this drawing at the next tick's
-// step 5 (§forgejo/reconciliation/the-tracker-block).
-func (e *Engine) drawTrackerBeforeWrapUp(tracker *Issue, blockers []Issue, foundIn string) {
-	if tracker == nil {
+// redrawForestsOnEvent is the pipeline's drawing step: it lands the drawing of
+// every forest an event touched on both sinks that carries that picture — the
+// tracker's current-state block and the outcomes view's pair — as part of
+// handling the event, so a forest's chart states the graph as it stands rather
+// than as it stood at the last tick (§forgejo/webhook/the-pipeline,
+// §forgejo/reconciliation/the-tracker-block, s-git/maitred#274). Nothing is asked
+// of the decision first and nothing is asked of the event kind: the redraw reads
+// the live graph, so an event that moved no row composes the bytes already there
+// and writes nothing.
+//
+// Two of the three events that draw nothing are decided here, for rules rather
+// than carve-outs. The sweep's synthetic `reconcile` event, because the tick that
+// sends it draws every current forest it enumerated at step 5
+// (§forgejo/reconciliation/the-sweep): this is the event path's work, not a second
+// drawing per row a sweep walks. An event on a pull request, which no drawing
+// gives a node or an edge (§forgejo/renderer/edge-classes) — what a merge delivers
+// arrives as the issue events it causes. The third, an event on a finished
+// forest, is redrawForest's to refuse.
+func (e *Engine) redrawForestsOnEvent(ev Event, st State) {
+	if ev.Kind != KindIssue || ev.Type == EventReconcile {
 		return
 	}
-	home := tracker.Repository
-	if home == "" {
-		home = foundIn // a single-object read may name no repository of its own (§forgejo/client/operations)
+	// One clock read for an event's drawings, as one stands for a tick's, so
+	// every forest an event draws states the same instant in both sinks
+	// (§forgejo/config/tracker-chart).
+	at := time.Now()
+	roots := e.forestRoots(ev, st)
+	for i := range roots {
+		e.redrawForest(&roots[i], ev.Repo, at)
 	}
-	ref := forestRef(home, tracker.Number)
-	root := ideationGate(blockers)
-	if root == nil {
-		if blockers == nil {
-			e.log.Warn("wrap-up: tracker blocker rows unread; cannot tell whether a gate draws this forest",
-				"tracker", ref)
-		} else {
-			e.log.Debug("wrap-up: tracker is gated by no ideation issue; nothing to draw", "tracker", ref)
+}
+
+// forestRoots names the forests an event's object belongs to by the one
+// membership relation the engine has: the object is the forest where it carries
+// `ideation`, and every `ideation` issue among its blockers names a forest a
+// membership edge reaches it into (§forgejo/decisions/commissioning). An issue
+// two roots block belongs to both and both are drawn — membership is a relation,
+// not a label, and the second root's chart would otherwise wait for that forest's
+// next event or the next sweep.
+//
+// The blocker rows are the ones the re-fetch assembled wherever it assembled
+// them (§forgejo/webhook/re-fetch); a close carries none — its walk reads the
+// closed issue's downstream edges — so a close pays the one read here, and a read
+// that breaks says so rather than reading as a graph with no membership edges.
+func (e *Engine) forestRoots(ev Event, st State) []Issue {
+	roots := []Issue{}
+	if st.Issue == nil {
+		return roots
+	}
+	home := rowRepository(st.Issue, ev.Repo)
+	if hasLabel(st.Issue, LabelIdeation) {
+		root := *st.Issue
+		root.Repository = home // a single-object read may name no repository of its own (§forgejo/client/operations)
+		roots = append(roots, root)
+	}
+	blockers := st.Blockers
+	if blockers == nil {
+		owner, name := splitRepo(home)
+		rows, err := e.api.IssueDependencies(owner, name, st.Issue.Number)
+		if err != nil {
+			e.log.Warn("redraw: cannot tell which forests this issue belongs to; the sweep draws them",
+				"issue", forestRef(home, st.Issue.Number), "error", err)
+			return roots
 		}
+		blockers = rows
+	}
+	for i := range blockers {
+		blocker := &blockers[i]
+		if blocker.IsPull || !hasLabel(blocker, LabelIdeation) {
+			continue // a delivery is no root, and a work-order edge admits no member
+		}
+		root := *blocker
+		root.Repository = rowRepository(blocker, home)
+		roots = append(roots, root)
+	}
+	return roots
+}
+
+// redrawForest draws one forest from its root and lands the drawing where both
+// sinks of the forest's picture are held: the tracker's block, through the one
+// write the tick makes too (writeTrackerBlock), and the payload's pair
+// (recordForestPicture).
+//
+// Which repository holds a forest's root is forge data a blocking edge named, so
+// the root's repository pays the admission test every other cross-repository hop
+// pays here — before a row of it is read, so a repository no maitred role names
+// costs this path a comparison rather than a request
+// (§forgejo/webhook/repository-roles). foundIn is the repository the event came
+// from: the one the pipeline's own role test already admitted, and the fallback
+// for a row that names none of its own (§forgejo/client/operations).
+//
+// A root that gates no tracker is a forest with no region to land in, said at
+// `Debug` the way the tick says it; a forest whose tickets are both closed is
+// history the engine does not edit, its pair standing frozen
+// (§forgejo/observability/the-outcomes-view). A drawing that failed records
+// nothing: the pair both sinks hold keeps the stamp it was drawn under, and the
+// sweep draws the forest again.
+func (e *Engine) redrawForest(root *Issue, foundIn string, at time.Time) {
+	rootRef := forestRef(root.Repository, root.Number)
+	admits, err := e.remitAdmits(root.Repository, foundIn)
+	if err != nil {
+		e.log.Warn("redraw: cannot tell whether the root's repository is admitted; the sweep draws this forest",
+			"root", rootRef, "error", err)
 		return
 	}
-	rootRow := forestIssue(*root, home)
-	trackerRow := forestIssue(*tracker, home)
-	forest := Forest{Repository: rootRow.Repository, Root: rootRow, Tracker: &trackerRow}
-	if _, err := e.writeTrackerBlock(forest, time.Now()); err != nil {
-		e.log.Error("wrap-up: tracker current-state block not written",
-			"tracker", ref, "error", err)
+	if !admits {
+		// Debug, the level every other cross-repository hop uses for this
+		// sentence (§forgejo/webhook/repository-roles,
+		// §forgejo/observability/the-decision-log).
+		e.log.Debug("drawing skips a root in a repository no maitred role names; nothing drawn",
+			"root", rootRef)
+		return
 	}
+	owner, name := splitRepo(root.Repository)
+	blocked, err := e.api.IssueBlocks(owner, name, root.Number)
+	if err != nil {
+		e.log.Warn("redraw: the root's rows unread; the sweep draws this forest", "root", rootRef, "error", err)
+		return
+	}
+	tracker := trackerBlockedBy(blocked, root.Repository)
+	if tracker == nil {
+		e.log.Debug("redraw: the root gates no tracker; nothing drawn", "root", rootRef)
+		return
+	}
+	forest := Forest{
+		Repository: root.Repository,
+		Root:       forestIssue(*root, root.Repository),
+		Tracker:    tracker,
+	}
+	if !forestIsCurrent(forest) {
+		// A finished forest's picture is the drawing that finished it, not a
+		// stamp for a pass that changed nothing of it.
+		e.log.Debug("redraw: a finished forest draws nothing; its picture stands as it was",
+			"tracker", trackerRef(forest))
+		return
+	}
+	source, err := e.writeTrackerBlock(forest, at)
+	if err != nil {
+		e.log.Error("redraw: tracker current-state block not written",
+			"tracker", trackerRef(forest), "error", err)
+	}
+	if source == "" {
+		return // nothing was drawn, so nothing is recorded and nothing is erased
+	}
+	e.recordForestPicture(forest, source, at)
 }
 
 // writeTrackerBlock renders one forest and lands its block on that forest's
