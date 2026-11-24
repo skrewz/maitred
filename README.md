@@ -354,10 +354,12 @@ the attribution says the engine, not an agent, drew the picture. That region
 is the one thing the engine writes to Forgejo; an issue's title, state and
 labels, and every other issue's body — a
 member's, or a grouping issue's whose body drives a landing decision — stay as
-they were found. A `wrap-up` dispatch also redraws its tracker's region once,
-before queueing the task, so a finished forest's chart shows every member
-closed rather than whatever the last sweep happened to draw; a redraw that
-fails is logged and never holds the wrap-up up. See
+they were found. The engine draws that region the same way as part of handling
+any event that touches the forest — an event on an object of it (a root, a
+tracker or a member), or a cascade that dispatches its wrap-up — so the
+tracker's block and the `/outcomes` picture move within the event rather than
+waiting for the next sweep, and a draw that changes nothing writes nothing at
+all; a draw that fails is logged and holds nothing up. See
 `specification/forgejo/reconciliation.md` and
 `specification/forgejo/config.md`.
 

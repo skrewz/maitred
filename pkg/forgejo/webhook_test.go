@@ -5666,6 +5666,10 @@ func TestHandler_TeardownStillDispatchesBesideTheTracker(t *testing.T) {
 // digest computation — the gate's enumeration of the forest — and no
 // other hop, so the emptiness test adds no fetch to the curation path
 // (§forgejo/webhook/re-fetch, §forgejo/decisions/actionable-state-digest).
+// The one hop the curation path does not pay, the drawing after it does:
+// the redraw of the forest this root is needs the pairing read that names
+// its tracker, and that is the whole of its cost in reads of the root
+// (§forgejo/reconciliation/the-tracker-block, s-git/maitred#274).
 func TestHandler_RootPerformsNoForestHop(t *testing.T) {
 	eng, api, q, _ := newOutcomesEngine(t)
 	api.issues[7] = &Issue{
@@ -5679,8 +5683,8 @@ func TestHandler_RootPerformsNoForestHop(t *testing.T) {
 	if tasks := q.all(); len(tasks) != 1 || !strings.Contains(tasks[0].Prompt, "action="+string(ActionDecompose)) {
 		t.Fatalf("want the one decompose dispatch, got %+v", tasks)
 	}
-	if n := api.callCount("IssueBlocks:out/7"); n != 1 {
-		t.Errorf("IssueBlocks on the root called %d time(s), want the gate's one digest computation and no teardown emptiness test", n)
+	if n := api.callCount("IssueBlocks:out/7"); n != 2 {
+		t.Errorf("IssueBlocks on the root called %d time(s), want the gate's one digest computation and the redraw's one pairing read, with no teardown emptiness test beside them", n)
 	}
 }
 

@@ -139,9 +139,11 @@ func NewEngine(api API, store *Store, cfg *Config, q queue.TaskQueueProvider, lo
 }
 
 // HandleEvent processes one event end to end — scope test, re-fetch,
-// decide, dispatch, watermark — under the key's lock, so concurrent
-// events for the same key cannot race the watermark
-// (§forgejo/webhook/serialisation). A repository holding no maitred
+// decide, dispatch, watermark, and the redraw of every forest the event
+// touched, by the object's own membership or by the wrap-ups the cascade
+// dispatched — under the key's lock, so concurrent
+// events for the same key cannot race the watermark or the drawing
+// (§forgejo/webhook/serialisation, §forgejo/webhook/the-pipeline). A repository holding no maitred
 // role is outside the engine's remit: it holds off before the re-fetch
 // (§forgejo/webhook/repository-roles) — except a close, which is inert
 // for its own issue but reads through the graph to wake the unblock
@@ -231,6 +233,16 @@ func (e *Engine) HandleEvent(ev Event) {
 			}
 		}
 		e.emitCascade(d, key, ev.Sender)
+		// The drawing is the pipeline's own step, not a dispatch's errand: every
+		// forest the event touched — the object's own membership, and every forest
+		// whose `wrap-up` the cascade dispatched — is redrawn once that event has
+		// been decided, dispatched and cascaded, because the drawing is the one
+		// work no decision waits on (§forgejo/webhook/the-pipeline,
+		// §forgejo/reconciliation/the-tracker-block, s-git/maitred#274). The
+		// repository this drawing is admitted through is the event's own: the role
+		// test at this function's head is what granted it
+		// (§forgejo/webhook/repository-roles).
+		e.redrawForestsOnEvent(ev, st, d, ev.Repo)
 	})
 }
 
@@ -260,7 +272,9 @@ func (e *Engine) emitCascade(d Decision, rootKey Key, sender string) {
 // repositories the graph may be read through: the closed issue itself
 // is inert — nothing is acted on for it, no re-fetch, no watermark —
 // but the engine asks what it blocks and runs the ordinary unblock
-// cascade for it. Every emission stays judged by the roles of the
+// cascade for it, and the pipeline's drawing step for every forest whose
+// `wrap-up` that cascade dispatched — the closed issue stays inert, the
+// graph it moved does not. Every emission stays judged by the roles of the
 // repository holding its key, so a cascade woken by an inert close can
 // only act where the roles admit it. The extra read is restricted to
 // closes: no other event in a role-less repository gets past the
@@ -289,6 +303,11 @@ func (e *Engine) handleCascadeOnlyClose(ev Event) {
 	var d Decision
 	d.Cascade, d.CascadeHoldOffs = unblockCascade(root)
 	e.emitCascade(d, key, ev.Sender)
+	// This drawing is admitted through no repository: this path runs because the
+	// one the close arrived in holds no maitred role, so every repository the
+	// forests it reached stand in is judged by the roles in its own right
+	// (§forgejo/webhook/repository-roles).
+	e.redrawForestsOnEvent(ev, State{}, d, "")
 }
 
 // refetch re-fetches the authoritative state for ev from Forgejo
@@ -1378,14 +1397,6 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	pc, err := e.cfg.PromptFor(action)
 	if err != nil {
 		return err
-	}
-	// A wrap-up dispatch redraws its tracker's current-state block before
-	// queuing, so the picture the finished forest leaves behind is the one
-	// the wrap-up describes; a drawing that fails costs the dispatch nothing
-	// (§forgejo/reconciliation/the-tracker-block, §forgejo/decisions/unblock-cascade,
-	// s-git/maitred#232).
-	if action == ActionWrapUp {
-		e.drawTrackerBeforeWrapUp(st.Issue, st.Blockers, ev.Repo)
 	}
 	rev := digestFor(action, ev, st)
 	if err := e.dispatchPrompt(ev, st, *pc, "", action, rev); err != nil {

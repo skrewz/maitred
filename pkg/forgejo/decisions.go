@@ -1649,6 +1649,24 @@ func allClosed(blockers []IssueNode) bool {
 	return true
 }
 
+// ideationRoots are the blockers that name a forest: every blocker carrying
+// the reserved ideation label, in the order the listing carries them. This
+// states the membership relation — an `ideation` issue among an object's
+// blockers names a forest the object belongs to — once, so no reader of the
+// graph keeps a second copy of it (§forgejo/decisions/commissioning).
+func ideationRoots(blockers []Issue) []Issue {
+	roots := []Issue{}
+	for i := range blockers {
+		if blockers[i].IsPull {
+			continue // a pull request is a delivery vehicle, never a root
+		}
+		if hasLabel(&blockers[i], LabelIdeation) {
+			roots = append(roots, blockers[i])
+		}
+	}
+	return roots
+}
+
 // ideationGate returns the issue gating an issue's commissioning: the first
 // blocker carrying the reserved ideation label, or nil when no blocker
 // carries it. A tracker is gated one hop away because it is a member like
@@ -1657,15 +1675,11 @@ func allClosed(blockers []IssueNode) bool {
 // open one is not (§forgejo/decisions/commissioning,
 // §forgejo/reconciliation/watermark-exemptions).
 func ideationGate(blockers []Issue) *Issue {
-	for i := range blockers {
-		if blockers[i].IsPull {
-			continue // a pull request is a delivery vehicle, never a root
-		}
-		if hasLabel(&blockers[i], LabelIdeation) {
-			return &blockers[i]
-		}
+	roots := ideationRoots(blockers)
+	if len(roots) == 0 {
+		return nil
 	}
-	return nil
+	return &roots[0]
 }
 
 // openBlockers returns the blockers that are still open.

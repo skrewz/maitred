@@ -67,8 +67,9 @@ created while the engine was down.
    that forest's tracker; a past forest — its tickets both closed —
    draws nothing, the engine not editing a finished forest's history
    (§forgejo/reconciliation/the-tracker-block). Like step 2 this is
-   the tick paying so no request path has to: the chart is as current as the
-   forest set the outcomes view is served from. It comes **last** because it
+   the tick paying so no request path has to: the chart is at least as current as
+   the forest set the outcomes view is served from, the event path's redraw having
+   drawn whatever moved between ticks (§forgejo/reconciliation/the-tracker-block). It comes **last** because it
    is the step that changes nothing the tick decides: a forge that has gone
    slow must not put the drawing between the sweep and a decision, and
    nothing downstream needs the block written first — the digest excludes a
@@ -80,7 +81,9 @@ created while the engine was down.
    pairs that set carried across, never an empty one it has drawn no
    conclusion from, and a past forest's pair stands frozen at the drawing
    the forest held when it was last current
-   (§forgejo/observability/the-outcomes-view).
+   (§forgejo/observability/the-outcomes-view). An event-path redraw that landed
+   between the two steps is drawn over here: the tick's drawing reads the live
+   graph, and so does the redraw's (§forgejo/reconciliation/the-tracker-block).
 
 The synthetic event carries no sender.
 
@@ -90,8 +93,12 @@ An outcome tracker's description carries its forest's drawing between a pair of
 HTML comments — `<!-- maitred:forest:begin -->` and `<!-- maitred:forest:end -->`
 — under a `## Current state` heading. On every tick the engine writes that
 region for every current forest it enumerated (§forgejo/reconciliation/the-sweep), and
-ahead of every `wrap-up` dispatch it writes that one tracker's region once more
-(§forgejo/decisions/actions): it gathers the graph, renders it
+as part of handling any admissible event that lands on an object of a forest —
+or whose cascade dispatches that forest's `wrap-up`, the event's object being
+no member of it (§forgejo/decisions/unblock-cascade) — it writes that one
+forest's region once more
+(§forgejo/reconciliation/the-tracker-block, s-git/maitred#274): it gathers the
+graph, renders it
 (§forgejo/renderer/the-contract), and splices the
 source under a `Last revisited by maître d' engine: <YYYY-MM-DD HH:MM> <TZ>`
 stamp, the time rendered in the configured timezone
@@ -102,11 +109,11 @@ picture (s-git/maitred#251). The tick's
 rendering is recorded onto the forest set the outcomes view serves too, so the
 payload carries the bytes it drew alongside the block they were spliced into —
 and carries them even where the splice found no region to land in
-(§forgejo/observability/the-outcomes-view): one drawing per forest per tick,
-feeding both sinks. The `wrap-up` drawing is the exception: it feeds the block
-alone, and the payload catches up with it at the next tick's step 5, so between
-an event-path wrap-up and that tick the two sinks of one forest state two
-instants — the block the wrap-up's, the picture the last tick's.
+(§forgejo/observability/the-outcomes-view): one drawing per forest per pass,
+feeding both sinks. No engine path feeds one sink and not the other, so the two
+sinks of one forest state the same drawing whenever the engine drew it last — and
+a forest whose picture an event moved states that instant in both of them
+(s-git/maitred#274).
 
 - **The fence bounds the write.** Only a tracker's description is written, and
   only the bytes between one opener and its closer. The outcome prose around
@@ -146,16 +153,17 @@ instants — the block the wrap-up's, the picture the last tick's.
   the failure rather than reading as a repository holding no role — in the fold
   as in the drawing, at the first fact beyond the repository already admitted
   (§forgejo/webhook/the-scope-cache).
-- **The stamp moves whatever the graph does.** A tick over an unchanged forest
+- **The stamp moves whatever the graph does.** A pass over an unchanged forest
   rewrites the stamp and nothing else. Where the composed body is byte-identical
-  to the body read — two ticks inside one minute over an unchanged graph —
-  nothing is written, so a sweep never bumps a tracker for nothing. Past that
+  to the body read — two passes inside one minute over an unchanged graph,
+  whichever of the two writers made them — nothing is written, so neither a sweep
+  nor an event bumps a tracker for nothing. Past that
   minute the write does move the tracker's `updated_at`, and a timestamp the
   engine moves itself cannot be what the engine paces itself on: §forgejo/state/watermark
   states the digest that replaces it, and here that means the re-fire bound and
   the queue's dedup key both hold to one unchanged state however often the forest
   is redrawn, while the delivery the write provokes is the engine's own
-  handwriting and holds off unread (§forgejo/decisions/loop-prevention). A tick
+  handwriting and holds off unread (§forgejo/decisions/loop-prevention). A redraw
   therefore re-fires no agent that the forest's state was not already calling
   for (§forgejo/reconciliation/the-state-is-the-watermark).
 - **The write says so.** A tracker whose block landed is named at `Info` in
@@ -164,26 +172,65 @@ instants — the block the wrap-up's, the picture the last tick's.
   a tracker whose composed body was already there is named at `Debug`, so
   "nothing needed writing" never reads as "this forest was never reached"
   (§forgejo/observability/the-decision-log).
-- **`wrap-up` draws before it queues.** The dispatch of `wrap-up` is this
-  block's second call site, and the same function rather than a second
-  renderer: before the task is queued it redraws that tracker's region from
-  the graph, so the picture a finished forest leaves behind — every member
-  struck through with its close stamp — is the one the wrap-up describes, not
-  whatever the last pass happened to draw; the outcomes view answers the same
-  picture from the next tick's step 5, since this path feeds the block alone
-  (§forgejo/observability/the-outcomes-view). The root comes from the tracker's
-  blocker rows the dispatch already holds. A tracker gated by no `ideation`
-  issue has no forest to draw: it says so at `Debug` and queues regardless, and
-  a dispatch holding no blocker rows at all — the read that would have named
-  them having failed — says that instead at `Warn`, the two absences being
-  different facts. Because a blocking edge names whichever repository it likes,
-  the root's repository pays the admission test every other cross-repository
-  hop pays (§forgejo/webhook/repository-roles): a root standing where no maitred
-  role names its repository is drawn nowhere, its titles left unpublished, and
-  the wrap-up queues all the same. A draw that fails — a refused write, an
-  ambiguous fence pair, an unreadable graph — is logged naming the tracker, and
-  the wrap-up dispatches anyway: the chart is UX, the wrap-up is the work
-  (s-git/maitred#232).
+- **The event path draws the forest it touched.** This block's second call site
+  is the pipeline itself: an admissible event whose object **is** a forest — an
+  `ideation` root, open or closed — or **belongs** to one, by the membership
+  relation every other reader of the graph applies (§forgejo/decisions/commissioning:
+  an `ideation` issue among the object's blockers names the forest, and the
+  object's own label names it when the object is the root), is redrawn as part of
+  handling the event, whatever the event kind (§forgejo/webhook/the-pipeline,
+  s-git/maitred#274). Nothing is asked of the decision first — no per-kind test of
+  whether this event *could* have moved the picture — because the redraw reads the
+  live graph: an event that changed no row composes the bytes already there and
+  writes nothing. One drawing feeds both sinks, so the outcomes view's `chart`
+  moves with the block instead of catching up at the next tick
+  (§forgejo/observability/the-outcomes-view).
+
+  Three events draw nothing, and each for a rule rather than a carve-out. The
+  sweep's synthetic `reconcile` event, because the tick that sends it draws every
+  current forest it enumerated at step 5 (§forgejo/reconciliation/the-sweep): the
+  redraw is the event path's work, not a second drawing per row a sweep walks.
+  An event on a pull request, which the drawing gives no node and no edge
+  (§forgejo/renderer/edge-classes); what a merge delivers arrives as the issue
+  events it causes. And an event on a forest whose tickets are both closed, a
+  finished forest's history the engine does not edit — its pair stands frozen
+  (§forgejo/observability/the-outcomes-view).
+
+  The redraw stands at the pipeline's tail, after the dispatch and the cascade the
+  event woke, for the reason step 5 gives for itself: the drawing is the one work
+  no decision waits on (§forgejo/reconciliation/the-sweep). So a `wrap-up` task is
+  queued before the block it describes is redrawn — the ordering the dispatch used
+  to arrange for itself (s-git/maitred#232) — and the picture the finished forest
+  leaves behind still states the graph the wrap-up was dispatched from, the graph
+  being exactly what the redraw reads. Membership is a relation, not a label, so
+  an object two roots' membership edges reach is drawn twice, once for each forest
+  it belongs to; an object no membership edge reaches draws nothing, the
+  repository's role being what admits the read rather than what makes a forest
+  (§forgejo/webhook/repository-roles).
+
+  Because a blocking edge names whichever repository it likes, the root's
+  repository pays the admission test every other cross-repository hop pays
+  (§forgejo/webhook/repository-roles) **before** its rows are read: a root
+  standing where no maitred role names its repository is drawn nowhere, its titles
+  left unpublished, and the event's decision is none the worse — and the same
+  test is paid before the drawing reads a cascade `wrap-up`'s tracker rows, so a
+  forest the cascade reaches through a role-less repository costs a comparison,
+  not a read. The repository a drawing is admitted by is the one whose admission
+  the pass established — the event's own, on the event path, where the pipeline's
+  role test granted it ahead of any read. A pass that established no admission,
+  the inert close among them, names none, and every repository such a drawing then
+  reaches must be one a role names in its own right. A root the
+  pairing reaches no tracker is a forest with no region to land in: nothing is
+  drawn, the absence stated at `Debug` the way the tick states it. A failed read
+  is named at `Warn` with the forest it could not read — the sweep is the
+  backstop, as it is for every read that breaks — and a refused write, an
+  ambiguous fence pair and an unreadable graph are the `Error` lines the tick
+  already writes for the same failures. A drawing that failed erases nothing: the
+  pair both sinks held stands under its own stamp, never dressed in a newer one.
+  The delivery the write provokes is the engine's own handwriting, and the
+  self-authored edit guard holds it off ahead of the read
+  (§forgejo/decisions/loop-prevention), which is what keeps a redraw from drawing
+  itself.
 - **No fence pair is an empty region, not an absent one.** Where a description
   carries no pair, the block is inserted as the body's first heading and the
   body found follows it in the order it was in.
@@ -191,7 +238,9 @@ instants — the block the wrap-up's, the picture the last tick's.
   which forest is not guessable, so the engine writes nothing to that tracker
   and the log names it; a chart landing in the wrong region is worse than a
   stale one.
-- **The graph is gathered each tick, never remembered.** The rows are the root,
+- **The graph is gathered on every pass, never remembered.** Every writer of the
+  block — the tick and the event path alike — gathers the rows afresh before it
+  splices. The rows are the root,
   the rows the root blocks — trackers included, the same reading the digest and
   the cascade apply (§forgejo/decisions/actionable-state-digest) — and the edges
   are the blocking edges found between those rows, read as the root's and each

@@ -229,10 +229,14 @@ port authenticates nothing
 answers `405`.
 
 **Drawing the picture.** The picture is not scraped out of any
-description and it is not composed per request: the sweep tick draws it
-once from the forest's graph with the engine's own renderer
-(§forgejo/renderer/the-contract), and that one drawing is the payload's
-`chart`. The same drawing is also what splices into the tracker's
+description and it is not composed per request: the engine draws it from
+the forest's graph with the engine's own renderer
+(§forgejo/renderer/the-contract) — the sweep tick once for every current
+forest it enumerated, and the event path whenever an admissible event lands
+on an object of that forest or its cascade dispatches that forest's
+`wrap-up` (§forgejo/reconciliation/the-tracker-block,
+§forgejo/decisions/unblock-cascade) — and that one drawing is the
+payload's `chart`. The same drawing is also what splices into the tracker's
 current-state block, so the payload and the tracker cannot disagree
 about what the graph looks like: the chart matches what the block would
 render from the same edges (§forgejo/reconciliation/the-tracker-block) —
@@ -259,9 +263,10 @@ security level, or show it as text and never as a graph.
 current-state block's stamp line carries, `<YYYY-MM-DD HH:MM> <TZ>` — the
 rendering instant, spelled in the configured timezone
 (§forgejo/config/tracker-chart), the same instant the block's stamp
-states for that tick. It is a string the view does not interpret. The
+states for that drawing. It is a string the view does not interpret. The
 recency is honest because it belongs to the drawing: the payload's
-picture carries the stamp of the tick that rendered it, not the moment
+picture carries the stamp of the pass that rendered it — a tick's or an
+event's — not the moment
 some agent last wrote a description, and no stamp is ever dressed over a
 remembered picture — the pair is written together or erased together, so
 a forest a tick drew nothing for carries **both** fields empty once that
@@ -287,8 +292,10 @@ tick it was last current, frozen under the stamp belonging to that
 drawing, and a past forest the engine never saw while it was current
 carries both fields empty. A carried
 pair is never the view's last word: step 5 states what this tick drew,
-with the wrap-up path's one-sink drawing accounted for where that
-exception lives (§forgejo/reconciliation/the-tracker-block). The
+and an event that touched the forest between the head record and step 5
+states itself there too — every drawing the engine makes feeds this field
+and the block together (§forgejo/reconciliation/the-tracker-block), and
+the carry redraws nothing of its own. The
 carry pays the admission test the drawing pays
 (§forgejo/reconciliation/the-tracker-block), of both the repository the pair
 was drawn from and the one the tracker now stands in — the tracker is forge

@@ -279,6 +279,57 @@ func (e *Engine) recordForestCharts(forests []Forest, sources []string, at time.
 	e.forestsSnap = updated
 }
 
+// trackerBlockedBy is the forest's tracker: the first row of a root's blocks
+// listing the engine reads as a tracker — the pairing the view, the cascade and
+// the teardown all apply, stated once so no reader of the graph keeps a second
+// copy of it (§forgejo/observability/the-outcomes-view,
+// §forgejo/decisions/unblock-cascade). A blocks listing names no repository for
+// a row that lives where the listing was made, so rootRepo is the fallback
+// (§forgejo/client/operations).
+func trackerBlockedBy(blocked []Issue, rootRepo string) *ForestIssue {
+	for i := range blocked {
+		row := &blocked[i]
+		if row.IsPull || !isTracker(row) {
+			continue // a delivery carries no forest, and a root's row is another forest's root
+		}
+		tracker := forestIssue(*row, rootRepo)
+		return &tracker
+	}
+	return nil
+}
+
+// recordForestPicture lands one forest's drawing on the recorded set, so an
+// event-path redraw reaches the outcomes payload as well as the tracker's block
+// and the two sinks of one forest never state two drawings
+// (§forgejo/reconciliation/the-tracker-block, s-git/maitred#274). It is
+// recordForestCharts' single-forest twin and shares its discipline: the pair is
+// written together, the set is replaced whole rather than mutated in place, and
+// the forest is addressed by the store's own forest key — the root it grew from
+// (keyOf, §forgejo/state/forest-digest).
+//
+// A forest the recorded set does not hold is left out, not invented: the set is
+// what a sweep's enumeration vouches for, and a row no enumeration named is a row
+// the view would publish without knowing what else stands beside it
+// (§forgejo/observability/the-outcomes-view). The block such an event draws still
+// lands, and the payload carries the forest from the next tick's head.
+func (e *Engine) recordForestPicture(forest Forest, source string, at time.Time) {
+	stamp := stampAt(at, e.cfg.ChartLocation())
+	e.forestsMu.Lock()
+	defer e.forestsMu.Unlock()
+	for i, row := range e.forestsSnap {
+		if keyOf(row) != keyOf(forest) {
+			continue
+		}
+		updated := make([]Forest, len(e.forestsSnap))
+		copy(updated, e.forestsSnap)
+		updated[i].Chart, updated[i].ChartRevisited = source, stamp
+		e.forestsSnap = updated
+		return
+	}
+	e.log.Debug("outcomes: the recorded forest set holds no row to record this drawing onto; the tick's head records it",
+		"forest", forestRef(forest.Repository, forest.Root.Number))
+}
+
 // forestIssue slims an issue to its row in the view. The row names the
 // repository the issue's own read carries — the forge's listing
 // spelling — and falls back to the address the caller supplies when a
@@ -393,19 +444,12 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 				}
 				return nil, fmt.Errorf("forgejo: outcomes: issues %s#%d blocks: %w", root.Repository, issue.Number, err)
 			}
-			for k := range blocked {
-				b := &blocked[k]
-				if b.IsPull || !isTracker(b) {
-					continue
-				}
-				tracker := forestIssue(*b, root.Repository)
-				forest.Tracker = &tracker
-				// The pairing reads no picture from the row: the tick draws
-				// it once, after the walk, and records it onto this set
-				// (recordForestCharts, §forgejo/reconciliation/the-tracker-block,
-				// §forgejo/reconciliation/the-sweep).
-				break
-			}
+			// The pairing is the one rule every reader of the graph applies
+			// (trackerBlockedBy); it reads no picture from the row — the tick
+			// draws it once, after the walk, and records it onto this set
+			// (recordForestCharts, §forgejo/reconciliation/the-tracker-block,
+			// §forgejo/reconciliation/the-sweep).
+			forest.Tracker = trackerBlockedBy(blocked, root.Repository)
 			// The warning walk is the digest's one hop out of the root
 			// (§forgejo/decisions/commissioning,
 			// §forgejo/observability/the-warnings-a-forest-carries).
