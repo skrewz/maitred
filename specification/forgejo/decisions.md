@@ -987,8 +987,8 @@ Six mechanisms, in this order:
    restart that empties its memory admits a re-fire the interval has not
    already paid for (§forgejo/state/watermark). One slot does bound
    nothing: a slot holding no instant at all, which only an earlier
-   release can leave behind on a row still keyed on an object revision,
-   answers as a first dispatch and the row's next write stamps it
+   release can leave behind on a pull-request row, answers as a first
+   dispatch and the row's next write stamps it
    (§forgejo/state/watermark).
    The bound is the engine's general guard for state-governed re-fires,
    not a property of any one action: every landed singleton dispatch
