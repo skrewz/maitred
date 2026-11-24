@@ -205,14 +205,8 @@ func (e *Engine) forestFold(root *Issue, engineAccount, decomposerIdentity strin
 }
 
 // foldComments folds the comments on one forest issue that are not the
-// engine's own side effect: those authored by neither the engine's own
-// account nor the configured decomposer identity
-// (§forgejo/decisions/actionable-state-digest). It is a self-trigger
-// guard, not an authorisation test — a comment surviving it says a fact
-// moved, not that its sender may commission work. The exclusion is
-// commentCountsAsInput's alone, shared with the declared digest's fold of
-// `reassess`'s comment input so the two folds cannot drift apart
-// (s-git/maitred#262).
+// engine's own side effect, the exclusion being commentCountsAsInput's
+// (§forgejo/decisions/actionable-state-digest, s-git/maitred#262).
 func foldComments(f *fold, api API, ref, repo string, number int, engineAccount, decomposerIdentity string) error {
 	owner, name := splitRepo(repo)
 	comments, err := api.ListIssueComments(owner, name, number)
@@ -228,19 +222,21 @@ func foldComments(f *fold, api API, ref, repo string, number int, engineAccount,
 	return nil
 }
 
-// commentCountsAsInput reports whether a comment authored by author
-// counts as an input at all: the engine's own account and the configured
-// decomposer identity are excluded, every other author — a human, or any
-// other account the operator runs — counts
-// (§forgejo/decisions/actions, §forgejo/decisions/loop-prevention,
-// s-git/maitred#262). It is the one place that exclusion lives: the forest
-// fold applies it through foldComments, the declared digest's fold of
-// `reassess`'s comment input applies it to each listing, and the
-// `reassess` predicate applies it to a delivery's sender, so no row keeps
-// an authorship test of its own. An unset identity excludes nothing, as
-// every guard reading a declared identity behaves; an empty author is
-// never taken for an unset identity, so only an identity's own login is
-// excluded (§forgejo/decisions/actionable-state-digest).
+// commentCountsAsInput reports whether a comment authored by author is
+// an input, and with it the one statement of whose comments are: any
+// author the declaration does not exclude counts — a human, or any other
+// account the operator runs — and the two it does are the account
+// engine_account names and the configured decomposer identity
+// (§forgejo/config/engine-account, §forgejo/config/decomposer-identity,
+// s-git/maitred#262). It is a self-trigger guard, not an authorisation
+// test: a comment surviving it says a fact moved, not that its sender
+// may commission work. Three readers apply it and none keeps a test of
+// its own — the forest's fold of a thread, `reassess`'s fold of its
+// declared comment input, and the `reassess` predicate of a delivery's
+// sender. An unset identity excludes nothing, as every guard reading a
+// declared identity behaves; an empty author is never taken for an unset
+// identity, so only an identity's own login is excluded
+// (§forgejo/decisions/actionable-state-digest).
 func commentCountsAsInput(author, engineAccount, decomposerIdentity string) bool {
 	if author == "" {
 		return true

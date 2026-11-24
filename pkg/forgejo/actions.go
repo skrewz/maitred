@@ -466,14 +466,10 @@ var declaredInputFolds = map[string]func(State) []string{
 		return []string{"updated " + s.Issue.UpdatedAt.UTC().Format(time.RFC3339)}
 	},
 	"issue.comments": func(s State) []string {
-		// The comments are carried as the forge lists them; which of
-		// them count is commentCountsAsInput's one statement, applied
-		// here and nowhere else, so an excluded author's comment moves
-		// no digest while every other author's moves it
-		// (§forgejo/config/engine-account, §forgejo/config/decomposer-identity,
-		// s-git/maitred#262). A body is quoted as the hex its text
-		// digests to, the way an issue's own body is: what an operator
-		// can place in the forge's history is the comment beside it.
+		// One comment, one fact: the login that authored it and the hex
+		// its body digests to, the way an issue's own description is
+		// stated. Whose comments reach the fold is commentCountsAsInput's
+		// to say, and the declaration above it (s-git/maitred#262).
 		var facts []string
 		for _, c := range s.Comments {
 			if !commentCountsAsInput(c.Author, s.EngineAccount, s.DecomposerIdentity) {
@@ -608,14 +604,12 @@ func implementReady(_ Event, s State) (Decision, readyAnswer) {
 
 // reassessReady is reassess's predicate: an open issue with no open
 // blocker carried activity — the event row it is reached from is the
-// edited/labelled/commented row. A comment counts only when
-// commentCountsAsInput does not exclude its author: the engine's own
-// report, or the decomposer's own question, on an ordinary work item is
-// no input, so the row holds off naming whose authorship it read rather
-// than re-firing at the re-fire bound's pace for as long as the issue
-// stands (§forgejo/decisions/actions,
-// §forgejo/decisions/loop-prevention, s-git/maitred#262). No timestamp
-// is asked of: what moves this row is a fact it declares.
+// edited/labelled/commented row, and what moves it is a fact the
+// declaration names. commentCountsAsInput says whose comments reach that
+// row: the engine's own report, or the decomposer's own question, on an
+// ordinary work item holds off naming the authorship it read rather than
+// re-firing at the re-fire bound's pace for as long as the issue stands
+// (§forgejo/decisions/loop-prevention, s-git/maitred#262).
 func reassessReady(e Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {

@@ -231,9 +231,9 @@ func TestDeclaredDigests_LeaveTheTrackersWrittenRegionOut(t *testing.T) {
 
 // TestDeclaredDigests_CommentsAreReassessInputs pins the acceptance that
 // comments stand among `reassess`'s declared inputs, that whose comments
-// count is stated once — in the fold of that input — and that no issue
-// timestamp stands in the digest at all, the key the comment rows used
-// to turn on (§forgejo/decisions/actions, §forgejo/decisions/inputs,
+// count is stated once — in the fold of that input — and that the digest
+// is a fold of declared facts, a timestamp being none of them
+// (§forgejo/decisions/actions, §forgejo/decisions/inputs,
 // s-git/maitred#262).
 func TestDeclaredDigests_CommentsAreReassessInputs(t *testing.T) {
 	quiet := State{
