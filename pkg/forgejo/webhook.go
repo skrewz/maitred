@@ -1638,13 +1638,18 @@ func watermarkAt(prev *Watermark, action, revision string) Watermark {
 // bound keys on (action, digest) and paces on the instant recorded beside
 // that pair, so a fan-out keeping the pair and dropping the instant would
 // leave a slot that reads as recorded answering as though nothing had ever
-// fired (§forgejo/state/watermark, §forgejo/decisions/loop-prevention).
+// fired. The instant is copied rather than shared, the subject map being
+// copied for the same reason: a write must not alias the record it was
+// merged into (§forgejo/state/watermark, §forgejo/decisions/loop-prevention).
 func watermarkKeepSlots(prev *Watermark, slots map[string]Slot) Watermark {
 	next := Watermark{Subjects: prev.subjectSlots()}
 	if prev != nil {
 		next.Action = prev.Action
 		next.Revision = prev.Revision
-		next.FiredAt = prev.FiredAt
+		if prev.FiredAt != nil {
+			stamped := *prev.FiredAt
+			next.FiredAt = &stamped
+		}
 	}
 	if next.Subjects == nil {
 		next.Subjects = map[string]Slot{}
