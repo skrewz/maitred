@@ -1,6 +1,7 @@
 package forgejo
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -322,6 +323,44 @@ func TestQuotedRevision_NamesTheFactsBehindTheDigest(t *testing.T) {
 	// quoted by the row that keys on it — is quoted as what it is.
 	if got := quotedRevision(ActionReview, prEvent(EventPRReviewed, "carol"), State{PR: openPR("abc")}, "abc"); got != "revision abc" {
 		t.Errorf("quoted revision = %q, want the head sha quoted as a revision", got)
+	}
+}
+
+// TestQuotedRevision_BoundsTheQuotedComments pins that a long thread is
+// quoted as its newest counted comment beside how many the fold
+// counted, rather than one fact per comment as the work item ages — and
+// that the bound is the quote's alone, the digest still folding every
+// counted comment (§forgejo/observability/the-decision-log,
+// s-git/maitred#262).
+func TestQuotedRevision_BoundsTheQuotedComments(t *testing.T) {
+	var thread []Comment
+	for i := range 20 {
+		thread = append(thread, Comment{Author: "alice", Body: "feedback " + strconv.Itoa(i)})
+	}
+	thread = append(thread, Comment{Author: "maitred", Body: "my own report"})
+	threaded := State{
+		ReviewLenses:  testLenses,
+		Issue:         openIssue(),
+		EngineAccount: "maitred",
+		Comments:      thread,
+	}
+	ev := issueEventBy(EventIssueCommented, "alice")
+	got := quotedRevision(ActionReassess, ev, threaded, digestFor(ActionReassess, ev, threaded))
+	if want := "comment alice " + digestRevision("feedback 19"); !strings.Contains(got, want) {
+		t.Errorf("quoted revision %q names no %q", got, want)
+	}
+	if !strings.Contains(got, "the newest of 20 counted comments") {
+		t.Errorf("quoted revision %q names no count of the comments folded", got)
+	}
+	if n := strings.Count(got, "comment alice "); n != 1 {
+		t.Errorf("quoted revision %q carries %d comment facts, want the one the delivery was about", got, n)
+	}
+	// The fold answers for the digest: take one counted comment away and
+	// the digest moves, however the quote reads.
+	shorter := threaded
+	shorter.Comments = thread[:len(thread)-2]
+	if digestFor(ActionReassess, ev, threaded) == digestFor(ActionReassess, ev, shorter) {
+		t.Error("a counted comment the thread lost moved no digest, though the fold quotes only the newest")
 	}
 }
 
