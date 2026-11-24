@@ -1355,16 +1355,22 @@ func TestDecide(t *testing.T) {
 			},
 		},
 		{
-			name:      "implement already dispatched at the revision holds off",
-			event:     issueEvent(EventIssueOpened),
-			state:     State{ReviewLenses: testLenses, Issue: openIssue()},
-			watermark: &Watermark{Action: "implement", Revision: testRev},
+			// The issue-path rows pace themselves on the digest of their
+			// declared inputs, so a watermark recording a revision
+			// records no digest the row can answer with, and the state
+			// dispatches (s-git/maitred#259).
+			name:       "implement watermarked at a revision dispatches: the digest is what the row compares",
+			event:      issueEvent(EventIssueOpened),
+			state:      State{ReviewLenses: testLenses, Issue: openIssue()},
+			watermark:  &Watermark{Action: "implement", Revision: testRev},
+			wantAction: ActionImplement,
 		},
 		{
-			name:      "reassess already dispatched at the revision holds off",
-			event:     issueEvent(EventIssueEdited),
-			state:     State{ReviewLenses: testLenses, Issue: openIssue()},
-			watermark: &Watermark{Action: "reassess", Revision: testRev},
+			name:       "reassess watermarked at a revision dispatches for the same reason",
+			event:      issueEvent(EventIssueEdited),
+			state:      State{ReviewLenses: testLenses, Issue: openIssue()},
+			watermark:  &Watermark{Action: "reassess", Revision: testRev},
+			wantAction: ActionReassess,
 		},
 		{
 			name:      "review already dispatched at the revision holds off",
@@ -1601,13 +1607,16 @@ func TestDecide(t *testing.T) {
 			state: State{ReviewLenses: testLenses, Issue: ideationIssue(), DecomposerIdentity: "decomposer"},
 		},
 		{
-			name:  "decompose already dispatched at the revision holds off on the event path",
-			event: issueEvent(EventIssueOpened),
-			state: State{ReviewLenses: testLenses, Issue: ideationIssue()},
-			watermark: &Watermark{
-				Action:   string(ActionDecompose),
-				Revision: testRev,
-			},
+			// The root's row compares the digest of its declaration's
+			// inputs, so a watermark recording the old revision-keyed
+			// shape holds nothing off: the gate, where it is armed, and
+			// the re-fire bound pace the row
+			// (§forgejo/decisions/actionable-state-digest, s-git/maitred#259).
+			name:       "decompose watermarked at a revision dispatches on the event path",
+			event:      issueEvent(EventIssueOpened),
+			state:      State{ReviewLenses: testLenses, Issue: ideationIssue()},
+			watermark:  &Watermark{Action: string(ActionDecompose), Revision: testRev},
+			wantAction: ActionDecompose,
 		},
 		{
 			name:  "decompose already dispatched at an older revision re-fires on an edit at a new revision",
@@ -1857,7 +1866,10 @@ func TestDecide_MergeGateHoldOffNamesBlockers(t *testing.T) {
 // §forgejo/observability/the-decision-log).
 func TestDecide_HoldOffReasons(t *testing.T) {
 	t.Run("a revision-keyed hold-off names the revision", func(t *testing.T) {
-		d := Decide(issueEvent(EventIssueOpened), State{ReviewLenses: testLenses, Issue: openIssue()}, &Watermark{Action: "implement", Revision: testRev})
+		// The pull-request rows are the ones left keyed on an object
+		// revision (s-git/maitred#260), so this is the family whose
+		// hold-off names the revision it has already reacted to.
+		d := Decide(prEvent(EventPRReviewed, "carol"), State{ReviewLenses: testLenses, PR: openPR("abc"), Reviews: []Review{review(ReviewChangesRequested, "carol", testTime)}}, &Watermark{Action: "fix-feedback", Revision: "abc"})
 		if !d.HoldOff() {
 			t.Fatalf("expected hold-off, got dispatch of %q", d.Action)
 		}
@@ -2733,11 +2745,22 @@ func TestDecide_IdeationCommentAuthorGuard(t *testing.T) {
 		}
 	})
 
-	t.Run("the human's comment keeps the revision-keyed watermark guard", func(t *testing.T) {
-		w := &Watermark{Action: string(ActionDecompose), Revision: issueRevision(root)}
+	t.Run("a comment the digest already records re-fires paced by the bound", func(t *testing.T) {
+		// The root's row asks the same question on both paths and is
+		// paced by the declared digest, not by the issue's timestamp: a
+		// digest the watermark records dispatches, and the re-fire bound
+		// spaces it (§forgejo/reconciliation/the-state-is-the-watermark,
+		// s-git/maitred#259).
+		w := &Watermark{Action: string(ActionDecompose), Revision: digestFor(ActionDecompose, issueEvent(EventIssueCommented), st)}
 		d := Decide(issueEvent(EventIssueCommented), st, w)
-		if !d.HoldOff() || !strings.Contains(d.Reason, "already dispatched") {
-			t.Fatalf("decision = %+v, want the revision-keyed hold-off", d)
+		if d.HoldOff() || d.Action != ActionDecompose {
+			t.Fatalf("decision = %+v, want the state-governed re-fire", d)
+		}
+		if !d.StateGoverned {
+			t.Errorf("decision = %+v, want the re-fire marked state-governed", d)
+		}
+		if !strings.Contains(d.Reason, "the re-fire bound") {
+			t.Errorf("reason = %q, want it to name the bound that paces the re-fire", d.Reason)
 		}
 	})
 
@@ -4369,20 +4392,96 @@ func TestDecide_ReconcileImplementIsStateGoverned(t *testing.T) {
 	}
 }
 
-// TestDecide_IssueOpenedImplementStaysRevisionGated: the event path
-// keeps the revision-keyed guard — eligibility is the same predicate on
-// both paths, only the suppression differs, so an opened issue whose
-// revision the watermark already records was reacted to and holds off
-// (§forgejo/reconciliation/the-state-is-the-watermark).
-func TestDecide_IssueOpenedImplementStaysRevisionGated(t *testing.T) {
-	w := &Watermark{Action: string(ActionImplement), Revision: testRev}
-	d := Decide(issueEvent(EventIssueOpened), State{ReviewLenses: testLenses, Issue: openIssue()}, w)
-	if !d.HoldOff() {
-		t.Fatalf("decision = %+v, want the event path to hold off at the recorded revision", d)
-	}
-	if d.StateGoverned {
-		t.Errorf("decision = %+v, want the event-path dispatch unmarked: a revision-gated row consults no stamp", d)
-	}
+// TestDecide_IssuePathRowsPaceOnTheDeclaredDigest: the event path and
+// the sweep ask one question and pace one way — the digest of the
+// declaration's input set. A digest the watermark records dispatches
+// state-governed, which is to say at the re-fire bound's pace; a digest
+// it does not record — because a blocker edge moved, no delivery and no
+// timestamp with it — dispatches as new information
+// (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#259).
+func TestDecide_IssuePathRowsPaceOnTheDeclaredDigest(t *testing.T) {
+	st := State{ReviewLenses: testLenses, Issue: openIssue()}
+	ev := issueEvent(EventIssueOpened)
+
+	t.Run("the digest the watermark records re-fires state-governed", func(t *testing.T) {
+		w := &Watermark{Action: string(ActionImplement), Revision: digestFor(ActionImplement, ev, st)}
+		d := Decide(ev, st, w)
+		if d.HoldOff() || d.Action != ActionImplement {
+			t.Fatalf("decision = %+v, want the re-fire to dispatch", d)
+		}
+		if !d.StateGoverned {
+			t.Errorf("decision = %+v, want the re-fire marked state-governed", d)
+		}
+		if !strings.Contains(d.Reason, "the re-fire bound") {
+			t.Errorf("reason = %q, want it to name what paces the re-fire", d.Reason)
+		}
+	})
+
+	t.Run("the sweep and an event give one answer for one state", func(t *testing.T) {
+		// One question, one value, whichever path arrived: the sweep's
+		// synthetic current-state event and a delivery holding the same
+		// state and the same watermark decide alike — the same action or
+		// the same hold-off, the same reason, and the same marking for
+		// the pacing that follows
+		// (§forgejo/reconciliation/the-state-is-the-watermark,
+		// s-git/maitred#259).
+		gate := &ForestDigestGate{RootRepo: "o/r", RootNumber: 7, Current: "forest", Stored: "forest"}
+		cases := []struct {
+			name  string
+			state State
+			event Event
+			want  Action
+		}{
+			{"implement", st, issueEvent(EventIssueOpened), ActionImplement},
+			{"decompose with a forest at rest", State{ReviewLenses: testLenses, Issue: ideationIssue(), ForestGate: gate}, issueEvent(EventIssueOpened), ActionDecompose},
+			{"teardown-forest", State{ReviewLenses: testLenses, Issue: teardownRoot(), Blocked: []Issue{{Number: 8, State: "open", Repository: "o/r"}}}, issueEvent(EventIssueOpened), ActionTeardownForest},
+		}
+		for _, tc := range cases {
+			recorded := &Watermark{Action: string(tc.want), Revision: digestFor(tc.want, tc.event, tc.state)}
+			fromEvent := Decide(tc.event, tc.state, recorded)
+			fromSweep := Decide(issueEvent(EventReconcile), tc.state, recorded)
+			// The prose may name the delivery that asked; the answer,
+			// and the marking that paces a re-fire of it, may not.
+			if fromEvent.Action != fromSweep.Action ||
+				fromEvent.StateGoverned != fromSweep.StateGoverned {
+				t.Errorf("%s: event = %+v, sweep = %+v: one state answered two ways",
+					tc.name, fromEvent, fromSweep)
+			}
+			if strings.HasPrefix(tc.name, "decompose with") {
+				// The gate's own question comes first, and a forest at
+				// rest answers it the same way on both paths
+				// (§forgejo/decisions/actionable-state-digest).
+				if !fromEvent.HoldOff() {
+					t.Errorf("%s = %+v, want the digest gate's hold-off on both paths", tc.name, fromEvent)
+				}
+				continue
+			}
+			if fromEvent.HoldOff() || fromEvent.Action != tc.want {
+				t.Errorf("%s = %+v, want the row re-firing at the digest the watermark records", tc.name, fromEvent)
+			}
+			if !fromEvent.StateGoverned {
+				t.Errorf("%s = %+v, want the re-fire marked state-governed for the bound to pace", tc.name, fromEvent)
+			}
+		}
+	})
+
+	t.Run("a blocker edge move is a new digest on the event path", func(t *testing.T) {
+		// The watermark records the digest the state carried while the
+		// blocker stood open; the edge was then removed, which moves no
+		// delivery and no updated_at. The row must dispatch rather than
+		// be suppressed by a timestamp it no longer consults
+		// (§forgejo/reconciliation/watermark-exemptions).
+		blocker := Issue{Number: 3, State: "open", Repository: "o/r"}
+		at := digestFor(ActionImplement, ev, State{ReviewLenses: testLenses, Issue: openIssue(), Blockers: []Issue{blocker}})
+		w := &Watermark{Action: string(ActionImplement), Revision: at}
+		d := Decide(ev, st, w)
+		if d.HoldOff() || d.Action != ActionImplement {
+			t.Fatalf("decision = %+v, want the edge removal to dispatch implement", d)
+		}
+		if strings.Contains(d.Reason, "re-fire bound") {
+			t.Errorf("reason = %q, want new information, not a paced re-fire", d.Reason)
+		}
+	})
 }
 
 // TestDecide_PRSyncedRebaseStaysRevisionGated: the PR-synced event path
@@ -4596,9 +4695,10 @@ func TestDecide_DecomposeDigestGate_SweepTracker(t *testing.T) {
 // give the same answer for this action — and the gate replaces the
 // revision-keyed guard there, because an edge move changes the digest
 // and no revision (§forgejo/reconciliation/watermark-exemptions,
-// s-git/maitred#209). The row's revision guard stands only where the
-// gate is unarmed: an event on a root whose kind labels conflict, an
-// issue the sweep holds off as a conflict before any decompose row.
+// s-git/maitred#209). Where the gate is unarmed — an event on a root
+// whose kind labels conflict, an issue the sweep holds off as a
+// conflict before any decompose row — the row is paced by the declared
+// digest and the re-fire bound, one attempt per interval on every path.
 func TestDecide_DecomposeDigestGate_EventPath(t *testing.T) {
 	edited := func() *Issue {
 		i := ideationIssue()
@@ -4644,17 +4744,34 @@ func TestDecide_DecomposeDigestGate_EventPath(t *testing.T) {
 			t.Errorf("decision = %+v, want the authorship hold-off kept ahead of the gate", d)
 		}
 	})
-	t.Run("a kind-conflicting root keeps the revision-keyed guard", func(t *testing.T) {
-		// The gate arms only where a gated row is reachable; the
-		// sweep holds this issue off as a conflict before any
-		// decompose row, so the event path's root row keeps its
-		// revision guard — pre-existing routing, unchanged.
+	t.Run("a kind-conflicting root is paced by the re-fire bound", func(t *testing.T) {
+		// The gate arms only where a gated row is reachable; the sweep
+		// holds this issue off as a conflict before any decompose row,
+		// so the event path's root row is the digest's alone — and the
+		// bound's, since the row may not fall silent at a digest it
+		// cannot move. The sweep's refusal of the same issue is
+		// pre-existing routing, unchanged here.
 		conflicted := labelledIssue(LabelIdeation, LabelSync)
 		conflicted.Number = 7
 		st := State{ReviewLenses: testLenses, Issue: conflicted}
-		d := Decide(issueEvent(EventIssueEdited), st, nil)
+		ev := issueEvent(EventIssueEdited)
+		d := Decide(ev, st, nil)
 		if d.Action != ActionDecompose || !strings.Contains(d.Reason, "the label makes the root") {
-			t.Errorf("decision = %+v, want the unarmed row's revision-guarded dispatch", d)
+			t.Errorf("decision = %+v, want the unarmed row's dispatch", d)
+		}
+		// StateGoverned is the flag the bound reads: without it the row
+		// would re-fire on every arrival rather than once per interval.
+		if !d.StateGoverned {
+			t.Errorf("decision = %+v, want a state-governed dispatch the re-fire bound spaces", d)
+		}
+		// A digest the watermark already records still dispatches — no
+		// suppression returns to this row — and says who spaces it.
+		d = Decide(ev, st, &Watermark{Action: string(ActionDecompose), Revision: digestFor(ActionDecompose, ev, st)})
+		if d.Action != ActionDecompose {
+			t.Errorf("decision = %+v, want the recorded digest to dispatch, paced rather than suppressed", d)
+		}
+		if !strings.Contains(d.Reason, "re-fire bound") {
+			t.Errorf("reason = %q, want it to name the bound that paces the re-fire", d.Reason)
 		}
 	})
 }

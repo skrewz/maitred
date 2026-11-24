@@ -1460,8 +1460,10 @@ func TestHandler_WatermarkAndIdempotency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if w == nil || w.Action != string(ActionImplement) || w.Revision != testUpdatedAt.UTC().Format(time.RFC3339) {
-		t.Errorf("watermark = %+v, want implement @ %s", w, testUpdatedAt.UTC().Format(time.RFC3339))
+	// The watermark records the dispatched action's declared digest, not
+	// the issue's timestamp (§forgejo/state/watermark, s-git/maitred#259).
+	if want := digestFor(ActionImplement, Event{}, State{Issue: api.issues[7]}); w == nil || w.Action != string(ActionImplement) || w.Revision != want {
+		t.Errorf("watermark = %+v, want implement @ the declared digest %s", w, want)
 	}
 
 	// A second identical delivery holds off.
@@ -1547,7 +1549,11 @@ func TestHandler_TaskDedupKey(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("got %d tasks, want 1", len(tasks))
 	}
-	want := "forgejoeng-o/r-issue-7-implement-" + testUpdatedAt.UTC().Format(time.RFC3339)
+	// The dedup key carries the digest the dispatch is watermarked on,
+	// so a state relation with no delivery — which moves that digest and
+	// no timestamp — is a different key that dispatches freely
+	// (§forgejo/webhook/the-pipeline, s-git/maitred#259).
+	want := "forgejoeng-o/r-issue-7-implement-" + digestFor(ActionImplement, Event{}, State{Issue: api.issues[7]})
 	if tasks[0].DedupKey != want {
 		t.Errorf("dedup key = %q, want %q", tasks[0].DedupKey, want)
 	}
@@ -1916,8 +1922,14 @@ func TestHandler_IssueClosed_CascadeWatermarkHolds(t *testing.T) {
 	api.issues[10] = testIssue(10, "open")
 	api.blocks[7] = []Issue{*testIssue(10, "open")}
 	api.deps[10] = []Issue{*testIssue(7, "closed")}
+	// The key's watermark records the declared digest of the state the
+	// cascade leg will re-fetch: issue and blocker rows alike
+	// (§forgejo/decisions/inputs, s-git/maitred#259).
 	if err := store.Save(Key{Repo: "o/r", Kind: KindIssue, Number: 10},
-		Watermark{Action: string(ActionImplement), Revision: testUpdatedAt.UTC().Format(time.RFC3339)}); err != nil {
+		Watermark{
+			Action:   string(ActionImplement),
+			Revision: digestFor(ActionImplement, Event{}, State{Issue: api.issues[10], Blockers: api.deps[10]}),
+		}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -2226,9 +2238,8 @@ func TestDispatch_WatermarkNamesTheLoggedRevision(t *testing.T) {
 		if w == nil {
 			t.Fatal("the cascade recorded no watermark")
 		}
-		ev := Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 10, Sender: "alice"}
-		if want := revisionFor(ev, State{Issue: api.issues[10]}); w.Revision != want {
-			t.Errorf("the cascade's watermark records %q, want the revision the leg's own state gives, %q", w.Revision, want)
+		if want := digestFor(ActionImplement, Event{}, State{Issue: api.issues[10], Blockers: api.deps[10]}); w.Revision != want {
+			t.Errorf("the cascade's watermark records %q, want the digest of the leg's own declared inputs, %q", w.Revision, want)
 		}
 	})
 }
@@ -2294,10 +2305,10 @@ func TestHandler_IssueClosed_CascadeWrapUpAcrossRoleBoundary(t *testing.T) {
 }
 
 // TestHandler_IssueClosed_CascadeWrapUpWatermarkHolds: the cascade's
-// wrap-up emission is guarded by the key's own revision-keyed
-// watermark — unlike the sweep's exempt row, a cascade does not
-// re-fire wrap-up at an already-dispatched revision
-// (§forgejo/reconciliation/watermark-exemptions).
+// wrap-up emission is guarded by the key's own watermark, keyed on the
+// digest of the wrap-up declaration's inputs — a cascade does not
+// re-fire wrap-up at a state it has already dispatched at
+// (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#259).
 func TestHandler_IssueClosed_CascadeWrapUpWatermarkHolds(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
 	h := NewHandler(eng, "s3cret", nil)
@@ -2308,7 +2319,10 @@ func TestHandler_IssueClosed_CascadeWrapUpWatermarkHolds(t *testing.T) {
 	api.blocks[7] = []Issue{*tracker}
 	api.deps[10] = []Issue{*testIssue(7, "closed")}
 	if err := store.Save(Key{Repo: "o/outcomes", Kind: KindIssue, Number: 10},
-		Watermark{Action: string(ActionWrapUp), Revision: issueRevision(tracker)}); err != nil {
+		Watermark{
+			Action:   string(ActionWrapUp),
+			Revision: digestFor(ActionWrapUp, Event{}, State{Issue: tracker, Blockers: api.deps[10]}),
+		}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -5526,7 +5540,9 @@ func TestHandler_TeardownSweepRefiresWhileTheForestStands(t *testing.T) {
 	// The interval the bound waits out is spent: the forest standing
 	// is the state that calls for the order again.
 	key := Key{Repo: "o/out", Kind: KindIssue, Number: 7}
-	eng.stampReFireAt(key, ActionTeardownForest, issueRevision(api.issues[7]), time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+	eng.stampReFireAt(key, ActionTeardownForest,
+		digestFor(ActionTeardownForest, Event{}, State{Issue: api.issues[7], Blocked: api.blocks[7]}),
+		time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
 	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "maitred"})
 	tasks = q.all()
 	if len(tasks) != 2 {
@@ -5985,26 +6001,250 @@ func TestHandler_IssueClosed_CascadeVIPMemberDispatchesAtTeacher(t *testing.T) {
 	}
 }
 
-// TestDispatchCascade_VIPReadFailureDispatchesAtDefault: the blocker read
-// the cascade's issue leg makes for the walk is an addition to the
-// dispatch, not a precondition — a lost read sends the task out at the
-// queue's default tier rather than holding the woken member back
-// (§forgejo/webhook/vip-priority).
-func TestDispatchCascade_VIPReadFailureDispatchesAtDefault(t *testing.T) {
-	eng, api, q, _ := newTestEngine(t)
+// TestHandler_IssueEdited_DurableStampBoundsTheReFireAcrossARestart: the
+// watermark no longer suppresses these rows, so what spaces their
+// re-fire must outlive the process — otherwise every restart, and with
+// it every crash-loop, admits one agent task per tracked key per
+// still-ready action with no interval spent. The fire instant the
+// dispatch records beside the digest is what the bound reads when the
+// new process holds no stamp of its own
+// (§forgejo/decisions/loop-prevention, §forgejo/state/watermark).
+func TestHandler_IssueEdited_DurableStampBoundsTheReFireAcrossARestart(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.issues[7] = &Issue{Number: 7, State: "open", Repository: "o/r", UpdatedAt: testUpdatedAt}
+	key := Key{Repo: "o/r", Kind: KindIssue, Number: 7}
+	ev := Event{Type: EventIssueEdited, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"}
+
+	eng.HandleEvent(ev)
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want the edited issue to dispatch once", len(tasks))
+	}
+	w, err := store.Load(key)
+	if err != nil || w == nil || w.FiredAt == nil {
+		t.Fatalf("watermark = %+v, %v, want the dispatch to stamp when it fired", w, err)
+	}
+
+	// A restart: a fresh engine over the same store, holding no stamp.
+	restarted := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	restarted.HandleEvent(ev)
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks after the restart, want the durable stamp to hold the re-fire back; all = %+v", len(tasks), tasks)
+	}
+
+	// The instant the store records is a clock, not a latch: once the
+	// interval has passed the same state re-fires again.
+	aged := time.Now().Add(-eng.cfg.ReconcileInterval - time.Minute)
+	w.FiredAt = &aged
+	if err := store.Save(key, *w); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	restarted.HandleEvent(ev)
+	if tasks := q.all(); len(tasks) != 2 {
+		t.Fatalf("got %d tasks with the interval spent, want 2; all = %+v", len(tasks), tasks)
+	}
+}
+
+// TestHandler_IssueEdited_FutureStampedInstantCountsAsSpent: the durable
+// instant is a wall clock — the monotonic reading does not survive the store —
+// so it can read as an instant that has not arrived yet: the clock corrected
+// backwards at boot, or a store restored from a host whose clock ran ahead.
+// Read as unspent it would hold every state-governed row on the key off until
+// the clock caught up, restarts included. The bound spaces a re-fire and never
+// silences a row, so a stamp dated ahead of the clock is an expired one
+// (§forgejo/state/watermark, §forgejo/decisions/loop-prevention,
+// s-git/maitred#259).
+func TestHandler_IssueEdited_FutureStampedInstantCountsAsSpent(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.issues[7] = &Issue{Number: 7, State: "open", Repository: "o/r", UpdatedAt: testUpdatedAt}
+	key := Key{Repo: "o/r", Kind: KindIssue, Number: 7}
+	ev := Event{Type: EventIssueEdited, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"}
+
+	eng.HandleEvent(ev)
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want the edited issue to dispatch once", len(tasks))
+	}
+	w, err := store.Load(key)
+	if err != nil || w == nil || w.FiredAt == nil {
+		t.Fatalf("watermark = %+v, %v, want the dispatch to stamp when it fired", w, err)
+	}
+	ahead := time.Now().Add(eng.cfg.ReconcileInterval + time.Hour)
+	w.FiredAt = &ahead
+	if err := store.Save(key, *w); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	restarted := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	restarted.HandleEvent(ev)
+	if tasks := q.all(); len(tasks) != 2 {
+		t.Fatalf("got %d tasks with the stamp dated ahead of the clock, want it read as spent and the row dispatched; all = %+v", len(tasks), tasks)
+	}
+}
+
+// TestHandler_PRFanOut_KeepsTheDurableStampForARestart: the review fan-out is
+// the other writer of a key's main slot, so the fire instant that paces a
+// re-fire must ride that write as it rides a singleton's. A fan-out that kept
+// the (action, digest) pair and dropped the instant would leave the store
+// looking recorded with nothing in it to pace on, and the first sweep after a
+// restart would re-fire the sweep's exempt pull-request rows at a head that has
+// not moved (§forgejo/state/watermark, §forgejo/decisions/loop-prevention).
+func TestHandler_PRFanOut_KeepsTheDurableStampForARestart(t *testing.T) {
+	lenses := []ReviewLens{
+		{Identity: "lens-a", Prompt: "/pr-review-a {{.PRURL}}", Timeout: 30 * time.Minute},
+		{Identity: "lens-b", Prompt: "/pr-review-b {{.PRURL}}", Timeout: 30 * time.Minute},
+	}
+	eng, api, q, store := newTestEngine(t)
+	eng.cfg.Reviews = lenses
+	api.pulls[9] = testPR(9, "open", false)
+	key := Key{Repo: "o/r", Kind: KindPR, Number: 9}
+
+	// The PR is behind: rebase lands in the main slot and stamps the instant
+	// beside the head it dispatched at.
+	eng.HandleEvent(Event{Type: EventPRSynced, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "alice"})
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want rebase dispatched once; all = %+v", len(tasks), tasks)
+	}
+	w, err := store.Load(key)
+	if err != nil || w == nil || w.Action != string(ActionRebase) || w.Revision != "sha-9" || w.FiredAt == nil {
+		t.Fatalf("watermark = %+v, %v, want rebase at the head with its fire instant", w, err)
+	}
+	fired := *w.FiredAt
+
+	// The forge re-reads mergeability, and the next sweep finds both lenses
+	// still owed a review at this head: the fan-out dispatches, and its write
+	// is the main slot's last writer.
+	api.pulls[9].Mergeable = true
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 3 {
+		t.Fatalf("got %d tasks, want one review task per lens; all = %+v", len(tasks), tasks)
+	}
+	w, err = store.Load(key)
+	if err != nil || w == nil {
+		t.Fatalf("Load = %+v, %v, want the fan-out's watermark", w, err)
+	}
+	if w.Action != string(ActionRebase) || w.Revision != "sha-9" {
+		t.Fatalf("main slot = %s @ %s, want the fan-out to keep the dispatch it found there", w.Action, w.Revision)
+	}
+	if w.FiredAt == nil || !w.FiredAt.Equal(fired) {
+		t.Fatalf("fire instant = %v, want the fan-out's write to carry the instant the dispatch stamped (%v)", w.FiredAt, fired)
+	}
+	for _, lens := range lenses {
+		if _, ok := w.Subjects[lens.Identity]; !ok {
+			t.Fatalf("subject slots = %+v, want a slot per dispatched lens", w.Subjects)
+		}
+	}
+
+	// A restart — a fresh engine over the same store, holding no stamp of its
+	// own — and mergeability retracted, so the sweep's exempt rebase row asks
+	// the bound again at the head it already dispatched at. What spaces that
+	// re-fire is the instant in the slot the fan-out wrote last.
+	api.pulls[9].Mergeable = false
+	restarted := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	restarted.cfg.Reviews = lenses
+	restarted.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 3 {
+		t.Fatalf("got %d tasks on the sweep after the restart, want the durable stamp to hold the re-fire back; all = %+v", len(tasks), tasks)
+	}
+}
+
+// TestReconcile_PRSlotWithoutAFireInstantRefiresOnceAndIsRestamped: the slot an
+// earlier release left behind for a pull-request row names the action and the
+// head it dispatched at and carries no fire instant, because that stamp did not
+// exist when the slot was written. The head has not moved, so the pair the
+// bound matches is the pair the slot holds and there is no instant beside it to
+// pace on: the deploy's first sweep re-fires the row, and that dispatch's write
+// carries the instant, so the missing stamp costs one re-fire and no more
+// (§forgejo/state/watermark, §forgejo/decisions/loop-prevention).
+func TestReconcile_PRSlotWithoutAFireInstantRefiresOnceAndIsRestamped(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	api.pulls[9] = testPR(9, "open", false) // an unmoved head the rebase row reads
+	key := Key{Repo: "o/r", Kind: KindPR, Number: 9}
+	if err := store.Save(key, Watermark{Action: string(ActionRebase), Revision: "sha-9"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// No dispatch of this process's own, so memory holds no stamp and the
+	// bound reads the slot the store holds.
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks on the first sweep over that slot, want the row a slot cannot pace to dispatch; all = %+v", len(tasks), tasks)
+	}
+	w, err := store.Load(key)
+	if err != nil || w == nil || w.Action != string(ActionRebase) || w.Revision != "sha-9" || w.FiredAt == nil {
+		t.Fatalf("watermark = %+v, %v, want the dispatch to rewrite the slot with an instant", w, err)
+	}
+
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks at the same head inside one interval, want the instant the row wrote to pace the re-fire; all = %+v", len(tasks), tasks)
+	}
+}
+
+// TestDispatchCascade_LostBlockerReadHoldsTheLegBack: the read the
+// cascade's issue leg pays is a declared input of the digest that decides
+// the leg, so a lost read holds the leg back rather than dispatching at —
+// and recording — a digest folded over a state missing that input. The
+// sweep is the backstop for the member the cascade woke
+// (§forgejo/webhook/vip-priority, §forgejo/reconciliation/the-sweep,
+// §forgejo/decisions/inputs).
+func TestDispatchCascade_LostBlockerReadHoldsTheLegBack(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
 	api.issues[10] = testIssue(10, "open")
 	api.depsErr = errors.New("dependencies unavailable")
 
-	cd := CascadeDispatch{Key: Key{Repo: "o/r", Kind: KindIssue, Number: 10}, Action: ActionImplement}
+	key := Key{Repo: "o/r", Kind: KindIssue, Number: 10}
+	cd := CascadeDispatch{Key: key, Action: ActionImplement}
+	if err := eng.dispatchCascade(cd, "alice"); err == nil {
+		t.Error("dispatchCascade succeeded, want the lost declared read to hold the leg back")
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Errorf("got %d tasks, want none; all = %+v", len(tasks), tasks)
+	}
+	// A digest no other path derives must not enter the store either —
+	// the sweep would read it as a state the engine had reacted to,
+	// dispatch again at the real one, and spend two agent runs on one
+	// unblocking.
+	w, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w != nil {
+		t.Errorf("watermark = %+v, want the leg to leave the store as it found it", w)
+	}
+}
+
+// TestDispatchCascade_IssueLegRecordsTheRefetchedDigest: one state, one
+// digest. The cascade's issue leg carries keys rather than state, so the
+// digest it records must be the one the re-fetch's state shape yields —
+// open PR blockers projected into the connected PRs by the projection the
+// re-fetch calls, or the same unblocking would read as unseen state on the
+// next sweep (§forgejo/webhook/re-fetch, §forgejo/decisions/inputs,
+// s-git/maitred#259). The blocker lives in another repository on purpose:
+// the blocker fold states it as o/other#3 and the connected-PR fold states
+// it as o/r#3, so a state left unprojected folds a digest this assertion
+// cannot match. Folded from one repository both folds state the same fact,
+// and the assertion could not see whether the projection ran at all.
+func TestDispatchCascade_IssueLegRecordsTheRefetchedDigest(t *testing.T) {
+	eng, api, _, store := newTestEngine(t)
+	api.issues[10] = testIssue(10, "open")
+	blocker := Issue{Number: 3, State: "open", IsPull: true, Repository: "o/other"}
+	api.deps[10] = []Issue{blocker}
+
+	key := Key{Repo: "o/r", Kind: KindIssue, Number: 10}
+	cd := CascadeDispatch{Key: key, Action: ActionImplement}
 	if err := eng.dispatchCascade(cd, "alice"); err != nil {
 		t.Fatalf("dispatchCascade: %v", err)
 	}
-	tasks := q.all()
-	if len(tasks) != 1 {
-		t.Fatalf("got %d tasks, want 1 (implement for issue 10)", len(tasks))
+	w, err := store.Load(key)
+	if err != nil || w == nil {
+		t.Fatalf("Load = %+v, %v, want the leg's watermark", w, err)
 	}
-	if tasks[0].Priority != "" {
-		t.Errorf("priority = %q, want unset — the lost read costs the tier, not the dispatch", tasks[0].Priority)
+	want := digestFor(ActionImplement, Event{}, State{
+		Issue:        api.issues[10],
+		Blockers:     api.deps[10],
+		ConnectedPRs: []PullRequest{pullRequestFromIssue(blocker)},
+	})
+	if w.Revision != want {
+		t.Errorf("watermark revision = %q, want the re-fetch's digest %q", w.Revision, want)
 	}
 }
 

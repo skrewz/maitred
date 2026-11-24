@@ -3,6 +3,7 @@ package forgejo
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // everyAction lists the actions the decision function can name
@@ -80,28 +81,242 @@ func TestActionDeclarations_FoldComponentsAreDeclaredByDecompose(t *testing.T) {
 	}
 }
 
-// TestActionDeclarations_DigestsMatchRowRevisions pins each declared
-// digest to the revision the decision path guards and records at
-// today — the digests are unchanged by the declarations, and a change
-// to one is a deliberate edit to exactly one line of the table
-// (§forgejo/state/watermark, s-git/maitred#258).
-func TestActionDeclarations_DigestsMatchRowRevisions(t *testing.T) {
+// TestActionDeclarations_DigestsAreDeclared pins what each declaration's
+// digest derives from: an issue-path action's digest is the fold of its
+// own input set, and the pull-request and landing-set actions name an
+// object revision — a head sha, the landing set's derived revision —
+// until the next member of the chain re-keys them
+// (s-git/maitred#260). (§forgejo/state/watermark, s-git/maitred#258,
+// s-git/maitred#259.)
+func TestActionDeclarations_DigestsAreDeclared(t *testing.T) {
 	issue := trackerIssue()
 	pr := openPR("sha-head")
 	members := []SyncMember{syncMemberFixture(4, 40)}
 	st := State{Issue: issue, PR: pr, SyncMembers: members, ReviewLenses: testLenses}
 	for _, a := range []Action{ActionImplement, ActionReassess, ActionDecompose, ActionWrapUp, ActionTeardownForest} {
-		if got, want := digestFor(a, Event{}, st), issueRevision(issue); got != want {
-			t.Errorf("digestFor(%s) = %q, want the issue revision %q", a, got, want)
+		if !digestFoldsInputs(a) {
+			t.Errorf("digestFor(%s) does not fold the declaration's input set", a)
+		}
+		if got, want := digestFor(a, Event{}, st), hashInputFacts(declaredInputFacts(a, st)); got != want {
+			t.Errorf("digestFor(%s) = %q, want the declared fold %q", a, got, want)
 		}
 	}
 	for _, a := range []Action{ActionReview, ActionFixFeedback, ActionMergeOrWait, ActionRebase} {
+		if digestFoldsInputs(a) {
+			t.Errorf("digestFor(%s) folds a declared input set; the pull-request rows are the next member of this chain", a)
+		}
 		if got, want := digestFor(a, Event{}, st), pr.HeadSHA; got != want {
 			t.Errorf("digestFor(%s) = %q, want the PR head sha %q", a, got, want)
 		}
 	}
 	if got, want := digestFor(ActionSync, Event{}, st), syncSetRevision(issue, members, testLenses); got != want {
 		t.Errorf("digestFor(sync) = %q, want the set revision %q", got, want)
+	}
+}
+
+// TestDeclaredDigests_FoldEveryDeclaredFact checks that no event fact
+// folds into a digest the two paths must answer with one value: an event
+// fact would make one state yield two digests
+// (§forgejo/decisions/inputs,
+// §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#259).
+// The companion claim — that a declaration naming a state fact no fold
+// states is a mistake rather than a digest — is no longer this test's to
+// make: validateFoldingDeclarations refuses it as the declaration table
+// is built, so no test binary with such a gap ever reaches a
+// table walk.
+func TestDeclaredDigests_FoldEveryDeclaredFact(t *testing.T) {
+	// One state, every path: the sweep's synthetic event and an issue's
+	// activity events must reach one digest, whatever row brought them.
+	st := State{ReviewLenses: testLenses, Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "closed", Repository: "o/r"}}}
+	for _, ev := range []Event{
+		{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: 7},
+		{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"},
+		{Type: EventIssueEdited, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "carol"},
+		{Type: EventIssueCommented, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "dave"},
+	} {
+		for _, a := range []Action{ActionImplement, ActionReassess, ActionWrapUp} {
+			if got, want := digestFor(a, ev, st), digestFor(a, Event{}, st); got != want {
+				t.Errorf("digestFor(%s) under %s = %q, want the sweep's %q: an event fact entered a digest", a, ev.Type, got, want)
+			}
+		}
+	}
+}
+
+// TestDeclaredDigests_MoveWithTheFactsThePredicatesRead checks the
+// digest answers a state relation the forge delivers no event for — a
+// blocker edge attached or removed — and answers the listings' order
+// once, so the guard cannot be the reason an edge move goes unhandled
+// (§forgejo/reconciliation/watermark-exemptions,
+// §forgejo/decisions/actionable-state-digest, s-git/maitred#259).
+func TestDeclaredDigests_MoveWithTheFactsThePredicatesRead(t *testing.T) {
+	issue := openIssue()
+	blocker := Issue{Number: 3, State: "open", Repository: "o/r"}
+	closed := Issue{Number: 3, State: "closed", Repository: "o/r"}
+	st := State{ReviewLenses: testLenses, Issue: issue, Blockers: []Issue{blocker}}
+	stUnblocked := State{ReviewLenses: testLenses, Issue: issue, Blockers: []Issue{closed}}
+	for _, a := range []Action{ActionImplement, ActionReassess, ActionWrapUp} {
+		if digestFor(a, Event{}, st) == digestFor(a, Event{}, stUnblocked) {
+			t.Errorf("digestFor(%s) does not move when a blocker's state moves", a)
+		}
+	}
+
+	// Order-insensitive: the same set of blockers listed the other way.
+	two := []Issue{{Number: 3, State: "open", Repository: "o/r"}, {Number: 4, State: "closed", Repository: "o/r"}}
+	reversed := []Issue{two[1], two[0]}
+	for _, a := range []Action{ActionImplement, ActionWrapUp} {
+		if got, want := digestFor(a, Event{}, State{Issue: issue, Blockers: two}), digestFor(a, Event{}, State{Issue: issue, Blockers: reversed}); got != want {
+			t.Errorf("digestFor(%s) = %q over one listing order, want the other's %q", a, got, want)
+		}
+	}
+	// A label the forge lists the other way round is the same state.
+	shuffled := openIssue()
+	shuffled.Labels = []string{"enhancement", "bug"}
+	twisted := openIssue()
+	twisted.Labels = []string{"bug", "enhancement"}
+	for _, a := range []Action{ActionImplement, ActionReassess} {
+		if got, want := digestFor(a, Event{}, State{Issue: shuffled}), digestFor(a, Event{}, State{Issue: twisted}); got != want {
+			t.Errorf("digestFor(%s) = %q over one label order, want the other's %q", a, got, want)
+		}
+	}
+
+	// A connected pull request opening and closing is a fact the
+	// implement predicate reads, so it must move the digest
+	// (§forgejo/decisions/transition-table).
+	connected := State{Issue: issue, ConnectedPRs: []PullRequest{{Number: 9, State: "open"}}}
+	if digestFor(ActionImplement, Event{}, connected) == digestFor(ActionImplement, Event{}, State{Issue: issue}) {
+		t.Error("digestFor(implement) does not move when a pull request connects")
+	}
+
+	// A teardown order over a forest whose members are all spared
+	// trackers states no downstream fact at all.
+	root := ideationIssue()
+	root.Labels = append(root.Labels, LabelTeardownForest)
+	teardown := State{Issue: root, Blocked: []Issue{*trackerIssue()}}
+	if got := declaredInputFacts(ActionTeardownForest, teardown); len(got) == 0 {
+		t.Error("a root blocking only a spared tracker states no fact at all; want the kind labels folded besides")
+	}
+	spared := State{Issue: root, Blocked: []Issue{*trackerIssue()}}
+	withMember := State{Issue: root, Blocked: []Issue{*trackerIssue(), *openIssue()}}
+	if digestFor(ActionTeardownForest, Event{}, spared) == digestFor(ActionTeardownForest, Event{}, withMember) {
+		t.Error("digestFor(teardown-forest) does not move when a deletable member appears")
+	}
+}
+
+// TestDeclaredDigests_LeaveTheTrackersWrittenRegionOut checks the one
+// fact the engine moves by writing it is absent from the digest: a
+// tracker's current-state block, rewritten by every wrap-up's draw,
+// must not move the digest a wrap-up is watermarked on, whatever the
+// tick does to the row's timestamp (§forgejo/reconciliation/the-tracker-block,
+// §forgejo/decisions/loop-prevention, s-git/maitred#259).
+func TestDeclaredDigests_LeaveTheTrackersWrittenRegionOut(t *testing.T) {
+	tracker := trackerIssue()
+	tracker.Body = "## Outcome\n\nThe thing we said we would ship.\n\n## Current state\n\n" +
+		fenceBegin + "\n\nLast revisited: 2026-01-01 00:00 UTC\n\n```mermaid\nflowchart TD\n```\n\n" + fenceEnd
+	written := trackerIssue()
+	written.Body = strings.Replace(tracker.Body, "Last revisited: 2026-01-01 00:00 UTC", "Last revisited: 2026-01-02 00:00 UTC", 1)
+	written.UpdatedAt = tracker.UpdatedAt.Add(time.Hour)
+	for _, a := range []Action{ActionWrapUp, ActionReassess, ActionImplement} {
+		if got, want := digestFor(a, Event{}, State{Issue: written}), digestFor(a, Event{}, State{Issue: tracker}); got != want {
+			t.Errorf("digestFor(%s) = %q after the engine rewrote the tracker's region, want the unchanged %q", a, got, want)
+		}
+	}
+	// The prose outside the region is the outcome's own, and moves it.
+	edited := trackerIssue()
+	edited.Body = strings.Replace(tracker.Body, "The thing we said we would ship.", "What we shipped, restated by a human.", 1)
+	if digestFor(ActionWrapUp, Event{}, State{Issue: tracker}) == digestFor(ActionWrapUp, Event{}, State{Issue: edited}) {
+		t.Error("digestFor(wrap-up) does not move when the tracker's prose outside the region is edited")
+	}
+}
+
+// TestQuotedRevision_NamesTheFactsBehindTheDigest checks the digest a
+// reason quotes is stated in the words an operator can line up against
+// the forge's history, the rule every other revision quote already
+// follows (§forgejo/observability/the-decision-log, s-git/maitred#259).
+func TestQuotedRevision_NamesTheFactsBehindTheDigest(t *testing.T) {
+	st := State{ReviewLenses: testLenses, Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "closed", Repository: "o/r"}}}
+	ev := issueEvent(EventIssueOpened)
+	got := quotedRevision(ActionImplement, ev, st, digestFor(ActionImplement, ev, st))
+	for _, want := range []string{"state open", "updated ", "o/r#3 closed"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("quoted revision %q names no %q", got, want)
+		}
+	}
+	// An `outcome` tracker's fold states the facts its masked revision
+	// hashes rather than the region the engine rewrites every tick, so
+	// the wrap-up row that quotes its digest names what an operator can
+	// place in the forge's history (§forgejo/reconciliation/the-tracker-block).
+	tracker := State{Issue: trackerIssue()}
+	got = quotedRevision(ActionWrapUp, Event{}, tracker, digestFor(ActionWrapUp, Event{}, tracker))
+	for _, want := range []string{"state open", "label " + LabelOutcome, "body " + digestRevision(outsideFence(tracker.Issue.Body))} {
+		if !strings.Contains(got, want) {
+			t.Errorf("a tracker's quoted revision %q names no %q", got, want)
+		}
+	}
+	// A revision the action does not fold — a pull request's head sha,
+	// quoted by the row that keys on it — is quoted as what it is.
+	if got := quotedRevision(ActionReview, prEvent(EventPRReviewed, "carol"), State{PR: openPR("abc")}, "abc"); got != "revision abc" {
+		t.Errorf("quoted revision = %q, want the head sha quoted as a revision", got)
+	}
+}
+
+// TestDeclaredDigests_AgreeWithTheLoggedRevision pins the claim the
+// watermark and the log rest on together: the digest a dispatch
+// records, the revision the log names for it, the dedup key's revision
+// and the re-fire stamp are one derivation — the dispatched action's
+// declared digest. A hold-off names no action to derive one from and
+// names the object's own revision instead, which is what the log's
+// reader can line up against the forge (§forgejo/state/watermark,
+// §forgejo/webhook/the-pipeline, §forgejo/observability/the-decision-log,
+// s-git/maitred#259). A re-key of one action's digest is an edit to
+// that declaration and to this test, not to a second derivation.
+func TestDeclaredDigests_AgreeWithTheLoggedRevision(t *testing.T) {
+	for _, path := range []struct {
+		// name is the write path whose state the case stands for.
+		name    string
+		ev      Event
+		st      State
+		actions []Action
+	}{
+		{
+			name:    "the event pipeline's issue leg",
+			ev:      Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7},
+			st:      State{Issue: openIssue()},
+			actions: []Action{ActionImplement, ActionReassess, ActionDecompose, ActionWrapUp, ActionTeardownForest},
+		},
+		{
+			// The cascade's issue leg holds the issue and its blockers,
+			// so a digest may not need more than that.
+			name:    "the unblock cascade's issue leg",
+			ev:      Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7},
+			st:      State{Issue: trackerIssue(), Blockers: []Issue{{Number: 3, State: "closed", Repository: "o/r"}}},
+			actions: []Action{ActionImplement, ActionWrapUp},
+		},
+		{
+			name:    "the event pipeline's PR leg",
+			ev:      Event{Type: EventPRReviewed, Repo: "o/r", Kind: KindPR, Number: 9},
+			st:      State{PR: openPR("sha-head"), ReviewLenses: testLenses},
+			actions: []Action{ActionReview, ActionFixFeedback, ActionMergeOrWait, ActionRebase},
+		},
+		{
+			name:    "the sweep's sync row and the cascade's set leg",
+			ev:      Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: 11},
+			st:      State{Issue: syncIssueFixture(11), SyncMembers: []SyncMember{syncMemberFixture(4, 40)}, ReviewLenses: testLenses},
+			actions: []Action{ActionSync},
+		},
+	} {
+		t.Run(path.name, func(t *testing.T) {
+			for _, a := range path.actions {
+				d := dispatch(a, "the case stands for a dispatch")
+				if got, want := loggedRevision(d, path.ev, path.st), digestFor(a, path.ev, path.st); got != want {
+					t.Errorf("the log names %q for %s, the watermark records %q", got, a, want)
+				}
+			}
+			// A hold-off names the object revision, the value a reader
+			// of the log can place in the forge's history.
+			if got, want := loggedRevision(holdOff("nothing to dispatch"), path.ev, path.st), revisionFor(path.ev, path.st); got != want {
+				t.Errorf("a hold-off logged %q, want the object revision %q", got, want)
+			}
+		})
 	}
 }
 
@@ -317,64 +532,6 @@ func TestReadyAtRow_NamesAnAbstainAsAFault(t *testing.T) {
 	}
 	if !strings.Contains(d.Reason, string(ActionFixFeedback)) || !strings.Contains(d.Reason, "wiring fault") {
 		t.Errorf("hold-off reason = %q, want it to name the abstaining ask as a wiring fault", d.Reason)
-	}
-}
-
-// TestDeclaredDigests_AgreeWithTheObjectRevision pins the claim the
-// watermark rests on: the digest a dispatch is watermarked on and the
-// revision the decision log names and the re-fire stamp is keyed on
-// are two derivations of one fact, and for every action over every
-// state shape a write path hands them they answer with the same value
-// (§forgejo/state/watermark, §forgejo/webhook/the-pipeline,
-// §forgejo/decisions/actions). A re-key of one action's digest is
-// therefore an edit to that declaration, to revisionFor, to the two
-// sections named above and to this test — not to one line.
-func TestDeclaredDigests_AgreeWithTheObjectRevision(t *testing.T) {
-	for _, path := range []struct {
-		// name is the write path whose state the case stands for.
-		name    string
-		ev      Event
-		st      State
-		actions []Action
-	}{
-		{
-			name:    "the event pipeline's issue leg",
-			ev:      Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7},
-			st:      State{Issue: openIssue()},
-			actions: []Action{ActionImplement, ActionReassess, ActionDecompose, ActionWrapUp, ActionTeardownForest},
-		},
-		{
-			// The cascade's issue leg holds the issue and its blockers
-			// and nothing else, so a digest may not need more than that.
-			name:    "the unblock cascade's issue leg",
-			ev:      Event{Type: EventIssueOpened, Repo: "o/r", Kind: KindIssue, Number: 7},
-			st:      State{Issue: trackerIssue()},
-			actions: []Action{ActionImplement, ActionWrapUp},
-		},
-		{
-			name:    "the event pipeline's PR leg",
-			ev:      Event{Type: EventPRReviewed, Repo: "o/r", Kind: KindPR, Number: 9},
-			st:      State{PR: openPR("sha-head"), ReviewLenses: testLenses},
-			actions: []Action{ActionReview, ActionFixFeedback, ActionMergeOrWait, ActionRebase},
-		},
-		{
-			// Both sync writes — the sweep's row and dispatchSyncSet —
-			// read the set the same way, so the set revision is what
-			// both derivations answer.
-			name:    "the sweep's sync row and the cascade's set leg",
-			ev:      Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: 11},
-			st:      State{Issue: syncIssueFixture(11), SyncMembers: []SyncMember{syncMemberFixture(4, 40)}, ReviewLenses: testLenses},
-			actions: []Action{ActionSync},
-		},
-	} {
-		t.Run(path.name, func(t *testing.T) {
-			for _, a := range path.actions {
-				digest, rev := digestFor(a, path.ev, path.st), revisionFor(path.ev, path.st)
-				if digest != rev {
-					t.Errorf("digestFor(%s) = %q, want the revision the log records, %q", a, digest, rev)
-				}
-			}
-		})
 	}
 }
 

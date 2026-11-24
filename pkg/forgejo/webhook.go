@@ -204,7 +204,7 @@ func (e *Engine) HandleEvent(ev Event) {
 		if d.Dispatched && !admissibleInRoles(d.Action, r) {
 			d = holdOffActionInadmissible(d.Action, ev.Repo)
 		}
-		d = e.boundReFire(key, ev, st, d)
+		d = e.boundReFire(key, ev, st, w, d)
 		e.recordDecision(key, ev, st, d)
 		if d.Dispatched {
 			if len(d.Lenses) > 0 {
@@ -315,12 +315,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 			if err != nil {
 				return ev, State{}, err
 			}
-			st.Blockers = blockers
-			for i := range blockers {
-				if blockers[i].IsPull && blockers[i].State == "open" {
-					st.ConnectedPRs = append(st.ConnectedPRs, pullRequestFromIssue(blockers[i]))
-				}
-			}
+			projectPRBlockers(&st, blockers)
 			// A root under a teardown order is the one issue whose
 			// *downstream* edges are read, because the order is only
 			// actionable while the forest stands: whether the root blocks
@@ -1392,7 +1387,7 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	if action == ActionWrapUp {
 		e.drawTrackerBeforeWrapUp(st.Issue, st.Blockers, ev.Repo)
 	}
-	rev := revisionFor(ev, st)
+	rev := digestFor(action, ev, st)
 	if err := e.dispatchPrompt(ev, st, *pc, "", action, rev); err != nil {
 		return err
 	}
@@ -1439,17 +1434,17 @@ type reFireStamp struct {
 // consults is the one this action's own dispatch left, so an unrelated
 // dispatch at the same revision bounds nothing here. A revision-gated
 // decision consults nothing: the bound exists to pace the rows the
-// watermark does not gate. The bound is the engine's own stamp rather
-// than the watermark, so a store that cannot be read narrows the re-fire
-// instead of switching the bound off; a revision with no stamp is a
-// first dispatch, which is never touched.
-func (e *Engine) boundReFire(key Key, ev Event, st State, d Decision) Decision {
+// watermark does not gate. Memory answers first and the durable fire
+// instant answers where memory is empty, so a store that cannot be read
+// narrows the re-fire instead of switching the bound off; a revision
+// with no stamp anywhere is a first dispatch, which is never touched.
+func (e *Engine) boundReFire(key Key, ev Event, st State, w *Watermark, d Decision) Decision {
 	if !d.Dispatched || !d.StateGoverned {
 		return d
 	}
-	rev := revisionFor(ev, st)
-	if e.reFiredRecently(key, d.Action, rev) {
-		return holdOffReFireBound(d.Action, revisionFacts(st.Issue, rev), e.cfg.ReconcileInterval)
+	rev := digestFor(d.Action, ev, st)
+	if e.reFiredRecently(key, d.Action, rev, w) {
+		return holdOffReFireBound(d.Action, quotedRevision(d.Action, ev, st, rev), e.cfg.ReconcileInterval)
 	}
 	return d
 }
@@ -1458,12 +1453,36 @@ func (e *Engine) boundReFire(key Key, ev Event, st State, d Decision) Decision {
 // bounds a re-fire at revision: an interval spent, or a revision the
 // object has moved past, bounds nothing, so the bound is a rate on one
 // `(action, revision)` and never a hold-off on a dispatch the engine has
-// not made (§forgejo/decisions/loop-prevention).
-func (e *Engine) reFiredRecently(key Key, action Action, revision string) bool {
+// not made (§forgejo/decisions/loop-prevention). The engine's in-memory
+// stamp answers whenever it holds one, being the freshest record of the
+// dispatch. Where memory is empty — the first arrival after a restart —
+// the durable fire instant the watermark records for that same
+// `(action, revision)` answers instead, so a deploy, a crash-loop or an
+// OOM kill buys no fan-out the interval had not already bought
+// (§forgejo/state/watermark). An instant that has not arrived yet counts as
+// spent: the bound may pace a re-fire, never silence a row.
+func (e *Engine) reFiredRecently(key Key, action Action, revision string, w *Watermark) bool {
 	e.reFireMu.Lock()
 	defer e.reFireMu.Unlock()
-	last, ok := e.reFires[reFireSlot{key: key, action: action}]
-	return ok && last.revision == revision && time.Since(last.at) < e.cfg.ReconcileInterval
+	if last, ok := e.reFires[reFireSlot{key: key, action: action}]; ok {
+		return last.revision == revision && time.Since(last.at) < e.cfg.ReconcileInterval
+	}
+	if w == nil || w.FiredAt == nil || w.Action != string(action) || w.Revision != revision {
+		return false
+	}
+	// The durable instant is a wall clock, the monotonic reading being lost
+	// when the slot was marshalled, so a boot-time correction — or a store
+	// restored from a host whose clock ran ahead — can hand it an instant
+	// that has not arrived yet. Such a stamp is an expired one, the answer a
+	// missing stamp already gives: read as unspent it would hold every
+	// state-governed row on this key off until the clock caught up, outliving
+	// every restart taken meanwhile, which is an action falling silent at a
+	// digest it cannot move — the case s-git/maitred#259 exists to rule out.
+	// The memory stamp above is paced by the monotonic clock and cannot be
+	// read this way (§forgejo/state/watermark,
+	// §forgejo/decisions/loop-prevention).
+	spent := time.Since(*w.FiredAt)
+	return spent >= 0 && spent < e.cfg.ReconcileInterval
 }
 
 // stampReFire records a landed singleton dispatch for the bound. A
@@ -1559,7 +1578,7 @@ func (e *Engine) dispatchPrompt(ev Event, st State, pc PromptConfig, subject str
 // slot and the sweep retries it, exactly as a failed singleton dispatch
 // retries.
 func (e *Engine) dispatchLenses(key Key, w *Watermark, ev Event, st State, lenses []LensDispatch) {
-	rev := revisionFor(ev, st)
+	rev := digestFor(ActionReview, ev, st)
 	slots := w.subjectSlots()
 	if slots == nil {
 		slots = map[string]Slot{}
@@ -1602,18 +1621,35 @@ func findLens(lenses []ReviewLens, identity string) (ReviewLens, bool) {
 
 // watermarkAt returns a watermark whose main slot records action at
 // revision, keeping the subject slots a previous fan-out wrote
-// (§forgejo/state/watermark).
+// (§forgejo/state/watermark). It stamps the fire instant into the slot,
+// so the re-fire bound that spaces an unchanged `(action, digest)`
+// survives the engine's memory as well — a restart re-fires at the
+// bound's pace rather than at once
+// (§forgejo/decisions/loop-prevention).
 func watermarkAt(prev *Watermark, action, revision string) Watermark {
-	return Watermark{Action: action, Revision: revision, Subjects: prev.subjectSlots()}
+	fired := time.Now()
+	return Watermark{Action: action, Revision: revision, FiredAt: &fired, Subjects: prev.subjectSlots()}
 }
 
-// watermarkKeepSlots returns a watermark keeping prev's main slot and
-// adding/overwriting the given subject slots — the fan-out's write.
+// watermarkKeepSlots returns a watermark keeping prev's main slot — the
+// action, the digest it dispatched at and the fire instant beside it — and
+// adding/overwriting the given subject slots: the fan-out's write. The
+// instant rides this write because the pair it is read with does: the re-fire
+// bound keys on (action, digest) and paces on the instant recorded beside
+// that pair, so a fan-out keeping the pair and dropping the instant would
+// leave a slot that reads as recorded answering as though nothing had ever
+// fired. The instant is copied rather than shared, the subject map being
+// copied for the same reason: a write must not alias the record it was
+// merged into (§forgejo/state/watermark, §forgejo/decisions/loop-prevention).
 func watermarkKeepSlots(prev *Watermark, slots map[string]Slot) Watermark {
 	next := Watermark{Subjects: prev.subjectSlots()}
 	if prev != nil {
 		next.Action = prev.Action
 		next.Revision = prev.Revision
+		if prev.FiredAt != nil {
+			stamped := *prev.FiredAt
+			next.FiredAt = &stamped
+		}
 	}
 	if next.Subjects == nil {
 		next.Subjects = map[string]Slot{}
@@ -1718,37 +1754,46 @@ func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
 		e.log.Warn("load watermark (continuing without)", "key", k.String(), "error", err)
 		w = nil
 	}
-	// The cascade's watermark records the emitted action's declared
-	// digest, which for the issue-path actions is the re-fetched
-	// issue's revision. A sync-set candidate never reaches this line:
-	// dispatchCascade hands it to dispatchSyncSet, which reads the set
-	// before deriving anything, so the state built here carries
-	// exactly the object these actions read
-	// (§forgejo/decisions/actions, §forgejo/decisions/unblock-cascade).
-	rev := digestFor(cd.Action, Event{}, State{Issue: issue})
-	if alreadyDispatched(w, cd.Action, rev) {
-		return nil
-	}
-	ev := Event{Type: EventIssueOpened, Repo: k.Repo, Kind: KindIssue, Number: k.Number, Sender: sender}
 	// The vip walk reads the issue's blocker rows for a labelled tracker
 	// (§forgejo/webhook/vip-priority), and this is the one path that
 	// dispatches an issue without holding them — the cascade carries
 	// keys, not state — so the leg pays the one read the decision made
-	// elsewhere. A lost read costs the tier and not the dispatch: the
-	// task goes out at the queue's default with a warn line naming it
-	// (§forgejo/webhook/vip-priority).
+	// elsewhere. That read is also a declared input of the actions
+	// dispatched here (§forgejo/decisions/inputs), so the leg derives the
+	// digest that decides it over the state shape the re-fetch builds:
+	// the blocker rows, and the open PR blockers projected into the
+	// connected PRs through the same projection the re-fetch calls, so one
+	// state reaches one digest whichever path observed it
+	// (§forgejo/webhook/re-fetch, §forgejo/decisions/actions). A read
+	// that fails costs this leg and not merely the tier: folding a
+	// digest over a state missing a declared input would derive a value
+	// no other path derives, which both mis-spaces the re-fire and leaves
+	// the store holding a digest the next sweep reads as unseen state.
+	// The sweep is the backstop the specification already names for a
+	// delivery the cascade lost
+	// (§forgejo/reconciliation/the-sweep, §forgejo/webhook/vip-priority).
 	st := State{Issue: issue}
 	blockers, err := e.api.IssueDependencies(owner, name, k.Number)
 	if err != nil {
-		e.log.Warn("vip walk: issue-dependencies read failed; scheduling at the queue's default tier",
-			"key", k.String(), "error", err)
-	} else {
-		st.Blockers = blockers
+		return fmt.Errorf("cascade leg: reading %s's blockers: %w", k.String(), err)
 	}
+	projectPRBlockers(&st, blockers)
+	// The cascade's watermark records the emitted action's declared
+	// digest, derived over the state the action's declaration names. A
+	// sync-set candidate never reaches this line: dispatchCascade hands
+	// it to dispatchSyncSet, which reads the set before deriving
+	// anything, so the state built here carries exactly the object
+	// these actions read (§forgejo/decisions/actions,
+	// §forgejo/decisions/unblock-cascade).
+	rev := digestFor(cd.Action, Event{}, st)
+	if alreadyDispatched(w, cd.Action, rev) {
+		return nil
+	}
+	ev := Event{Type: EventIssueOpened, Repo: k.Repo, Kind: KindIssue, Number: k.Number, Sender: sender}
 	if err := e.dispatch(ev, st, cd.Action); err != nil {
 		return err
 	}
-	return e.store.Save(k, Watermark{Action: string(cd.Action), Revision: rev})
+	return e.store.Save(k, watermarkAt(w, string(cd.Action), rev))
 }
 
 // dispatchCascadePR dispatches the unblock cascade for a newly unblocked PR
@@ -1831,7 +1876,7 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 			e.log.Warn("load watermark (continuing without)", "key", k.String(), "error", err)
 			w = nil
 		}
-		d = e.boundReFire(k, ev, st, Decide(ev, st, w))
+		d = e.boundReFire(k, ev, st, w, Decide(ev, st, w))
 		if d.Action == ActionMergeOrWait {
 			// The dispatch carries the assembled state, not the bare
 			// pull request: the delivered issue's labels are read from
@@ -1938,19 +1983,32 @@ func (e *Engine) dispatchSyncSet(cd CascadeDispatch, sender string) error {
 	return e.store.Save(k, watermarkAt(w, string(ActionSync), digestFor(ActionSync, ev, st)))
 }
 
-// revisionFor is the object revision a decision-log entry records and
-// the re-fire stamp is keyed on: the PR head sha for pull requests,
-// the issue's updated_at for issues, and the derived set revision for
-// a landing set — the state of the whole set, not of the grouping
-// issue alone (§forgejo/webhook/the-pipeline, §forgejo/state/watermark,
-// §forgejo/decisions/sync-set). What a dispatch's own watermark
-// records is the dispatched action's declared digest, reached through
-// the declaration table (§forgejo/decisions/actions). Each action
-// reads one object, so its declared digest is the revision this
-// function derives for that object — an agreement the tests keep
-// rather than a coincidence of wording, since nothing in the types
-// forces it (TestDeclaredDigests_AgreeWithTheObjectRevision,
-// TestDispatch_WatermarkNamesTheLoggedRevision).
+// loggedRevision is the revision a decision-log entry records: the
+// dispatched action's declared digest for a dispatch, so the line and
+// the watermark file state one value, and the object's own revision for
+// a hold-off, which names no action whose declaration could be folded
+// (§forgejo/observability/the-decision-log, §forgejo/state/watermark,
+// s-git/maitred#259). A dispatch records that digest in its watermark,
+// in its task's dedup key and in the re-fire stamp alike, so the guard,
+// the pacing and the queue answer on one derivation
+// (§forgejo/decisions/actions, §forgejo/webhook/the-pipeline).
+func loggedRevision(d Decision, ev Event, st State) string {
+	if d.Dispatched && d.Action != "" {
+		return digestFor(d.Action, ev, st)
+	}
+	return revisionFor(ev, st)
+}
+
+// revisionFor is the object revision itself: the PR head sha for a pull
+// request, the issue's updated_at for an issue, and the revision
+// derived from the whole set for a landing set — the state of that set,
+// not of the grouping issue alone (§forgejo/webhook/the-pipeline,
+// §forgejo/state/watermark, §forgejo/decisions/sync-set). The
+// pull-request and landing-set actions declare these as their digest, so
+// for their rows this derivation and the declared digest state one
+// value; the issue-path actions fold their declaration's input set
+// instead, and reach this only where no action was chosen
+// (s-git/maitred#259).
 func revisionFor(ev Event, st State) string {
 	// The set revision describes a landing set, so it takes
 	// precedence only on the path that attached members to the
@@ -1993,6 +2051,21 @@ func pullRequestFromIssue(issue Issue) PullRequest {
 		Title:   issue.Title,
 		State:   issue.State,
 		HTMLURL: issue.HTMLURL,
+	}
+}
+
+// projectPRBlockers records a dependency listing on st and projects its
+// open pull-request blockers into the connected pull requests — the one
+// statement of that projection, so every path that builds a state from a
+// blocker listing builds the same state and the declaration's digest folds
+// the same facts whichever path observed them
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/inputs).
+func projectPRBlockers(st *State, blockers []Issue) {
+	st.Blockers = blockers
+	for i := range blockers {
+		if blockers[i].IsPull && blockers[i].State == "open" {
+			st.ConnectedPRs = append(st.ConnectedPRs, pullRequestFromIssue(blockers[i]))
+		}
 	}
 }
 

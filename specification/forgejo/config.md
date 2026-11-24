@@ -62,10 +62,11 @@ config it deploys (§forgejo/config/loading).
 The `implement` prompt's pre-flight checks must, before creating any
 branch or pull request, establish whether a connected pull request
 already exists for the issue and, if one does, report and stay silent
-rather than start a second delivery: the sweep re-dispatches `implement`
-revision notwithstanding, so what keeps a re-fire of a delivered
-implementation quiet is the **pair** — the engine's eligibility predicate
-(no connected open pull request, §forgejo/decisions/actions) and this
+rather than start a second delivery: the sweep re-fires `implement` at a
+state it has already reacted to, spaced by the re-fire bound, so what
+keeps a re-fire of a delivered implementation quiet is the **pair** —
+the engine's eligibility predicate (no connected open pull request,
+§forgejo/decisions/actions) and this
 pre-flight. Neither replaces the other, and neither is the guard on its
 own: the predicate reads the issue's blocker rows and nothing else, so a
 delivery that wired no edge is invisible to it, and an instruction in a

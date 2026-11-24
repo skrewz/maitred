@@ -107,13 +107,15 @@ On each `POST`:
    so the actor named on the work is the forge login itself. The task
    carries a **dedup key** — the dispatch identity: the key's repo, kind,
    and number, the action, the **subject** for a fan-out dispatch (the lens
-   identity §forgejo/decisions/review-lenses), and the revision — so a queue
+   identity §forgejo/decisions/review-lenses), and the revision the action
+   was dispatched at — its declared digest — so a queue
    system with de-duplication (hotelier's `dedup_key`) squelches a
    re-dispatch of the same `(action, subject, revision)` while the first
    task is still pending. The subject is what keeps one lens's review task
    from squelching another's at the same revision; singletons carry no
-   subject slot. A different revision (a new commit, an edited issue) is a
-   different key and dispatches freely. The key carries the repo verbatim
+   subject slot. A different revision (a new commit, an edited issue, a
+   blocker edge an event never announced) is a different key and dispatches
+   freely (§forgejo/state/watermark). The key carries the repo verbatim
    (slash retained — it is opaque to the queue system), so two distinct repos
    never produce the same key. A prompt that references a
    URL the re-fetched state cannot fill fails the dispatch instead of
@@ -139,13 +141,17 @@ On each `POST`:
    per §forgejo/webhook/vip-priority.
 7. **Watermark.** A dispatch records its watermark — the action and the
    revision it was dispatched at, which is the dispatched action's declared
-   digest (§forgejo/decisions/actions): the PR head sha, the issue's
-   `updated_at`, or, for a tracker, the digest §forgejo/state/watermark
-   describes — in the store (§forgejo/state/watermark); a hold-off
-   records nothing. Each key of the
+   digest (§forgejo/decisions/actions), the one value this step's task
+   dedup key, the re-fire stamp and the decision log's revision field also
+   carry: for an issue-path action the fold of the inputs its declaration
+   names, for a pull request the head sha, and for a landing set the
+   revision derived from the whole set — in the store
+   (§forgejo/state/watermark); a hold-off records nothing, and the log
+   names an already-recorded state as a re-fire the re-fire bound spaces
+   rather than a duplicate. Each key of the
    unblock cascade (§forgejo/decisions/unblock-cascade) has its own
    watermark applied before its dispatch, so an already-dispatched
-   `(action, revision)` is not re-dispatched.
+   `(action, digest)` is not re-dispatched.
 8. **Acknowledge.** The response is `204` once the pipeline has run; the
    engine does not block on the dispatched agent — dispatch only enqueues.
    A slow pipeline (several re-fetch calls) can exceed Forgejo's delivery
@@ -336,14 +342,26 @@ unblock cascade's issue leg (§forgejo/decisions/unblock-cascade) is the
 one path that dispatches an issue without holding its blocker rows, so
 it reads them once per dispatch; the cascade's PR leg dispatches the
 state the re-fetch assembled, so the delivered issue is judged there on
-the same rows every other delivery path judges it on.
+the same rows every other delivery path judges it on. That read is also
+a **declared input** of the actions the issue leg dispatches, so the leg
+builds the state the re-fetch builds — open PR blockers projected into
+the connected pull requests as §forgejo/webhook/re-fetch projects them —
+and one state reaches one digest whichever path observed it
+(§forgejo/decisions/inputs).
 
-A graph read that **fails** costs the tier and not the dispatch: an
-object whose forest cannot be read is scheduled at the queue's default
-like any unlabelled object, with one warn line naming the lost read —
-the level every other degraded continuation in the engine logs at.
-Holding the work back over an annotation would leave the queue poorer and
-the issue unattended, which is the opposite of what the label asks for.
+A graph read made **only** for the tier costs the tier and not the
+dispatch: an object whose forest cannot be read is scheduled at the
+queue's default like any unlabelled object, with one warn line naming
+the lost read — the level every other degraded continuation in the
+engine logs at. Holding the work back over an annotation would leave the
+queue poorer and the issue unattended, which is the opposite of what the
+label asks for. Where the same read is a declared input of the digest
+that decides the leg, though, it is not an annotation: a digest folded
+over a state missing one of its inputs is a value no other path derives,
+which would mis-space the re-fire and leave the store holding a digest
+the next sweep reads as unseen state — two agent runs where one belongs.
+There the lost read costs the leg, the sweep being the backstop the
+specification already names (§forgejo/reconciliation/the-sweep).
 
 The tier is an **ask**, made in the queue's own words: the one value the
 engine ever puts in the field is a word the queue documents

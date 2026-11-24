@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Kind identifies what a watermark tracks.
@@ -84,9 +85,22 @@ type Watermark struct {
 	// decision function's action names).
 	Action string `json:"action"`
 	// Revision is the activity revision the action was dispatched at:
-	// the PR head sha for pull requests, the issue's updated_at for
-	// issues.
+	// the declared digest for an action whose declaration folds its
+	// inputs, the PR head sha for pull requests, and the revision the
+	// landing set derives (§forgejo/state/watermark).
 	Revision string `json:"revision"`
+	// FiredAt is when this action last dispatched at Revision. The
+	// re-fire bound keeps its stamp in memory, so a restart would admit
+	// one re-fire per key per action with no interval spent — a fan-out
+	// of agent tasks a crash-loop could buy again on every restart.
+	// Recording the fire instant beside the digest carries that stamp
+	// across the process boundary, so the bound stays a rate rather than
+	// a memory (§forgejo/decisions/loop-prevention). Nil where no singleton
+	// dispatch ever wrote one — a forest's digest slot carries an observation,
+	// never a dispatch, and a slot an earlier release wrote for a pull-request
+	// row holds the pair the bound matches with no instant to pace on, which
+	// bounds nothing — the same answer an unrecorded revision gives.
+	FiredAt *time.Time `json:"fired_at,omitempty"`
 	// Subjects maps each fan-out subject's identity (a review lens's
 	// configured login) to the slot dispatched for it. Empty for
 	// objects that have only ever seen singleton dispatches, and for

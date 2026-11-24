@@ -185,27 +185,32 @@ action's predicate and digest through that declaration, so no row
 states those facts beside it a second time; the declaration *records*
 the input set — the refusal of undeclared reads that will one day
 check a predicate against it is a later member of this chain
-(§forgejo/decisions/inputs). The digest each
-action declares today is the revision that path already keys on; re-keying
-one edits that declaration and the object revision the pipeline names
-(§forgejo/webhook/the-pipeline), whose agreement the tests pin
-(§forgejo/state/watermark). The `decompose` fold's component set is
-drawn from that action's declaration rather than from a list beside
+(§forgejo/decisions/inputs). The digest an action declares is the one
+value its dispatch is watermarked on, the decision log names, the task's
+dedup key carries and the re-fire bound is a rate on, so re-keying an
+action edits this declaration and nothing beside it — the tests keep
+those four answering with the value the declaration derives
+(§forgejo/state/watermark, s-git/maitred#259). An issue-path action
+declares the fold of its own input set; the pull-request and landing-set
+actions still declare the object revision their rows key on, and
+re-keying them is the next member of this chain (s-git/maitred#260).
+The `decompose` fold's component set is drawn from that action's
+declaration rather than from a list beside
 the fold (§forgejo/decisions/actionable-state-digest). The Inputs
 column names each action's declared set, in lockstep with the
 declaration that records it (§forgejo/decisions/inputs).
 
 | Action | Dispatched when | Inputs |
 |---|---|---|
-| `implement` | the issue is open, unblocked (all its blockers closed), has no connected open PR, carries no reserved label and does not carry `forest-seeding`, and is not an `outcome` tracker (one that becomes unblocked is a `wrap-up` candidate) — the issue was opened, became unblocked, or was reconciled into that state; **on the sweep the row is state-governed, dispatching revision notwithstanding and bounded by the re-fire bound**, so an attempt that died before opening a connected pull request recovers within one interval (§forgejo/reconciliation/the-state-is-the-watermark, §forgejo/decisions/loop-prevention, §forgejo/decisions/commissioning) | `issue.state`, `issue.labels`, `issue.updated_at`, `blockers.states`, `connected PRs` |
+| `implement` | the issue is open, unblocked (all its blockers closed), has no connected open PR, carries no reserved label and does not carry `forest-seeding`, and is not an `outcome` tracker (one that becomes unblocked is a `wrap-up` candidate) — the issue was opened, became unblocked, or was reconciled into that state; **the row is state-governed on every path, dispatching on the digest of these inputs rather than on any timestamp, and a digest the watermark already records re-fires at the re-fire bound's pace**, so an attempt that died before opening a connected pull request recovers within one interval (§forgejo/reconciliation/the-state-is-the-watermark, §forgejo/decisions/loop-prevention, §forgejo/decisions/commissioning, s-git/maitred#259) | `issue.state`, `issue.labels`, `issue.updated_at`, `blockers.states`, `connected PRs` |
 | `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement), and it carries no reserved label | `issue.state`, `issue.labels`, `issue.updated_at`, `blockers.states`, `event.type` |
 | `review` | the **fan-out over the configured lenses**: a mergeable PR opened, or synced, dispatches each lens with no undismissed approval at the head (§forgejo/decisions/review-lenses); so does an open mergeable PR carrying the `trigger-review` label, at the current revision (§forgejo/decisions/label-triggered-review); watermark-exempt per lens on the sweep while that lens has reported nothing at the head (§forgejo/reconciliation/watermark-exemptions) | `PR.state`, `PR.mergeable`, `PR.head sha`, `PR.labels`, `reviews`, `config.review lenses`, `event.type`, `event.sender` |
 | `fix-feedback` | every configured review lens has reported at the PR's current head and the reports are not all approvals (§forgejo/decisions/review-lenses) — **and** the PR's author is the configured implementer identity; a PR authored by anyone else holds off, its feedback theirs to fix (§forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention, s-git/maitred#143); while any lens has not reported at head the action holds off naming the outstanding lenses, whose dispatches the fan-out row advances; watermark-exempt on the sweep while the chain reports feedback at the current head (§forgejo/reconciliation/watermark-exemptions) | `PR.state`, `PR.mergeable`, `PR.head sha`, `PR.author`, `reviews`, `config.review lenses`, `config.implementer identity`, `event.type` |
 | `merge-or-wait` | **every configured lens holds an undismissed approval at the PR's current head**, no reviewer's latest undismissed review at head is a non-approval (§forgejo/decisions/review-lenses), **the issue its body closes carries the `agentic-auto-merge` opt-in** — the label is a precondition of the dispatch on every path, so an approved PR whose delivered issue carries no merge opt-in holds off, its reason naming the missing label and the connected issues (§forgejo/decisions/merge-gate, s-git/maitred#179, s-git/maitred#228) — **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's; never for a PR whose connected issue is a member of an open sync set — landing is the set's decision (§forgejo/decisions/sync-set); a labelled member of no open set — its set retired — reads as stale authoring, not a gate, and the merge gate decides on (§forgejo/decisions/sync-set); watermark-exempt on every path when the issue its body closes carries `agentic-auto-merge`, its approved head being frozen (§forgejo/reconciliation/watermark-exemptions) | `PR.state`, `PR.mergeable`, `PR.head sha`, `reviews`, `connected issues`, `connected issues' blockers`, `connected issues' sync sets`, `sync sets`, `config.review lenses`, `event.kind`, `event.repo`, `event.number` |
 | `rebase` | an open PR is not mergeable (conflicts); **on the sweep the row is state-governed, dispatching revision notwithstanding and bounded by the re-fire bound**, so a rebase that died at an unmoved head recovers within one interval (§forgejo/reconciliation/the-state-is-the-watermark, §forgejo/decisions/loop-prevention) | `PR.state`, `PR.mergeable`, `PR.head sha`, `event.type` |
-| `decompose` | an open issue carrying the `ideation` label was opened, edited, had its labels changed, or received a comment authored by anyone other than the configured decomposer identity (§forgejo/decisions/loop-prevention, s-git/maitred#147); or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes. The `teardown-forest` order is asked of the root's own row: a root carrying it is the teardown row's forest, and a tracker carrying it is decided as any other tracker would be. Every row consults the forest's **actionable-state digest gate**: the dispatch fires only when the digest moved since the store last observed it, naming the component that moved; `decompose` stands outside the watermark-exempt set, and the event path's row for a kind-conflicting root — where the gate is unarmed — keeps the revision-keyed guard (§forgejo/decisions/actionable-state-digest, §forgejo/reconciliation/watermark-exemptions, s-git/maitred#209) | `issue.state`, `issue.labels`, `issue.body`, `blockers.states`, `forest digest gate`, `event.type`, `event.sender`; the fold's component set (`root`, `member`, `tracker`, `blocker`, `comment`) is declared here and read by the digest |
-| `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — watermark-exempt (§forgejo/reconciliation/watermark-exemptions); or the unblock cascade newly unblocks an open issue carrying the `outcome` label (§forgejo/decisions/unblock-cascade). Either row's dispatch redraws the tracker's current-state block from the graph before queueing the task — one write, the tick's own render function, and a failed draw logged without gating the dispatch (§forgejo/reconciliation/the-tracker-block, s-git/maitred#232) | `issue.state`, `issue.labels`, `issue.updated_at`, `blockers.states` |
-| `teardown-forest` | an open issue carrying the `ideation` label **also** carries the `teardown-forest` label, **and blocks at least one issue that is not an `outcome` tracker**: the human has ordered the forest that root commissioned to be deleted, and a member the order would delete remains to delete (§forgejo/decisions/forest-teardown); watermark-exempt on the sweep while such a member stands (§forgejo/reconciliation/watermark-exemptions) | `issue.state`, `issue.labels`, `issue.updated_at`, `blocked downstream edges` |
+| `decompose` | an open issue carrying the `ideation` label was opened, edited, had its labels changed, or received a comment authored by anyone other than the configured decomposer identity (§forgejo/decisions/loop-prevention, s-git/maitred#147); or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker that is still blocked and whose `ideation` blocker is closed — a commissioned forest stays under curation until its tracker closes. The `teardown-forest` order is asked of the root's own row: a root carrying it is the teardown row's forest, and a tracker carrying it is decided as any other tracker would be. Every row consults the forest's **actionable-state digest gate**: the dispatch fires only when the digest moved since the store last observed it, naming the component that moved; `decompose` stands outside the watermark-exempt set, and the event path's row for a kind-conflicting root — where the gate is unarmed — is paced by the digest of these declared inputs alone (§forgejo/decisions/actionable-state-digest, §forgejo/reconciliation/watermark-exemptions, s-git/maitred#209) | `issue.state`, `issue.labels`, `issue.body`, `blockers.states`, `forest digest gate`, `event.type`, `event.sender`; the fold's component set (`root`, `member`, `tracker`, `blocker`, `comment`) is declared here and read by the digest |
+| `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — outside the exempt set, the row dispatching on the digest these inputs fold and leaving a re-fire at an unchanged digest to the re-fire bound (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#259); or the unblock cascade newly unblocks an open issue carrying the `outcome` label (§forgejo/decisions/unblock-cascade). Either row's dispatch redraws the tracker's current-state block from the graph before queueing the task — one write, the tick's own render function, and a failed draw logged without gating the dispatch (§forgejo/reconciliation/the-tracker-block, s-git/maitred#232) | `issue.state`, `issue.labels`, `issue.updated_at`, `blockers.states` |
+| `teardown-forest` | an open issue carrying the `ideation` label **also** carries the `teardown-forest` label, **and blocks at least one issue that is not an `outcome` tracker**: the human has ordered the forest that root commissioned to be deleted, and a member the order would delete remains to delete (§forgejo/decisions/forest-teardown); outside the exempt set: the downstream edges are among these inputs, so a member that arrived or went quiet with no delivery moves the digest the row dispatches on (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#259) | `issue.state`, `issue.labels`, `issue.updated_at`, `blocked downstream edges` |
 | `sync` | an open issue carrying the `sync` label — a **landing set**: changes that must land together — has every blocking issue either closed or standing with its delivering PR approved at head and mergeable while carrying `agentic-sync-merge`; "approved at head" is the lens gate — every configured lens holds an undismissed approval at that PR's head (§forgejo/decisions/review-lenses) (a blocking issue that is itself a pull request is held to that test through its own state); dispatched from the reconciliation sweep, from the unblock cascade's sync-set candidate, and from the approval path's emission re-checked on re-fetch; the watermark is a revision derived from the whole set (§forgejo/decisions/sync-set) | `issue.state`, `issue.labels`, `issue.body`, `sync members`, `members' PRs`, `members' PR reviews`, `config.review lenses` |
 
 Reviews are the fan-out over the configured lenses, not a configured
@@ -287,7 +292,7 @@ re-firing (§forgejo/decisions/label-triggered-review).
 | issue opened / edited / labels changed / comment not authored by the configured decomposer identity (issue open, carries both the `ideation` and the `teardown-forest` label, blocks at least one issue that is not an `outcome` tracker) | `teardown-forest` — the teardown row wins over the root's `decompose` row, so a forest under teardown is never re-commissioned while it is being deleted (§forgejo/decisions/forest-teardown) |
 | issue opened / edited / labels changed / comment not authored by the configured decomposer identity (issue open, carries both labels, blocks no issue other than a tracker) | hold off, naming what the root still blocks — the engine can see there is nothing left to delete, so no agent is asked to discover it, and a tracker standing by the order's own rule is that state (§forgejo/decisions/forest-teardown) |
 | issue opened / edited / labels changed / comment (issue open, carries the `teardown-forest` label without `ideation`) | hold off, naming that the label modifies the root row and retires no work item — a kind label carried alongside is named first, since what an issue *is* outweighs what a label *modifies* (§forgejo/decisions/forest-teardown) |
-| issue opened / edited / labels changed (issue open, carries the `ideation` label, and — for the labels-changed event — no longer carries `teardown-forest`) | `decompose` — the label makes the root, whatever the repository and the title; attaching the label is the *first* trigger. Every path consults the digest gate wherever it is armed; the gate is unarmed for the kind-conflicting root, whose event-path row keeps the revision-keyed watermark guard while the sweep holds the issue off as a conflict (§forgejo/decisions/actionable-state-digest, §forgejo/reconciliation/watermark-exemptions) |
+| issue opened / edited / labels changed (issue open, carries the `ideation` label, and — for the labels-changed event — no longer carries `teardown-forest`) | `decompose` — the label makes the root, whatever the repository and the title; attaching the label is the *first* trigger. Every path consults the digest gate wherever it is armed; the gate is unarmed for the kind-conflicting root, whose event-path row is paced by the digest of its declared inputs while the sweep holds the issue off as a conflict (§forgejo/decisions/actionable-state-digest, §forgejo/reconciliation/watermark-exemptions) |
 | issue comment by an author other than the configured decomposer identity (issue open, carries the `ideation` label) | `decompose` — a human answering the decomposer's questions re-cures the forest event-driven, without waiting for the sweep; a human comment on the root, a tracker or a member is a folded fact, so the gate moves and answers, while the decomposer's own comments fold nowhere (§forgejo/decisions/loop-prevention, §forgejo/decisions/actionable-state-digest, s-git/maitred#147); a root that also carries `teardown-forest` takes the teardown row instead, as an edit does (§forgejo/decisions/forest-teardown) |
 | issue comment authored by the configured decomposer identity (issue open, carries the `ideation` label) | hold off, naming the authorship — the decomposer's own comment on its root must not re-trigger it; an unset identity leaves the guard inert (§forgejo/config/decomposer-identity, §forgejo/decisions/loop-prevention, s-git/maitred#147) |
 | issue opened / edited / labels changed / comment (issue carries the `outcome` or `human-task` label) | hold off, naming the label — the sweep is where `wrap-up` fires (§forgejo/reconciliation/watermark-exemptions) |
@@ -313,10 +318,10 @@ re-firing (§forgejo/decisions/label-triggered-review).
 | PR merged | unblock cascade (for the connected issue) |
 | PR closed without merging | hold off |
 | PR commented (open) | as reconcile — the sweep's logic: the re-fetched PR state decides the next action — but keeping only the sweep's `review` and `fix-feedback` exemptions: those states reached at a head whose subject slots already record the lens `review`, or whose watermark records `fix-feedback`, hold off here. `merge-or-wait` keeps the sweep's exemption too, so an approved PR whose delivered issue carries `agentic-auto-merge` re-fires at a head the watermark already records (§forgejo/reconciliation/watermark-exemptions, §forgejo/state/watermark) |
-| reconcile — open issue carrying both the `ideation` and the `teardown-forest` label, blocking at least one issue that is not an `outcome` tracker | `teardown-forest`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
+| reconcile — open issue carrying both the `ideation` and the `teardown-forest` label, blocking at least one issue that is not an `outcome` tracker | `teardown-forest` on the digest of its declared inputs — the downstream edges, which an edge edit moves with no delivery — a digest the watermark records re-firing at the re-fire bound's pace (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#259) |
 | reconcile — open issue carrying both labels, blocking no issue other than a tracker | hold off, naming what it still blocks: the re-firing ends where the order has nothing left to delete (§forgejo/decisions/forest-teardown) |
 | reconcile — open issue with the `ideation` label | `decompose` when the forest's actionable-state digest moved since the store last observed it, the reason naming the component that moved; otherwise a hold-off naming the unchanged digest. The row is the digest gate's whole decision; a row arriving with no observation holds off naming it, since through the pipeline the sweep's root row always reaches the gate armed (§forgejo/decisions/actionable-state-digest, §forgejo/config/engine-account, §forgejo/reconciliation/watermark-exemptions, s-git/maitred#209) |
-| reconcile — open `outcome` issue, no open blockers | `wrap-up`, revision notwithstanding (§forgejo/reconciliation/watermark-exemptions) |
+| reconcile — open `outcome` issue, no open blockers | `wrap-up` on the digest of its declared inputs, a digest the watermark records re-firing at the re-fire bound's pace (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#259) |
 | reconcile — open `outcome` issue with open blockers, its `ideation` blocker closed | `decompose` when the forest's actionable-state digest moved — the same gate the root's rows consult, so one forest gets one answer whichever row reaches it; a row arriving with no observation holds off naming it (s-git/maitred#209) |
 | reconcile — open `outcome` issue whose `ideation` blocker is **open** and carries the `teardown-forest` label | hold off, as any tracker with an open root does: the teardown order needs no row of its own, and the root's own edge is what keeps a spared tracker from reading as finished (§forgejo/decisions/forest-teardown) |
 | reconcile — open `outcome` issue with open blockers, its `ideation` blocker open | hold off, naming the root — the forest is not yet commissioned, and the root's own row is the pulse: a forest is curated once per sweep |
@@ -799,7 +804,11 @@ The cascade is **transitive**: a blocked issue that is itself closed
 cascades onward to the issues it blocks (A→B→C). It **terminates**
 without double-dispatching: each issue is visited once. The engine
 applies each cascaded key's own watermark before dispatching, so an
-already-dispatched `(action, revision)` is not re-dispatched. A
+already-dispatched `(action, digest)` is not re-dispatched — a digest the
+leg derives over the state the action's declaration names, which is why
+the leg reads the issue's blocker rows before deriving it, the read the
+priority walk pays anyway (§forgejo/webhook/vip-priority,
+§forgejo/decisions/actions). A
 cascaded key carrying `ideation` or `human-task` holds off, naming
 the label: it is decided by the sweep
 (§forgejo/reconciliation/watermark-exemptions); a key carrying
@@ -930,23 +939,30 @@ Six mechanisms, in this order:
    the *next* transition, never a re-run of the same one: a review
    does not push commits; a commit push triggers a review; a
    changes-requested review triggers a fix; a fix pushes commits.
-2. **Idempotency + watermark.** The same `(event, state, revision)`
-   does not re-dispatch the same action: when the watermark already
-   records the action at the current revision (the PR head sha, or the
-   issue's `updated_at` — a tracker's revision being its state, labels and
-   body outside the current-state region, §forgejo/state/watermark), the
-   decision holds off. The guard is
-   revision-keyed on every path, and for the review fan-out it is
+2. **Idempotency + watermark.** The same `(event, state, digest)` does
+   not re-dispatch the same action: where a row consults the watermark,
+   it does not dispatch ahead of what the record holds — the revision a
+   pull-request row keys on being the PR
+   head sha, an issue-path row's the digest of its declared inputs
+   (§forgejo/state/watermark), and a landing set's the revision derived
+   from the whole set (§forgejo/decisions/sync-set). The guard is
+   digest-keyed on every path, and for the review fan-out it is
    **subject-keyed** as well: each lens is guarded by its own slot at
-   the revision, so three lenses dispatched at one head are three
+   the digest, so three lenses dispatched at one head are three
    dispatches, and a lens already mid-flight at the head is not
    duplicated (§forgejo/state/watermark, §forgejo/decisions/review-lenses).
-   The watermark-exempt actions `wrap-up`, `review`, and `fix-feedback`
-   are exempt only **on the sweep**, whose rows for
+   The issue-path rows — `implement`, `reassess`, `decompose`, `wrap-up`
+   and `teardown-forest` — are not held off by that record: a digest the
+   store already holds means only that the state has not moved since the
+   engine last acted on it, and the row dispatches anyway rather than
+   falling silent at a digest it cannot move, the re-fire bound spacing
+   the attempt (§forgejo/reconciliation/the-state-is-the-watermark,
+   s-git/maitred#259). The watermark-exempt actions `review` and
+   `fix-feedback` are exempt only **on the sweep**, whose rows for
    them decide without consulting the watermark:
    state is their watermark (§forgejo/reconciliation/watermark-exemptions),
    and the agent's silence-on-noop keeps the re-firing quiet.
-   `decompose` is no longer among them: its re-firing is bounded on
+   `decompose` is not among them: its re-firing is bounded on
    every path by the forest's **actionable-state digest gate** — an
    unchanged fold holds the row off, so the dispatch is limited by the
    forest's state rather than by any guard keyed on a revision
@@ -963,26 +979,33 @@ Six mechanisms, in this order:
    evaluated ahead of the row, the row stops firing the moment the PR
    closes, and the **re-fire bound** — an engine guard applied after the
    decision, its hold-off recorded in the decision log like any other —
-   lets one unchanged `(action, revision)` dispatch at most once per
+   lets one unchanged `(action, digest)` dispatch at most once per
    `reconcile_interval`, whichever path reached it. The bound reads the
-   engine's own stamp, so a watermark the store cannot read narrows the
-   re-fire rather than lifting the bound; the stamp is in memory, so a
-   restart admits one re-fire per key before the bound reasserts itself.
+   engine's own stamp — the fire instant the dispatch records beside the
+   digest, in memory and in the watermark's slot for the same
+   `(action, digest)` — so neither a store the engine cannot read nor a
+   restart that empties its memory admits a re-fire the interval has not
+   already paid for (§forgejo/state/watermark). One slot does bound
+   nothing: a slot holding no instant at all, which only an earlier
+   release can leave behind on a pull-request row, answers as a first
+   dispatch and the row's next write stamps it
+   (§forgejo/state/watermark).
    The bound is the engine's general guard for state-governed re-fires,
    not a property of any one action: every landed singleton dispatch
-   stamps its key, action and revision, and a re-fire of that unchanged
-   `(action, revision)` by a state-governed row inside one interval
-   becomes a hold-off naming the bound
+   stamps its key, action and **declared digest** — the same value its
+   watermark records and its task's dedup key carries — and a re-fire of
+   that unchanged `(action, digest)` by a state-governed row inside one
+   interval becomes a hold-off naming the bound
    (§forgejo/reconciliation/the-state-is-the-watermark). The action is
    part of the stamp because the bound is a rate on one
-   unchanged `(action, revision)`: a dispatch may pace the same action's
+   unchanged `(action, digest)`: a dispatch may pace the same action's
    re-fire and never another action's, so an event that landed one action
-   at a revision cannot hold a different action's row there off, and one
+   at one digest cannot hold a different action's row there off, and one
    action's landing erases no sibling's pacing. Only a
    state-governed row consults a stamp; a row still revision-gated
    consults none, so generalising the mechanism changes no behaviour
    there. The queue's
-   `(action, revision)` dedup key is not that bound: it squelches a
+   `(action, digest)` dedup key is not that bound: it squelches a
    submission whose match is still pending, so it bounds the overlap of
    two tasks at one head and not their spacing
    (§forgejo/webhook/the-pipeline). Without the bound the pace of a
@@ -1123,11 +1146,18 @@ alone. Both guards are inert when the identity is unset.
 
 The enumeration above is the vocabulary the action declarations name:
 each action carries one declaration (§forgejo/decisions/actions)
-naming the subset of these facts its predicate reads. The declaration
-records that set, in one place; the refusal of undeclared reads that
-will one day check a predicate against it is a later member of this
-chain, so today the path records inputs through the declaration rather
-than consulting it.
+naming the subset of these facts its predicate reads. An issue-path
+declaration **folds** that set into the digest its dispatch is
+watermarked on, so an input a predicate reads cannot move without the
+row that asks it noticing (§forgejo/state/watermark, s-git/maitred#259):
+the fold states each fact the predicate reads and no fact it does not,
+and it answers identically whatever order the listings arrive in. The
+pull-request and landing-set declarations name the object revision their
+rows key on until the next member re-keys them (s-git/maitred#260). An
+event fact is the exception and folds nothing: which row fired is not
+part of the state, and a digest both the sweep and an event must answer
+with cannot contain it. The refusal of undeclared reads that will one
+day check a predicate against the set is a later member of this chain.
 
 ## Actionable-state digest
 

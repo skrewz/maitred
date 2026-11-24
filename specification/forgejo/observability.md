@@ -13,12 +13,17 @@ watermark key, §forgejo/state/storage). The log entry is
 decision (dispatch or hold-off), the dispatched action, the reason, and
 the revision the decision was made at are discrete fields, so a human
 or a tool can filter the log per object and follow the engine's
-reasoning. Where a reason quotes a revision, it names the facts behind it — the
-instant a row keyed on `updated_at` carries, or the state, labels and masked-body
-digest an `outcome` tracker's revision folds — so a line stays readable against
-the forge's history; a revision that describes more than the row in hand, such as
-a landing set's, is quoted as it stands (§forgejo/state/watermark,
-§forgejo/decisions/sync-set).
+reasoning. Where a reason quotes a revision, it names the facts behind it: for
+an issue-path row the facts its declaration's digest folds — state, labels, each
+blocker's state, the connected pull requests, the edges a teardown order reads —
+for a row keyed on `updated_at` the instant it carries, and for a landing set the
+set revision as it stands, since more than one row lies behind it. A log line
+therefore stays readable against the forge's history whatever the guard keyed
+itself on (§forgejo/state/watermark, §forgejo/decisions/sync-set,
+s-git/maitred#259). The field holds the dispatched action's declared digest, so
+the line and the watermark file state one value; a hold-off names no action to
+derive a digest from and names the object's own revision, which is what a reader
+can place in that history.
 
 The event path and the reconciliation sweep log their decisions alike:
 the sweep feeds the same decision function through the same pipeline
@@ -40,7 +45,11 @@ the view shows:
 - the **watermark** — the object's last *singleton* dispatch: the
   action and the revision it was dispatched at
   (§forgejo/state/watermark), or none when nothing has been
-  dispatched through the main slot. Fan-out dispatches do not touch
+  dispatched through the main slot. On the issue path that revision is
+  the declared digest: an opaque fold of the state rather than a timestamp
+  a reader can place in the history, made readable by the reason beside it
+  (§forgejo/state/watermark, §forgejo/observability/the-decision-log,
+  s-git/maitred#259). Fan-out dispatches do not touch
   the main slot; the view lists the watermark's **subject slots**
   alongside it — one row per dispatched action and revision, naming
   the subjects (the review lenses) dispatched at it — so a fan-out is

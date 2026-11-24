@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // newEngineWithLogger builds an engine over a fresh fake API, queue, and
@@ -83,8 +82,11 @@ func TestHandleEvent_StructuredDecisionLog(t *testing.T) {
 	if got := e["reason"]; got != "issue 7 opened: open, unblocked, no connected PR" {
 		t.Errorf("reason = %v", got)
 	}
-	if got := e["revision"]; got != testUpdatedAt.UTC().Format(time.RFC3339) {
-		t.Errorf("revision = %v, want %s", got, testUpdatedAt.UTC().Format(time.RFC3339))
+	// A dispatch logs the digest its watermark records — the digest of
+	// the action's declared input set, not the issue's timestamp
+	// (§forgejo/state/watermark, s-git/maitred#259).
+	if got, want := e["revision"], digestFor(ActionImplement, Event{}, State{Issue: api.issues[7]}); got != want {
+		t.Errorf("revision = %v, want the dispatched action's declared digest %v", got, want)
 	}
 }
 
@@ -144,11 +146,14 @@ func TestTracked_AfterDispatch(t *testing.T) {
 	if e.State != "open" {
 		t.Errorf("state = %q, want open", e.State)
 	}
-	if e.Revision != testUpdatedAt.UTC().Format(time.RFC3339) {
-		t.Errorf("revision = %q", e.Revision)
+	// The dispatch's row names the digest it dispatched at, which is
+	// what its watermark records: one value for the line and the file
+	// (§forgejo/state/watermark, s-git/maitred#259).
+	if want := digestFor(ActionImplement, Event{}, State{Issue: api.issues[7]}); e.Revision != want {
+		t.Errorf("revision = %q, want the declared digest %q", e.Revision, want)
 	}
 	if e.Watermark == nil || e.Watermark.Action != string(ActionImplement) || e.Watermark.Revision != e.Revision {
-		t.Errorf("watermark = %+v, want implement at the issue revision", e.Watermark)
+		t.Errorf("watermark = %+v, want implement at the revision the row names", e.Watermark)
 	}
 	if !e.Decision.Dispatched || e.Decision.Action != ActionImplement {
 		t.Errorf("decision = %+v, want a dispatched implement", e.Decision)
