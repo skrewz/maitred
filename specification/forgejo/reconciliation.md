@@ -330,9 +330,9 @@ will not move (s-git/maitred#259).
 
 - `implement` dispatches on the digest of state, labels, blockers and
   connected pull requests; `reassess` on the digest of state, labels,
-  blockers and the comments whose authors stand outside the engine's own
-  identities, so a comment moves that row because it is an input and not
-  because it moved a timestamp (s-git/maitred#262).
+  description, blockers and the comments whose authors stand outside the
+  engine's own identities, so a comment moves that row because the
+  declaration names it as an input (s-git/maitred#262).
 - `wrap-up` dispatches on the digest an attached or removed blocker edge
   moves (§forgejo/state/watermark).
 - `teardown-forest` dispatches on the digest of its downstream edges, so

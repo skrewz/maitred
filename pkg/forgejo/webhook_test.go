@@ -1280,6 +1280,26 @@ func TestHandler_Reassess_CommentMovesTheStateAlone(t *testing.T) {
 	}
 }
 
+// TestHandler_Reassess_DescriptionEditMovesTheDigest pins that an edit
+// whose only change is the issue's description dispatches: the
+// description stands among reassess's declared inputs, so a reworded ask
+// moves the digest the row is keyed on instead of going quiet until some
+// other input happens to move (s-git/maitred#262).
+func TestHandler_Reassess_DescriptionEditMovesTheDigest(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.issues[7] = testIssue(7, "open")
+
+	serve(t, h, signedRequest(t, "s3cret", "issues", "edited", issuePayload("o/r", 7, "edited")))
+	reworded := *api.issues[7]
+	reworded.Body = "do something else entirely"
+	api.issues[7] = &reworded
+	serve(t, h, signedRequest(t, "s3cret", "issues", "edited", issuePayload("o/r", 7, "edited")))
+	if tasks := q.all(); len(tasks) != 2 {
+		t.Errorf("dispatched %d tasks for two descriptions, want 2: %+v", len(tasks), tasks)
+	}
+}
+
 // TestHandler_PRComment_FiresNoIssuePathAction pins that a comment on a
 // connected pull request is decided by the pull-request rows: the issue
 // path reads no issue's comments and dispatches no `reassess` for it

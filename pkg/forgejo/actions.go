@@ -100,18 +100,18 @@ func init() {
 			digest:            declaredDigestFor(ActionImplement),
 			digestFoldsInputs: true,
 		},
-		// Comments are an input to reassess, and whose comments count is
-		// stated in this declaration alone: one authored by neither the
-		// account engine_account names nor the configured decomposer
-		// identity, the test commentCountsAsInput applies and no row
-		// restates. No issue timestamp stands in the set — the digest of
-		// these facts is what fires the row, never the moment the issue
-		// was last touched, which a comment moves whatever its author
+		// Comments stand among reassess's inputs, and this declaration is
+		// the one place whose comments count is stated: a comment authored
+		// by neither the account engine_account names nor the configured
+		// decomposer identity, the test commentCountsAsInput applies
 		// (§forgejo/config/engine-account, §forgejo/config/decomposer-identity,
-		// s-git/maitred#262).
+		// §forgejo/decisions/inputs, s-git/maitred#262). The digest of
+		// these facts is what fires the row, the description among them so
+		// an edit that rewords what the engine is asked to do moves it
+		// (s-git/maitred#262).
 		ActionReassess: {
 			inputs: []string{
-				"issue.state", "issue.labels", "issue.comments",
+				"issue.state", "issue.labels", "issue.body", "issue.comments",
 				"blockers.states", "event.type", "event.sender",
 			},
 			ready:             reassessReady,
