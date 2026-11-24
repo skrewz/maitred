@@ -269,6 +269,15 @@ func TestDeclaredDigests_CommentsAreReassessInputs(t *testing.T) {
 	if digestFor(ActionReassess, Event{}, two) != digestFor(ActionReassess, Event{}, reversed) {
 		t.Error("reassess's digest answers one listing of comments with two digests")
 	}
+	// A thread is append-only, so how many comments it holds is itself a
+	// fact: one repeating an earlier comment's text word for word moves
+	// the digest rather than folding as the fact it repeats
+	// (§forgejo/decisions/actions, s-git/maitred#262).
+	repeat := quiet
+	repeat.Comments = []Comment{{Author: "alice", Body: "and add this too"}, {Author: "alice", Body: "and add this too"}}
+	if digestFor(ActionReassess, Event{}, counted) == digestFor(ActionReassess, Event{}, repeat) {
+		t.Error("a comment repeating an earlier one's text folded no fact, though a thread's length is information")
+	}
 	// A comment the forge lists with no author at all — the shape of a
 	// response without a user object — belongs to no excluded identity,
 	// so it counts, as the forest fold's exclusion already treats it
@@ -287,11 +296,6 @@ func TestDeclaredDigests_CommentsAreReassessInputs(t *testing.T) {
 	stamped.Issue = &late
 	if digestFor(ActionReassess, Event{}, quiet) != digestFor(ActionReassess, Event{}, stamped) {
 		t.Error("reassess's digest moves with the issue's updated_at")
-	}
-	// The quoted revision names the comment an operator can go and read.
-	got := quotedRevision(ActionReassess, issueEventBy(EventIssueCommented, "alice"), counted, digestFor(ActionReassess, Event{}, counted))
-	if want := "comment alice " + digestRevision("and add this too"); !strings.Contains(got, want) {
-		t.Errorf("quoted revision %q names no %q", got, want)
 	}
 }
 
@@ -327,11 +331,10 @@ func TestQuotedRevision_NamesTheFactsBehindTheDigest(t *testing.T) {
 }
 
 // TestQuotedRevision_BoundsTheQuotedComments pins that a long thread is
-// quoted as its newest counted comment beside how many the fold
-// counted, rather than one fact per comment as the work item ages — and
-// that the bound is the quote's alone, the digest still folding every
-// counted comment (§forgejo/observability/the-decision-log,
-// s-git/maitred#262).
+// quoted as its newest counted comment beside the count the fold states,
+// rather than one fact per comment as the work item ages — and that the
+// bound is the quote's alone, the digest still folding every counted
+// comment (§forgejo/observability/the-decision-log, s-git/maitred#262).
 func TestQuotedRevision_BoundsTheQuotedComments(t *testing.T) {
 	var thread []Comment
 	for i := range 20 {
@@ -349,7 +352,7 @@ func TestQuotedRevision_BoundsTheQuotedComments(t *testing.T) {
 	if want := "comment alice " + digestRevision("feedback 19"); !strings.Contains(got, want) {
 		t.Errorf("quoted revision %q names no %q", got, want)
 	}
-	if !strings.Contains(got, "the newest of 20 counted comments") {
+	if !strings.Contains(got, "counted comments 20") {
 		t.Errorf("quoted revision %q names no count of the comments folded", got)
 	}
 	if n := strings.Count(got, "comment alice "); n != 1 {

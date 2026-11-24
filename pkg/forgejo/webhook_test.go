@@ -1280,6 +1280,26 @@ func TestHandler_Reassess_CommentMovesTheStateAlone(t *testing.T) {
 	}
 }
 
+// TestHandler_Reassess_RepeatedCommentMovesTheDigest pins that a comment
+// repeating an earlier one’s text word for word still dispatches: a
+// thread is append-only, so how many comments it holds is a fact the fold
+// states, and a row the sweep never re-reaches must not fall quiet on the
+// delivery that asked for it (§forgejo/decisions/actions,
+// s-git/maitred#262).
+func TestHandler_Reassess_RepeatedCommentMovesTheDigest(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.issues[7] = testIssue(7, "open")
+	api.comments[7] = []Comment{{Author: "alice", Body: "any update?"}}
+
+	serve(t, h, signedRequest(t, "s3cret", "issue_comment", "created", issuePayload("o/r", 7, "created")))
+	api.comments[7] = []Comment{{Author: "alice", Body: "any update?"}, {Author: "alice", Body: "any update?"}}
+	serve(t, h, signedRequest(t, "s3cret", "issue_comment", "created", issuePayload("o/r", 7, "created")))
+	if tasks := q.all(); len(tasks) != 2 {
+		t.Errorf("dispatched %d tasks for a thread of two counted comments, want 2: %+v", len(tasks), tasks)
+	}
+}
+
 // TestHandler_Reassess_DescriptionEditMovesTheDigest pins that an edit
 // whose only change is the issue's description dispatches: the
 // description stands among reassess's declared inputs, so a reworded ask

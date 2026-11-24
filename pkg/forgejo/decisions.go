@@ -2027,13 +2027,10 @@ func digestRevision(fact string) string {
 // stands, being a value an operator can already place in the forge's
 // history. A tracker's revision is stated through the fold like any
 // other issue-path row's, since the rows that quote one all ask a
-// re-keyed declaration (§forgejo/reconciliation/the-tracker-block). An
-// input whose facts grow with the work item is quoted through the bound
-// it declares, so the line states a digest an operator can place in the
-// forge's history without reciting the thread behind it.
+// re-keyed declaration (§forgejo/reconciliation/the-tracker-block).
 func quotedRevision(a Action, e Event, s State, rev string) string {
 	if digestFoldsInputs(a) && rev == digestFor(a, e, s) {
-		facts := quotedInputFacts(a, s)
+		facts := quoteThread(declaredInputFacts(a, s))
 		if len(facts) > 0 {
 			sort.Strings(facts)
 			return "digest " + strings.Join(facts, ", ")

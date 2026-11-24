@@ -1111,9 +1111,11 @@ and its connected open PRs, for the `implement` and `reassess`
 conditions; **the issue's comments**, read on the paths whose row can
 dispatch `reassess` — an edit, a label change or a comment — for the
 `reassess` condition, whose declaration counts the comments authored
-outside the excluded identities (§forgejo/decisions/actions,
-s-git/maitred#262); the PR's reviews, for the review transitions; the
-PR's labels, for the label-triggered review override
+outside the excluded identities and folds their number beside them, a
+thread being append-only so that a comment repeating an earlier one's
+text is one fact more, not the same fact twice
+(§forgejo/decisions/actions, s-git/maitred#262); the PR's reviews,
+for the review transitions; the PR's labels, for the label-triggered review override
 (§forgejo/decisions/label-triggered-review); for PR reviewed, PR
 commented, the sweep's PR path and the unblock cascade's PR leg, the
 **connected issues** — the union of the issues the PR's body

@@ -321,25 +321,16 @@ func declaredDigestFor(a Action) func(Event, State) string {
 // reason line quotes them: the facts the action's declaration names,
 // each stated so a human can line the quote up against the forge's
 // history (§forgejo/observability/the-decision-log,
-// §forgejo/state/watermark).
+// §forgejo/state/watermark). The digest folds every fact; a quote of
+// them bounds the thread (§forgejo/observability/the-decision-log).
 func declaredInputFacts(a Action, s State) []string {
-	return inputFacts(a, s, nil)
+	return inputFacts(a, s)
 }
 
-// quotedInputFacts is the same set as a decision line carries it, with
-// the bound an input declares applied: a reason stays the length of the
-// delivery it describes rather than the age of the work item
-// (§forgejo/observability/the-decision-log).
-func quotedInputFacts(a Action, s State) []string {
-	return inputFacts(a, s, declaredInputQuotes)
-}
-
-// inputFacts collects one declaration's folded facts once for both
-// readers: the digest folds every one of them, the quote takes them
-// through the bound named in quotes (nil for the digest itself). A fact
-// an earlier input already stated is collected once, so two folds that
-// name the same fact move one digest and quote it once.
-func inputFacts(a Action, s State, quotes map[string]func([]string) []string) []string {
+// inputFacts collects one declaration's folded facts. A fact an earlier
+// input already stated is collected once, so two folds that name the
+// same fact move one digest and quote it once.
+func inputFacts(a Action, s State) []string {
 	var facts []string
 	seen := map[string]bool{}
 	for _, name := range declarationFor(a).inputs {
@@ -365,34 +356,41 @@ func inputFacts(a Action, s State, quotes map[string]func([]string) []string) []
 			seen[fact] = true
 			folded = append(folded, fact)
 		}
-		if bound, ok := quotes[name]; ok {
-			folded = bound(folded)
-		}
 		facts = append(facts, folded...)
 	}
 	return facts
 }
 
-// declaredInputQuotes bounds how one declared input's folded facts reach
-// a reason line. Comments are the only input whose facts grow with a
-// work item's age — labels, blockers and connected pull requests are
-// trimmed to the taxonomy the forge enforces, a description folds to one
-// hex — so the digest keeps folding every counted comment while the
-// quote names the newest, the one the delivery was about, beside how
-// many the fold counted (§forgejo/observability/the-decision-log,
-// s-git/maitred#262). An input that needs no bound stands nowhere here.
-var declaredInputQuotes = map[string]func([]string) []string{
-	"issue.comments": quoteCountedComments,
-}
+// commentFactPrefix opens every fact the issue.comments fold states, so
+// the one place that bounds the thread for a reason line recognises it.
+const commentFactPrefix = "comment "
 
-// quoteCountedComments is that bound. The forge lists a thread oldest
-// first, so the fact last folded is the comment just written; a thread
-// of one quotes as that comment alone.
-func quoteCountedComments(facts []string) []string {
-	if len(facts) < 2 {
-		return facts
+// quoteThread bounds a thread's facts for the reason line that quotes
+// them. Comments are the only input whose facts grow with a work item's
+// age — labels, blockers and connected pull requests are trimmed to the
+// taxonomy the forge enforces, a description folds to one hex — so a
+// quote carries the newest counted comment, the one the delivery was
+// about, and lets the count the fold states say how many there were
+// (§forgejo/observability/the-decision-log, s-git/maitred#262). The
+// newest is the last fact the fold produced, the listing being in the
+// order the forge answers with; were that order other, the line would
+// name another comment of the same thread rather than the one asked for,
+// the decision itself being folded from every one. The bound is the
+// quote's alone: a comment the thread lost still moves the digest.
+func quoteThread(facts []string) []string {
+	kept := make([]string, 0, len(facts))
+	newest := ""
+	for _, fact := range facts {
+		if strings.HasPrefix(fact, commentFactPrefix) {
+			newest = fact
+			continue
+		}
+		kept = append(kept, fact)
 	}
-	return []string{fmt.Sprintf("%s (the newest of %d counted comments)", facts[len(facts)-1], len(facts))}
+	if newest != "" {
+		kept = append(kept, newest)
+	}
+	return kept
 }
 
 // validateFoldingDeclarations refuses a declaration whose digest is the
@@ -470,12 +468,26 @@ var declaredInputFolds = map[string]func(State) []string{
 		// its body digests to, the way an issue's own description is
 		// stated. Whose comments reach the fold is commentCountsAsInput's
 		// to say, and the declaration above it (s-git/maitred#262).
+		//
+		// A thread is append-only, and its information is multiplicity:
+		// every other input is a set of current facts, where stating one
+		// twice says no more, while a comment repeating an earlier one's
+		// text word for word is still a delivery that asked for this row.
+		// So the fold states how many it counted beside what it counted,
+		// and the deduplication that keeps two inputs from stating one
+		// fact twice cannot swallow the repeat
+		// (§forgejo/decisions/actions, s-git/maitred#262).
 		var facts []string
+		counted := 0
 		for _, c := range s.Comments {
 			if !commentCountsAsInput(c.Author, s.EngineAccount, s.DecomposerIdentity) {
 				continue
 			}
-			facts = append(facts, "comment "+c.Author+" "+digestRevision(c.Body))
+			counted++
+			facts = append(facts, commentFactPrefix+c.Author+" "+digestRevision(c.Body))
+		}
+		if counted > 0 {
+			facts = append(facts, fmt.Sprintf("counted comments %d", counted))
 		}
 		return facts
 	},
