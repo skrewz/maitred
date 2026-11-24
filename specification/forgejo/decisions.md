@@ -1189,16 +1189,9 @@ facts it names into the digest its dispatch is watermarked on
 which row fired is not
 part of the state, and a digest both the sweep and an event must answer
 with cannot contain it. The refusal of undeclared reads checks each
-predicate's reads against the set its action declares, and refuses by
-file, field and action a read that set does not name. The reads the
-digest machinery writes are the declaration's own implementation and
-answer to it rather than to the predicate, so no call site is excused
-by a list; a read of a row's identity — which row a reason names, and
-what kind of row it is — states no fact and is no input. A predicate
-reads no activity timestamp: the fold states the timestamp so the
-digest a row dispatches on moves, and a row that turned on the cursor
-itself would decide on the clock rather than on the state
-(§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#263).
+predicate's reads against the set its action declares, refusing by
+file, field and action a read that set does not name
+(s-git/maitred#263).
 
 ## Actionable-state digest
 

@@ -88,10 +88,10 @@ var inputPaths = map[string][]string{
 // inputFields states which vocabulary name each fact of a state-model row is
 // read for. The same issue read as the row under decision, as a blocker and as
 // a landing-set member is named by each of those, and a read is declared only
-// when the walk and the fact agree on one name. A fact that stands with no
-// names is one no declaration may name — authorship gates nothing
-// (§forgejo/decisions/loop-prevention) — and a field absent here is a field
-// the vocabulary says nothing about, which is a refusal.
+// when the walk and the fact agree on one name. A field absent here is one the
+// vocabulary says nothing about, which is a refusal — authorship gates nothing
+// (§forgejo/decisions/loop-prevention), so no name in the vocabulary belongs
+// to an author.
 var inputFields = map[string]map[string][]string{
 	"Issue": {
 		"State":  {"issue.state", "blockers.states", "connected issues", "connected issues' blockers", "connected issues' sync sets", "sync sets", "sync members", "blocked downstream edges"},
@@ -100,11 +100,7 @@ var inputFields = map[string]map[string][]string{
 		// The fold states the activity timestamp so a declared digest moves;
 		// it is named here and still refused in a predicate by the timestamp
 		// rule below.
-		"UpdatedAt":    {"issue.updated_at"},
-		"ClosedAt":     nil,
-		"Author":       nil,
-		"Title":        nil,
-		"LabelColours": nil,
+		"UpdatedAt": {"issue.updated_at"},
 	},
 	"PullRequest": {
 		"State":     {"PR.state", "connected PRs", "members' PRs"},
@@ -113,16 +109,12 @@ var inputFields = map[string]map[string][]string{
 		"HeadSHA":   {"PR.head sha", "members' PRs"},
 		"Labels":    {"PR.labels"},
 		"Author":    {"PR.author"},
-		"Body":      nil,
-		"Title":     nil,
-		"UpdatedAt": nil,
 	},
 	"Review": {
-		"Event":       {"reviews"},
-		"Author":      {"reviews"},
-		"CommitID":    {"reviews"},
-		"Dismissed":   {"reviews"},
-		"SubmittedAt": nil,
+		"Event":     {"reviews"},
+		"Author":    {"reviews"},
+		"CommitID":  {"reviews"},
+		"Dismissed": {"reviews"},
 	},
 }
 
@@ -475,20 +467,17 @@ func checkDeclaredReads(src *sourceTree, decls []declaredInput) ([]string, error
 }
 
 // refusal is one read's answer against one declaration: nothing when the
-// declaration names it, a finding when it does not.
+// declaration names it, a finding when it does not. Every finding takes the
+// same shape — where the read stands, what it reads, and one clause naming
+// why the declaration does not own it.
 func (r read) refusal(a Action, declared map[string]bool) string {
-	unnamed := func() string {
-		return fmt.Sprintf("%s:%d: the %s declaration's predicate reads %s, which nothing in the vocabulary of §forgejo/decisions/inputs states",
-			r.file, r.line, a, r)
-	}
 	for _, name := range rowIdentity[r.owner] {
 		if name == r.field {
 			return ""
 		}
 	}
 	if r.ftype == "time.Time" {
-		return fmt.Sprintf("%s:%d: the %s declaration's predicate reads the timestamp %s: the fold states it so the digest moves, and a row that turned on it would decide on the clock",
-			r.file, r.line, a, r)
+		return r.finding(a, ": the fold states this timestamp so the digest moves, and a row that turned on the cursor itself would decide on the clock rather than on the state")
 	}
 	reached := r.reachedNames()
 	if facts, ok := inputFields[r.owner]; ok {
@@ -497,20 +486,26 @@ func (r read) refusal(a Action, declared map[string]bool) string {
 		// nothing the declaration can name.
 		names := facts[r.field]
 		if len(names) == 0 {
-			return unnamed()
+			return r.finding(a, ", which nothing in the vocabulary of §forgejo/decisions/inputs states")
 		}
 		reached = intersect(reached, names)
 	}
 	if len(reached) == 0 {
-		return unnamed()
+		return r.finding(a, ", which nothing in the vocabulary of §forgejo/decisions/inputs states")
 	}
 	for _, name := range reached {
 		if declared[name] {
 			return ""
 		}
 	}
-	return fmt.Sprintf("%s:%d: the %s declaration's predicate reads %s, a fact of %s; the %s declaration names %s",
-		r.file, r.line, a, r, strings.Join(reached, ", "), a, strings.Join(sortedKeys(declared), ", "))
+	return r.finding(a, fmt.Sprintf(", a fact of %s; the declaration names %s",
+		strings.Join(reached, ", "), strings.Join(sortedKeys(declared), ", ")))
+}
+
+// finding is a refused read: where it stands, what it reads, and the reason
+// it is refused.
+func (r read) finding(a Action, why string) string {
+	return fmt.Sprintf("%s:%d: the %s declaration's predicate reads %s%s", r.file, r.line, a, r, why)
 }
 
 // reachedNames is the walk's answer: the names the longest walk to this read
