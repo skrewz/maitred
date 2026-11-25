@@ -695,7 +695,13 @@ func (s *sourceTree) paramBinding(typ string, args []binding, i int) binding {
 	return binding{}
 }
 
-// resolve is an expression's type and the walk it was read out of.
+// resolve is an expression's type and the walk it was read out of. The forms
+// it places are those that state where a value was reached from: a name, a
+// parenthesised, address-of or dereferenced value, an element or a re-slice of
+// one it places, and a field of one it places. Everything else — a literal, a
+// call, a composite literal — is a value no walk reaches and answers
+// untracked; a form that could carry a walk and is not listed here answers the
+// same way, so a new hop is added here and nowhere else.
 func (s *sourceTree) resolve(e ast.Expr, env map[string]binding) binding {
 	switch x := e.(type) {
 	case *ast.Ident:
@@ -714,6 +720,11 @@ func (s *sourceTree) resolve(e ast.Expr, env map[string]binding) binding {
 	case *ast.IndexExpr:
 		b := s.resolve(x.X, env)
 		return binding{typ: elemType(b.typ), hops: b.hops, tracked: b.tracked}
+	case *ast.SliceExpr:
+		// A re-slice holds the same rows as the container cut from, so it
+		// carries that container's walk: `s.Blockers[1:]` ranges over the
+		// same row type the whole listing does.
+		return s.resolve(x.X, env)
 	case *ast.SelectorExpr:
 		b := s.resolve(x.X, env)
 		if !b.tracked || b.typ == "" {
@@ -1212,6 +1223,37 @@ func (i *Issue) probeTouched() bool { return !i.UpdatedAt.IsZero() }
 	}
 	if len(problems) != 0 {
 		t.Fatalf("problems = %v, want a method shared by two predicates left out of both declarations", problems)
+	}
+}
+
+// TestDeclarationCheck_AttributesAReadThroughASliceOfTheContainer is the same
+// rule over the form that skips a listing's head: a re-slice holds the same
+// rows as the container cut from, so the read behind it answers to the walk
+// that reached the container (§forgejo/decisions/inputs, s-git/maitred#263).
+func TestDeclarationCheck_AttributesAReadThroughASliceOfTheContainer(t *testing.T) {
+	src := sourceUnderTest(t, writeSource(t, map[string]string{"probe.go": probeSource(`	if anyTouched(s.Blockers[1:]) {
+		return dispatch(Action("probe"), "deciding through a re-sliced listing")
+	}`) + `
+
+func anyTouched(rows []Issue) bool {
+	for _, r := range rows {
+		if !r.UpdatedAt.IsZero() {
+			return true
+		}
+	}
+	return false
+}
+`}))
+	problems, err := checkDeclaredReads(src, []declaredInput{{
+		action:    "probe",
+		predicate: "probeReady",
+		inputs:    []string{"issue.state", "blockers.states"},
+	}})
+	if err != nil {
+		t.Fatalf("the declared-inputs guard: %v", err)
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0], "timestamp") || !strings.Contains(problems[0], "Issue.UpdatedAt") {
+		t.Fatalf("problems = %v, want one refusal naming the timestamp read behind the re-slice", problems)
 	}
 }
 
