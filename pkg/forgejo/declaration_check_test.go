@@ -683,10 +683,14 @@ func (s *sourceTree) paramBinding(typ string, args []binding, i int) binding {
 // resolve is an expression's type and the walk it was read out of. The forms
 // it places are those that state where a value was reached from: a name, a
 // parenthesised, address-of or dereferenced value, an element or a re-slice of
-// one it places, and a field of one it places. Everything else — a literal, a
-// call, a composite literal — is a value no walk reaches and answers
-// untracked; a form that could carry a walk and is not listed here answers the
-// same way, so a new hop is added here and nowhere else.
+// one it places, and a field of one it places. Everything else is answered
+// untracked by right, and TestDeclarationCheck_EveryFormInWalkedCodeIsAccountedFor
+// keeps that claim checked rather than hoped: a literal, a call, a composite
+// literal and a closure are values no walk reaches; an operator's result is
+// computed from its operands, whose reads the walk records where they stand;
+// a type states no value at all. A form that could carry a walk and is named
+// by neither list is the census's to refuse, so a new hop is added to resolve
+// or named in the census, and nowhere else.
 func (s *sourceTree) resolve(e ast.Expr, env map[string]binding) binding {
 	switch x := e.(type) {
 	case *ast.Ident:
@@ -835,17 +839,7 @@ func checkActionEnum(src *sourceTree, decls []declaredInput) ([]string, error) {
 // their declaration's own implementation, never a helper to follow into.
 func checkDeclaredReads(src *sourceTree, decls []declaredInput) ([]string, error) {
 	callers := src.callGraph()
-	forbidden := map[string]bool{}
-	for _, d := range decls {
-		forbidden[d.predicate] = true
-		if d.digest != nil {
-			// A derivation bound as a closure has no source name to forbid;
-			// no body can call it by name anyway.
-			if name := funcName(d.digest); !strings.HasPrefix(name, "func") {
-				forbidden[name] = true
-			}
-		}
-	}
+	forbidden := forbiddenDerivations(decls)
 	seen := map[string]bool{}
 	var problems []string
 	for _, d := range decls {
@@ -883,7 +877,10 @@ func (r read) refusal(a Action, declared map[string]bool) string {
 			return ""
 		}
 	}
-	if r.ftype == "time.Time" {
+	if t := strings.TrimPrefix(r.ftype, "*"); t == "time.Time" {
+		// The rule is read off the field's type, pointer included: a
+		// timestamp spelled `*time.Time` decides on the clock exactly as
+		// one spelled `time.Time` does.
 		return r.finding(a, ": the fold states this timestamp so the digest moves, and a row that turned on the cursor itself would decide on the clock rather than on the state")
 	}
 	reached := r.reachedNames()
@@ -1401,6 +1398,27 @@ func TestDeclarationCheck_RefusesATimestampRead(t *testing.T) {
 	}
 }
 
+// TestDeclarationCheck_RefusesATimestampReadWhateverTheSpelling keeps the
+// flagship rule off its spelling: a timestamp the model gains as a pointer is
+// the same decision on the clock, and the rule is read off the field's type
+// with the pointer stripped (§forgejo/decisions/inputs, s-git/maitred#263).
+func TestDeclarationCheck_RefusesATimestampReadWhateverTheSpelling(t *testing.T) {
+	src := sourceUnderTest(t, writeSource(t, map[string]string{"probe.go": probeSource(`	if issue := s.Issue; issue != nil && issue.DeletedAt == nil {
+		return dispatch(Action("probe"), "deciding on a pointer to the clock")
+	}`)}))
+	problems, err := checkDeclaredReads(src, []declaredInput{{
+		action:    "probe",
+		predicate: "probeReady",
+		inputs:    []string{"issue.state"},
+	}})
+	if err != nil {
+		t.Fatalf("the declared-inputs guard: %v", err)
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0], "timestamp") || !strings.Contains(problems[0], "Issue.DeletedAt") {
+		t.Fatalf("problems = %v, want one refusal naming the pointer-spelled timestamp read", problems)
+	}
+}
+
 // TestDeclarationCheck_RefusesAReadBesideTheVocabulary refuses a predicate
 // reading a field the vocabulary of §forgejo/decisions/inputs says nothing
 // about: a fact no declaration can name is a fact no row may decide on.
@@ -1418,6 +1436,122 @@ func TestDeclarationCheck_RefusesAReadBesideTheVocabulary(t *testing.T) {
 	}
 	if len(problems) != 1 || !strings.Contains(problems[0], "vocabulary") {
 		t.Fatalf("problems = %v, want one refusal that the vocabulary states no such input", problems)
+	}
+}
+
+// forbiddenDerivations is the set of callables no walk enters as a helper:
+// the predicates and digest derivations the table binds, each of which is its
+// own declaration's implementation rather than a body the caller-set rule
+// weighs.
+func forbiddenDerivations(decls []declaredInput) map[string]bool {
+	forbidden := map[string]bool{}
+	for _, d := range decls {
+		forbidden[d.predicate] = true
+		if d.digest != nil {
+			// A derivation bound as a closure has no source name to forbid;
+			// no body can call it by name anyway.
+			if name := funcName(d.digest); !strings.HasPrefix(name, "func") {
+				forbidden[name] = true
+			}
+		}
+	}
+	return forbidden
+}
+
+// TestDeclarationCheck_EveryFormInWalkedCodeIsAccountedFor is the census that
+// keeps resolve's enumeration safe rather than lucky: every expression written
+// in a walked body, at every position the walk asks one, is either a form
+// resolve places or one the walk answers untracked by right — a literal, a
+// call, a composite literal, a closure, an operator's result, a type. A form
+// the enumeration has not been told about is an error naming it and where it
+// stands, so a new spelling fails the day it is written instead of in the next
+// review (s-git/maitred#263).
+func TestDeclarationCheck_EveryFormInWalkedCodeIsAccountedFor(t *testing.T) {
+	src := sourceUnderTest(t, ".")
+	decls := declarationsUnderTest()
+	callers := src.callGraph()
+	forbidden := forbiddenDerivations(decls)
+	asked := map[string]bool{}
+	var problems []string
+	for _, d := range decls {
+		for name := range src.answersTo(d.predicate, callers, forbidden) {
+			fn := src.callable(name)
+			if fn.Body == nil {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				switch at := n.(type) {
+				case *ast.AssignStmt:
+					if at.Tok == token.DEFINE || at.Tok == token.ASSIGN {
+						for _, rhs := range at.Rhs {
+							src.censusExpr(rhs, asked, &problems)
+						}
+					}
+				case *ast.RangeStmt:
+					src.censusExpr(at.X, asked, &problems)
+				case *ast.SelectorExpr:
+					src.censusExpr(at.X, asked, &problems)
+				case *ast.CallExpr:
+					src.censusExpr(at.Fun, asked, &problems)
+					for _, arg := range at.Args {
+						src.censusExpr(arg, asked, &problems)
+					}
+				}
+				return true
+			})
+		}
+	}
+	for _, p := range problems {
+		t.Error(p)
+	}
+}
+
+// censusExpr is the walk's question asked of one expression written where the
+// walk asks one: is this form placed by resolve, is it something the walk
+// answers untracked by right — a literal, a call, a composite literal, a
+// closure, an operator's result, a type — or is it a form the enumeration has
+// not been told about, which is an error naming it? A call is asked of its
+// arguments either way, and each placed form of the expression it was reached
+// from; the reads a named-untracked form's operands write are recorded by the
+// walk's own selector case, never by this one.
+func (s *sourceTree) censusExpr(e ast.Expr, asked map[string]bool, problems *[]string) {
+	switch x := e.(type) {
+	case *ast.Ident:
+	case *ast.BasicLit:
+	case *ast.CompositeLit:
+	case *ast.FuncLit:
+	case *ast.BinaryExpr:
+		// What an operator yields is a value computed from its operands,
+		// not a row reached from a carrier — and the reads the operands
+		// write are the walk's selector case's, recorded wherever they
+		// stand.
+	case *ast.ArrayType, *ast.MapType, *ast.ChanType, *ast.FuncType, *ast.StructType, *ast.InterfaceType:
+		// A type states no value any walk reaches: `make([]Issue, n)`
+		// passes one where the walk asks an argument.
+	case *ast.ParenExpr:
+		s.censusExpr(x.X, asked, problems)
+	case *ast.UnaryExpr:
+		s.censusExpr(x.X, asked, problems)
+	case *ast.StarExpr:
+		s.censusExpr(x.X, asked, problems)
+	case *ast.IndexExpr:
+		s.censusExpr(x.X, asked, problems)
+	case *ast.SliceExpr:
+		s.censusExpr(x.X, asked, problems)
+	case *ast.SelectorExpr:
+		s.censusExpr(x.X, asked, problems)
+	case *ast.CallExpr:
+		s.censusExpr(x.Fun, asked, problems)
+		for _, arg := range x.Args {
+			s.censusExpr(arg, asked, problems)
+		}
+	default:
+		pos := s.fset.Position(e.Pos())
+		key := fmt.Sprintf("%s:%d %T", filepath.Base(pos.Filename), pos.Line, e)
+		if !asked[key] {
+			asked[key] = true
+			*problems = append(*problems, fmt.Sprintf("%s: walked code writes a %T where the walk asks an expression; neither resolve places it nor does the census record it as answered untracked by right", key, e))
+		}
 	}
 }
 
@@ -1617,6 +1751,7 @@ type Issue struct {
 	Title      string
 	Repository string
 	UpdatedAt  time.Time
+	DeletedAt  *time.Time
 }
 
 type Event struct {
