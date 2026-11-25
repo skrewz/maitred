@@ -2941,8 +2941,8 @@ func TestHandler_IssueClosed_CascadeWalkBudgetHoldsOff(t *testing.T) {
 	}
 	if got := eng.Tracked(); len(got) != 1 || got[0].Decision.Dispatched {
 		t.Errorf("Tracked() = %v, want the hold-off a graph read that could not be paid for leaves", got)
-	} else if reason := got[0].Decision.Reason; !strings.Contains(reason, "the blocker graph could not be proven") {
-		t.Errorf("hold-off reason = %q, want it to name the read that went unread", reason)
+	} else if reason := got[0].Decision.Reason; !strings.Contains(reason, "the re-fetched state could not be proven") {
+		t.Errorf("hold-off reason = %q, want it to state the re-fetch whose graph walk went unread", reason)
 	}
 }
 

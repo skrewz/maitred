@@ -290,6 +290,14 @@ type ForestDigestGate struct {
 	// sub-digests. Empty when the forest has never been observed.
 	Stored      string
 	StoredParts map[string]string
+	// Declined states why the gate carries no observation because the
+	// engine left it off on purpose: a gating root in a repository no
+	// maitred role names is an exclusion, not a read that failed, and
+	// asking the next sweep would decline identically. It is empty for
+	// every gate that was armed, and for the unarmed ones no row
+	// consults (§forgejo/webhook/repository-roles,
+	// §forgejo/decisions/actionable-state-digest, s-git/maitred#261).
+	Declined string
 }
 
 // movedComponents names the components of the forest's actionable
@@ -560,8 +568,7 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 			// is: no declared fact of the set moved, not that a landing
 			// was dispatched and waits (§forgejo/decisions/sync-set,
 			// s-git/maitred#261).
-			return holdOff(fmt.Sprintf("sync holds off: inputs unchanged at %s",
-				quotedRevision(ActionSync, e, s, rev)))
+			return holdOffInputsUnchanged(ActionSync, quotedRevision(ActionSync, e, s, rev))
 		}
 		return d
 	}
@@ -806,7 +813,7 @@ func holdOffTeardownWithoutRoot(a Action, number int) Decision {
 // (§forgejo/decisions/unblock-cascade).
 func decideIssueClosed(s State) Decision {
 	if s.Issue == nil {
-		return holdOffUnreadInput("issue.state", "no issue state was re-fetched")
+		return holdOffUnreadIssueState(Action(""))
 	}
 	if s.Issue.State != "closed" {
 		return holdOffUnsatisfiedInput(fmt.Sprintf("issue %d is %q, not closed", s.Issue.Number, s.Issue.State), "issue.state")
@@ -822,7 +829,7 @@ func decideIssueClosed(s State) Decision {
 func decidePROpened(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
 	if pr == nil {
-		return holdOffUnreadInput("PR.state", "no pull request state was re-fetched")
+		return holdOffUnreadPRState(Action(""))
 	}
 	if !prOpen(pr) {
 		return holdOffUnsatisfiedInput(fmt.Sprintf("PR %d is not open", pr.Number), "PR.state")
@@ -869,7 +876,7 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 func decidePRSynced(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
 	if pr == nil {
-		return holdOffUnreadInput("PR.state", "no pull request state was re-fetched")
+		return holdOffUnreadPRState(Action(""))
 	}
 	if !prOpen(pr) {
 		return holdOffUnsatisfiedInput(fmt.Sprintf("PR %d is not open", pr.Number), "PR.state")
@@ -921,7 +928,9 @@ func decideReviewFanOut(e Event, pr *PullRequest, s State, w *Watermark, labelRe
 				// dispatched against: nothing in the state moved, so the
 				// label is merely present and no lens re-reads a head it
 				// reported (§forgejo/decisions/label-triggered-review).
-				suppressed = append(suppressed, fmt.Sprintf("%s (the %s request arrived at inputs unchanged from the standing it was dispatched at)", lens.Identity, LabelTriggerReview))
+				suppressed = append(suppressed, fmt.Sprintf("%s (the %s request arrived at %s, the standing the engine dispatched it at)",
+					lens.Identity, LabelTriggerReview,
+					inputsUnchanged(quotedFacts(declaredInputFacts(ActionReview, lens.Identity, s), rev))))
 				continue
 			}
 			dispatched = append(dispatched, LensDispatch{
@@ -957,7 +966,7 @@ func decideReviewFanOut(e Event, pr *PullRequest, s State, w *Watermark, labelRe
 			// state still calls for the report, so the row dispatches and
 			// the re-fire bound spaces the attempt.
 			ld.StateGoverned = true
-			ld.Reason += fmt.Sprintf("; inputs unchanged at %s, which the state still calls for: the re-fire bound spaces the attempt",
+			ld.Reason = refireAtInputsUnchanged(ld.Reason,
 				quotedFacts(declaredInputFacts(ActionReview, lens.Identity, s), rev))
 			if !lensHasAnyReview(s.Reviews, lens) {
 				// No review by the lens's login has ever been seen — the
@@ -1346,8 +1355,7 @@ func dispatchOnDeclaredDigest(a Action, w *Watermark, e Event, s State, d Decisi
 		// already dispatched, and the re-fire bound is what spaces the
 		// attempt (§forgejo/observability/the-decision-log,
 		// s-git/maitred#261).
-		d.Reason = fmt.Sprintf("%s; inputs unchanged at %s, which the state still calls for: the re-fire bound spaces the attempt",
-			d.Reason, quotedRevision(a, e, s, digest))
+		d.Reason = refireAtInputsUnchanged(d.Reason, quotedRevision(a, e, s, digest))
 	case recordsAction(w, a):
 		d.Reason = fmt.Sprintf("%s; the inputs moved to %s", d.Reason, quotedRevision(a, e, s, digest))
 	}
@@ -1386,7 +1394,7 @@ func stateGoverned(d Decision) Decision {
 func decidePRReviewed(e Event, s State, w *Watermark) Decision {
 	pr := s.PR
 	if pr == nil {
-		return holdOffUnreadInput("PR.state", "no pull request state was re-fetched")
+		return holdOffUnreadPRState(Action(""))
 	}
 	if !prOpen(pr) {
 		return holdOffUnsatisfiedInput(fmt.Sprintf("PR %d is not open", pr.Number), "PR.state")
@@ -1428,10 +1436,10 @@ func decidePRReviewed(e Event, s State, w *Watermark) Decision {
 // merged PR auto-closes (§forgejo/decisions/unblock-cascade).
 func decidePRMerged(s State) Decision {
 	if s.PR == nil {
-		return holdOffUnreadInput("PR.state", "no pull request state was re-fetched")
+		return holdOffUnreadPRState(Action(""))
 	}
 	if !s.PR.Merged {
-		return holdOffUnsatisfiedInput(fmt.Sprintf("PR %d is closed, not merged", s.PR.Number), "PR.state")
+		return holdOffUnsatisfiedInput(fmt.Sprintf("PR %d is %q, not merged", s.PR.Number, s.PR.State), "PR.state")
 	}
 	d := holdOff(fmt.Sprintf("PR %d merged; unblock cascade for the connected issue", s.PR.Number))
 	d.Cascade, d.CascadeHoldOffs = unblockCascade(s.CascadeRoot)
@@ -2125,10 +2133,40 @@ func holdOff(reason string) Decision {
 	return Decision{Reason: reason}
 }
 
-// holdOffUnreadInput is the one seat the unproven vocabulary is written
-// for a reader that has named no action: the pipeline, whose re-fetch
-// failed before any row was reached, and the row whose object was never
-// re-fetched. subject names what the engine was trying to read — a
+// inputsUnchanged is the unchanged-digest vocabulary in one place: the
+// digest quoted as the facts behind it. Every row that meets a digest it
+// has never seen move composes its sentence from here, so the claim
+// §forgejo/decisions/reconciliation makes — that every such row says so —
+// is one sentence and not one per seat
+// (§forgejo/observability/the-decision-log, s-git/maitred#261).
+func inputsUnchanged(quoted string) string {
+	return fmt.Sprintf("inputs unchanged at %s", quoted)
+}
+
+// holdOffInputsUnchanged is the hold-off a row a digest suppresses
+// records: no declared fact moved, so nothing a fresh attempt could act
+// on has happened, and the row claims no dispatch waiting behind it
+// (§forgejo/decisions/sync-set, §forgejo/observability/the-decision-log,
+// s-git/maitred#261).
+func holdOffInputsUnchanged(a Action, quoted string) Decision {
+	return holdOff(fmt.Sprintf("%s holds off: %s", a, inputsUnchanged(quoted)))
+}
+
+// refireAtInputsUnchanged is the clause a dispatch the state still calls
+// for appends to the reason it already had: the digest it is paced on is
+// the one the state stands at, so the re-fire bound — not a move in the
+// state — is what spaces the next attempt
+// (§forgejo/reconciliation/the-state-is-the-watermark,
+// s-git/maitred#261).
+func refireAtInputsUnchanged(reason, quoted string) string {
+	return fmt.Sprintf("%s; %s, which the state still calls for: the re-fire bound spaces the attempt",
+		reason, inputsUnchanged(quoted))
+}
+
+// holdOffUnreadInput is the one seat the unproven sentence is written
+// at: the predicate, through holdOffUnproven, the pipeline whose
+// re-fetch failed before any row was reached, and the scope test ahead
+// of any action. subject names what the engine was trying to read — a
 // declared input, or the repository's scope ahead of any action — and
 // detail names the failure. The sentence says the engine could not tell,
 // never that the state said no, and names the sweep that backstops the
@@ -2136,6 +2174,17 @@ func holdOff(reason string) Decision {
 // §forgejo/observability/the-decision-log, s-git/maitred#261).
 func holdOffUnreadInput(subject, detail string) Decision {
 	return holdOff(fmt.Sprintf("%s could not be proven — %s; the reconciliation sweep asks again", subject, detail))
+}
+
+// holdOffDigestGateDeclined is the sentence for a digest gate the engine
+// armed and then declined to read: the forest sits behind a repository
+// the engine does not follow, so nothing failed and the next sweep would
+// decline identically. It is deliberately not the unproven sentence — no
+// read was attempted, and no retry is promised
+// (§forgejo/webhook/repository-roles,
+// §forgejo/decisions/actionable-state-digest, s-git/maitred#261).
+func holdOffDigestGateDeclined(subject, detail string) Decision {
+	return holdOff(fmt.Sprintf("%s: the digest gate is off — %s; the forest's digest asks nothing of this row, and asking again would decline the same", subject, detail))
 }
 
 // holdOffOutOfRemit is the admission hold-off: the repository holds no
@@ -2278,7 +2327,6 @@ func holdOffEngineAuthoredEdit(repo string, number int, account string) Decision
 // the decision log names the input the predicate would have asked of,
 // not the endpoint that failed (§forgejo/webhook/re-fetch,
 // §forgejo/decisions/inputs, s-git/maitred#261).
-// unreadInput names the input the failed read was buying.
 func unreadInput(input string, err error) error {
 	return unreadInputError{input: input, err: err}
 }

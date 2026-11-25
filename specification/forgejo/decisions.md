@@ -356,7 +356,7 @@ re-firing (§forgejo/decisions/label-triggered-review).
 | reconcile — open issue carrying both the `ideation` and the `teardown-forest` label, blocking at least one issue that is not an `outcome` tracker | `teardown-forest` on the digest of its declared inputs — the downstream edges, which an edge edit moves with no delivery — a digest the watermark records re-firing at the re-fire bound's pace (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#259) |
 | reconcile — open issue carrying both labels, blocking no issue other than a tracker | hold off, naming what it still blocks: the re-firing ends where the order has nothing left to delete (§forgejo/decisions/forest-teardown) |
 | reconcile — open issue with the `ideation` label | `decompose` when the forest's actionable-state digest moved since the store last observed it, the reason naming the component that moved; otherwise a hold-off naming the unchanged digest. The row is the digest gate's whole decision; a row arriving with no observation holds off naming it, since through the pipeline the sweep's root row always reaches the gate armed (§forgejo/decisions/actionable-state-digest, §forgejo/config/engine-account, s-git/maitred#209) |
-| reconcile — open `outcome` tracker its `ideation` blocker closed | `decompose` when the forest's actionable-state digest moved since the store last observed it — the same gate the root's rows consult, so one forest gets one answer whichever row reaches it, and a forest is under curation while its tracker is open whatever its blockers hold (s-git/maitred#209, s-git/maitred#279). Where the tracker is also ready for `wrap-up`, decompose wins, and the dispatch's refresh defers the close by exactly one sweep (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#279); a row arriving with no observation holds off naming it |
+| reconcile — open `outcome` tracker its `ideation` blocker closed | `decompose` when the forest's actionable-state digest moved since the store last observed it — the same gate the root's rows consult, so one forest gets one answer whichever row reaches it, and a forest is under curation while its tracker is open whatever its blockers hold (s-git/maitred#209, s-git/maitred#279). Where the tracker is also ready for `wrap-up`, decompose wins, and the dispatch's refresh defers the close by exactly one sweep (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#279); a row arriving with no observation holds off naming it, and one arriving at a gate the engine declined to read names the exclusion instead (§forgejo/webhook/repository-roles, s-git/maitred#261) |
 | reconcile — open `outcome` issue, no open blockers, its forest's digest unchanged since the store last observed it | `wrap-up` on the digest of its declared inputs, a digest the watermark records re-firing at the re-fire bound's pace — the close the moved digest deferred (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#259, s-git/maitred#279) |
 | reconcile — open `outcome` issue whose `ideation` blocker is **open** and carries the `teardown-forest` label | hold off, as any tracker with an open root does: the teardown order needs no row of its own, and the root's own edge is what keeps a spared tracker from reading as finished (§forgejo/decisions/forest-teardown) |
 | reconcile — open `outcome` issue whose `ideation` blocker is **open** | hold off, naming the root — the forest is not yet commissioned, and the root's own row is the pulse: a forest is curated once per sweep |
@@ -1204,7 +1204,12 @@ which is never satisfied: the row holds off naming which input could not
 be proven and leaves the next sweep to ask again. A failed read is
 therefore not the empty listing it would have stood for, and no guard's
 absence is read anywhere in the decision code as that guard being
-satisfied (s-git/maitred#261). An issue-path
+satisfied (s-git/maitred#261). A digest gate the engine armed and then
+left off on purpose is not among these: a forest whose root stands in a
+repository no maitred role names is the exclusion
+§forgejo/webhook/repository-roles specifies, so the row holds off naming
+that exclusion, naming the root's repository, and promising no retry the
+next sweep could only decline identically (s-git/maitred#261). An issue-path
 declaration **folds** that set into the digest its dispatch is
 watermarked on, so an input a predicate reads cannot move without the
 row that asks it noticing (§forgejo/state/watermark, s-git/maitred#259):
@@ -1263,9 +1268,14 @@ issue it holds off before reaching one (a kind-conflicting issue is
 held off as a conflict); on the event path such an issue does still
 reach its root row, and there the row consults no gate and dispatches on
 the digest of its declared inputs (§forgejo/decisions/transition-table). A gated row arriving with no
-observation holds off naming the missing observation — through the
-pipeline it cannot happen, and like any missing digest it decides
-nothing. A failed digest read is a re-fetch failure: a hold-off the
+observation because no read of the forest was ever paid for holds off
+naming that missing observation — through the pipeline it cannot happen,
+and like any missing digest it decides nothing. A gated row arriving at a
+gate the engine armed and then declined to read holds off naming the
+exclusion instead, the root's repository among it: a standing exclusion
+promises the next sweep nothing
+(§forgejo/webhook/repository-roles, s-git/maitred#261). A failed digest
+read is a re-fetch failure: a hold-off the
 next sweep backstops, never a decision from a partial digest.
 
 The forest is named by its `ideation` root and read through the issues

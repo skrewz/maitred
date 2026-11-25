@@ -957,31 +957,6 @@ func TestPredicates_HoldOffsNameTheDeclaredInput(t *testing.T) {
 	}
 }
 
-// TestHoldOffGenerators_RefuseAnUndeclaredInput pins where the
-// declaration stops being a description and becomes the rule: a hold-off
-// that names an input no declaration declares, or that names to an
-// action which does not declare it, is a guard stated beside the
-// declaration, and it is refused where it is written
-// (§forgejo/decisions/actions, s-git/maitred#261).
-func TestHoldOffGenerators_RefuseAnUndeclaredInput(t *testing.T) {
-	for name, write := range map[string]func(){
-		"an action holding off on an input it does not declare":    func() { holdOffUnsatisfied(ActionReview, "a guard no declaration covers", "blockers.states") },
-		"an action answered unproven for an input it declares not": func() { holdOffUnproven(ActionReview, "blockers.states", "unread") },
-		"a seat with no action naming an input no declaration declares": func() {
-			holdOffUnsatisfiedInput("an invented guard", "not.an.input")
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("%s was accepted; want the write refused at the seat", name)
-				}
-			}()
-			write()
-		})
-	}
-}
-
 // TestHoldOffUnreadRead_NamesTheFailedRead checks the pipeline's
 // hold-off for a read that failed: it names the input the read was
 // buying, and where no input was named it says so rather than naming one
@@ -1014,5 +989,53 @@ func TestPredicates_NeverDispatchOnAnUnreadState(t *testing.T) {
 		if !strings.Contains(d.Reason, "could not be proven") {
 			t.Errorf("%s hold-off %q does not name the input that went unread", a, d.Reason)
 		}
+	}
+}
+
+// TestDigestGateAnswer_DeclinedGateSpeaksTheExclusion pins the sentence
+// for a gate the engine armed and then left off on purpose: a forest
+// whose gating root stands in a repository no maitred role names is the
+// exclusion §forgejo/webhook/repository-roles specifies, so the row
+// holds off naming that root and promises no retry the next sweep could
+// only decline identically — a promise this change exists to keep the
+// log free of (§forgejo/webhook/repository-roles,
+// §forgejo/decisions/actionable-state-digest, s-git/maitred#261).
+func TestDigestGateAnswer_DeclinedGateSpeaksTheExclusion(t *testing.T) {
+	g := declinedGate("o/other", 3)
+	st := State{
+		Issue:      trackerIssue(),
+		Blockers:   []Issue{{Number: 3, State: "closed", Repository: "o/other", Labels: []string{LabelIdeation}}},
+		ForestGate: g,
+	}
+	d, ans := readyTo(ActionDecompose, issueEvent(EventReconcile), st)
+	if ans != readyNo {
+		t.Fatalf("predicate answered %v (reason %q), want a hold-off", ans, d.Reason)
+	}
+	if d.Dispatched {
+		t.Errorf("a declined gate dispatched %q", d.Action)
+	}
+	if !strings.Contains(d.Reason, "the digest gate is off") || !strings.Contains(d.Reason, "o/other#3") {
+		t.Errorf("hold-off = %q, want the exclusion's own sentence naming the root", d.Reason)
+	}
+	if strings.Contains(d.Reason, "could not be proven") || strings.Contains(d.Reason, "asks again") {
+		t.Errorf("hold-off = %q, want no failed-read wording and no retry promised", d.Reason)
+	}
+}
+
+// TestDigestGateAnswer_UnarmedGateIsStillUnproven keeps the other half of
+// the unarmed gate: where no read of the forest was ever paid for — the
+// pipeline handed the row no observation at all — the answer is unproven,
+// which the sweep is named as asking again
+// (§forgejo/decisions/actionable-state-digest, s-git/maitred#261).
+func TestDigestGateAnswer_UnarmedGateIsStillUnproven(t *testing.T) {
+	d, ans := readyTo(ActionDecompose, issueEvent(EventReconcile), State{
+		Issue:    trackerIssue(),
+		Blockers: []Issue{{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}}},
+	})
+	if ans != readyUnproven {
+		t.Fatalf("predicate answered %v (reason %q), want unproven", ans, d.Reason)
+	}
+	if !strings.Contains(d.Reason, "forest digest gate could not be proven") || !strings.Contains(d.Reason, "sweep") {
+		t.Errorf("hold-off = %q, want the unproven sentence naming the gate and the sweep", d.Reason)
 	}
 }

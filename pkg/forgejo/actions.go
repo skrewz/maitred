@@ -64,33 +64,6 @@ const (
 	readyNotApplicable
 )
 
-// declaresInput reports whether the action's declaration names the
-// input. A hold-off naming an input no declaration declares is a row
-// stating a guard beside its declaration rather than one the declaration
-// covers, so it is refused where it is written
-// (§forgejo/decisions/actions, s-git/maitred#261).
-func declaresInput(a Action, input string) bool {
-	for _, in := range declarationFor(a).inputs {
-		if in == input {
-			return true
-		}
-	}
-	return false
-}
-
-// declaresInputAnywhere reports whether any action's declaration names
-// the input: the weaker test a seat that has named no action can make,
-// and still enough to refuse an invented name
-// (§forgejo/decisions/inputs, s-git/maitred#261).
-func declaresInputAnywhere(in string) bool {
-	for a := range actionDecls {
-		if declaresInput(a, in) {
-			return true
-		}
-	}
-	return false
-}
-
 // holdOffUnsatisfied composes the reason an unsatisfied answer reaches
 // the log in: the action, the declared inputs the state did not satisfy,
 // and the fact the state shows. It is the one seat that wording is
@@ -98,40 +71,44 @@ func declaresInputAnywhere(in string) bool {
 // hold off without naming what its declaration was asked
 // (§forgejo/observability/the-decision-log, s-git/maitred#261).
 func holdOffUnsatisfied(a Action, detail string, inputs ...string) Decision {
-	for _, in := range inputs {
-		if !declaresInput(a, in) {
-			panic(fmt.Sprintf("forgejo: %s holds off on %s, which its declaration does not declare", a, in))
-		}
-	}
 	return holdOff(fmt.Sprintf("%s holds off: %s", a, holdOffUnsatisfiedInput(detail, inputs...).Reason))
 }
 
 // holdOffUnsatisfiedInput is the same sentence for the seat that has
 // named no action yet — a row that decides which row applies, or walks
 // the blocker graph — so the vocabulary stays one whatever asked
-// (§forgejo/observability/the-decision-log, s-git/maitred#261). The
-// inputs must be names some declaration declares.
+// (§forgejo/observability/the-decision-log, s-git/maitred#261).
 func holdOffUnsatisfiedInput(detail string, inputs ...string) Decision {
-	for _, in := range inputs {
-		if !declaresInputAnywhere(in) {
-			panic("forgejo: a hold-off names the undeclared input " + in)
-		}
-	}
 	return holdOff(fmt.Sprintf("%s — %s", strings.Join(inputs, ", "), detail))
 }
 
 // holdOffUnproven composes the reason an input the engine could not read
 // reaches the log in: which input, why it went unread, and that the next
-// sweep asks again. Where the asking row knows which action it holds
-// off for it passes the action; where it does not — the pipeline, before
-// any action is named — the same sentence is composed by
-// holdOffUnreadInput (§forgejo/decisions/inputs,
-// §forgejo/webhook/the-pipeline, s-git/maitred#261).
+// sweep asks again. Where the asking seat has named the action it holds
+// off for, the sentence names them together; where it has not — the row
+// that decides which row applies, before any action is named — it passes
+// the zero Action and the input stands alone
+// (§forgejo/decisions/inputs, §forgejo/webhook/the-pipeline,
+// s-git/maitred#261).
 func holdOffUnproven(a Action, input, detail string) Decision {
-	if !declaresInput(a, input) {
-		panic(fmt.Sprintf("forgejo: %s answered unproven for %s, which its declaration does not declare", a, input))
+	subject := input
+	if a != "" {
+		subject = string(a) + " holds off: " + input
 	}
-	return holdOffUnreadInput(string(a)+" holds off: "+input, detail)
+	return holdOffUnreadInput(subject, detail)
+}
+
+// holdOffUnreadIssueState and holdOffUnreadPRState carry the one
+// sentence an issue or pull request the engine never re-fetched reaches
+// the log in, so no row writes the unproven wording of its own
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/inputs,
+// s-git/maitred#261).
+func holdOffUnreadIssueState(a Action) Decision {
+	return holdOffUnproven(a, "issue.state", "no issue state was re-fetched")
+}
+
+func holdOffUnreadPRState(a Action) Decision {
+	return holdOffUnproven(a, "PR.state", "no pull request state was re-fetched")
 }
 
 // actionDecl is the one declaration of one action.
@@ -144,8 +121,9 @@ type actionDecl struct {
 	// looks at, in one place.
 	inputs []string
 	// ready is the action's predicate. The returned Decision carries
-	// the dispatch reason (readyYes) or the hold-off reason
-	// (readyNo), cascade included. The predicate must not consult the
+	// the dispatch reason (readyYes) or the hold-off reason — an
+	// unsatisfied (readyNo) or an unproven (readyUnproven) answer alike,
+	// cascade included. The predicate must not consult the
 	// watermark: pacing is the row's.
 	ready func(Event, State) (Decision, readyAnswer)
 	// digest derives the revision a dispatch of this action is
@@ -320,10 +298,11 @@ func readyTo(a Action, e Event, s State) (Decision, readyAnswer) {
 
 // readyAtRow asks an action's predicate from a row that has no next
 // question after it, so the predicate's answer is that row's whole
-// decision: readyYes is the dispatch the row paces, readyNo the
-// hold-off it records. Abstention belongs to the rows that do continue
-// — the review-reading cluster's fall-through to the fan-out
-// (decideChainReported) — so an abstain reaching one of these rows is
+// decision: readyYes is the dispatch the row paces, readyNo and
+// readyUnproven the hold-off it records. Abstention belongs to the rows
+// that do continue — the review-reading cluster's fall-through to the
+// fan-out (decideChainReported), which routes on readyNotApplicable —
+// so an abstain reaching one of these rows is
 // a misrouted ask, and is named in the decision log rather than
 // recorded as the silent nothing
 // (§forgejo/observability/the-decision-log, §forgejo/decisions/actions).
@@ -653,7 +632,11 @@ var declaredInputFolds = map[string]func(subject string, s State) []string{
 		return facts
 	},
 	"forest digest gate": func(_ string, s State) []string {
-		if s.ForestGate == nil {
+		// A gate carrying no observation states the same fact whether it
+		// was never armed or was armed and declined: the fold states the
+		// observation the row was not given, not why it is missing
+		// (§forgejo/decisions/actionable-state-digest).
+		if unarmedDigestGate(s.ForestGate) {
 			return []string{"forest gate unarmed"}
 		}
 		return []string{"forest " + forestRef(s.ForestGate.RootRepo, s.ForestGate.RootNumber) + " " + s.ForestGate.Current}
@@ -875,7 +858,7 @@ func hashInputFacts(facts []string) string {
 func implementReady(_ Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
-		return holdOffUnproven(ActionImplement, "issue.state", "no issue state was re-fetched"), readyUnproven
+		return holdOffUnreadIssueState(ActionImplement), readyUnproven
 	}
 	if issue.State != "open" {
 		return holdOffUnsatisfied(ActionImplement, fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State), "issue.state"), readyNo
@@ -909,7 +892,7 @@ func implementReady(_ Event, s State) (Decision, readyAnswer) {
 func reassessReady(e Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
-		return holdOffUnproven(ActionReassess, "issue.state", "no issue state was re-fetched"), readyUnproven
+		return holdOffUnreadIssueState(ActionReassess), readyUnproven
 	}
 	if issue.State != "open" {
 		return holdOffUnsatisfied(ActionReassess, fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State), "issue.state"), readyNo
@@ -948,7 +931,7 @@ func reassessReady(e Event, s State) (Decision, readyAnswer) {
 func reviewReady(_ Event, s State) (Decision, readyAnswer) {
 	pr := s.PR
 	if pr == nil {
-		return holdOffUnproven(ActionReview, "PR.state", "no pull request state was re-fetched"), readyUnproven
+		return holdOffUnreadPRState(ActionReview), readyUnproven
 	}
 	head := s.PR.HeadSHA
 	var owed []string
@@ -972,7 +955,7 @@ func reviewReady(_ Event, s State) (Decision, readyAnswer) {
 func rebaseReady(e Event, s State) (Decision, readyAnswer) {
 	pr := s.PR
 	if pr == nil {
-		return holdOffUnproven(ActionRebase, "PR.state", "no pull request state was re-fetched"), readyUnproven
+		return holdOffUnreadPRState(ActionRebase), readyUnproven
 	}
 	if !prOpen(pr) {
 		return holdOffUnsatisfied(ActionRebase, fmt.Sprintf("PR %d is not open", pr.Number), "PR.state"), readyNo
@@ -995,7 +978,7 @@ func rebaseReady(e Event, s State) (Decision, readyAnswer) {
 func fixFeedbackReady(e Event, s State) (Decision, readyAnswer) {
 	pr := s.PR
 	if pr == nil {
-		return holdOffUnproven(ActionFixFeedback, "PR.state", "no pull request state was re-fetched"), readyUnproven
+		return holdOffUnreadPRState(ActionFixFeedback), readyUnproven
 	}
 	gate := prReviewGate(s.Reviews, s.ReviewLenses, pr.HeadSHA)
 	if !gate.allReported || !gate.fixFires(e.Type != EventPRReviewed) {
@@ -1021,7 +1004,7 @@ func fixFeedbackReady(e Event, s State) (Decision, readyAnswer) {
 func mergeOrWaitReady(e Event, s State) (Decision, readyAnswer) {
 	pr := s.PR
 	if pr == nil {
-		return holdOffUnproven(ActionMergeOrWait, "PR.state", "no pull request state was re-fetched"), readyUnproven
+		return holdOffUnreadPRState(ActionMergeOrWait), readyUnproven
 	}
 	gate := prReviewGate(s.Reviews, s.ReviewLenses, pr.HeadSHA)
 	if !gate.mergeFires() {
@@ -1057,7 +1040,7 @@ func mergeOrWaitReady(e Event, s State) (Decision, readyAnswer) {
 func decomposeReady(e Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
-		return holdOffUnproven(ActionDecompose, "issue.state", "no issue state was re-fetched"), readyUnproven
+		return holdOffUnreadIssueState(ActionDecompose), readyUnproven
 	}
 	if hasLabel(issue, LabelIdeation) {
 		if hasLabel(issue, LabelTeardownForest) {
@@ -1117,6 +1100,14 @@ func decomposeReady(e Event, s State) (Decision, readyAnswer) {
 // s-git/maitred#261).
 func digestGateAnswer(g *ForestDigestGate, subject string, gateUnarmed Decision, unarmedAnswer readyAnswer) (Decision, readyAnswer) {
 	if unarmedDigestGate(g) {
+		if g != nil && g.Declined != "" {
+			// The gate was armed and the engine declined to read the
+			// forest: a standing exclusion, not a read that failed, so the
+			// row holds off in the exclusion's own sentence and promises no
+			// retry the next sweep could only refuse the same way
+			// (§forgejo/webhook/repository-roles, s-git/maitred#261).
+			return holdOffDigestGateDeclined(subject, g.Declined), readyNo
+		}
 		return gateUnarmed, unarmedAnswer
 	}
 	if g.Current == g.Stored {
@@ -1142,7 +1133,7 @@ func unarmedDigestGate(g *ForestDigestGate) bool {
 func wrapUpReady(_ Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
-		return holdOffUnproven(ActionWrapUp, "issue.state", "no issue state was re-fetched"), readyUnproven
+		return holdOffUnreadIssueState(ActionWrapUp), readyUnproven
 	}
 	if issue.State != "open" {
 		return holdOffUnsatisfied(ActionWrapUp, fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State), "issue.state"), readyNo
@@ -1167,7 +1158,7 @@ func wrapUpReady(_ Event, s State) (Decision, readyAnswer) {
 func teardownForestReady(e Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
-		return holdOffUnproven(ActionTeardownForest, "issue.state", "no issue state was re-fetched"), readyUnproven
+		return holdOffUnreadIssueState(ActionTeardownForest), readyUnproven
 	}
 	if issue.State != "open" {
 		return holdOffUnsatisfied(ActionTeardownForest, fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State), "issue.state"), readyNo
@@ -1197,7 +1188,7 @@ func teardownForestReady(e Event, s State) (Decision, readyAnswer) {
 func syncReady(_ Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
-		return holdOffUnproven(ActionSync, "issue.state", "no issue state was re-fetched"), readyUnproven
+		return holdOffUnreadIssueState(ActionSync), readyUnproven
 	}
 	members := s.SyncMembers
 	if len(members) == 0 {

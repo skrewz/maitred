@@ -437,8 +437,8 @@ func TestForestDigestPaysTheAdmissionTest(t *testing.T) {
 		if err != nil {
 			t.Fatalf("forestGate on an unadmitted root: %v", err)
 		}
-		if g != nil {
-			t.Error("the digest gate armed on a root in a repository no maitred role names")
+		if !unarmedDigestGate(g) || g == nil || g.Declined == "" {
+			t.Errorf("the digest gate armed on a root in a repository no maitred role names: %+v, want an armed gate carrying no observation and stating why it was left off", g)
 		}
 		if got := f.callCount("GetIssue:other/30"); got != 0 {
 			t.Errorf("the gate read the unadmitted root %d times, want no read there at all", got)

@@ -189,12 +189,17 @@ On each `POST`:
    reconciliation sweep re-derives anything genuinely missed.
 
 A re-fetch failure is a hold-off, and it is a hold-off the decision log
-**sees**: the entry names the input that failed read, in the unproven
-wording §forgejo/decisions/inputs and
-§forgejo/observability/the-decision-log share, dispatches nothing,
-records no watermark, and is acknowledged; the reconciliation sweep
-re-derives from the source of truth, which is what the hold-off's own
-reason says (s-git/maitred#261).
+**sees**: where the read that failed was buying an input a declaration
+declares, the entry names that input in the unproven wording
+§forgejo/decisions/inputs and
+§forgejo/observability/the-decision-log share; where it was buying
+something no declaration declares — the graph the unblock cascade walks,
+which wakes rows deciding on `issue.state` and `PR.state` — the entry
+says the re-fetched state could not be proven and quotes the failure,
+naming no input it cannot vouch for. Either way the hold-off dispatches
+nothing, records no watermark, and is acknowledged; the reconciliation
+sweep re-derives from the source of truth, which is what the hold-off's
+own reason says (s-git/maitred#261).
 
 ### Repository roles
 

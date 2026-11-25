@@ -5083,3 +5083,48 @@ func TestDecide_DigestVocabulary(t *testing.T) {
 		}
 	})
 }
+
+// declinedGate is a digest gate the engine armed and then left off, as
+// forestGate hands one back when the gating root's repository carries no
+// maitred role (§forgejo/webhook/repository-roles).
+func declinedGate(rootRepo string, rootNumber int) *ForestDigestGate {
+	return &ForestDigestGate{
+		RootRepo:   rootRepo,
+		RootNumber: rootNumber,
+		Declined:   fmt.Sprintf("no maitred role names %s", forestRef(rootRepo, rootNumber)),
+	}
+}
+
+// TestDecide_PRMerged_StatesTheFetchedState: the merged PR's defensive
+// branch is where a PR the forge says is not merged lands, and the
+// re-fetch read the PR's state to get here — so the hold-off states that
+// state rather than asserting a closed one the branch never read
+// (§forgejo/observability/the-decision-log, s-git/maitred#261).
+func TestDecide_PRMerged_StatesTheFetchedState(t *testing.T) {
+	d := Decide(prEvent(EventPRMerged, "alice"), State{ReviewLenses: testLenses, PR: openPR("abc")}, nil)
+	if d.Dispatched {
+		t.Fatalf("decision = %+v, want the hold-off a merge the re-fetch did not find", d)
+	}
+	if !strings.Contains(d.Reason, `PR 9 is "open", not merged`) {
+		t.Errorf("hold-off = %q, want the state the re-fetch read", d.Reason)
+	}
+}
+
+// TestDecide_TriggerReviewSuppressionNamesTheDigest puts the fan-out's
+// suppressed note beside the other seats meeting an unchanged digest, so
+// the vocabulary §forgejo/decisions/reconciliation promises has one
+// owner across all of them rather than one literal per row
+// (§forgejo/decisions/label-triggered-review,
+// §forgejo/observability/the-decision-log, s-git/maitred#261).
+func TestDecide_TriggerReviewSuppressionNamesTheDigest(t *testing.T) {
+	pr := labelledPR("abc", LabelTriggerReview)
+	reviews := []Review{review(ReviewApproved, "carol", testTime)}
+	st := State{ReviewLenses: testLenses, PR: pr, Reviews: reviews}
+	d := Decide(prEvent(EventPRSynced, "alice"), st, lensWatermark(lensDigest(pr, reviews, testLenses, "carol"), "carol"))
+	if d.Dispatched {
+		t.Fatalf("decision = %+v, want the label merely present to suppress the lens", d)
+	}
+	if !strings.Contains(d.Reason, "inputs unchanged at digest ") {
+		t.Errorf("hold-off = %q, want the suppressed lens to quote the digest the request arrived at", d.Reason)
+	}
+}

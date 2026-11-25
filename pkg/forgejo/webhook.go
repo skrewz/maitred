@@ -393,9 +393,14 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 			}
 			st.ForestGate = gate
 		case EventIssueClosed:
+			// The cascade's graph walk is no action's declared input — the
+			// rows it wakes decide on `issue.state` — so its failure is
+			// stated as the re-fetch's own rather than under an input name
+			// no declaration declares
+			// (§forgejo/decisions/inputs, §forgejo/webhook/re-fetch).
 			root, err := e.graphNode(issue)
 			if err != nil {
-				return ev, State{}, unreadInput("the blocker graph", err)
+				return ev, State{}, err
 			}
 			st.CascadeRoot = root
 		}
@@ -443,7 +448,10 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 				ev.Type = EventPRMerged
 				blocks, err := e.api.IssueBlocks(owner, name, ev.Number)
 				if err != nil {
-					return ev, State{}, unreadInput("the blocker graph", err)
+					// Unnamed like the closed issue's walk above: the graph
+					// the cascade walks is not a declared input
+					// (§forgejo/decisions/inputs).
+					return ev, State{}, err
 				}
 				for i := range blocks {
 					if !blocks[i].IsPull {
@@ -532,11 +540,19 @@ func (e *Engine) forestGate(ev Event, issue *Issue, blockers []Issue) (*ForestDi
 		if !admits {
 			// Debug, the level every other cross-repository hop uses for
 			// this sentence: the gate stays off, as it does for every issue
-			// whose decompose row never consults it
-			// (§forgejo/webhook/repository-roles, §forgejo/observability/the-decision-log).
+			// whose decompose row never consults it. The row that did
+			// consult it is handed why, so its hold-off reads as the
+			// standing exclusion §forgejo/webhook/repository-roles
+			// specifies rather than as a read the sweep will one day pay
+			// for (§forgejo/webhook/repository-roles,
+			// §forgejo/observability/the-decision-log, s-git/maitred#261).
 			e.log.Debug("digest gate skips a root in a repository no maitred role names",
 				"root", forestRef(repo, gate.Number), "tracker", forestRef(ev.Repo, issue.Number))
-			return nil, nil
+			return &ForestDigestGate{
+				RootRepo:   repo,
+				RootNumber: gate.Number,
+				Declined:   fmt.Sprintf("no maitred role names %s", forestRef(repo, gate.Number)),
+			}, nil
 		}
 		owner, name := splitRepo(repo)
 		fetched, err := e.api.GetIssue(owner, name, gate.Number)
