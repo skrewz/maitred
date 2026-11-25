@@ -464,7 +464,8 @@ observed for that forest (§forgejo/decisions/actionable-state-digest,
 forest pays the fold — graph and comment reads, no task. The fold is
 computed once per gated row, not once per forest: a quiet forest with an
 open root pays one digest computation per sweep, and one whose root has
-closed pays one per still-blocked tracker whose row the sweep reaches;
+closed pays one per open tracker of a commissioned forest whose row the
+sweep reaches;
 moved, the row dispatches, naming the component that moved (a blocker's
 state, a member's, the root's, a human comment); never observed, the
 first run is commissioned and the observation is stored. The slot is
@@ -495,14 +496,21 @@ root the only trigger, curation would end the moment the human
 commissioned the work — while the work is exactly what reports the
 discoveries a forest must absorb (a blocker nobody listed, a member that
 turned out to need another, a landing set whose membership has moved). So
-an open tracker that is still blocked is decomposed too, **provided its
-forest is commissioned**: the `ideation` issue blocking it is closed. An
-open tracker blocked by an **open** `ideation` issue holds off instead,
-naming that root, because the root's own row is already dispatching the
-same curation and a forest is curated once per sweep. A blocked tracker
-with no `ideation` blocker at all holds off naming that absence: a
-tracker not gated by a root is not a forest's tracker, and the engine
-does not guess which root it belongs to
+every open tracker is decomposed too, **provided its forest is
+commissioned**: the `ideation` issue blocking it is closed. How many of
+the forest's members still stand is no input to that question — the last
+one to close ends the work, not the forest, whose lifetime is its
+tracker's (s-git/maitred#279). The invariant holds of this row, not of
+every path: the **unblock cascade** dispatches `wrap-up` the moment a
+tracker's last blocker closes and consults no gate
+(§forgejo/decisions/unblock-cascade), so a forest whose leg landed ends
+there with no final look, and what this row backstops is the forest
+whose leg was lost. An open tracker blocked by an **open**
+`ideation` issue holds off instead, naming that root, because the root's
+own row is already dispatching the same curation and a forest is curated
+once per sweep. A tracker with no `ideation` blocker at all holds off
+naming that absence: a tracker not gated by a root is not a forest's
+tracker, and the engine does not guess which root it belongs to
 (§forgejo/decisions/transition-table). The test is one hop because the
 tracker's own blocker set is the forest, and the tracker is itself a
 member: it carries the membership edge from its root like every other
@@ -511,8 +519,15 @@ never walks a graph to find one.
 
 `decompose` and `wrap-up` are not symmetric, and not by oversight:
 `wrap-up` waits for the tracker's blockers to close, because wrapping up
-means collecting finished work; `decompose` on a root consults no
-blockers, because a root is a root whatever blocks it. For `wrap-up` the
+means collecting finished work; `decompose` on a root or a commissioned
+tracker consults no blockers, because a forest is under curation while
+its tracker is open. The tracker's row therefore asks `decompose` before
+it asks `wrap-up`, and where both are ready the rule an issue carrying
+both reserved labels already states holds: decompose wins. That costs a
+forest on the verge of closing one sweep, never more than one — the
+dispatch refreshes the forest's stored digest, so the next sweep finds
+nothing moved, the gate holds the curation row off and the close lands;
+a close cannot be starved (s-git/maitred#279). For `wrap-up` the
 sweep stays the only row that fires it — an `outcome` tracker's activity
 on the event path is a hold-off naming the label — and the **unblock
 cascade** dispatches it too when it newly unblocks a tracker

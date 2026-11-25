@@ -446,6 +446,38 @@ func TestForestDigestPaysTheAdmissionTest(t *testing.T) {
 	})
 }
 
+// TestForestGate_CommissionedTrackerWithNoOpenBlockers: the arming rule
+// reads the tracker's state, not its blocker count. Every member of a
+// commissioned forest may have closed while its tracker stays open, and
+// that tracker's row is still a decompose row the gate must answer — an
+// unarmed gate there would leave the forest unreachable
+// (§forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move,
+// s-git/maitred#279).
+func TestForestGate_CommissionedTrackerWithNoOpenBlockers(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	root := Issue{Number: 1, State: "closed", Repository: "o/r", UpdatedAt: testTime, Labels: []string{LabelIdeation}}
+	tracker := Issue{Number: 2, State: "open", Repository: "o/r", UpdatedAt: testTime, Labels: []string{LabelOutcome}}
+	member := Issue{Number: 3, State: "closed", Repository: "o/r", UpdatedAt: testTime}
+	api.issues[1], api.issues[2], api.issues[3] = &root, &tracker, &member
+	api.blocks[1] = []Issue{tracker, member}
+	api.deps[2] = []Issue{root, member}
+	eng.refreshScopeCache(api.repos)
+
+	g, err := eng.forestGate(Event{Kind: KindIssue, Type: EventReconcile, Repo: "o/r", Number: tracker.Number}, &tracker, api.deps[2])
+	if err != nil {
+		t.Fatalf("forestGate on a fully unblocked tracker: %v", err)
+	}
+	if g == nil {
+		t.Fatal("the gate stayed off for an open tracker of a commissioned forest with nothing left blocking it")
+	}
+	if g.RootRepo != "o/r" || g.RootNumber != 1 {
+		t.Errorf("gate observed %s %d, want the forest's own root o/r 1", g.RootRepo, g.RootNumber)
+	}
+	if g.Current == "" {
+		t.Error("the gate armed with no observation of the forest")
+	}
+}
+
 // TestForestDigestReadFailures pins that a failed read is an error, not
 // an omission: the digest reports no value rather than a partial one
 // (§forgejo/decisions/actionable-state-digest).

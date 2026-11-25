@@ -1195,6 +1195,62 @@ func TestReconcile_DecomposeDigestGate_MovedDigest(t *testing.T) {
 	}
 }
 
+// TestReconcile_DecomposeDigestGate_LandedForest: the sweep over a
+// commissioned forest whose every member has closed asks the gate all
+// the same — a forest is under curation while its tracker is open, and
+// the count of open blockers is not an input to that question
+// (§forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move,
+// s-git/maitred#279). A digest that moved dispatches decompose ahead of
+// the close; the dispatch refreshes the slot, so the following sweep
+// finds nothing moved and wrap-up lands the close: one sweep of
+// deferral, never more.
+func TestReconcile_DecomposeDigestGate_LandedForest(t *testing.T) {
+	eng, api, q, _ := quietForest(t)
+	api.mu.Lock()
+	api.issues[1].State = "closed" // the commissioning gesture
+	api.issues[4].State = "closed" // the last member landed
+	api.deps[2] = []Issue{*api.issues[1], *api.issues[4]}
+	api.deps[4] = []Issue{{Number: 9, State: "closed", Repository: "o/r"}}
+	api.openIssues["r"] = []Issue{*api.issues[2]} // the tracker is all that is left open
+	api.closedIssues["r"] = []Issue{*api.issues[1], *api.issues[4]}
+	api.mu.Unlock()
+
+	eng.Reconcile()
+	tasks := q.all()
+	if len(tasks) != 1 {
+		t.Fatalf("first sweep dispatched %d tasks, want the one first-observation decompose", len(tasks))
+	}
+	if !strings.Contains(tasks[0].Prompt, "action=decompose") {
+		t.Errorf("prompt = %q, want the decompose action ahead of the close", tasks[0].Prompt)
+	}
+
+	// A human answers the run's question on the tracker: the forest has
+	// moved again, and the row that reads it is the tracker's.
+	api.mu.Lock()
+	api.comments[2] = []Comment{{Author: "operator", Body: "and the migrations too"}}
+	api.mu.Unlock()
+
+	eng.Reconcile()
+	tasks = q.all()
+	if len(tasks) != 2 {
+		t.Fatalf("dispatched %d tasks after a human comment moved the forest, want a second decompose", len(tasks))
+	}
+	if !strings.Contains(tasks[1].Prompt, "action=decompose") {
+		t.Errorf("prompt = %q, want the decompose action: an unblocked tracker is under curation too", tasks[1].Prompt)
+	}
+
+	// Nothing else moves, so the gate holds the curation row off and the
+	// close the previous sweep deferred lands.
+	eng.Reconcile()
+	tasks = q.all()
+	if len(tasks) != 3 {
+		t.Fatalf("dispatched %d tasks across a quiet sweep, want the wrap-up the moved digest deferred", len(tasks))
+	}
+	if !strings.Contains(tasks[2].Prompt, "action=wrap-up") {
+		t.Errorf("prompt = %q, want wrap-up once nothing a decompose run could act on has moved", tasks[2].Prompt)
+	}
+}
+
 // TestReconcile_DecomposeDigestGate_FailedDispatchKeepsTheSlot pins the
 // refresh's failure clause: a dispatch that never landed leaves the
 // stale slot, so the next sweep re-observes the moved digest and
