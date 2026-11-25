@@ -4221,10 +4221,10 @@ func TestDecide_FanOutReasonFlagsNeverSeenLensIdentity(t *testing.T) {
 
 // TestDecide_ReviewLenses pins the dispatch predicate end to end on
 // the pure decision function: the lenses to dispatch are the
-// configured lenses with no undismissed approving review at the
-// current head — all outstanding at first, partial as verdicts land,
-// the whole chain again after a push invalidated the approvals, and
-// nothing once every lens approves at head (§forgejo/decisions/review-lenses).
+// configured lenses with no undismissed review at the current head —
+// all outstanding at first, partial as verdicts land, the whole chain
+// again after a push invalidated the standing at head, and nothing
+// once every lens has reported at head (§forgejo/decisions/review-lenses).
 func TestDecide_ReviewLenses(t *testing.T) {
 	lenses := []ReviewLens{{Identity: "lens-min"}, {Identity: "lens-maint"}, {Identity: "lens-sec"}}
 	pr := openPR("head-1")

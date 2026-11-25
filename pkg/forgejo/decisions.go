@@ -836,7 +836,7 @@ func decidePROpened(e Event, s State, w *Watermark) Decision {
 // re-fire bound, so a rebase that died at an unmoved head recovers within
 // one interval (§forgejo/reconciliation/the-state-is-the-watermark) —
 // otherwise the review fan-out — the
-// lenses with no undismissed approving review at the current head
+// lenses with no undismissed review at the current head
 // (§forgejo/decisions/review-lenses). A push invalidates every
 // approval (stale-approval dismissal), so a sync re-fires the whole
 // chain; a lens's own push does not re-fire that lens, while the
