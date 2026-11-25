@@ -39,9 +39,11 @@ package forgejo
 //     alone. A state field handed across the call —
 //     `openBlockers(s.Blockers)` — or across a method's receiver —
 //     `s.Issue.touched()` — is recorded where it is written either
-//     way. The one call the walk cannot name is a call on a value no
-//     walk reaches — a package function, a field holding a closure —
-//     and the reads behind it stay unattributed.
+//     way. The calls the walk cannot name are those on a value it never
+//     bound: a method on a value a call returned — `gate.fixFires` — or
+//     a closure held in a field, whose bodies it therefore never
+//     enters. Whether a call names a package function at all is the
+//     caller-set rule's decision, not a limit of the walk.
 //   - A predicate never reads an activity timestamp. The fold states the
 //     timestamp so the digest a row dispatches on moves; a predicate that
 //     turned on the cursor itself would decide on the clock rather than on the
@@ -614,10 +616,10 @@ func (s *sourceTree) walkBody(fn *ast.FuncDecl, args []binding) ([]read, []callA
 // callTo is one written call as the walk names it: a plain function by its name,
 // a method by the row it hangs off with its receiver standing as the callee's
 // first argument, so a body behind the call attributes its reads the same way a
-// helper does. A call the walk cannot name — one on a value no walk reaches, a
-// package function, a closure in a field — answers with none, and the reads
-// behind it stay unattributed; the reads its arguments write are recorded here
-// either way.
+// helper does. A call on a value the walk never bound — one on a value a call
+// returned, a closure held in a field — answers with none, and the reads behind
+// it stay unattributed; the reads its arguments write are recorded here either
+// way.
 func (s *sourceTree) callTo(at *ast.CallExpr, env map[string]binding) (callAt, bool) {
 	call := callAt{}
 	switch fun := at.Fun.(type) {
