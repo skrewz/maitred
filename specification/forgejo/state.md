@@ -117,7 +117,11 @@ dispatch's write keeps the subject slots a previous fan-out left behind
 s-git/maitred#260). The
 fan-out's own write keeps that main slot whole, its fire instant included,
 so the pace a singleton dispatch stamped outlives the fan-out that follows
-it (§forgejo/decisions/loop-prevention).
+it, and each subject slot it writes carries that write's own fire instant
+beside its digest — the instant the re-fire bound reads for the lens when
+memory is gone and only the file remains, so a restart inside one interval
+buys no lens a second dispatch (§forgejo/decisions/loop-prevention,
+s-git/maitred#260).
 Storage stays **one file per object**: the slots live in the same
 record, and the per-key lock stays on the object.
 
