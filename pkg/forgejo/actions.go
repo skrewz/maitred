@@ -997,10 +997,12 @@ func decomposeReady(e Event, s State) (Decision, readyAnswer) {
 		if gate.State == "open" {
 			return holdOff(fmt.Sprintf("issue %d is an open %s tracker whose %s root %d is still open; its own row carries the curation", issue.Number, LabelOutcome, LabelIdeation, gate.Number)), readyNo
 		}
-		// A commissioned tracker carries its forest's curation under
-		// the same gate as the root's row: one forest, one answer,
-		// whichever row asks (§forgejo/decisions/actionable-state-digest).
-		return digestGateAnswer(s.ForestGate, fmt.Sprintf("issue %d is an open %s tracker commissioned by %s %d and still blocked by %d open issue(s)", issue.Number, LabelOutcome, LabelIdeation, gate.Number, len(openBlockers(s.Blockers))),
+		// A commissioned tracker carries its forest's curation under the
+		// same gate as the root's row: one forest, one answer, whichever
+		// row asks. How many of the forest's members still stand is no
+		// input here — the tracker's own open state is what keeps the
+		// forest under curation (§forgejo/decisions/actions, s-git/maitred#279).
+		return digestGateAnswer(s.ForestGate, fmt.Sprintf("issue %d is an open %s tracker commissioned by %s %d", issue.Number, LabelOutcome, LabelIdeation, gate.Number),
 			holdOff(fmt.Sprintf("issue %d is an open %s tracker whose forest the digest gate assembled no observation of: nothing dispatches on a missing digest", issue.Number, LabelOutcome)))
 	}
 	return holdOff(fmt.Sprintf("issue %d is neither an open %s root nor an %s tracker: no row asks decompose of it", issue.Number, LabelIdeation, LabelOutcome)), readyNo

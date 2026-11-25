@@ -473,10 +473,12 @@ func readsComments(t EventType) bool {
 //   - an open `ideation` issue not under a teardown order and not
 //     claiming the sync kind, whose root row consults the gate on every
 //     path — the forest is the issue itself;
-//   - the sweep's view of an open tracker still blocked, whose ideation
-//     gate is closed — the forest is that closed root, fetched whole
-//     because the digest folds the root's body and labels and the
-//     dependency row is not trusted to carry them.
+//   - the sweep's view of an open tracker whose ideation gate is closed —
+//     the forest is that closed root, fetched whole because the digest
+//     folds the root's body and labels and the dependency row is not
+//     trusted to carry them. A forest is under curation while its tracker
+//     is open, so how many of its members still stand is no part of the
+//     arming rule (s-git/maitred#279).
 //
 // A root under a teardown order, a kind-conflicting issue and every
 // other issue leave the gate unarmed: on the sweep those rows are
@@ -498,7 +500,7 @@ func (e *Engine) forestGate(ev Event, issue *Issue, blockers []Issue) (*ForestDi
 	switch {
 	case hasLabel(issue, LabelIdeation) && !hasLabel(issue, LabelTeardownForest) && !hasLabel(issue, LabelSync):
 		root = issue
-	case ev.Type == EventReconcile && isTracker(issue) && !hasLabel(issue, LabelSync) && len(openBlockers(blockers)) > 0:
+	case ev.Type == EventReconcile && isTracker(issue) && !hasLabel(issue, LabelSync):
 		gate := ideationGate(blockers)
 		if gate == nil || gate.State != "closed" {
 			return nil, nil

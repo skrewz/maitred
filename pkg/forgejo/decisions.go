@@ -507,18 +507,18 @@ func Decide(e Event, s State, w *Watermark) Decision {
 // s-git/maitred#259). What differs is only how a re-fire at a digest
 // the watermark already records is paced, and that is the re-fire
 // bound's to decide, not this function's. The `decompose` rows are the
-// digest gate's: an open ideation root, and a commissioned tracker
-// still blocked, dispatch decompose only when the forest's
-// actionable-state digest moved since the store last observed it, on
-// this path and on the event path alike
-// (§forgejo/decisions/actionable-state-digest, s-git/maitred#209). A
-// tracker holds off only when there is nothing to curate — not yet
-// commissioned, so its root's row is the pulse, or gated by no root at
-// all — and the reason names that fact, so the decision log reads
-// "state calls for no action", never "already dispatched at this
-// revision". An issue carrying neither reserved label dispatches
-// implement on the state, and an attempt that left no connected PR
-// re-fires at that state once the bound's interval is spent
+// digest gate's: an open ideation root, and a commissioned tracker,
+// dispatch decompose only when the forest's actionable-state digest
+// moved since the store last observed it, on this path and on the event
+// path alike (§forgejo/decisions/actionable-state-digest,
+// s-git/maitred#209). A tracker holds decompose off only when there is
+// nothing to curate — not yet commissioned, so its root's row is the
+// pulse, gated by no root at all, or a forest whose every fact stands
+// where the store last saw it — and the reason names that fact, so the
+// decision log reads "state calls for no action", never "already
+// dispatched at this revision". An issue carrying neither reserved label
+// dispatches implement on the state, and an attempt that left no
+// connected PR re-fires at that state once the bound's interval is spent
 // (§forgejo/decisions/transition-table,
 // §forgejo/reconciliation/the-state-is-the-watermark).
 func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
@@ -595,26 +595,29 @@ func decideIssueReconcile(e Event, s State, w *Watermark) Decision {
 		return dispatchOnDeclaredDigest(ActionDecompose, w, e, s, d)
 	}
 	if hasLabel(issue, LabelOutcome) {
-		if len(openBlockers(s.Blockers)) > 0 {
-			// A commissioned forest stays under curation: closing the root removes
-			// it from the sweep's enumeration of open issues, so the tracker's
-			// own row carries the curation until the forest is finished
-			// (§forgejo/reconciliation/the-state-is-the-watermark). The
-			// decompose declaration's predicate is the whole question:
-			// no gate, an open gate, or the digest comparison — one
-			// forest, one answer, whichever row asks
-			// (§forgejo/decisions/actionable-state-digest, s-git/maitred#209).
-			d, ready := readyAtRow(ActionDecompose, e, s)
-			if !ready {
-				return d
-			}
-			return dispatchOnDeclaredDigest(ActionDecompose, w, e, s, d)
-		}
-		d, ready := readyAtRow(ActionWrapUp, e, s)
+		// A forest is under curation while its tracker is open, so the
+		// curation row asks first whatever the blocker rows hold: closing
+		// the root removes it from the sweep's enumeration, and the last
+		// member to close is no end to the forest's life
+		// (§forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move,
+		// s-git/maitred#279).
+		// The decompose declaration's predicate is the whole question: no
+		// gate, an open gate, or the digest comparison — one forest, one
+		// answer, whichever row asks (§forgejo/decisions/actionable-state-digest).
+		d, ready := readyAtRow(ActionDecompose, e, s)
 		if !ready {
+			// The curation row's hold-off is not a veto over the rest of
+			// the tracker's rows: where the forest has nothing left to
+			// curate and the tracker is fully unblocked, the close the
+			// gate deferred lands this sweep. Where neither row is ready,
+			// the curation row's reason is the one worth logging — it
+			// names what the forest is waiting on.
+			if closed, ok := readyAtRow(ActionWrapUp, e, s); ok {
+				return dispatchOnDeclaredDigest(ActionWrapUp, w, e, s, closed)
+			}
 			return d
 		}
-		return dispatchOnDeclaredDigest(ActionWrapUp, w, e, s, d)
+		return dispatchOnDeclaredDigest(ActionDecompose, w, e, s, d)
 	}
 	return decideIssueOpened(e, s, w)
 }

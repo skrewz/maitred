@@ -3281,7 +3281,10 @@ func TestDecide_SyncSetApprovalDirectMembershipNeedsThePRsOwnEdge(t *testing.T) 
 // blocker — which holds the tracker's `wrap-up` and curation rows off
 // without a rule of its own. The label reaching a *closed* root changes
 // nothing anywhere: a stale label must freeze neither the tracker's
-// wrap-up nor its curation (§forgejo/decisions/forest-teardown).
+// wrap-up nor its curation (§forgejo/decisions/forest-teardown). Each
+// row names the gate observation its sweep asks, because the closed-root
+// rows differ only in what the forest's digest did meanwhile
+// (§forgejo/decisions/actionable-state-digest).
 func TestDecide_TeardownProtectsTheTrackerThroughTheRootsOwnEdge(t *testing.T) {
 	member := func(state string) Issue {
 		return Issue{Number: 11, State: state, Repository: "o/r"}
@@ -3300,33 +3303,41 @@ func TestDecide_TeardownProtectsTheTrackerThroughTheRootsOwnEdge(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		blockers   []Issue
+		gate       *ForestDigestGate
 		wantAction Action
 	}{
 		{
 			name:       "a labelled root still open holds the tracker's rows off",
 			blockers:   []Issue{root("open"), member("closed")},
+			gate:       firstObservation(),
 			wantAction: "",
 		},
 		{
 			name:       "deleting members cannot empty the tracker while the root is open",
 			blockers:   []Issue{root("open")},
+			gate:       firstObservation(),
 			wantAction: "",
 		},
 		{
+			// The forest is quiet, so the curation row holds off and the
+			// close lands: an open tracker is under curation, not under a
+			// rule that keeps wrap-up from ever firing (s-git/maitred#279).
 			name:       "a stale label on a closed root does not freeze wrap-up",
 			blockers:   []Issue{root("closed")},
+			gate:       digestGateObservation(),
 			wantAction: ActionWrapUp,
 		},
 		{
 			name:       "a stale label on a closed root does not freeze curation",
 			blockers:   []Issue{root("closed"), member("open")},
+			gate:       firstObservation(),
 			wantAction: ActionDecompose,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tr := tracker()
 			d := Decide(Event{Type: EventReconcile, Repo: "o/r", Kind: KindIssue, Number: tr.Number},
-				State{ReviewLenses: testLenses, Issue: tr, Blockers: tc.blockers, ForestGate: firstObservation()}, nil)
+				State{ReviewLenses: testLenses, Issue: tr, Blockers: tc.blockers, ForestGate: tc.gate}, nil)
 			if d.Action != tc.wantAction {
 				t.Errorf("action = %q, want %q (%s)", d.Action, tc.wantAction, d.Reason)
 			}
@@ -4826,6 +4837,24 @@ func TestDecide_DecomposeDigestGate_SweepRoot(t *testing.T) {
 	})
 }
 
+// landedForestFixture is a commissioned forest whose every member has
+// closed: the tracker is open, its ideation gate is closed and nothing
+// blocks it. The forest is still under curation — a forest's lifetime is
+// its tracker's, not its blocker count — so its row is the gate's, and
+// only when the gate says nothing has moved is the tracker ready to
+// close (§forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-
+// cannot-move, s-git/maitred#279).
+func landedForestFixture() State {
+	return State{
+		ReviewLenses: testLenses,
+		Issue:        trackerIssue(),
+		Blockers: []Issue{
+			{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
+			{Number: 4, State: "closed", Repository: "o/r"},
+		},
+	}
+}
+
 // TestDecide_DecomposeDigestGate_SweepTracker: the commissioned
 // tracker's row consults the same gate — one forest, one answer
 // (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#209).
@@ -4850,6 +4879,53 @@ func TestDecide_DecomposeDigestGate_SweepTracker(t *testing.T) {
 		}
 		if !strings.Contains(d.Reason, "member") {
 			t.Errorf("reason = %q, want it to name the member component", d.Reason)
+		}
+	})
+	t.Run("a fully unblocked tracker whose digest moved dispatches", func(t *testing.T) {
+		// The blocker count is not an input to this decision: a forest
+		// whose every member has closed is still under curation while
+		// its tracker is open, and a moved digest is the state that
+		// calls for the run (s-git/maitred#279).
+		st := landedForestFixture()
+		st.ForestGate = digestGateObservation("comment")
+		d := Decide(issueEvent(EventReconcile), st, nil)
+		if d.Action != ActionDecompose {
+			t.Fatalf("decision = %+v, want decompose: the forest moved even though nothing blocks the tracker", d)
+		}
+		if !strings.Contains(d.Reason, "comment") {
+			t.Errorf("reason = %q, want it to name the comment component", d.Reason)
+		}
+	})
+	t.Run("a moved digest defers the close by one sweep", func(t *testing.T) {
+		// Both rows are ready here, and decompose wins over wrap-up
+		// (§forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move,
+		// s-git/maitred#279).
+		st := landedForestFixture()
+		st.ForestGate = digestGateObservation("member")
+		d := Decide(issueEvent(EventReconcile), st, nil)
+		if d.Action != ActionDecompose {
+			t.Fatalf("decision = %+v, want decompose over wrap-up", d)
+		}
+		// The dispatch refreshed the stored digest, so the next sweep
+		// asks the same row of an unchanged forest and the close lands:
+		// a forest on the verge of closing costs one sweep, never more
+		// than one (§forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-
+		// cannot-move).
+		st.ForestGate = digestGateObservation()
+		d = Decide(issueEvent(EventReconcile), st, nil)
+		if d.Action != ActionWrapUp {
+			t.Fatalf("decision = %+v, want wrap-up the sweep after the digest moved", d)
+		}
+	})
+	t.Run("a quiet fully unblocked tracker closes", func(t *testing.T) {
+		// The gate's hold-off is the decompose row's answer, not a veto
+		// over the rest of the tracker's rows: nothing moved, so the
+		// forest's outcome has landed and the tracker closes.
+		st := landedForestFixture()
+		st.ForestGate = digestGateObservation()
+		d := Decide(issueEvent(EventReconcile), st, nil)
+		if d.Action != ActionWrapUp {
+			t.Fatalf("decision = %+v, want wrap-up for a forest with nothing left to curate", d)
 		}
 	})
 	t.Run("no observation on a gated row holds off", func(t *testing.T) {
