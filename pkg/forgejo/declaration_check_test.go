@@ -1555,6 +1555,50 @@ func (s *sourceTree) censusExpr(e ast.Expr, asked map[string]bool, problems *[]s
 	}
 }
 
+// TestDeclarationCheck_TheTwoEnumerationsAgree keeps those enumerations
+// from drifting apart: the forms that carry a walk are listed once, as
+// data, and asked of both switches — resolve must place each carrier
+// form's walk, and censusExpr must ask the walk's question inside every
+// form it recurses through. The one asymmetry the lists carry is
+// recorded as data too: a call's result answers untracked by right, so
+// resolve places no walk through a CallExpr while the census still
+// asks its parts. A case added to one switch and not the other fails
+// here by name (s-git/maitred#277).
+func TestDeclarationCheck_TheTwoEnumerationsAgree(t *testing.T) {
+	src := sourceUnderTest(t, ".")
+	env := map[string]binding{"x": {typ: "Issue", hops: []string{"x"}, tracked: true}}
+	forms := []struct {
+		name    string
+		resolve bool // whether resolve places a walk through this form
+		wrap    func(ast.Expr) ast.Expr
+	}{
+		{"*ast.Ident", true, func(e ast.Expr) ast.Expr { return e }},
+		{"*ast.ParenExpr", true, func(e ast.Expr) ast.Expr { return &ast.ParenExpr{X: e} }},
+		{"*ast.UnaryExpr", true, func(e ast.Expr) ast.Expr { return &ast.UnaryExpr{Op: token.AND, X: e} }},
+		{"*ast.StarExpr", true, func(e ast.Expr) ast.Expr { return &ast.StarExpr{X: e} }},
+		{"*ast.IndexExpr", true, func(e ast.Expr) ast.Expr { return &ast.IndexExpr{X: e, Index: ast.NewIdent("i")} }},
+		{"*ast.SliceExpr", true, func(e ast.Expr) ast.Expr { return &ast.SliceExpr{X: e, Low: ast.NewIdent("i")} }},
+		{"*ast.SelectorExpr", true, func(e ast.Expr) ast.Expr { return &ast.SelectorExpr{X: e, Sel: ast.NewIdent("Number")} }},
+		{"*ast.CallExpr", false, func(e ast.Expr) ast.Expr { return &ast.CallExpr{Fun: e} }},
+	}
+	for _, f := range forms {
+		if b := src.resolve(f.wrap(ast.NewIdent("x")), env); b.tracked != f.resolve {
+			if f.resolve {
+				t.Errorf("resolve places no walk through %s, which the list says carries one", f.name)
+			} else {
+				t.Errorf("resolve places a walk through %s, which the list says answers untracked by right", f.name)
+			}
+		}
+		uncounted := &ast.TypeAssertExpr{X: ast.NewIdent("x"), Type: &ast.Ident{Name: "int"}}
+		asked := map[string]bool{}
+		var problems []string
+		src.censusExpr(f.wrap(uncounted), asked, &problems)
+		if len(problems) == 0 || !strings.Contains(problems[0], "*ast.TypeAssertExpr") {
+			t.Errorf("censusExpr did not ask the walk's question inside %s of an uncounted form; it refused: %v", f.name, problems)
+		}
+	}
+}
+
 // TestDeclarationCheck_SilentAboutAConfigurationRead is one rule unchanged:
 // a read the declaration names is refused by nothing, a configuration fact
 // included — and a read inside a configuration carrier answers under the
