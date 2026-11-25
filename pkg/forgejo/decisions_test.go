@@ -2000,7 +2000,7 @@ func TestDecide_HoldOffReasons(t *testing.T) {
 		if !d.HoldOff() {
 			t.Fatalf("expected hold-off, got dispatch of %q", d.Action)
 		}
-		if !strings.Contains(d.Reason, "already dispatched at digest ") {
+		if !strings.Contains(d.Reason, "inputs unchanged at digest ") {
 			t.Errorf("reason = %q, want it to name the digest's facts", d.Reason)
 		}
 		if !strings.Contains(d.Reason, "body ") {
@@ -2077,19 +2077,19 @@ func TestCascadeActionFitsState(t *testing.T) {
 			name:       "implement is denied to a tracker that gained the outcome label",
 			action:     ActionImplement,
 			issue:      &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelOutcome}},
-			wantReason: "issue 2 carries the outcome label; never an implement candidate",
+			wantReason: "implement holds off: issue.labels — issue 2 carries the outcome label; never an implement candidate",
 		},
 		{
 			name:       "implement is denied to an ideation root",
 			action:     ActionImplement,
 			issue:      &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}},
-			wantReason: "issue 2 carries the ideation label; never an implement candidate",
+			wantReason: "implement holds off: issue.labels — issue 2 carries the ideation label; never an implement candidate",
 		},
 		{
 			name:       "implement is denied to a newborn forest member carrying forest-seeding",
 			action:     ActionImplement,
 			issue:      &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelForestSeeding}},
-			wantReason: "issue 2 carries forest-seeding; forest is seeding, not yet gated",
+			wantReason: "implement holds off: issue.labels — issue 2 carries forest-seeding; forest is seeding, not yet gated",
 		},
 		{
 			name:   "wrap-up fits the tracker it was classified for",
@@ -2101,13 +2101,13 @@ func TestCascadeActionFitsState(t *testing.T) {
 			name:       "wrap-up holds off when ideation arrived: decompose wins",
 			action:     ActionWrapUp,
 			issue:      &Issue{Number: 2, State: "open", Repository: "o/r", Labels: []string{LabelIdeation, LabelOutcome}},
-			wantReason: "issue 2 carries the ideation label; decompose wins over wrap-up",
+			wantReason: "wrap-up holds off: issue.labels — issue 2 carries the ideation label; decompose wins over wrap-up",
 		},
 		{
 			name:       "wrap-up holds off when the outcome label is gone",
 			action:     ActionWrapUp,
 			issue:      &Issue{Number: 2, State: "open", Repository: "o/r"},
-			wantReason: "issue 2 no longer carries the outcome label; nothing to wrap up",
+			wantReason: "wrap-up holds off: issue.labels — issue 2 no longer carries the outcome label; nothing to wrap up",
 		},
 	}
 	for _, tt := range tests {
@@ -2723,19 +2723,19 @@ func TestDecide_ForestSeedingHoldOff(t *testing.T) {
 			name:       "opened: implement denied while seeding",
 			event:      issueEvent(EventIssueOpened),
 			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelForestSeeding)},
-			wantReason: "issue 7 carries forest-seeding; forest is seeding, not yet gated",
+			wantReason: "implement holds off: issue.labels — issue 7 carries forest-seeding; forest is seeding, not yet gated",
 		},
 		{
 			name:       "activity: reassess denied while seeding",
 			event:      issueEvent(EventIssueLabelsChanged),
 			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelForestSeeding)},
-			wantReason: "issue 7 carries forest-seeding; forest is seeding, not yet gated",
+			wantReason: "reassess holds off: issue.labels — issue 7 carries forest-seeding; forest is seeding, not yet gated",
 		},
 		{
 			name:       "sweep: the reconcile fall-through holds off too",
 			event:      issueEvent(EventReconcile),
 			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelForestSeeding)},
-			wantReason: "issue 7 carries forest-seeding; forest is seeding, not yet gated",
+			wantReason: "implement holds off: issue.labels — issue 7 carries forest-seeding; forest is seeding, not yet gated",
 		},
 		{
 			// The seeding label matches case-insensitively, as every
@@ -2743,7 +2743,7 @@ func TestDecide_ForestSeedingHoldOff(t *testing.T) {
 			name:       "a label created as Forest-Seeding holds off too",
 			event:      issueEvent(EventIssueOpened),
 			state:      State{ReviewLenses: testLenses, Issue: labelledIssue("Forest-Seeding")},
-			wantReason: "issue 7 carries forest-seeding; forest is seeding, not yet gated",
+			wantReason: "implement holds off: issue.labels — issue 7 carries forest-seeding; forest is seeding, not yet gated",
 		},
 		{
 			// A transient hold-off does not outrank what an issue *is*:
@@ -2751,13 +2751,13 @@ func TestDecide_ForestSeedingHoldOff(t *testing.T) {
 			name:       "outcome carried alongside forest-seeding is named first",
 			event:      issueEvent(EventIssueCommented),
 			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelForestSeeding, LabelOutcome)},
-			wantReason: "issue 7 carries the outcome label; never a reassess candidate",
+			wantReason: "reassess holds off: issue.labels — issue 7 carries the outcome label; never a reassess candidate",
 		},
 		{
 			name:       "human-task carried alongside forest-seeding is named first",
 			event:      issueEvent(EventIssueOpened),
 			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelForestSeeding, LabelHumanTask)},
-			wantReason: "issue 7 carries the human-task label; never an implement candidate",
+			wantReason: "implement holds off: issue.labels — issue 7 carries the human-task label; never an implement candidate",
 		},
 	}
 	for _, tt := range tests {
@@ -3540,7 +3540,7 @@ func TestDecide_MergeRowIsStateGovernedOnEveryPath(t *testing.T) {
 			if strings.Contains(d.Reason, "already dispatched") {
 				t.Errorf("event %q: reason = %q, want the state that calls for the action, not the watermark", ev.Type, d.Reason)
 			}
-			if !strings.Contains(d.Reason, "the watermark already records merge-or-wait at digest ") {
+			if !strings.Contains(d.Reason, "inputs unchanged at digest ") {
 				t.Errorf("event %q: reason = %q, want it to name the digest the state still calls for", ev.Type, d.Reason)
 			}
 			if !d.StateGoverned {
@@ -5024,6 +5024,62 @@ func TestDecide_DecomposeDigestGate_EventPath(t *testing.T) {
 		}
 		if !strings.Contains(d.Reason, "re-fire bound") {
 			t.Errorf("reason = %q, want it to name the bound that paces the re-fire", d.Reason)
+		}
+	})
+}
+
+// TestDecide_DigestVocabulary pins the two digest wordings the decision
+// log speaks: an unchanged digest reads as inputs unchanged — never as
+// something the engine has already dispatched, which a state relation
+// it has merely never seen move is not — and a dispatch states the
+// digest it moved to, the value the watermark now records
+// (§forgejo/observability/the-decision-log, s-git/maitred#261).
+func TestDecide_DigestVocabulary(t *testing.T) {
+	t.Run("an unchanged digest reads as inputs unchanged", func(t *testing.T) {
+		set := syncIssueFixture(7)
+		members := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
+		d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: set, SyncMembers: members},
+			&Watermark{Action: string(ActionSync), Revision: setDigest(set, members...)})
+		if !d.HoldOff() {
+			t.Fatalf("expected hold-off, got dispatch of %q", d.Action)
+		}
+		if !strings.Contains(d.Reason, "inputs unchanged") {
+			t.Errorf("reason = %q, want it stated as inputs unchanged", d.Reason)
+		}
+		if strings.Contains(d.Reason, "already dispatched") {
+			t.Errorf("reason = %q, want no already-dispatched wording for a state relation", d.Reason)
+		}
+	})
+	t.Run("a state-governed re-fire reads as inputs unchanged", func(t *testing.T) {
+		tracker := trackerIssue()
+		st := State{ReviewLenses: testLenses, Issue: tracker}
+		d := Decide(issueEvent(EventReconcile), st, &Watermark{Action: string(ActionWrapUp), Revision: digestFor(ActionWrapUp, issueEvent(EventReconcile), st)})
+		if !d.Dispatched || d.Action != ActionWrapUp {
+			t.Fatalf("decide dispatched %q (reason %q), want the state-governed re-fire", d.Action, d.Reason)
+		}
+		if !strings.Contains(d.Reason, "inputs unchanged") {
+			t.Errorf("reason = %q, want it stated as inputs unchanged", d.Reason)
+		}
+	})
+	t.Run("a dispatch names the digest it moved to", func(t *testing.T) {
+		tracker := trackerIssue()
+		d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: tracker},
+			&Watermark{Action: string(ActionWrapUp), Revision: "a digest the state has since moved past"})
+		if !d.Dispatched {
+			t.Fatalf("decide held off: %q", d.Reason)
+		}
+		if !strings.Contains(d.Reason, "inputs moved to digest ") {
+			t.Errorf("reason = %q, want the digest the inputs moved to, stated as facts", d.Reason)
+		}
+	})
+	t.Run("a first dispatch names no move it cannot see", func(t *testing.T) {
+		tracker := trackerIssue()
+		d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: tracker}, nil)
+		if !d.Dispatched {
+			t.Fatalf("decide held off: %q", d.Reason)
+		}
+		if strings.Contains(d.Reason, "moved to") || strings.Contains(d.Reason, "inputs unchanged") {
+			t.Errorf("reason = %q, want no claim about a digest the engine has never observed", d.Reason)
 		}
 	})
 }

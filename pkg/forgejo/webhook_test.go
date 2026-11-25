@@ -179,6 +179,11 @@ type fakeAPI struct {
 	comments    map[int][]Comment
 	commentsErr error
 
+	// reviewsErr, when set, fails only ListPullRequestReviews — so a test
+	// can break the review listing without breaking the object re-fetches
+	// (§forgejo/webhook/re-fetch).
+	reviewsErr error
+
 	// writes holds the body of every issue the engine wrote, keyed
 	// "repo/number", and writeErr, when set, fails every write the way a
 	// forge whose identity may not edit an issue body does. The engine's
@@ -406,6 +411,9 @@ func (f *fakeAPI) ListPullRequestReviews(owner, repo string, number int) ([]Revi
 	f.record("ListPullRequestReviews:" + repo + "/" + strconv.Itoa(number))
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.reviewsErr != nil {
+		return nil, f.reviewsErr
 	}
 	return f.reviews[number], nil
 }
@@ -2196,7 +2204,7 @@ func TestCascadeHoldOffReason_QualifiesByTheKeyRepositoryRoles(t *testing.T) {
 			name:    "a failed listing names the failure, never an exclusion",
 			repo:    "o/r",
 			listErr: errors.New("boom"),
-			want:    []string{"scope of repo o/r unknown", "boom"},
+			want:    []string{"scope of repo o/r could not be proven", "boom"},
 			deny:    "holds no maitred role",
 		},
 	}
@@ -2931,8 +2939,10 @@ func TestHandler_IssueClosed_CascadeWalkBudgetHoldsOff(t *testing.T) {
 	if n := api.callCount("IssueBlocks:"); n != maxCascadeWalkReads {
 		t.Errorf("%d graph read(s), want the walk to stop at its budget of %d", n, maxCascadeWalkReads)
 	}
-	if got := eng.Tracked(); len(got) != 0 {
-		t.Errorf("Tracked() = %v, want no decision: the delivery holds off on the logged failure and the sweep decides", got)
+	if got := eng.Tracked(); len(got) != 1 || got[0].Decision.Dispatched {
+		t.Errorf("Tracked() = %v, want the hold-off a graph read that could not be paid for leaves", got)
+	} else if reason := got[0].Decision.Reason; !strings.Contains(reason, "the blocker graph could not be proven") {
+		t.Errorf("hold-off reason = %q, want it to name the read that went unread", reason)
 	}
 }
 
@@ -6793,4 +6803,99 @@ func TestReconcile_FanOutMixedSpacingKeepsTheOwedLens(t *testing.T) {
 	if reason := lastReasonFor(t, &log, "o/r/pr/9"); !strings.Contains(reason, "the re-fire bound spaced lens-b") {
 		t.Errorf("decision reason %q does not name the lens the bound spaced", reason)
 	}
+}
+
+// TestHandler_FailedReadHoldsOffNamingTheInput pins that a read the
+// engine could not pay for reaches the decision log as a hold-off
+// naming which input could not be proven, rather than as silence: an
+// unread input is never the input being satisfied, the row that needed
+// it stamps no watermark, and the reconciliation sweep asks again
+// (§forgejo/webhook/the-pipeline, §forgejo/webhook/re-fetch,
+// §forgejo/decisions/inputs, s-git/maitred#261).
+func TestHandler_FailedReadHoldsOffNamingTheInput(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		event  func(t *testing.T, h *Handler)
+		reads  string
+		break_ func(*fakeAPI)
+		key    Key
+	}{
+		{
+			name: "the object itself went unread",
+			event: func(t *testing.T, h *Handler) {
+				serve(t, h, signedRequest(t, "s3cret", "issues", "opened", issuePayload("o/r", 7, "opened")))
+			},
+			reads:  "GetIssue:r/7",
+			break_: func(api *fakeAPI) { api.getIssueErrOn = map[int]error{7: errors.New("issue endpoint down")} },
+			key:    Key{Repo: "o/r", Kind: KindIssue, Number: 7},
+		},
+		{
+			name: "the dependency listing went unread",
+			event: func(t *testing.T, h *Handler) {
+				serve(t, h, signedRequest(t, "s3cret", "issue_comment", "created", issuePayload("o/r", 7, "created")))
+			},
+			reads:  "IssueDependencies:r/7",
+			break_: func(api *fakeAPI) { api.depsErr = errors.New("dependencies endpoint down") },
+			key:    Key{Repo: "o/r", Kind: KindIssue, Number: 7},
+		},
+		{
+			name: "the review listing went unread",
+			event: func(t *testing.T, h *Handler) {
+				serve(t, h, signedRequest(t, "s3cret", "pull_request_sync", "synchronized", prPayload("o/r", 9, "synchronized")))
+			},
+			reads:  "ListPullRequestReviews:r/9",
+			break_: func(api *fakeAPI) { api.reviewsErr = errors.New("reviews endpoint down") },
+			key:    Key{Repo: "o/r", Kind: KindPR, Number: 9},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eng, api, q, store := newTestEngine(t)
+			h := NewHandler(eng, "s3cret", nil)
+			api.issues[7] = testIssue(7, "open")
+			api.pulls[9] = &PullRequest{Number: 9, State: "open", Mergeable: true, HeadSHA: "abc"}
+			tc.break_(api)
+
+			tc.event(t, h)
+			if n := api.callCount(tc.reads); n == 0 {
+				t.Fatalf("the read this case breaks (%s) was never reached", tc.reads)
+			}
+			if tasks := q.all(); len(tasks) != 0 {
+				t.Errorf("dispatched %d tasks over an input that could not be proven: %+v", len(tasks), tasks)
+			}
+			w, err := store.Load(tc.key)
+			if err != nil || w != nil {
+				t.Errorf("watermark recorded over an unread input: %v, %v", w, err)
+			}
+			reason := decisionReason(eng, tc.key)
+			if !strings.Contains(reason, "could not be proven") {
+				t.Errorf("decision log reason %q does not say which input could not be proven", reason)
+			}
+		})
+	}
+
+	t.Run("a repository whose scope is unknown says so", func(t *testing.T) {
+		eng, api, q, _ := newTestEngine(t)
+		h := NewHandler(eng, "s3cret", nil)
+		api.listReposErr = errors.New("repository listing down")
+		serve(t, h, signedRequest(t, "s3cret", "issues", "opened", issuePayload("o/r", 7, "opened")))
+		if tasks := q.all(); len(tasks) != 0 {
+			t.Errorf("dispatched %d tasks with the scope unknown: %+v", len(tasks), tasks)
+		}
+		reason := decisionReason(eng, Key{Repo: "o/r", Kind: KindIssue, Number: 7})
+		if !strings.Contains(reason, "could not be proven") || !strings.Contains(reason, "repository listing down") {
+			t.Errorf("decision log reason %q reads as a deliberate exclusion, not as a failed read", reason)
+		}
+	})
+}
+
+// decisionReason is the reason the decision log holds for one key, the
+// reader's view of the hold-off a failed read left
+// (§forgejo/observability/the-decision-log).
+func decisionReason(eng *Engine, k Key) string {
+	for _, tr := range eng.Tracked() {
+		if tr.Key == k {
+			return tr.Decision.Reason
+		}
+	}
+	return ""
 }

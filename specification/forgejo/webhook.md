@@ -80,8 +80,11 @@ On each `POST`:
    graph additionally names the unblock cascade the close woke. A
    repository listing that **fails** also holds off, but with a reason
    naming the failure — never the role or topic wording — so a transient
-   API failure is not recorded as a deliberate exclusion
-   (§forgejo/webhook/the-scope-cache). A delivery that passes the scope
+   API failure is not recorded as a deliberate exclusion: the scope
+   **could not be proven**, which is a different sentence from the
+   remit's, and the sweep is named as what asks again
+   (§forgejo/webhook/the-scope-cache, §forgejo/decisions/inputs,
+   s-git/maitred#261). A delivery that passes the scope
    test may still be denied by **admissibility** further down the
    pipeline: an action fires for an object only if the repository holding
    the object under consideration carries the role that admits it
@@ -185,8 +188,13 @@ On each `POST`:
    retrying; the event is still processed to completion, and the
    reconciliation sweep re-derives anything genuinely missed.
 
-A re-fetch failure is a hold-off: it is logged and acknowledged, and the
-reconciliation sweep re-derives from the source of truth.
+A re-fetch failure is a hold-off, and it is a hold-off the decision log
+**sees**: the entry names the input that failed read, in the unproven
+wording §forgejo/decisions/inputs and
+§forgejo/observability/the-decision-log share, dispatches nothing,
+records no watermark, and is acknowledged; the reconciliation sweep
+re-derives from the source of truth, which is what the hold-off's own
+reason says (s-git/maitred#261).
 
 ### Repository roles
 
@@ -445,8 +453,9 @@ For each decision event, the re-fetch assembles the state
   pull requests among those blockers. The activity path needs the
   blockers because an open blocker holds off the `reassess` decision
   (§forgejo/decisions/transition-table); if the blockers read fails,
-  the re-fetch fails — a hold-off naming the failure, never
-  "no blockers".
+  the re-fetch fails — a hold-off naming `blockers.states` as an input
+  that could not be proven, never the "no blockers" an empty listing
+  would have answered with (s-git/maitred#261).
 
   The three activity events — edited, labels changed, commented — read
   the issue's **comments** as well, because comments stand among

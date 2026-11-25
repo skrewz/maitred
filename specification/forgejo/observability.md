@@ -8,7 +8,18 @@ engine tracks.
 
 The engine **logs every decision** — the dispatched action plus its
 reason, or the hold-off plus its reason — keyed by repo/issue/PR (the
-watermark key, §forgejo/state/storage). The log entry is
+watermark key, §forgejo/state/storage). Reasons are **generated from
+the action's predicate**, never composed beside the row that hit it: an
+unsatisfied answer names the declared inputs the state did not satisfy,
+an answer the watermark's digest already recorded says **inputs
+unchanged** rather than that the action was already dispatched, and a
+dispatch names the digest its inputs moved to. An input the engine
+could not read holds the row off in the same sentence whatever asked —
+`<input> could not be proven — <why>; the reconciliation sweep asks
+again` — so the engine's own failed reads are as readable as a state
+that says no, and are never mistaken for one
+(§forgejo/decisions/actions, §forgejo/decisions/inputs,
+s-git/maitred#261). The log entry is
 **structured**: the key, the event that produced the decision, the
 decision (dispatch or hold-off), the dispatched action, the reason, and
 the revision the decision was made at are discrete fields, so a human
@@ -23,9 +34,10 @@ for a landing set, each member's readiness. A fan-out quotes the digest of the
 one subject it paces, folded from that subject's side, so a lens's own standing
 reads as the state it is rather than as the whole chain's
 (§forgejo/decisions/review-lenses). A row the re-fire
-bound caught says so and names the bound, and the one row a digest suppresses —
-the landing set's — names the readiness it already recorded
-(§forgejo/reconciliation/the-landing-sets-row). A log line therefore stays
+bound caught says so and names the bound, and the one row a digest
+suppresses — the landing set's — names the set's facts as inputs
+unchanged (§forgejo/reconciliation/the-landing-sets-row,
+s-git/maitred#261). A log line therefore stays
 readable against the forge's history whatever the guard keyed itself on
 (§forgejo/state/watermark, §forgejo/decisions/sync-set, s-git/maitred#259,
 s-git/maitred#260). The field holds the dispatched action's declared digest, so

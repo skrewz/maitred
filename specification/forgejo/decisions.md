@@ -41,9 +41,11 @@ the object is applied by the pipeline after `Decide`
 (§forgejo/webhook/the-pipeline). Either way the function stays pure —
 repository roles are not among its inputs. When
 the engine cannot establish scope because the repository listing failed,
-the hold-off reason instead names the failure (`scope of repo <name>
-unknown: ...`), keeping exclusion and API failure distinguishable in the
-decision log.
+the hold-off reason instead says the repository's scope **could not be
+proven** and names the failure that left it unread
+(`scope of repo <name> could not be proven — ...`), keeping exclusion
+and API failure distinguishable in the decision log
+(§forgejo/observability/the-decision-log, s-git/maitred#261).
 
 ## Commissioning
 
@@ -189,8 +191,24 @@ predicate that reads a fact its action's declaration does not name is
 refused, by file, field and action (§forgejo/decisions/inputs). Both
 run from the repository's ordinary test targets, and each fails loudly
 rather than passing when the source or the enum it reads cannot be
-read (s-git/maitred#263). The digest an action declares is the one value
-its dispatch is watermarked on, the decision log names, the task's
+read (s-git/maitred#263).
+
+The predicate is also the only seat a hold-off's or a dispatch's reason
+is written from: it answers **three ways** over the declared inputs —
+satisfied, unsatisfied, or **unproven**, the engine having failed to
+read the input at all — and the reason the log carries is composed from
+that answer. An unsatisfied answer names the declared inputs the state
+did not satisfy; an unproven one names the input that could not be
+proven, says the reconciliation sweep asks again, and never reads as the
+guard being satisfied; an answer the watermark's digest has already
+recorded reads as **inputs unchanged**, never as the action having
+already been dispatched (§forgejo/observability/the-decision-log,
+s-git/maitred#261). No row states a hold-off beside its declaration in
+words of its own, and none dispatches while its predicate is unsatisfied
+or its answer unproven (s-git/maitred#261).
+
+The digest an action declares is the one value its dispatch is
+watermarked on, the decision log names, the task's
 dedup key carries and the re-fire bound is a rate on, so re-keying an
 action edits this declaration and nothing beside it — the tests keep
 those four answering with the value the declaration derives
@@ -1177,7 +1195,16 @@ alone. Both guards are inert when the identity is unset.
 
 The enumeration above is the vocabulary the action declarations name:
 each action carries one declaration (§forgejo/decisions/actions)
-naming the subset of these facts its predicate reads. An issue-path
+naming the subset of these facts its predicate reads. An input the
+engine **could not read** — an object that was never re-fetched, a
+dependency, comment, review or membership listing that failed, a forest
+whose digest gate assembled no observation, a repository whose scope
+the failed repository listing left unknown — evaluates to **unproven**,
+which is never satisfied: the row holds off naming which input could not
+be proven and leaves the next sweep to ask again. A failed read is
+therefore not the empty listing it would have stood for, and no guard's
+absence is read anywhere in the decision code as that guard being
+satisfied (s-git/maitred#261). An issue-path
 declaration **folds** that set into the digest its dispatch is
 watermarked on, so an input a predicate reads cannot move without the
 row that asks it noticing (§forgejo/state/watermark, s-git/maitred#259):

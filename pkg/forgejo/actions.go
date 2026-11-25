@@ -40,19 +40,99 @@ import (
 // §forgejo/webhook/the-pipeline,
 // §forgejo/decisions/transition-table).
 
-// readyAnswer is the predicate's verdict: the state calls for the
-// action (readyYes), does not (readyNo), or the predicate abstains and
-// the asking row continues to its next question (readyNotApplicable).
-// Only the review-reading rows have such a next question; the rest ask
-// through readyAtRow, which records an abstain as the wiring fault it
-// would be.
+// readyAnswer is the predicate's verdict. Three of its answers are the
+// three values a declared input's standing has (§forgejo/decisions/inputs):
+// the state satisfies the predicate (readyYes), it does not (readyNo),
+// or the engine could not read the input the predicate asked and so can
+// say neither (readyUnproven). The fourth is a routing answer: the
+// predicate abstains and the asking row continues to its next question
+// (readyNotApplicable). Only the review-reading rows have such a next
+// question; the rest ask through readyAtRow, which records an abstain as
+// the wiring fault it would be.
+//
+// Unproven is never satisfied. A row reaching it holds off naming which
+// input could not be proven, and says that the engine could not tell
+// rather than that the state said no — the distinction a guard's
+// absence must never be allowed to fake (§forgejo/decisions/loop-prevention,
+// s-git/maitred#261).
 type readyAnswer int
 
 const (
 	readyNo readyAnswer = iota
 	readyYes
+	readyUnproven
 	readyNotApplicable
 )
+
+// declaresInput reports whether the action's declaration names the
+// input. A hold-off naming an input no declaration declares is a row
+// stating a guard beside its declaration rather than one the declaration
+// covers, so it is refused where it is written
+// (§forgejo/decisions/actions, s-git/maitred#261).
+func declaresInput(a Action, input string) bool {
+	for _, in := range declarationFor(a).inputs {
+		if in == input {
+			return true
+		}
+	}
+	return false
+}
+
+// declaresInputAnywhere reports whether any action's declaration names
+// the input: the weaker test a seat that has named no action can make,
+// and still enough to refuse an invented name
+// (§forgejo/decisions/inputs, s-git/maitred#261).
+func declaresInputAnywhere(in string) bool {
+	for a := range actionDecls {
+		if declaresInput(a, in) {
+			return true
+		}
+	}
+	return false
+}
+
+// holdOffUnsatisfied composes the reason an unsatisfied answer reaches
+// the log in: the action, the declared inputs the state did not satisfy,
+// and the fact the state shows. It is the one seat that wording is
+// written, so no row carries a hold-off string of its own and no row can
+// hold off without naming what its declaration was asked
+// (§forgejo/observability/the-decision-log, s-git/maitred#261).
+func holdOffUnsatisfied(a Action, detail string, inputs ...string) Decision {
+	for _, in := range inputs {
+		if !declaresInput(a, in) {
+			panic(fmt.Sprintf("forgejo: %s holds off on %s, which its declaration does not declare", a, in))
+		}
+	}
+	return holdOff(fmt.Sprintf("%s holds off: %s", a, holdOffUnsatisfiedInput(detail, inputs...).Reason))
+}
+
+// holdOffUnsatisfiedInput is the same sentence for the seat that has
+// named no action yet — a row that decides which row applies, or walks
+// the blocker graph — so the vocabulary stays one whatever asked
+// (§forgejo/observability/the-decision-log, s-git/maitred#261). The
+// inputs must be names some declaration declares.
+func holdOffUnsatisfiedInput(detail string, inputs ...string) Decision {
+	for _, in := range inputs {
+		if !declaresInputAnywhere(in) {
+			panic("forgejo: a hold-off names the undeclared input " + in)
+		}
+	}
+	return holdOff(fmt.Sprintf("%s — %s", strings.Join(inputs, ", "), detail))
+}
+
+// holdOffUnproven composes the reason an input the engine could not read
+// reaches the log in: which input, why it went unread, and that the next
+// sweep asks again. Where the asking row knows which action it holds
+// off for it passes the action; where it does not — the pipeline, before
+// any action is named — the same sentence is composed by
+// holdOffUnreadInput (§forgejo/decisions/inputs,
+// §forgejo/webhook/the-pipeline, s-git/maitred#261).
+func holdOffUnproven(a Action, input, detail string) Decision {
+	if !declaresInput(a, input) {
+		panic(fmt.Sprintf("forgejo: %s answered unproven for %s, which its declaration does not declare", a, input))
+	}
+	return holdOffUnreadInput(string(a)+" holds off: "+input, detail)
+}
 
 // actionDecl is the one declaration of one action.
 type actionDecl struct {
@@ -253,7 +333,7 @@ func readyAtRow(a Action, e Event, s State) (Decision, bool) {
 	switch ans {
 	case readyYes:
 		return d, true
-	case readyNo:
+	case readyNo, readyUnproven:
 		return d, false
 	}
 	return holdOff(fmt.Sprintf("the %s declaration abstains only where the asking row has a next question to fall through to; this row has none, so asking it here is a wiring fault", a)), false
@@ -795,25 +875,25 @@ func hashInputFacts(facts []string) string {
 func implementReady(_ Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
-		return holdOff("no issue state re-fetched"), readyNo
+		return holdOffUnproven(ActionImplement, "issue.state", "no issue state was re-fetched"), readyUnproven
 	}
 	if issue.State != "open" {
-		return holdOff(fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State)), readyNo
+		return holdOffUnsatisfied(ActionImplement, fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State), "issue.state"), readyNo
 	}
 	if label := neverWorkItemLabel(issue.Labels); label != "" {
-		return holdOffNeverImplement(issue.Number, label), readyNo
+		return holdOffNeverImplement(ActionImplement, issue.Number, label), readyNo
 	}
 	if label := transientHoldOffLabel(issue.Labels); label != "" {
-		return holdOffForestSeeding(issue.Number, label), readyNo
+		return holdOffForestSeeding(ActionImplement, issue.Number, label), readyNo
 	}
 	if hasLabel(issue, LabelTeardownForest) {
-		return holdOffTeardownWithoutRoot(issue.Number), readyNo
+		return holdOffTeardownWithoutRoot(ActionImplement, issue.Number), readyNo
 	}
 	if open := openBlockers(s.Blockers); len(open) > 0 {
-		return holdOff(fmt.Sprintf("issue %d is blocked by %d open issue(s)", issue.Number, len(open))), readyNo
+		return holdOffUnsatisfied(ActionImplement, fmt.Sprintf("issue %d is blocked by %d open issue(s)", issue.Number, len(open)), "blockers.states"), readyNo
 	}
 	if len(s.ConnectedPRs) > 0 {
-		return holdOff(fmt.Sprintf("issue %d has %d connected open PR(s)", issue.Number, len(s.ConnectedPRs))), readyNo
+		return holdOffUnsatisfied(ActionImplement, fmt.Sprintf("issue %d has %d connected open PR(s)", issue.Number, len(s.ConnectedPRs)), "connected PRs"), readyNo
 	}
 	return dispatch(ActionImplement, fmt.Sprintf("issue %d opened: open, unblocked, no connected PR", issue.Number)), readyYes
 }
@@ -829,28 +909,28 @@ func implementReady(_ Event, s State) (Decision, readyAnswer) {
 func reassessReady(e Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
-		return holdOff("no issue state re-fetched"), readyNo
+		return holdOffUnproven(ActionReassess, "issue.state", "no issue state was re-fetched"), readyUnproven
 	}
 	if issue.State != "open" {
-		return holdOff(fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State)), readyNo
+		return holdOffUnsatisfied(ActionReassess, fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State), "issue.state"), readyNo
 	}
 	if label := neverWorkItemLabel(issue.Labels); label != "" {
-		return holdOffNeverReassess(issue.Number, label), readyNo
+		return holdOffNeverReassess(ActionReassess, issue.Number, label), readyNo
 	}
 	if label := transientHoldOffLabel(issue.Labels); label != "" {
-		return holdOffForestSeeding(issue.Number, label), readyNo
+		return holdOffForestSeeding(ActionReassess, issue.Number, label), readyNo
 	}
 	if hasLabel(issue, LabelTeardownForest) {
-		return holdOffTeardownWithoutRoot(issue.Number), readyNo
+		return holdOffTeardownWithoutRoot(ActionReassess, issue.Number), readyNo
 	}
 	if open := openBlockers(s.Blockers); len(open) > 0 {
-		return holdOff(fmt.Sprintf("issue %d is blocked by %s; not reassessing", issue.Number, issueRefs(open))), readyNo
+		return holdOffUnsatisfied(ActionReassess, fmt.Sprintf("issue %d is blocked by %s; not reassessing", issue.Number, issueRefs(open)), "blockers.states"), readyNo
 	}
 	// The authorship is asked last: every hold-off above it already
 	// names a state the row has nothing to do with, and this one names
 	// the delivery.
 	if e.Type == EventIssueCommented && !commentCountsAsInput(e.Sender, s.EngineAccount, s.DecomposerIdentity) {
-		return holdOff(fmt.Sprintf("issue %d: comment authored by %s, whose comments are no input; nothing reassessed", issue.Number, e.Sender)), readyNo
+		return holdOffUnsatisfied(ActionReassess, fmt.Sprintf("issue %d: comment authored by %s, whose comments are no input; nothing reassessed", issue.Number, e.Sender), "issue.comments", "event.sender"), readyNo
 	}
 	return dispatch(ActionReassess, fmt.Sprintf("issue %d: %s", issue.Number, e.Type)), readyYes
 }
@@ -868,7 +948,7 @@ func reassessReady(e Event, s State) (Decision, readyAnswer) {
 func reviewReady(_ Event, s State) (Decision, readyAnswer) {
 	pr := s.PR
 	if pr == nil {
-		return holdOff("no PR state re-fetched"), readyNo
+		return holdOffUnproven(ActionReview, "PR.state", "no pull request state was re-fetched"), readyUnproven
 	}
 	head := s.PR.HeadSHA
 	var owed []string
@@ -880,7 +960,7 @@ func reviewReady(_ Event, s State) (Decision, readyAnswer) {
 	if len(owed) > 0 {
 		return dispatch(ActionReview, fmt.Sprintf("lens %s has no undismissed report at head %s", strings.Join(owed, ", "), head)), readyYes
 	}
-	return holdOff(fmt.Sprintf("PR %d: every review lens (%s) has an undismissed report at head %s; the review-following rows decide", pr.Number, strings.Join(lensIdentities(s.ReviewLenses), ", "), head)), readyNo
+	return holdOffUnsatisfied(ActionReview, fmt.Sprintf("PR %d: every review lens (%s) has an undismissed report at head %s; the review-following rows decide", pr.Number, strings.Join(lensIdentities(s.ReviewLenses), ", "), head), "reviews"), readyNo
 }
 
 // rebaseReady is rebase's predicate: an open pull request the forge
@@ -892,10 +972,10 @@ func reviewReady(_ Event, s State) (Decision, readyAnswer) {
 func rebaseReady(e Event, s State) (Decision, readyAnswer) {
 	pr := s.PR
 	if pr == nil {
-		return holdOff("no PR state re-fetched"), readyNo
+		return holdOffUnproven(ActionRebase, "PR.state", "no pull request state was re-fetched"), readyUnproven
 	}
 	if !prOpen(pr) {
-		return holdOff(fmt.Sprintf("PR %d is not open", pr.Number)), readyNo
+		return holdOffUnsatisfied(ActionRebase, fmt.Sprintf("PR %d is not open", pr.Number), "PR.state"), readyNo
 	}
 	reason := fmt.Sprintf("PR %d synced with merge conflicts", pr.Number)
 	if e.Type == EventPROpened {
@@ -915,13 +995,13 @@ func rebaseReady(e Event, s State) (Decision, readyAnswer) {
 func fixFeedbackReady(e Event, s State) (Decision, readyAnswer) {
 	pr := s.PR
 	if pr == nil {
-		return holdOff("no PR state re-fetched"), readyNo
+		return holdOffUnproven(ActionFixFeedback, "PR.state", "no pull request state was re-fetched"), readyUnproven
 	}
 	gate := prReviewGate(s.Reviews, s.ReviewLenses, pr.HeadSHA)
 	if !gate.allReported || !gate.fixFires(e.Type != EventPRReviewed) {
 		return Decision{}, readyNotApplicable
 	}
-	if d, held := holdOffPRNotOwned(pr, s.ImplementerIdentity); held {
+	if d, held := holdOffPRNotOwned(ActionFixFeedback, pr, s.ImplementerIdentity); held {
 		return d, readyNo
 	}
 	return dispatch(ActionFixFeedback, fmt.Sprintf("PR %d stands at reviews at head %s whose reports are not all approvals (lenses without an approval: %s)",
@@ -941,7 +1021,7 @@ func fixFeedbackReady(e Event, s State) (Decision, readyAnswer) {
 func mergeOrWaitReady(e Event, s State) (Decision, readyAnswer) {
 	pr := s.PR
 	if pr == nil {
-		return holdOff("no PR state re-fetched"), readyNo
+		return holdOffUnproven(ActionMergeOrWait, "PR.state", "no pull request state was re-fetched"), readyUnproven
 	}
 	gate := prReviewGate(s.Reviews, s.ReviewLenses, pr.HeadSHA)
 	if !gate.mergeFires() {
@@ -951,11 +1031,11 @@ func mergeOrWaitReady(e Event, s State) (Decision, readyAnswer) {
 		return d, readyNo
 	}
 	if open := mergeGateOpenBlockers(e, s); len(open) > 0 {
-		return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens, but a connected issue is blocked by %s; not merging", pr.Number, issueRefs(open))), readyNo
+		return holdOffUnsatisfied(ActionMergeOrWait, fmt.Sprintf("PR %d stands at approving reviews from every lens, but a connected issue is blocked by %s; not merging", pr.Number, issueRefs(open)), "connected issues' blockers"), readyNo
 	}
 	ref, optedIn := mergeOptedIn(pr, e.Repo, s.ConnectedIssues)
 	if !optedIn {
-		return holdOff(fmt.Sprintf("PR %d stands at approving reviews from every lens but no issue its body closes carries the %s label; an approved PR with no merge opt-in waits on a human (connected issues: %s)", pr.Number, LabelAgenticAutoMerge, connectedIssueNames(s))), readyNo
+		return holdOffUnsatisfied(ActionMergeOrWait, fmt.Sprintf("PR %d stands at approving reviews from every lens but no issue its body closes carries the %s label; an approved PR with no merge opt-in waits on a human (connected issues: %s)", pr.Number, LabelAgenticAutoMerge, connectedIssueNames(s)), "connected issues"), readyNo
 	}
 	return dispatch(ActionMergeOrWait, fmt.Sprintf("PR %d stands at approving reviews from every lens and %s",
 		pr.Number, issueOptInClause(ref))), readyYes
@@ -977,15 +1057,15 @@ func mergeOrWaitReady(e Event, s State) (Decision, readyAnswer) {
 func decomposeReady(e Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
-		return holdOff("no issue state re-fetched"), readyNo
+		return holdOffUnproven(ActionDecompose, "issue.state", "no issue state was re-fetched"), readyUnproven
 	}
 	if hasLabel(issue, LabelIdeation) {
 		if hasLabel(issue, LabelTeardownForest) {
-			return holdOff(fmt.Sprintf("issue %d is an open %s root carrying %s: the teardown order stands above the root's row", issue.Number, LabelIdeation, LabelTeardownForest)), readyNo
+			return holdOffUnsatisfied(ActionDecompose, fmt.Sprintf("issue %d is an open %s root carrying %s: the teardown order stands above the root's row", issue.Number, LabelIdeation, LabelTeardownForest), "issue.labels"), readyNo
 		}
 		if onSweep(e) {
 			return digestGateAnswer(s.ForestGate, fmt.Sprintf("issue %d is an open %s issue", issue.Number, LabelIdeation),
-				holdOff(fmt.Sprintf("issue %d is an open %s issue: the digest gate assembled no observation of its forest; nothing dispatches on a missing digest", issue.Number, LabelIdeation)))
+				holdOffUnproven(ActionDecompose, "forest digest gate", fmt.Sprintf("the sweep's re-fetch assembled no observation of issue %d's forest", issue.Number)), readyUnproven)
 		}
 		subject := fmt.Sprintf("issue %d is an open %s root: the label makes the root", issue.Number, LabelIdeation)
 		if e.Type == EventIssueCommented {
@@ -1002,15 +1082,15 @@ func decomposeReady(e Event, s State) (Decision, readyAnswer) {
 		}
 		// Unarmed, the root's standing is the answer and the re-fire
 		// bound paces the row, one attempt per interval.
-		return digestGateAnswer(s.ForestGate, subject, dispatch(ActionDecompose, subject))
+		return digestGateAnswer(s.ForestGate, subject, dispatch(ActionDecompose, subject), readyYes)
 	}
 	if isTracker(issue) {
 		gate := ideationGate(s.Blockers)
 		if gate == nil {
-			return holdOff(fmt.Sprintf("issue %d is an open %s tracker blocked by %d open issue(s) and gated by no %s issue; state calls for no action", issue.Number, LabelOutcome, len(openBlockers(s.Blockers)), LabelIdeation)), readyNo
+			return holdOffUnsatisfied(ActionDecompose, fmt.Sprintf("issue %d is an open %s tracker blocked by %d open issue(s) and gated by no %s issue; state calls for no action", issue.Number, LabelOutcome, len(openBlockers(s.Blockers)), LabelIdeation), "blockers.states"), readyNo
 		}
 		if gate.State == "open" {
-			return holdOff(fmt.Sprintf("issue %d is an open %s tracker whose %s root %d is still open; its own row carries the curation", issue.Number, LabelOutcome, LabelIdeation, gate.Number)), readyNo
+			return holdOffUnsatisfied(ActionDecompose, fmt.Sprintf("issue %d is an open %s tracker whose %s root %d is still open; its own row carries the curation", issue.Number, LabelOutcome, LabelIdeation, gate.Number), "blockers.states"), readyNo
 		}
 		// A commissioned tracker carries its forest's curation under the
 		// same gate as the root's row: one forest, one answer, whichever
@@ -1018,26 +1098,29 @@ func decomposeReady(e Event, s State) (Decision, readyAnswer) {
 		// input here — the tracker's own open state is what keeps the
 		// forest under curation (§forgejo/decisions/actions, s-git/maitred#279).
 		return digestGateAnswer(s.ForestGate, fmt.Sprintf("issue %d is an open %s tracker commissioned by %s %d", issue.Number, LabelOutcome, LabelIdeation, gate.Number),
-			holdOff(fmt.Sprintf("issue %d is an open %s tracker whose forest the digest gate assembled no observation of: nothing dispatches on a missing digest", issue.Number, LabelOutcome)))
+			holdOffUnproven(ActionDecompose, "forest digest gate", fmt.Sprintf("the re-fetch assembled no observation of issue %d's forest", issue.Number)), readyUnproven)
 	}
-	return holdOff(fmt.Sprintf("issue %d is neither an open %s root nor an %s tracker: no row asks decompose of it", issue.Number, LabelIdeation, LabelOutcome)), readyNo
+	return holdOffUnsatisfied(ActionDecompose, fmt.Sprintf("issue %d is neither an open %s root nor an %s tracker: no row asks decompose of it", issue.Number, LabelIdeation, LabelOutcome), "issue.labels"), readyNo
 }
 
 // digestGateAnswer is the digest gate's comparison, the answer every
 // gated decompose row reaches through the declaration: unchanged
 // digests hold off, a moved digest dispatches naming the component
 // that moved, and a forest the store has never observed dispatches as
-// a first observation. gateUnarmed is what the asker answers when the
-// gate carries no observation at all — a hold-off on the sweep's
-// gated rows (through the pipeline it cannot happen), the root's
-// standing on the event path (§forgejo/decisions/actionable-state-digest,
-// §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#209).
-func digestGateAnswer(g *ForestDigestGate, subject string, gateUnarmed Decision) (Decision, readyAnswer) {
+// a first observation. gateUnarmed and unarmedAnswer are what the asker
+// answers when the gate carries no observation at all: the root's
+// standing on the event path, which is a dispatch, and an unproven
+// hold-off on the rows whose whole decision is the comparison — a gated
+// row arriving with no observation is a read that was never paid for,
+// never a state that said no (§forgejo/decisions/actionable-state-digest,
+// §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#209,
+// s-git/maitred#261).
+func digestGateAnswer(g *ForestDigestGate, subject string, gateUnarmed Decision, unarmedAnswer readyAnswer) (Decision, readyAnswer) {
 	if unarmedDigestGate(g) {
-		return gateUnarmed, answerOf(gateUnarmed)
+		return gateUnarmed, unarmedAnswer
 	}
 	if g.Current == g.Stored {
-		return holdOff(fmt.Sprintf("%s: the forest's actionable-state digest is unchanged since it was last observed: nothing a decompose run could act on has moved", subject)), readyNo
+		return holdOffUnsatisfied(ActionDecompose, fmt.Sprintf("%s: the forest's actionable-state digest is unchanged since it was last observed: nothing a decompose run could act on has moved", subject), "forest digest gate"), readyNo
 	}
 	if g.Stored == "" {
 		return dispatch(ActionDecompose, fmt.Sprintf("%s: the forest's actionable-state digest is observed for the first time; the state calls for decompose", subject)), readyYes
@@ -1053,31 +1136,22 @@ func unarmedDigestGate(g *ForestDigestGate) bool {
 	return g == nil || g.Current == ""
 }
 
-// answerOf reads a hold-off-or-dispatch Decision back as the
-// predicate's answer.
-func answerOf(d Decision) readyAnswer {
-	if d.Dispatched {
-		return readyYes
-	}
-	return readyNo
-}
-
 // wrapUpReady is wrap-up's predicate: an open outcome tracker with no
 // open blocker (§forgejo/decisions/actions,
 // §forgejo/reconciliation/the-state-is-the-watermark).
 func wrapUpReady(_ Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
-		return holdOff("no issue state re-fetched"), readyNo
+		return holdOffUnproven(ActionWrapUp, "issue.state", "no issue state was re-fetched"), readyUnproven
 	}
 	if issue.State != "open" {
-		return holdOff(fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State)), readyNo
+		return holdOffUnsatisfied(ActionWrapUp, fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State), "issue.state"), readyNo
 	}
 	if !isTracker(issue) {
-		return holdOff(fmt.Sprintf("issue %d is not an open %s tracker: nothing to wrap up", issue.Number, LabelOutcome)), readyNo
+		return holdOffUnsatisfied(ActionWrapUp, fmt.Sprintf("issue %d is not an open %s tracker: nothing to wrap up", issue.Number, LabelOutcome), "issue.labels"), readyNo
 	}
 	if open := openBlockers(s.Blockers); len(open) > 0 {
-		return holdOff(fmt.Sprintf("issue %d is an open %s tracker still blocked by %d open issue(s); the curation row asks first", issue.Number, LabelOutcome, len(open))), readyNo
+		return holdOffUnsatisfied(ActionWrapUp, fmt.Sprintf("issue %d is an open %s tracker still blocked by %d open issue(s); the curation row asks first", issue.Number, LabelOutcome, len(open)), "blockers.states"), readyNo
 	}
 	return dispatch(ActionWrapUp, fmt.Sprintf("issue %d is an open, fully unblocked %s tracker; the state calls for wrap-up",
 		issue.Number, LabelOutcome)), readyYes
@@ -1093,20 +1167,20 @@ func wrapUpReady(_ Event, s State) (Decision, readyAnswer) {
 func teardownForestReady(e Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
-		return holdOff("no issue state re-fetched"), readyNo
+		return holdOffUnproven(ActionTeardownForest, "issue.state", "no issue state was re-fetched"), readyUnproven
 	}
 	if issue.State != "open" {
-		return holdOff(fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State)), readyNo
+		return holdOffUnsatisfied(ActionTeardownForest, fmt.Sprintf("issue %d is %q, not open", issue.Number, issue.State), "issue.state"), readyNo
 	}
 	if !hasLabel(issue, LabelIdeation) {
-		return holdOffTeardownWithoutRoot(issue.Number), readyNo
+		return holdOffTeardownWithoutRoot(ActionTeardownForest, issue.Number), readyNo
 	}
 	remaining := countDeletableMembers(s.Blocked)
 	if remaining == 0 {
 		if onSweep(e) {
-			return holdOff(fmt.Sprintf("issue %d is an open %s root carrying %s but blocking no issue other than an %s tracker, which the order spares: its forest has nothing left to delete", issue.Number, LabelIdeation, LabelTeardownForest, LabelOutcome)), readyNo
+			return holdOffUnsatisfied(ActionTeardownForest, fmt.Sprintf("issue %d is an open %s root carrying %s but blocking no issue other than an %s tracker, which the order spares: its forest has nothing left to delete", issue.Number, LabelIdeation, LabelTeardownForest, LabelOutcome), "blocked downstream edges"), readyNo
 		}
-		return holdOff(fmt.Sprintf("issue %d carries %s but blocks no issue other than an %s tracker, which the order spares: its forest has nothing left to delete", issue.Number, LabelTeardownForest, LabelOutcome)), readyNo
+		return holdOffUnsatisfied(ActionTeardownForest, fmt.Sprintf("issue %d carries %s but blocks no issue other than an %s tracker, which the order spares: its forest has nothing left to delete", issue.Number, LabelTeardownForest, LabelOutcome), "blocked downstream edges"), readyNo
 	}
 	return dispatch(ActionTeardownForest, fmt.Sprintf("issue %d is an open %s root carrying %s and still blocking %d issue(s) the order would delete; the forest it commissioned is to be deleted",
 		issue.Number, LabelIdeation, LabelTeardownForest, remaining)), readyYes
@@ -1123,11 +1197,11 @@ func teardownForestReady(e Event, s State) (Decision, readyAnswer) {
 func syncReady(_ Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
-		return holdOff("no issue state re-fetched"), readyNo
+		return holdOffUnproven(ActionSync, "issue.state", "no issue state was re-fetched"), readyUnproven
 	}
 	members := s.SyncMembers
 	if len(members) == 0 {
-		return holdOff(fmt.Sprintf("issue %d is an open %s issue with no blocking issues; an empty set has nothing to land", issue.Number, LabelSync)), readyNo
+		return holdOffUnsatisfied(ActionSync, fmt.Sprintf("issue %d is an open %s issue with no blocking issues; an empty set has nothing to land", issue.Number, LabelSync), "sync members"), readyNo
 	}
 	var notReady []string
 	for i := range members {
@@ -1158,7 +1232,7 @@ func syncReady(_ Event, s State) (Decision, readyAnswer) {
 		}
 	}
 	if len(notReady) > 0 {
-		return holdOff(fmt.Sprintf("sync issue %d held off: %s", issue.Number, strings.Join(notReady, "; "))), readyNo
+		return holdOffUnsatisfied(ActionSync, fmt.Sprintf("sync issue %d held off: %s", issue.Number, strings.Join(notReady, "; ")), "sync members", "members' PRs", "members' PR reviews"), readyNo
 	}
 	return dispatch(ActionSync, fmt.Sprintf("issue %d is an open %s issue: all %d member(s) closed or approved, mergeable, and opted in; the state calls for sync at the set's declared digest %s",
 		issue.Number, LabelSync, len(members), digestFor(ActionSync, Event{}, s))), readyYes

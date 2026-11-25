@@ -367,7 +367,7 @@ func TestHandleEvent_ListingFailure_HoldsOff(t *testing.T) {
 		t.Errorf("decision logged as dispatched: %v", entry)
 	}
 	reason, _ := entry["reason"].(string)
-	if !strings.Contains(reason, "scope of repo o/r unknown") || !strings.Contains(reason, "boom") {
+	if !strings.Contains(reason, "scope of repo o/r could not be proven") || !strings.Contains(reason, "boom") {
 		t.Errorf("hold-off reason = %q, want it to name the listing failure", reason)
 	}
 	if strings.Contains(reason, "holds no maitred role") {
