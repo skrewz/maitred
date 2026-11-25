@@ -556,6 +556,23 @@ func newTestEngine(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store) {
 	return eng, api, q, store
 }
 
+// stampAtState records that action landed for ev's object at the digest
+// the engine derives under that object's state, at the moment given — the
+// test states the event, the derivation stays the declaration's
+// (§forgejo/state/watermark, §forgejo/decisions/loop-prevention).
+func stampAtState(t *testing.T, eng *Engine, ev Event, action Action, subject string, at time.Time) {
+	t.Helper()
+	ev, st, err := eng.refetch(ev)
+	if err != nil {
+		t.Fatalf("refetch for the stamp: %v", err)
+	}
+	rev := digestFor(action, ev, st)
+	if subject != "" {
+		rev = digestForSubject(action, subject, ev, st)
+	}
+	eng.stampReFireAt(ev.KeyOf(), action, subject, rev, at)
+}
+
 // sign computes the hex HMAC-SHA256 of body under secret, the format
 // Forgejo sends in X-Forgejo-Signature.
 func sign(secret string, body []byte) string {
@@ -1341,6 +1358,23 @@ func TestHandler_PRComment_FiresNoIssuePathAction(t *testing.T) {
 	}
 }
 
+// slotIsDigest reports whether a watermark slot records the digest of a
+// declaration rather than the raw revision a forge reported: a digest is
+// SHA-256, so 64 hex characters, where the fixtures' forge revisions are
+// shorter shas (§forgejo/state/watermark, §forgejo/decisions/inputs,
+// s-git/maitred#260).
+func slotIsDigest(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, r := range s {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			return false
+		}
+	}
+	return true
+}
+
 // TestHandler_PROpened_BlockedConnectedIssueDispatchesReview pins the
 // retired rejection's absence end to end: a PR opened against a work
 // item that is blocked by an open ideation issue is not closed by the
@@ -1364,8 +1398,8 @@ func TestHandler_PROpened_BlockedConnectedIssueDispatchesReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if w == nil || w.Subjects["bob"] != (Slot{Action: string(ActionReview), Revision: "sha-9"}) {
-		t.Errorf("watermark = %+v, want a subject slot for the lens review at the head revision", w)
+	if w == nil || w.Subjects["bob"].Action != string(ActionReview) || !slotIsDigest(w.Subjects["bob"].Revision) {
+		t.Errorf("watermark = %+v, want a subject slot for the lens review at the digest of the inputs the review action declares", w)
 	}
 }
 
@@ -2311,7 +2345,11 @@ func TestHandler_CrossRepoCascade(t *testing.T) {
 // the object's revision — and where they part the log describes a
 // dispatch at a revision the store never recorded
 // (§forgejo/state/watermark, §forgejo/webhook/the-pipeline,
-// §forgejo/decisions/actions).
+// §forgejo/decisions/actions). A fan-out records its revisions per
+// subject slot, so its line names each dispatched subject's own digest
+// beside its identity: every slot digest the dispatch wrote is a value
+// the reader finds in the line (§forgejo/observability/the-decision-log,
+// s-git/maitred#260).
 func TestDispatch_WatermarkNamesTheLoggedRevision(t *testing.T) {
 	t.Run("the pipeline's issue and PR legs", func(t *testing.T) {
 		cases := []struct {
@@ -2324,7 +2362,13 @@ func TestDispatch_WatermarkNamesTheLoggedRevision(t *testing.T) {
 			// in the watermark's main slot
 			// (§forgejo/state/watermark).
 			fanOut bool
-			setup  func(api *fakeAPI)
+			// lenses overrides the configured lens list where the case
+			// needs one beside the default.
+			lenses []ReviewLens
+			// wantTasks is the dispatches the case lands; one unless the
+			// row fans out over more than one lens.
+			wantTasks int
+			setup     func(api *fakeAPI)
 		}{
 			{
 				name: "implement on an opened issue", eventType: "issues", action: "opened",
@@ -2349,7 +2393,15 @@ func TestDispatch_WatermarkNamesTheLoggedRevision(t *testing.T) {
 				payload: prPayload("o/r", 9, "opened"),
 				key:     Key{Repo: "o/r", Kind: KindPR, Number: 9},
 				fanOut:  true,
-				setup:   func(api *fakeAPI) { api.pulls[9] = testPR(9, "open", true) },
+				// Two lenses, so the line must name two subjects' digests:
+				// a single-lens case cannot tell the per-subject fold from
+				// the whole-chain one.
+				lenses: []ReviewLens{
+					{Identity: "bob", Prompt: "/review-bob {{.PRURL}}", Timeout: 30 * time.Minute},
+					{Identity: "lens-b", Prompt: "/review-lens-b {{.PRURL}}", Timeout: 30 * time.Minute},
+				},
+				wantTasks: 2,
+				setup:     func(api *fakeAPI) { api.pulls[9] = testPR(9, "open", true) },
 			},
 			{
 				name: "merge-or-wait on an approved opted-in PR", eventType: "pull_request_review_approved", action: "approved",
@@ -2364,14 +2416,21 @@ func TestDispatch_WatermarkNamesTheLoggedRevision(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				eng, api, q, store := newTestEngine(t)
+				if tc.lenses != nil {
+					eng.cfg.Reviews = tc.lenses
+				}
 				h := NewHandler(eng, "s3cret", nil)
 				tc.setup(api)
 				rec := serve(t, h, signedRequest(t, "s3cret", tc.eventType, tc.action, tc.payload))
 				if rec.Code != http.StatusNoContent {
 					t.Fatalf("status = %d, want 204", rec.Code)
 				}
-				if len(q.all()) != 1 {
-					t.Fatalf("got %d tasks, want 1", len(q.all()))
+				want := tc.wantTasks
+				if want == 0 {
+					want = 1
+				}
+				if len(q.all()) != want {
+					t.Fatalf("got %d tasks, want %d", len(q.all()), want)
 				}
 				w, err := store.Load(tc.key)
 				if err != nil {
@@ -2386,8 +2445,8 @@ func TestDispatch_WatermarkNamesTheLoggedRevision(t *testing.T) {
 						t.Fatal("the fan-out recorded no subject slots")
 					}
 					for lens, slot := range w.Subjects {
-						if slot.Revision != logged.Revision {
-							t.Errorf("the %s slot records revision %q, the decision log names %q", lens, slot.Revision, logged.Revision)
+						if !strings.Contains(logged.Revision, slot.Revision) || !strings.Contains(logged.Revision, lens) {
+							t.Errorf("the %s slot records revision %q, the decision log names %q — want each dispatched subject's digest beside its identity", lens, slot.Revision, logged.Revision)
 						}
 					}
 					return
@@ -2488,7 +2547,7 @@ func TestHandler_IssueClosed_CascadeWrapUpAcrossRoleBoundary(t *testing.T) {
 // wrap-up emission is guarded by the key's own watermark, keyed on the
 // digest of the wrap-up declaration's inputs — a cascade does not
 // re-fire wrap-up at a state it has already dispatched at
-// (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#259).
+// (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#259).
 func TestHandler_IssueClosed_CascadeWrapUpWatermarkHolds(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
 	h := NewHandler(eng, "s3cret", nil)
@@ -3325,8 +3384,8 @@ func TestHandler_PRReviewed_ConnectedIssueSelfEntryMerges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load watermark: %v", err)
 	}
-	if w == nil || w.Action != string(ActionMergeOrWait) || w.Revision != "sha-9" {
-		t.Errorf("watermark = %+v, want merge-or-wait at sha-9", w)
+	if w == nil || w.Action != string(ActionMergeOrWait) || !slotIsDigest(w.Revision) {
+		t.Errorf("watermark = %+v, want merge-or-wait recorded at the digest of the inputs the merge row declares", w)
 	}
 }
 
@@ -3475,8 +3534,8 @@ func TestHandler_IssueClosed_CascadeUnblocksConnectedPR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load watermark: %v", err)
 	}
-	if w == nil || w.Action != string(ActionMergeOrWait) || w.Revision != "sha-9" {
-		t.Errorf("PR watermark = %+v, want merge-or-wait at sha-9", w)
+	if w == nil || w.Action != string(ActionMergeOrWait) || !slotIsDigest(w.Revision) {
+		t.Errorf("PR watermark = %+v, want merge-or-wait recorded at the digest of the inputs the merge row declares", w)
 	}
 }
 
@@ -3636,7 +3695,7 @@ func TestHandler_IssueClosed_CascadePRWatermarkHolds(t *testing.T) {
 // head re-dispatches even though the watermark already records the
 // action at that frozen head, because a cascade dispatch that went
 // nowhere would otherwise never recover outside the sweep
-// (s-git/maitred#197, §forgejo/reconciliation/watermark-exemptions).
+// (s-git/maitred#197, §forgejo/reconciliation/the-state-is-the-watermark).
 func TestHandler_IssueClosed_CascadePRReFiresWithOptIn(t *testing.T) {
 	eng, _, q, store, _ := cascadePRFixtures(t)
 	if err := store.Save(Key{Repo: "o/r", Kind: KindPR, Number: 9},
@@ -3654,8 +3713,8 @@ func TestHandler_IssueClosed_CascadePRReFiresWithOptIn(t *testing.T) {
 		t.Errorf("prompt = %q, want merge-or-wait for o/r PR 9", tasks[0].Prompt)
 	}
 	w, _ := store.Load(Key{Repo: "o/r", Kind: KindPR, Number: 9})
-	if w == nil || w.Action != string(ActionMergeOrWait) || w.Revision != "sha-9" {
-		t.Errorf("watermark = %+v, want merge-or-wait at sha-9", w)
+	if w == nil || w.Action != string(ActionMergeOrWait) || !slotIsDigest(w.Revision) {
+		t.Errorf("watermark = %+v, want merge-or-wait recorded at the digest of the inputs the merge row declares", w)
 	}
 }
 
@@ -3685,7 +3744,7 @@ func TestHandler_IssueClosed_CascadePROptedInWithBlockedConnectedIssue(t *testin
 	}
 }
 
-// TestHandler_PRCommented_MergeReFireBoundedPerInterval: the exempt
+// TestHandler_PRCommented_MergeReFireBoundedPerInterval: the state-governed
 // merge row re-fires on a PR comment whatever the watermark records,
 // but the re-fire bound keeps one unchanged head to one dispatch per
 // reconcile interval — a comment supplies the event, not the clock —
@@ -3721,20 +3780,20 @@ func TestHandler_PRCommented_MergeReFireBoundedPerInterval(t *testing.T) {
 // spent, the same comment at the same head re-fires again, which is how
 // a merge run that died recovers without waiting on the sweep
 // (§forgejo/decisions/loop-prevention,
-// §forgejo/reconciliation/watermark-exemptions).
+// §forgejo/reconciliation/the-state-is-the-watermark).
 func TestHandler_PRCommented_MergeReFireAllowedAfterInterval(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
 	pr := optedInDelivery(testPR(9, "open", true), api, 4)
 	api.pulls[9] = pr
 	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
-	key := Key{Repo: "o/r", Kind: KindPR, Number: 9}
 
 	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
 	if tasks := q.all(); len(tasks) != 1 {
 		t.Fatalf("got %d tasks after the first comment, want 1", len(tasks))
 	}
 	// The interval the bound waits out is spent.
-	eng.stampReFireAt(key, ActionMergeOrWait, "sha-9", time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
+	stampAtState(t, eng, Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9},
+		ActionMergeOrWait, "", time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
 
 	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
 
@@ -3781,7 +3840,7 @@ func TestHandler_PRCommented_MergeReFireBoundsWithoutTheWatermark(t *testing.T) 
 // no longer holds bounds nothing — the re-fire at the current head goes
 // through rather than waiting the interval out, which is the fixed point
 // #197 was filed against (§forgejo/decisions/loop-prevention,
-// §forgejo/reconciliation/watermark-exemptions).
+// §forgejo/reconciliation/the-state-is-the-watermark).
 func TestHandler_PRCommented_MergeReFireIgnoresAStampAtAnotherRevision(t *testing.T) {
 	eng, api, q, _ := newTestEngine(t)
 	pr := optedInDelivery(testPR(9, "open", true), api, 4)
@@ -3790,8 +3849,10 @@ func TestHandler_PRCommented_MergeReFireIgnoresAStampAtAnotherRevision(t *testin
 	key := Key{Repo: "o/r", Kind: KindPR, Number: 9}
 
 	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
-	// The head the stamp records is not the head the PR stands at.
-	eng.stampReFireAt(key, ActionMergeOrWait, "sha-older", time.Now())
+	// A stamp taken at a state the pull request no longer stands in —
+	// the digest names the head among its facts, so a moved head is a
+	// different digest and bounds nothing.
+	eng.stampReFireAt(key, ActionMergeOrWait, "", "digest-of-an-earlier-state", time.Now())
 	eng.HandleEvent(Event{Type: EventPRCommented, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "carol"})
 
 	tasks := q.all()
@@ -3924,7 +3985,7 @@ func TestHandler_PRCommented_MergeReFireNeverHoldsOffAnUnstampedRevision(t *test
 // leave one merge task and one hold-off naming the bound — the interval
 // is the clock, not the order the paths arrived in
 // (§forgejo/decisions/loop-prevention,
-// §forgejo/reconciliation/watermark-exemptions).
+// §forgejo/reconciliation/the-state-is-the-watermark).
 func TestHandler_Reconcile_MergeReFireBoundedPerInterval(t *testing.T) {
 	var log bytes.Buffer
 	eng, api, q, _ := newTestEngine(t)
@@ -4329,7 +4390,7 @@ func TestHandler_PRReviewed_SyncMemberHoldsOffAndDispatchesTheSet(t *testing.T) 
 		t.Fatalf("Load: %v", err)
 	}
 	if w == nil || w.Action != string(ActionSync) || w.Revision == "" {
-		t.Fatalf("sync watermark = %+v, want sync at the set revision", w)
+		t.Fatalf("sync watermark = %+v, want sync at the set's declared digest", w)
 	}
 
 	// The same approval delivered again: the set state is unchanged,
@@ -4416,7 +4477,7 @@ func autoCloseSetFixtures(t *testing.T) (*Engine, *fakeAPI, *fakeQueue, *Store, 
 // Closes #N — the member records no blocking edge, so the old read saw
 // nothing and the approval merged the delivery on its own. The approval
 // now holds merge-or-wait off and enqueues sync against the grouping
-// issue at the set revision (§forgejo/decisions/sync-set,
+// issue at the set's declared digest (§forgejo/decisions/sync-set,
 // §forgejo/webhook/re-fetch, s-git/maitred#180).
 func TestHandler_PRReviewed_AutoCloseReferenceFindsTheSet(t *testing.T) {
 	eng, _, q, store, log := autoCloseSetFixtures(t)
@@ -4448,7 +4509,7 @@ func TestHandler_PRReviewed_AutoCloseReferenceFindsTheSet(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	if w == nil || w.Action != string(ActionSync) || w.Revision == "" {
-		t.Fatalf("sync watermark = %+v, want sync at the set revision", w)
+		t.Fatalf("sync watermark = %+v, want sync at the set's declared digest", w)
 	}
 	if reason := reasonFor(t, log, "o/r/pr/9"); !strings.Contains(reason, "sync set") {
 		t.Errorf("approval hold-off %q does not name the landing set it is waiting for", reason)
@@ -4953,7 +5014,7 @@ func TestConnectedIssuesCapChargesOnlyPaidReferences(t *testing.T) {
 // TestHandler_Reconcile_SyncIssueDispatchesTheSet: the sweep is the
 // backstop — reconciling an open sync issue whose members are all
 // closed or approved-and-opted-in dispatches sync, recorded against
-// the set revision; a second sweep at the unchanged set state is
+// the set's declared digest; a second sweep at the unchanged set state is
 // suppressed (§forgejo/decisions/sync-set, §forgejo/reconciliation).
 func TestHandler_Reconcile_SyncIssueDispatchesTheSet(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
@@ -4976,7 +5037,7 @@ func TestHandler_Reconcile_SyncIssueDispatchesTheSet(t *testing.T) {
 		t.Fatalf("sync watermark = %+v, want sync", w)
 	}
 	if w.Revision == issueRevision(api.issues[11]) {
-		t.Error("sync watermark must record the set revision, not the grouping issue's own revision")
+		t.Error("sync watermark must record the set's declared digest, not the grouping issue's own revision")
 	}
 
 	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
@@ -4984,12 +5045,12 @@ func TestHandler_Reconcile_SyncIssueDispatchesTheSet(t *testing.T) {
 		t.Errorf("got %d tasks after the second sweep, want 1 (unchanged set state)", len(tasks))
 	}
 
-	// A member PR moving changes the set revision: the sweep re-fires.
+	// A member PR moving changes the set's declared digest: the sweep re-fires.
 	api.pulls[9].HeadSHA = "sha-9-v2"
 	api.reviews[9] = []Review{{Event: ReviewApproved, Author: "bob", CommitID: "sha-9-v2", SubmittedAt: testUpdatedAt}}
 	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/outcomes", Kind: KindIssue, Number: 11, Sender: "maitred"})
 	if tasks := q.all(); len(tasks) != 2 {
-		t.Errorf("got %d tasks after the set state moved, want 2 (the set revision re-fires the dispatch)", len(tasks))
+		t.Errorf("got %d tasks after the set state moved, want 2 (the set's declared digest re-fires the dispatch)", len(tasks))
 	}
 }
 
@@ -5192,8 +5253,8 @@ func TestHandler_IssueClosed_CascadePRLegMergesRetiredSetMember(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load watermark: %v", err)
 	}
-	if w == nil || w.Action != string(ActionMergeOrWait) || w.Revision != "sha-9" {
-		t.Errorf("PR watermark = %+v, want merge-or-wait at sha-9", w)
+	if w == nil || w.Action != string(ActionMergeOrWait) || !slotIsDigest(w.Revision) {
+		t.Errorf("PR watermark = %+v, want merge-or-wait recorded at the digest of the inputs the merge row declares", w)
 	}
 }
 
@@ -5227,7 +5288,7 @@ func TestHandler_Reconcile_SyncMemberReadsItsFirstOpenPR(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	if w == nil || w.Action != string(ActionSync) {
-		t.Errorf("sync watermark = %+v, want sync at the set revision", w)
+		t.Errorf("sync watermark = %+v, want sync at the set's declared digest", w)
 	}
 }
 
@@ -5635,8 +5696,8 @@ func TestHandler_PRReviewed_DirectPRMemberOfRetiredSetMerges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if w == nil || w.Action != string(ActionMergeOrWait) || w.Revision != "sha-9" {
-		t.Errorf("PR watermark = %+v, want merge-or-wait at sha-9", w)
+	if w == nil || w.Action != string(ActionMergeOrWait) || !slotIsDigest(w.Revision) {
+		t.Errorf("PR watermark = %+v, want merge-or-wait recorded at the digest of the inputs the merge row declares", w)
 	}
 }
 
@@ -5699,11 +5760,11 @@ func TestHandler_TeardownEventPath_DispatchesTeardown(t *testing.T) {
 }
 
 // TestHandler_TeardownSweepRefiresWhileTheForestStands pins the sweep's
-// exemption at the engine: while the label stands on an open root the
+// pacing at the engine: while the label stands on an open root the
 // sweep dispatches again, so a teardown that died half way through is
 // retried rather than remembered as done — spaced, like every
 // state-governed re-fire, by the re-fire bound of one dispatch per
-// reconcile interval (§forgejo/reconciliation/watermark-exemptions,
+// reconcile interval (§forgejo/reconciliation/the-state-is-the-watermark,
 // §forgejo/decisions/loop-prevention).
 func TestHandler_TeardownSweepRefiresWhileTheForestStands(t *testing.T) {
 	eng, api, q, _ := newOutcomesEngine(t)
@@ -5720,7 +5781,7 @@ func TestHandler_TeardownSweepRefiresWhileTheForestStands(t *testing.T) {
 	// The interval the bound waits out is spent: the forest standing
 	// is the state that calls for the order again.
 	key := Key{Repo: "o/out", Kind: KindIssue, Number: 7}
-	eng.stampReFireAt(key, ActionTeardownForest,
+	eng.stampReFireAt(key, ActionTeardownForest, "",
 		digestFor(ActionTeardownForest, Event{}, State{Issue: api.issues[7], Blocked: api.blocks[7]}),
 		time.Now().Add(-eng.cfg.ReconcileInterval-time.Minute))
 	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/out", Kind: KindIssue, Number: 7, Sender: "maitred"})
@@ -5760,10 +5821,10 @@ func TestHandler_TeardownOutsideTheOutcomesRole(t *testing.T) {
 
 // TestHandler_TeardownEmptyForestCostsNoAgentRun: the engine can see
 // whether the root blocks anything, so an empty forest dispatches no
-// agent at all — the re-firing exemption ends where the forest does, and
+// agent at all — the re-firing ends where the forest does, and
 // a label standing on a root that never had a forest costs nothing
 // (§forgejo/decisions/forest-teardown,
-// §forgejo/reconciliation/watermark-exemptions).
+// §forgejo/reconciliation/the-state-is-the-watermark).
 func TestHandler_TeardownEmptyForestCostsNoAgentRun(t *testing.T) {
 	eng, api, q, store := newOutcomesEngine(t)
 	api.issues[7] = teardownRootIssue("o/out", 7)
@@ -5907,8 +5968,8 @@ func TestHandler_ReviewFanOut_EndToEnd(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	for _, lens := range eng.cfg.Reviews {
-		if w.Subjects[lens.Identity] != (Slot{Action: string(ActionReview), Revision: "sha-9"}) {
-			t.Errorf("subject slot %q = %+v, want review at the head", lens.Identity, w.Subjects[lens.Identity])
+		if w.Subjects[lens.Identity].Action != string(ActionReview) || !slotIsDigest(w.Subjects[lens.Identity].Revision) {
+			t.Errorf("subject slot %q = %+v, want review recorded at that lens's own digest", lens.Identity, w.Subjects[lens.Identity])
 		}
 	}
 	if w.Action != "" {
@@ -5926,8 +5987,8 @@ func TestHandler_ReviewFanOut_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if w.Action != string(ActionFixFeedback) || w.Revision != "sha-9" {
-		t.Errorf("main slot = %+v, want fix-feedback at the head", *w)
+	if w.Action != string(ActionFixFeedback) || !slotIsDigest(w.Revision) {
+		t.Errorf("main slot = %+v, want fix-feedback recorded at the digest of the inputs it declares", *w)
 	}
 	for _, lens := range eng.cfg.Reviews {
 		if _, ok := w.Subjects[lens.Identity]; !ok {
@@ -6269,8 +6330,10 @@ func TestHandler_IssueEdited_FutureStampedInstantCountsAsSpent(t *testing.T) {
 // re-fire must ride that write as it rides a singleton's. A fan-out that kept
 // the (action, digest) pair and dropped the instant would leave the store
 // looking recorded with nothing in it to pace on, and the first sweep after a
-// restart would re-fire the sweep's exempt pull-request rows at a head that has
-// not moved (§forgejo/state/watermark, §forgejo/decisions/loop-prevention).
+// restart would re-fire a pull-request row whose inputs have not moved: the
+// digest says dispatch and only the fire instant in the main slot holds it back
+// (§forgejo/state/watermark, §forgejo/decisions/loop-prevention,
+// s-git/maitred#260).
 func TestHandler_PRFanOut_KeepsTheDurableStampForARestart(t *testing.T) {
 	lenses := []ReviewLens{
 		{Identity: "lens-a", Prompt: "/pr-review-a {{.PRURL}}", Timeout: 30 * time.Minute},
@@ -6288,8 +6351,9 @@ func TestHandler_PRFanOut_KeepsTheDurableStampForARestart(t *testing.T) {
 		t.Fatalf("got %d tasks, want rebase dispatched once; all = %+v", len(tasks), tasks)
 	}
 	w, err := store.Load(key)
-	if err != nil || w == nil || w.Action != string(ActionRebase) || w.Revision != "sha-9" || w.FiredAt == nil {
-		t.Fatalf("watermark = %+v, %v, want rebase at the head with its fire instant", w, err)
+	wantDigest := digestFor(ActionRebase, Event{Kind: KindPR}, State{PR: api.pulls[9]})
+	if err != nil || w == nil || w.Action != string(ActionRebase) || w.Revision != wantDigest || w.FiredAt == nil {
+		t.Fatalf("watermark = %+v, %v, want rebase at the digest it derives (%s) with its fire instant", w, err, wantDigest)
 	}
 	fired := *w.FiredAt
 
@@ -6305,7 +6369,7 @@ func TestHandler_PRFanOut_KeepsTheDurableStampForARestart(t *testing.T) {
 	if err != nil || w == nil {
 		t.Fatalf("Load = %+v, %v, want the fan-out's watermark", w, err)
 	}
-	if w.Action != string(ActionRebase) || w.Revision != "sha-9" {
+	if w.Action != string(ActionRebase) || w.Revision != wantDigest {
 		t.Fatalf("main slot = %s @ %s, want the fan-out to keep the dispatch it found there", w.Action, w.Revision)
 	}
 	if w.FiredAt == nil || !w.FiredAt.Equal(fired) {
@@ -6318,9 +6382,9 @@ func TestHandler_PRFanOut_KeepsTheDurableStampForARestart(t *testing.T) {
 	}
 
 	// A restart — a fresh engine over the same store, holding no stamp of its
-	// own — and mergeability retracted, so the sweep's exempt rebase row asks
-	// the bound again at the head it already dispatched at. What spaces that
-	// re-fire is the instant in the slot the fan-out wrote last.
+	// own — and mergeability retracted, so the rebase row arrives at the digest
+	// it already dispatched at and asks the bound. What holds the re-fire back
+	// is the instant in the slot the fan-out wrote last.
 	api.pulls[9].Mergeable = false
 	restarted := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	restarted.cfg.Reviews = lenses
@@ -6342,7 +6406,9 @@ func TestReconcile_PRSlotWithoutAFireInstantRefiresOnceAndIsRestamped(t *testing
 	eng, api, q, store := newTestEngine(t)
 	api.pulls[9] = testPR(9, "open", false) // an unmoved head the rebase row reads
 	key := Key{Repo: "o/r", Kind: KindPR, Number: 9}
-	if err := store.Save(key, Watermark{Action: string(ActionRebase), Revision: "sha-9"}); err != nil {
+	// The slot records the digest the row derives over that unchanged
+	// state, so the only thing missing from it is the fire instant.
+	if err := store.Save(key, Watermark{Action: string(ActionRebase), Revision: digestFor(ActionRebase, Event{Kind: KindPR}, State{PR: api.pulls[9]})}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -6353,7 +6419,7 @@ func TestReconcile_PRSlotWithoutAFireInstantRefiresOnceAndIsRestamped(t *testing
 		t.Fatalf("got %d tasks on the first sweep over that slot, want the row a slot cannot pace to dispatch; all = %+v", len(tasks), tasks)
 	}
 	w, err := store.Load(key)
-	if err != nil || w == nil || w.Action != string(ActionRebase) || w.Revision != "sha-9" || w.FiredAt == nil {
+	if err != nil || w == nil || w.Action != string(ActionRebase) || !slotIsDigest(w.Revision) || w.FiredAt == nil {
 		t.Fatalf("watermark = %+v, %v, want the dispatch to rewrite the slot with an instant", w, err)
 	}
 
@@ -6493,7 +6559,7 @@ func TestHandler_IssueClosed_CascadeVIPDeliveredIssueDispatchesAtTeacher(t *test
 // path's decompose row consults the same gate the sweep assembled —
 // here, an edit at a fresh revision whose digest is unchanged dispatches
 // nothing, and the forest slot the sweep refreshed is what the gate read
-// (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#209).
+// (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#209).
 func TestHandleEvent_DecomposeDigestGate_ArmsOnTheEventPath(t *testing.T) {
 	eng, api, q, _ := quietForest(t)
 	eng.Reconcile()
@@ -6510,5 +6576,221 @@ func TestHandleEvent_DecomposeDigestGate_ArmsOnTheEventPath(t *testing.T) {
 	eng.HandleEvent(Event{Type: EventIssueEdited, Repo: "o/r", Kind: KindIssue, Number: 1, Sender: "alice"})
 	if got := len(q.all()); got != quiet {
 		t.Fatalf("dispatched %d tasks after an edit that moved nothing, want silence", got)
+	}
+}
+
+// TestReconcile_MergeRowAtAFrozenHeadRefiresAtTheNextSweep: a merge run
+// that died leaves the state that asked for it untouched — every lens
+// still approving, the head unchanged because nothing merged — so the
+// sweep that follows arrives at the digest the watermark already records.
+// The row dispatches there and the re-fire bound spaces it: one attempt
+// per reconcile interval, and a merge the forge never ran is retried on
+// the next sweep rather than waiting for a push that cannot come
+// (§forgejo/reconciliation/the-state-is-the-watermark,
+// §forgejo/decisions/loop-prevention, s-git/maitred#260).
+func TestReconcile_MergeRowAtAFrozenHeadRefiresAtTheNextSweep(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	eng.cfg.Reviews = []ReviewLens{{Identity: "bob", Prompt: "/pr-review {{.PRURL}}", Timeout: 30 * time.Minute}}
+	api.pulls[9] = testPR(9, "open", true)
+	api.pulls[9].Body = "Delivers issue 7.\n\nFixes #7"
+	api.reviews[9] = []Review{{Author: "bob", Event: ReviewApproved, CommitID: "sha-9"}}
+	api.blocks[9] = []Issue{*testIssue(7, "open")}
+	opted := testIssue(7, "open")
+	opted.Labels = []string{LabelAgenticAutoMerge}
+	api.issues[7] = opted
+	key := Key{Repo: "o/r", Kind: KindPR, Number: 9}
+
+	// The first sweep asks for the merge and records the digest it
+	// dispatched at beside the instant.
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	tasks := q.all()
+	if len(tasks) != 1 || !strings.Contains(tasks[0].Prompt, "action="+string(ActionMergeOrWait)) {
+		t.Fatalf("got %+v, want the one merge-or-wait dispatch", tasks)
+	}
+	w, err := store.Load(key)
+	if err != nil || w == nil || w.Action != string(ActionMergeOrWait) || w.FiredAt == nil {
+		t.Fatalf("watermark = %+v, %v, want merge-or-wait with its fire instant", w, err)
+	}
+
+	// The merge run died: the forge moved nothing, so the next sweep
+	// inside the interval finds the same digest and the bound holds the
+	// second attempt back.
+	eng.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Fatalf("got %d tasks inside one interval, want the bound to hold the re-fire back; all = %+v", len(tasks), tasks)
+	}
+
+	// One interval later the same unchanged digest asks again — the row a
+	// dead run left behind is retried, not left waiting for a push. The
+	// interval is read from the instant the slot holds, which is what a
+	// restart sees when it holds no stamp of its own
+	// (§forgejo/decisions/loop-prevention).
+	stamped := *w
+	fired := stamped.FiredAt.Add(-eng.cfg.ReconcileInterval - time.Second)
+	stamped.FiredAt = &fired
+	if err := store.Save(key, stamped); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	restarted := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	restarted.cfg.Reviews = eng.cfg.Reviews
+	restarted.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	if tasks := q.all(); len(tasks) != 2 || !strings.Contains(tasks[1].Prompt, "action="+string(ActionMergeOrWait)) {
+		t.Fatalf("got %+v, want the merge row re-fired one interval on", q.all())
+	}
+}
+
+// TestReconcile_FanOutRefiresOnlyTheLensThatNeverReported: the sweep's
+// fan-out is owed by standing, not by the digest it recorded — a lens
+// whose report landed at head is done whatever else moves on the PR, and
+// one whose never did is re-fired however little else moved. A sibling's
+// report therefore does not re-ask a lens that already reported, and a
+// lens whose identity no review on the PR carries is re-asked every
+// sweep at the bound's pace — including across a restart, where it is
+// the durable instant in the lens's own slot that keeps the bound's
+// pace (§forgejo/decisions/review-lenses,
+// §forgejo/reconciliation/the-state-is-the-watermark,
+// §forgejo/state/watermark, s-git/maitred#260).
+func TestReconcile_FanOutRefiresOnlyTheLensThatNeverReported(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	eng.cfg.Reviews = []ReviewLens{
+		{Identity: "lens-a", Prompt: "/pr-review-a {{.PRURL}}", Timeout: 30 * time.Minute},
+		{Identity: "lens-b", Prompt: "/pr-review-b {{.PRURL}}", Timeout: 30 * time.Minute},
+	}
+	api.pulls[9] = testPR(9, "open", true)
+	key := Key{Repo: "o/r", Kind: KindPR, Number: 9}
+
+	// The fan-out that opened the PR dispatched both lenses and recorded
+	// one slot each — the shape a dispatch leaves behind.
+	eng.HandleEvent(Event{Type: EventPROpened, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "alice"})
+	w, err := store.Load(key)
+	if err != nil || w == nil || len(w.Subjects) != 2 {
+		t.Fatalf("watermark = %+v, %v, want a slot per lens", w, err)
+	}
+
+	// lens-a reports at head; lens-b never does. The report moves
+	// lens-a's digest, not the slots: the fan-out's two slots stand as
+	// the dispatch left them.
+	api.reviews[9] = []Review{{Author: "lens-a", Event: ReviewApproved, CommitID: "sha-9"}}
+
+	// lens-a's report arrives. The sweep that follows owes only lens-b,
+	// even though the digest lens-b was dispatched at has not moved.
+	serve(t, NewHandler(eng, "s3cret", nil), signedRequest(t, "s3cret", "pull_request_review_submitted", "", prPayload("o/r", 9, "submitted")))
+
+	// A restart inside the interval — a fresh engine over the store the
+	// fan-out wrote, with no stamp of its own to read — buys no re-fire
+	// the interval has not paid for: lens-b is still owed, but its
+	// slot's fire instant is unspent, and the durable instant in the
+	// subject's own slot is what spaces it
+	// (§forgejo/state/watermark, §forgejo/decisions/loop-prevention).
+	restarted := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	restarted.cfg.Reviews = eng.cfg.Reviews
+	before := len(q.all())
+	restarted.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	if tasks := q.all()[before:]; len(tasks) != 0 {
+		t.Fatalf("got %d tasks on the first sweep after a restart inside the interval, want the owed lens spaced by its slot's durable instant; all = %+v", len(tasks), tasks)
+	}
+
+	// One interval on: the sweep asks the lens that never reported and
+	// no other.
+	w, err = store.Load(key)
+	if err != nil || w == nil {
+		t.Fatalf("Load: %v", err)
+	}
+	aged := map[string]Slot{}
+	for subject, slot := range w.Subjects {
+		fired := slot.FiredAt.Add(-eng.cfg.ReconcileInterval - time.Second)
+		slot.FiredAt = &fired
+		aged[subject] = slot
+	}
+	w.Subjects = aged
+	if err := store.Save(key, *w); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	before = len(q.all())
+	restarted.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	tasks := q.all()[before:]
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want the one review the lens still owes; all = %+v", len(tasks), tasks)
+	}
+	for _, task := range tasks {
+		if strings.Contains(task.DedupKey, "review-lens-a-") {
+			t.Errorf("task %q re-asked the lens that already reported at head", task.DedupKey)
+		}
+		if !strings.Contains(task.DedupKey, "review-lens-b-") {
+			t.Errorf("task %q = %q, want the lens that never reported", task.DedupKey, task.DedupKey)
+		}
+	}
+	// The write keeps the lens that reported: its slot records its own
+	// standing, and the fan-out dispatching a subset rewrites only the
+	// lenses it dispatched (§forgejo/state/watermark).
+	after, err := store.Load(key)
+	if err != nil || after == nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, lens := range []string{"lens-a", "lens-b"} {
+		if after.Subjects[lens].Action != string(ActionReview) {
+			t.Errorf("subject slot %q = %+v, want its review standing kept", lens, after.Subjects[lens])
+		}
+	}
+}
+
+// TestReconcile_FanOutMixedSpacingKeepsTheOwedLens: the bound paces a
+// lens, never the fan-out. Where two owed lenses fall out of step — one
+// whose interval is spent, one whose durable fire instant is not — the
+// lens the state still owes is dispatched and only the other is named as
+// spaced. Spacing the whole fan-out whenever any one lens is spaced would
+// leave every other test green while holding an owed lens silent for an
+// interval, which is the failure mode s-git/maitred#260 exists to rule
+// out (§forgejo/decisions/review-lenses,
+// §forgejo/reconciliation/the-state-is-the-watermark).
+func TestReconcile_FanOutMixedSpacingKeepsTheOwedLens(t *testing.T) {
+	var log bytes.Buffer
+	eng, api, q, store := newTestEngine(t)
+	eng.cfg.Reviews = []ReviewLens{
+		{Identity: "lens-a", Prompt: "/pr-review-a {{.PRURL}}", Timeout: 30 * time.Minute},
+		{Identity: "lens-b", Prompt: "/pr-review-b {{.PRURL}}", Timeout: 30 * time.Minute},
+	}
+	api.pulls[9] = testPR(9, "open", true)
+	key := Key{Repo: "o/r", Kind: KindPR, Number: 9}
+
+	// Neither lens has reported, so the sweep owes both and the bound
+	// decides each by its own stamp alone.
+	eng.HandleEvent(Event{Type: EventPROpened, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "alice"})
+	w, err := store.Load(key)
+	if err != nil || w == nil || len(w.Subjects) != 2 {
+		t.Fatalf("watermark = %+v, %v, want a slot per lens", w, err)
+	}
+
+	// lens-a's interval is spent and lens-b's is not — the shape two
+	// lenses out of step leave behind. A restart stands between the two
+	// sweeps so the durable instants are what answer.
+	aged := map[string]Slot{}
+	for subject, slot := range w.Subjects {
+		if subject == "lens-a" {
+			fired := slot.FiredAt.Add(-eng.cfg.ReconcileInterval - time.Second)
+			slot.FiredAt = &fired
+		}
+		aged[subject] = slot
+	}
+	w.Subjects = aged
+	if err := store.Save(key, *w); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	restarted := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	restarted.log = slog.New(slog.NewJSONHandler(&log, nil))
+	restarted.cfg.Reviews = eng.cfg.Reviews
+	before := len(q.all())
+
+	restarted.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+
+	tasks := q.all()[before:]
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want the owed lens dispatched beside a spaced sibling; all = %+v", len(tasks), tasks)
+	}
+	if !strings.Contains(tasks[0].DedupKey, "review-lens-a-") {
+		t.Errorf("task %q = %q, want the lens whose interval is spent", tasks[0].DedupKey, tasks[0].DedupKey)
+	}
+	if reason := lastReasonFor(t, &log, "o/r/pr/9"); !strings.Contains(reason, "the re-fire bound spaced lens-b") {
+		t.Errorf("decision reason %q does not name the lens the bound spaced", reason)
 	}
 }

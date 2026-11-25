@@ -30,10 +30,17 @@ A watermark records, for one issue or pull request:
   current-state region, and a fact the engine moves by writing it is a fact
   no guard can pace, so a tracker folds the facts its masked revision folds
   instead (§forgejo/reconciliation/the-tracker-block,
-  §forgejo/decisions/loop-prevention). The pull-request actions and the
-  landing set still name the object revision their rows were keyed on — the
-  PR head sha, and the revision derived from the whole set — and re-keying
-  them is the next member of this chain (s-git/maitred#260).
+  §forgejo/decisions/loop-prevention). A pull-request row folds the facts
+  its row reads — the head sha, the PR's state and mergeability, the chain
+  at head, the labels that gate it, and, for the landing set, each
+  member's readiness — and no row's revision is a forge revision any
+  longer (s-git/maitred#260). No event fact folds into any digest, on
+  either side of the engine: which row fired is the event's business, and
+  a digest the sweep and an event must answer with one value cannot
+  contain a fact only one of them carries. A comment on a pull request
+  folds into no digest on no row — it is no action's declared input on
+  either path — so no comment there moves the sweep's or an event's
+  decision (§forgejo/decisions/loop-prevention).
 
 The digest is the one value the idempotency guard compares, the re-fire
 bound is a rate on, and the task's dedup key carries; the decision log
@@ -44,13 +51,13 @@ Re-keying an action is an edit to its declaration and to nothing beside
 it — but a revision the store recorded before a re-key is a digest no
 state of that row folds, so the first sweep after a re-key reads every
 tracked object as a state the engine has never reacted to and re-fires
-each once. One cost is not the re-keyed action's alone: at the deploy
-that introduces the fire instant, the pull-request rows re-fire once
-each, the case the durable stamp names below. The landing set pays no
-such cost: its row is still revision-gated, consults the bound
-nowhere, and holds off at the set revision its slot records as before.
-Otherwise rows whose digest did not move are not re-fired, and the cost
-falls on the re-keyed action alone.
+each once. That is the cost of the deploy that re-keys the pull-request
+rows and the landing set's (s-git/maitred#260), and it is paid once: the
+digest a re-fire records is the one the new declaration derives, and the
+rows whose state calls for nothing hold off without dispatching. The
+landing set's row, whose digest suppresses, re-fires only where the set
+is genuinely ready; a row whose digest did not move afterwards is not
+re-fired again, and the cost falls on the re-keyed action alone.
 
 Alongside the digest the main slot records **when** its action last
 fired at it. That instant is the re-fire bound's durable stamp: the
@@ -65,9 +72,9 @@ reach that read holding nothing: its action and revision are the pair
 the bound matches, and it stores no instant, so the first sweep after
 that release's deploy re-fires each such row whose state still calls
 for an action, and that row's own next dispatch rewrites the slot with
-an instant. A landing set's slot holds no instant either, but its row
-is revision-gated and never reaches this read, so no deploy re-fires
-it. The durable stamp
+an instant. A row a digest suppresses never reaches this read, and the
+one row of that kind on the pull-request side is the landing set's
+(§forgejo/reconciliation/the-landing-sets-row). The durable stamp
 is a wall clock, the monotonic reading not surviving the store, so an
 instant that reads as not yet arrived — the clock corrected backwards at
 boot, a store restored from a host whose clock ran ahead — is an expired
@@ -81,24 +88,40 @@ object is actionable: eligibility is a predicate over re-fetched state
 alone (§forgejo/reconciliation/the-state-is-the-watermark). A digest the
 watermark does not record is new information and dispatches; one it does
 record means the state has not moved since the engine last acted on it,
-and the row dispatches anyway — no action may fall silent at a digest it
-cannot move — leaving the pace of that re-fire to the re-fire bound
-(§forgejo/decisions/loop-prevention). This is the same on both paths, which
-is the point of keying on a digest rather than a timestamp: the sweep and
+and what the row makes of that is the declaration's: the rows whose
+dispatch cannot move the digest they just derived — every pull-request
+row included — dispatch anyway rather than fall silent at a digest they
+cannot move, leaving the pace of the re-fire to the re-fire bound, and
+the one row whose digest names facts its own dispatch does move — the
+landing set's — holds off (§forgejo/decisions/loop-prevention,
+§forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move).
+This is the same on both paths, which is the point of keying on a digest
+rather than a timestamp, or on a pull request's head sha: the sweep and
 the event ask one question of one state and get one answer
-(§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#259).
+(§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#259,
+s-git/maitred#260).
 
 Fan-out dispatches — the review lenses (§forgejo/decisions/review-lenses) —
 give the record a **per-subject dimension**: alongside that main
 `(action, revision)` slot sits one `(action, revision)` **slot per
 subject**, keyed by the subject's identity (the lens's configured
-login). The idempotency guard for a fan-out dispatch reads its own
-subject's slot, so two lenses dispatched at the same revision do not
-hold each other off, and a singleton dispatch's write keeps the
-subject slots a previous fan-out left behind (§forgejo/state/storage). The
+login), and **the revision each subject slot holds is that subject's own
+digest** — the fold scoped to the inputs the row reads about that lens,
+which is its standing at head, over the pull request's facts the row
+reads whatever the lens — so two lenses dispatched at one head carry two
+digests, neither one the value a sibling's report moves. The idempotency
+guard for a fan-out dispatch reads its own subject's slot, so two lenses
+dispatched at the same head do not hold each other off, and a singleton
+dispatch's write keeps the subject slots a previous fan-out left behind
+(§forgejo/state/storage, §forgejo/decisions/review-lenses,
+s-git/maitred#260). The
 fan-out's own write keeps that main slot whole, its fire instant included,
 so the pace a singleton dispatch stamped outlives the fan-out that follows
-it (§forgejo/decisions/loop-prevention).
+it, and each subject slot it writes carries that write's own fire instant
+beside its digest — the instant the re-fire bound reads for the lens when
+memory is gone and only the file remains, so a restart inside one interval
+buys no lens a second dispatch (§forgejo/decisions/loop-prevention,
+s-git/maitred#260).
 Storage stays **one file per object**: the slots live in the same
 record, and the per-key lock stays on the object.
 

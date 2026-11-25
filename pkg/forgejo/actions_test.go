@@ -83,35 +83,44 @@ func TestActionDeclarations_FoldComponentsAreDeclaredByDecompose(t *testing.T) {
 }
 
 // TestActionDeclarations_DigestsAreDeclared pins what each declaration's
-// digest derives from: an issue-path action's digest is the fold of its
-// own input set, and the pull-request and landing-set actions name an
-// object revision — a head sha, the landing set's derived revision —
-// until the next member of the chain re-keys them
-// (s-git/maitred#260). (§forgejo/state/watermark, s-git/maitred#258,
+// digest derives from: every action's digest is the fold of its own
+// declared input set, the pull-request rows included now that the head
+// sha they once keyed on beside the declaration is one of the inputs they
+// name (s-git/maitred#260). A fan-out's subject digest is the same fold
+// read from that subject's side (§forgejo/state/watermark,
 // s-git/maitred#259.)
 func TestActionDeclarations_DigestsAreDeclared(t *testing.T) {
 	issue := trackerIssue()
 	pr := openPR("sha-head")
 	members := []SyncMember{syncMemberFixture(4, 40)}
 	st := State{Issue: issue, PR: pr, SyncMembers: members, ReviewLenses: testLenses}
-	for _, a := range []Action{ActionImplement, ActionReassess, ActionDecompose, ActionWrapUp, ActionTeardownForest} {
-		if !digestFoldsInputs(a) {
-			t.Errorf("digestFor(%s) does not fold the declaration's input set", a)
-		}
-		if got, want := digestFor(a, Event{}, st), hashInputFacts(declaredInputFacts(a, st)); got != want {
+	for _, a := range []Action{
+		ActionImplement, ActionReassess, ActionDecompose, ActionWrapUp,
+		ActionTeardownForest, ActionReview, ActionFixFeedback, ActionMergeOrWait, ActionRebase, ActionSync,
+	} {
+		if got, want := digestFor(a, Event{}, st), hashInputFacts(declaredInputFacts(a, "", st)); got != want {
 			t.Errorf("digestFor(%s) = %q, want the declared fold %q", a, got, want)
 		}
 	}
-	for _, a := range []Action{ActionReview, ActionFixFeedback, ActionMergeOrWait, ActionRebase} {
-		if digestFoldsInputs(a) {
-			t.Errorf("digestFor(%s) folds a declared input set; the pull-request rows are the next member of this chain", a)
-		}
-		if got, want := digestFor(a, Event{}, st), pr.HeadSHA; got != want {
-			t.Errorf("digestFor(%s) = %q, want the PR head sha %q", a, got, want)
-		}
+	// The pull-request rows fold the head sha as an input the declaration
+	// names, never as a revision held beside it: the digest states more
+	// than the sha, and moves when the reviews at it move.
+	if !strings.Contains(strings.Join(declaredInputFacts(ActionReview, "", st), "|"), "pr head sha-head") {
+		t.Errorf("digestFor(review) states no head sha: %+v", declaredInputFacts(ActionReview, "", st))
 	}
-	if got, want := digestFor(ActionSync, Event{}, st), syncSetRevision(issue, members, testLenses); got != want {
-		t.Errorf("digestFor(sync) = %q, want the set revision %q", got, want)
+	headMoved := State{Issue: issue, PR: openPR("sha-next"), SyncMembers: members, ReviewLenses: testLenses}
+	if digestFor(ActionMergeOrWait, Event{}, st) == digestFor(ActionMergeOrWait, Event{}, headMoved) {
+		t.Error("digestFor(merge-or-wait) holds while the head moves")
+	}
+	// A fan-out's subject digest states that subject's own standing and
+	// none of a sibling's, which is what keeps one lens's dispatch one
+	// dispatch (§forgejo/decisions/review-lenses).
+	lensed := State{
+		PR: openPR("sha-head"), ReviewLenses: testLenses,
+		Reviews: []Review{{Event: ReviewApproved, Author: "lens-a", CommitID: "sha-head"}},
+	}
+	if digestForSubject(ActionReview, "lens-a", Event{}, lensed) == digestForSubject(ActionReview, "lens-b", Event{}, lensed) {
+		t.Error("every lens folds the same digest; a sibling's report would re-fire its dispatch")
 	}
 }
 
@@ -147,7 +156,7 @@ func TestDeclaredDigests_FoldEveryDeclaredFact(t *testing.T) {
 // digest answers a state relation the forge delivers no event for — a
 // blocker edge attached or removed — and answers the listings' order
 // once, so the guard cannot be the reason an edge move goes unhandled
-// (§forgejo/reconciliation/watermark-exemptions,
+// (§forgejo/reconciliation/the-state-is-the-watermark,
 // §forgejo/decisions/actionable-state-digest, s-git/maitred#259).
 func TestDeclaredDigests_MoveWithTheFactsThePredicatesRead(t *testing.T) {
 	issue := openIssue()
@@ -193,13 +202,64 @@ func TestDeclaredDigests_MoveWithTheFactsThePredicatesRead(t *testing.T) {
 	root := ideationIssue()
 	root.Labels = append(root.Labels, LabelTeardownForest)
 	teardown := State{Issue: root, Blocked: []Issue{*trackerIssue()}}
-	if got := declaredInputFacts(ActionTeardownForest, teardown); len(got) == 0 {
+	if got := declaredInputFacts(ActionTeardownForest, "", teardown); len(got) == 0 {
 		t.Error("a root blocking only a spared tracker states no fact at all; want the kind labels folded besides")
 	}
 	spared := State{Issue: root, Blocked: []Issue{*trackerIssue()}}
 	withMember := State{Issue: root, Blocked: []Issue{*trackerIssue(), *openIssue()}}
 	if digestFor(ActionTeardownForest, Event{}, spared) == digestFor(ActionTeardownForest, Event{}, withMember) {
 		t.Error("digestFor(teardown-forest) does not move when a deletable member appears")
+	}
+}
+
+// TestDeclaredDigests_PRLabelFoldsStateOnlyPresences pins the three
+// pull-request-side label folds to the presences their rows read: the
+// re-fire bound remembers one digest per `(action, subject)`, so a fold
+// wider than the predicate lets an account with label-edit rights
+// alternate the digest between two values and outrun the bound — the
+// shape s-git/maitred#278's reviews found on the fan-out's fold, the
+// merge row's connected-issue fold and the landing set's grouping-issue
+// fold (§forgejo/decisions/loop-prevention, §forgejo/decisions/inputs).
+func TestDeclaredDigests_PRLabelFoldsStateOnlyPresences(t *testing.T) {
+	withPRLabels := func(labels ...string) State {
+		pr := openPR("abc")
+		pr.Labels = labels
+		return State{ReviewLenses: testLenses, PR: pr}
+	}
+	fan := digestFor(ActionReview, Event{}, withPRLabels())
+	if got := digestFor(ActionReview, Event{}, withPRLabels("bug")); got != fan {
+		t.Error("digestFor(review) moved on a PR label no predicate reads, arming the re-fire bound's one-digest memory against a toggle")
+	}
+	if got := digestFor(ActionReview, Event{}, withPRLabels(LabelTriggerReview)); got == fan {
+		t.Error("digestFor(review) held still while the fan-out's own request appeared — the presence is the fact the row asks")
+	}
+
+	withConnectedLabels := func(labels ...string) State {
+		connected := connectedIssueOf(4)
+		connected.Issue.Labels = labels
+		return State{ReviewLenses: testLenses, PR: openPR("abc"), ConnectedIssues: []ConnectedIssue{connected}}
+	}
+	merge := digestFor(ActionMergeOrWait, Event{}, withConnectedLabels())
+	if got := digestFor(ActionMergeOrWait, Event{}, withConnectedLabels("bug")); got != merge {
+		t.Error("digestFor(merge-or-wait) moved on a connected issue's label the merge gate never reads — a toggle past the bound's memory on the row that attempts a merge")
+	}
+	for _, optIn := range []string{LabelAgenticAutoMerge, LabelAgenticSyncMerge} {
+		if got := digestFor(ActionMergeOrWait, Event{}, withConnectedLabels(optIn)); got == merge {
+			t.Errorf("digestFor(merge-or-wait) held still while a connected issue acquired %s, which the merge gate reads", optIn)
+		}
+	}
+
+	withGroupingLabels := func(labels ...string) State {
+		set := syncIssueFixture(7)
+		set.Labels = labels
+		return State{ReviewLenses: testLenses, Issue: set, SyncMembers: []SyncMember{syncMemberFixture(5, 11)}}
+	}
+	land := digestFor(ActionSync, Event{}, withGroupingLabels(LabelSync))
+	if got := digestFor(ActionSync, Event{}, withGroupingLabels(LabelSync, "bug")); got != land {
+		t.Error("digestFor(sync) moved on a grouping issue's label no row reads, re-running the landing prompt on a toggle that moved no readiness")
+	}
+	if got := digestFor(ActionSync, Event{}, withGroupingLabels()); got == land {
+		t.Error("digestFor(sync) held still while the grouping issue lost the label every path asks before the row exists")
 	}
 }
 
@@ -323,8 +383,8 @@ func TestQuotedRevision_NamesTheFactsBehindTheDigest(t *testing.T) {
 			t.Errorf("a tracker's quoted revision %q names no %q", got, want)
 		}
 	}
-	// A revision the action does not fold — a pull request's head sha,
-	// quoted by the row that keys on it — is quoted as what it is.
+	// A revision beside the declared digest — an object value named
+	// where no fold derived it — is quoted as what it is.
 	if got := quotedRevision(ActionReview, prEvent(EventPRReviewed, "carol"), State{PR: openPR("abc")}, "abc"); got != "revision abc" {
 		t.Errorf("quoted revision = %q, want the head sha quoted as a revision", got)
 	}

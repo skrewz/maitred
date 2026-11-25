@@ -219,12 +219,13 @@ templates via `.ID`.
 | `.Priority` | `string` | Queue tier to serve the task at (empty unless the dispatch sets one); forwarded verbatim, so the queue's own vocabulary applies — hotelier accepts `firefighter`, `teacher` or `orangutan` and defaults to the lowest when the field is absent. The default template includes `priority` only when set |
 
 The Forgejo engine sets a dedup key on every dispatch — the dispatch
-identity: the issue/PR, the action, and the revision — so a re-dispatch of
-the same `(action, revision)` is squelched by hotelier while the first task is
-still pending. On the watermark-exempt `merge-or-wait` row that pending-task
-dedup — not the watermark, which the row ignores — is what keeps one ready pull
-request to one merge task in flight, the engine's own re-fire bound spacing that
-head to at most one dispatch per `reconcile_interval` on every path. Each
+identity: the issue/PR, the action, the subject for a review fan-out, and the
+digest the action declares — so a re-dispatch of the same
+`(action, subject, digest)` is squelched by hotelier while the first task is
+still pending. On a pull-request row, whose digest the act of dispatching does
+not move, that pending-task dedup is what keeps one ready pull request to one
+task in flight, the engine's own re-fire bound spacing one unchanged digest to
+at most one dispatch per `reconcile_interval` on every path. Each
 dispatch also names its work: the title reads as the action's verb, the issue
 or PR title and the `repo#number` reference (for example, `Review: Make
 everything awesome and pink (org/repo#1337)`), and the URL points at the pull

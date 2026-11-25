@@ -108,7 +108,9 @@ On each `POST`:
    carries a **dedup key** — the dispatch identity: the key's repo, kind,
    and number, the action, the **subject** for a fan-out dispatch (the lens
    identity §forgejo/decisions/review-lenses), and the revision the action
-   was dispatched at — its declared digest — so a queue
+   was dispatched at — always the digest its declaration derives, the
+   pull-request rows' folded from the head, the chain at head and the set's
+   readiness (§forgejo/decisions/inputs, s-git/maitred#260) — so a queue
    system with de-duplication (hotelier's `dedup_key`) squelches a
    re-dispatch of the same `(action, subject, revision)` while the first
    task is still pending. The subject is what keeps one lens's review task
@@ -143,9 +145,10 @@ On each `POST`:
    revision it was dispatched at, which is the dispatched action's declared
    digest (§forgejo/decisions/actions), the one value this step's task
    dedup key, the re-fire stamp and the decision log's revision field also
-   carry: for an issue-path action the fold of the inputs its declaration
-   names, for a pull request the head sha, and for a landing set the
-   revision derived from the whole set — in the store
+   carry: the fold of the inputs its declaration names, whichever kind the key
+   names — a pull-request row's fold carries the head sha, the PR's state and
+   mergeability and the chain at head, and the landing set's carries the set
+   and each member's readiness (§forgejo/decisions/inputs) — in the store
    (§forgejo/state/watermark); a hold-off records nothing, and the log
    names an already-recorded state as a re-fire the re-fire bound spaces
    rather than a duplicate. Each key of the
@@ -353,7 +356,7 @@ was scheduled to work on**, and the tier this section promises rests on
 that convention as much as on the walk.
 
 What the walk judges is the label's **name**, matched case-insensitively
-(§forgejo/reconciliation/watermark-exemptions states the same rule for
+(§forgejo/decisions/transition-table states the same rule for
 `ideation` and `outcome`): labels reach the engine as names, not as
 scoped records, so the org-scope above is a property of the deployment's
 label permissions and nothing the resolver verifies — a
@@ -455,7 +458,7 @@ For each decision event, the re-fetch assembles the state
   sweep's own test counting the call. An open `ideation` root arriving
   on one of the three activity paths reads the thread twice: once for
   this digest and once for the digest gate's fold, which the decompose
-  row consults (§forgejo/reconciliation/watermark-exemptions). The fold
+  row consults (§forgejo/decisions/actionable-state-digest). The fold
   excludes the authors the declaration excludes rather than the read
   carrying a filtered listing, and a failed comment read fails the
   re-fetch, as the blockers' does.

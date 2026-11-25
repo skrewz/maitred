@@ -15,11 +15,11 @@ const (
 	// (§forgejo/decisions/commissioning). It also marks a root to
 	// decompose, and — seen from a tracker whose copy of that edge is
 	// closed — a forest commissioned but not yet finished
-	// (§forgejo/reconciliation/watermark-exemptions).
+	// (§forgejo/reconciliation/the-state-is-the-watermark).
 	LabelIdeation = "ideation"
 	// LabelOutcome marks an issue as a tracker to wrap up once all
 	// its blockers are closed
-	// (§forgejo/reconciliation/watermark-exemptions).
+	// (§forgejo/reconciliation/the-state-is-the-watermark).
 	LabelOutcome = "outcome"
 	// LabelTriggerReview is the explicit request for an agentic
 	// review: an open, mergeable pull request carrying it is reviewed
@@ -60,11 +60,11 @@ const (
 	// consequentially — as the precondition of every merge-or-wait
 	// dispatch: an approved, unblocked PR whose delivered issue lacks
 	// it waits on a human on every path, the sweep's
-	// watermark-exempt row included, while a PR whose delivered issue
+	// state-governed row included, while a PR whose delivered issue
 	// carries it is re-fired whatever its watermark records on
 	// every path, the sweep included
 	// (§forgejo/decisions/merge-gate, §forgejo/decisions/sync-set,
-	// §forgejo/reconciliation/watermark-exemptions,
+	// §forgejo/reconciliation/the-state-is-the-watermark,
 	// s-git/maitred#179, s-git/maitred#197).
 	LabelAgenticAutoMerge = "agentic-auto-merge"
 	// LabelForestSeeding is the transient hold-off on a newborn forest

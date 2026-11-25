@@ -378,7 +378,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 			// The digest gate's observation, assembled where the
 			// gated decompose rows can reach it — the root's own rows
 			// on every path, the sweep's commissioned-tracker row
-			// (§forgejo/reconciliation/watermark-exemptions,
+			// (§forgejo/reconciliation/the-state-is-the-watermark,
 			// s-git/maitred#209).
 			gate, err := e.forestGate(ev, issue, blockers)
 			if err != nil {
@@ -468,7 +468,7 @@ func readsComments(t EventType) bool {
 
 // forestGate assembles the digest gate's observation for one issue
 // re-fetch — and only where a digest-gated decompose row can reach it
-// (§forgejo/reconciliation/watermark-exemptions, s-git/maitred#209):
+// (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#209):
 //
 //   - an open `ideation` issue not under a teardown order and not
 //     claiming the sync kind, whose root row consults the gate on every
@@ -572,7 +572,7 @@ func (e *Engine) forestGate(ev Event, issue *Issue, blockers []Issue) (*ForestDi
 // what this observation saw, or the next sweep would ask the same
 // question of stale values and dispatch a run the quiet forest has
 // already paid for (§forgejo/state/forest-digest,
-// §forgejo/reconciliation/watermark-exemptions, s-git/maitred#209).
+// §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#209).
 // Nothing is written when the gate was unarmed, when the digests
 // already agreed (the stored value is current — re-writing it would be
 // a no-op with a disk touch), or when the dispatch never landed — a
@@ -1436,20 +1436,24 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	// event and the sweep arrive at it together
 	// (§forgejo/decisions/loop-prevention,
 	// §forgejo/reconciliation/the-state-is-the-watermark).
-	e.stampReFire(ev.KeyOf(), action, rev)
+	e.stampReFire(ev.KeyOf(), action, "", rev)
 	return nil
 }
 
 // reFireSlot names the pair a re-fire stamp occupies. The bound paces
 // one unchanged `(action, revision)`, so a key holds one slot per
-// action: where two state-governed actions coexist at one revision — a
-// conflicted approved head holds `merge-or-wait` and the sweep's
-// `rebase` — each landing paces its own re-fire and erases no
-// sibling's (§forgejo/decisions/loop-prevention,
-// §forgejo/reconciliation/the-state-is-the-watermark).
+// action — and per subject of a fan-out, whose dispatches share an
+// action but each carry their subject's own digest, exactly as the
+// task's dedup key does (§forgejo/decisions/loop-prevention,
+// §forgejo/webhook/the-pipeline,
+// §forgejo/reconciliation/the-state-is-the-watermark). Where two
+// state-governed actions coexist at one revision — a conflicted
+// approved head holds `merge-or-wait` and the sweep's `rebase` — each
+// landing paces its own re-fire and erases no sibling's.
 type reFireSlot struct {
-	key    Key
-	action Action
+	key     Key
+	action  Action
+	subject string
 }
 
 // reFireStamp is one landed dispatch the engine remembers for the
@@ -1468,19 +1472,53 @@ type reFireStamp struct {
 // reconcile interval becomes a hold-off naming the bound, whichever
 // path brought the event (§forgejo/decisions/loop-prevention,
 // §forgejo/reconciliation/the-state-is-the-watermark). The stamp it
-// consults is the one this action's own dispatch left, so an unrelated
-// dispatch at the same revision bounds nothing here. A revision-gated
-// decision consults nothing: the bound exists to pace the rows the
-// watermark does not gate. Memory answers first and the durable fire
-// instant answers where memory is empty, so a store that cannot be read
-// narrows the re-fire instead of switching the bound off; a revision
-// with no stamp anywhere is a first dispatch, which is never touched.
+// consults is the one this action's own dispatch — this subject's own
+// dispatch, for a fan-out — left, so an unrelated dispatch at the same
+// revision bounds nothing here. A revision-gated decision consults
+// nothing: the bound exists to pace the rows the watermark does not
+// gate. Memory answers first and the durable fire instant answers where
+// memory is empty, so a store that cannot be read narrows the re-fire
+// instead of switching the bound off; a revision with no stamp anywhere
+// is a first dispatch, which is never touched. A fan-out whose every
+// lens is spaced becomes one hold-off naming the bound; a fan-out with
+// an unspaced lens among them keeps that lens and names the spaced ones.
 func (e *Engine) boundReFire(key Key, ev Event, st State, w *Watermark, d Decision) Decision {
-	if !d.Dispatched || !d.StateGoverned {
+	if !d.Dispatched {
+		return d
+	}
+	if len(d.Lenses) > 0 {
+		kept := make([]LensDispatch, 0, len(d.Lenses))
+		var spaced []string
+		for _, ld := range d.Lenses {
+			if ld.StateGoverned && e.reFiredRecently(key, ActionReview, ld.Lens, ld.Revision, w) {
+				spaced = append(spaced, ld.Lens)
+				continue
+			}
+			kept = append(kept, ld)
+		}
+		if len(kept) == 0 {
+			refs := make([]string, 0, len(d.Lenses))
+			for _, ld := range d.Lenses {
+				// The bound's hold-off names the facts behind each spaced
+				// lens's digest, as the guard's hold-off and the
+				// singleton's do — bare hex is not a value an operator
+				// can read off the forge (§forgejo/observability/the-decision-log).
+				refs = append(refs, fmt.Sprintf("%s at %s", ld.Lens,
+					quotedFacts(declaredInputFacts(ActionReview, ld.Lens, st), ld.Revision)))
+			}
+			return holdOffReFireBound(ActionReview, strings.Join(refs, ", "), e.cfg.ReconcileInterval)
+		}
+		if len(spaced) > 0 {
+			d.Reason += fmt.Sprintf(" (the re-fire bound spaced %s this interval)", strings.Join(spaced, ", "))
+		}
+		d.Lenses = kept
+		return d
+	}
+	if !d.StateGoverned {
 		return d
 	}
 	rev := digestFor(d.Action, ev, st)
-	if e.reFiredRecently(key, d.Action, rev, w) {
+	if e.reFiredRecently(key, d.Action, "", rev, w) {
 		return holdOffReFireBound(d.Action, quotedRevision(d.Action, ev, st, rev), e.cfg.ReconcileInterval)
 	}
 	return d
@@ -1493,18 +1531,38 @@ func (e *Engine) boundReFire(key Key, ev Event, st State, w *Watermark, d Decisi
 // not made (§forgejo/decisions/loop-prevention). The engine's in-memory
 // stamp answers whenever it holds one, being the freshest record of the
 // dispatch. Where memory is empty — the first arrival after a restart —
-// the durable fire instant the watermark records for that same
-// `(action, revision)` answers instead, so a deploy, a crash-loop or an
-// OOM kill buys no fan-out the interval had not already bought
-// (§forgejo/state/watermark). An instant that has not arrived yet counts as
+// the durable fire instant the watermark records beside the pair the row
+// wrote answers instead: the subject's own slot for a fan-out, the main
+// slot for a singleton, so a deploy, a crash-loop or an OOM kill buys no
+// fan-out the interval had not already bought (§forgejo/state/watermark).
+// An instant that has not arrived yet counts as
 // spent: the bound may pace a re-fire, never silence a row.
-func (e *Engine) reFiredRecently(key Key, action Action, revision string, w *Watermark) bool {
+func (e *Engine) reFiredRecently(key Key, action Action, subject, revision string, w *Watermark) bool {
 	e.reFireMu.Lock()
 	defer e.reFireMu.Unlock()
-	if last, ok := e.reFires[reFireSlot{key: key, action: action}]; ok {
+	if last, ok := e.reFires[reFireSlot{key: key, action: action, subject: subject}]; ok {
 		return last.revision == revision && time.Since(last.at) < e.cfg.ReconcileInterval
 	}
-	if w == nil || w.FiredAt == nil || w.Action != string(action) || w.Revision != revision {
+	if w == nil {
+		return false
+	}
+	if subject != "" {
+		// A fan-out's durable instant stands in its subject's slot, the
+		// same place its guard does (§forgejo/state/watermark). The
+		// main-slot test below is a singleton's question: a fan-out
+		// deliberately keeps the main slot whole, so asking it of a
+		// fan-out would answer false whatever the subject's slot holds
+		// and the durable half of the fan-out's bound would be written
+		// and never read. The subject's slot therefore answers before
+		// the main slot, never behind it.
+		slot, ok := w.subjectSlot(subject)
+		if !ok || slot.Action != string(action) || slot.Revision != revision || slot.FiredAt == nil {
+			return false
+		}
+		spent := time.Since(*slot.FiredAt)
+		return spent >= 0 && spent < e.cfg.ReconcileInterval
+	}
+	if w.FiredAt == nil || w.Action != string(action) || w.Revision != revision {
 		return false
 	}
 	// The durable instant is a wall clock, the monotonic reading being lost
@@ -1527,16 +1585,16 @@ func (e *Engine) reFiredRecently(key Key, action Action, revision string, w *Wat
 // replaced rather than kept: the bound is one per unchanged
 // `(action, revision)`, never a hold-off on a dispatch the engine has not
 // made.
-func (e *Engine) stampReFire(key Key, action Action, revision string) {
-	e.stampReFireAt(key, action, revision, time.Now())
+func (e *Engine) stampReFire(key Key, action Action, subject, revision string) {
+	e.stampReFireAt(key, action, subject, revision, time.Now())
 }
 
 // stampReFireAt records the stamp at a given moment; the tests
 // that need an interval spent use it rather than waiting one out.
-func (e *Engine) stampReFireAt(key Key, action Action, revision string, at time.Time) {
+func (e *Engine) stampReFireAt(key Key, action Action, subject, revision string, at time.Time) {
 	e.reFireMu.Lock()
 	defer e.reFireMu.Unlock()
-	e.reFires[reFireSlot{key: key, action: action}] = reFireStamp{revision: revision, at: at}
+	e.reFires[reFireSlot{key: key, action: action, subject: subject}] = reFireStamp{revision: revision, at: at}
 }
 
 // dispatchPrompt is the one dispatch pipeline: it fills the canned
@@ -1615,11 +1673,11 @@ func (e *Engine) dispatchPrompt(ev Event, st State, pc PromptConfig, subject str
 // slot and the sweep retries it, exactly as a failed singleton dispatch
 // retries.
 func (e *Engine) dispatchLenses(key Key, w *Watermark, ev Event, st State, lenses []LensDispatch) {
-	rev := digestFor(ActionReview, ev, st)
 	slots := w.subjectSlots()
 	if slots == nil {
 		slots = map[string]Slot{}
 	}
+	now := time.Now()
 	dispatched := false
 	for _, ld := range lenses {
 		lens, ok := findLens(e.cfg.Reviews, ld.Lens)
@@ -1630,11 +1688,16 @@ func (e *Engine) dispatchLenses(key Key, w *Watermark, ev Event, st State, lense
 			e.log.Error("review lens not configured", "key", key.String(), "lens", ld.Lens)
 			continue
 		}
-		if err := e.dispatchLens(ev, st, lens, rev); err != nil {
+		if err := e.dispatchLens(ev, st, lens, ld.Revision); err != nil {
 			e.log.Error("dispatch failed", "key", key.String(), "action", string(ActionReview), "lens", ld.Lens, "error", err)
 			continue
 		}
-		slots[ld.Lens] = Slot{Action: string(ActionReview), Revision: rev}
+		slots[ld.Lens] = Slot{Action: string(ActionReview), Revision: ld.Revision, FiredAt: &now}
+		// The fan-out stamps its own re-fire, per subject: the row
+		// dispatches at a digest the watermark records, so the bound is
+		// what keeps one owed lens to one task per interval whichever
+		// path arrived (§forgejo/decisions/loop-prevention).
+		e.stampReFireAt(key, ActionReview, ld.Lens, ld.Revision, now)
 		dispatched = true
 	}
 	if !dispatched {
@@ -1848,7 +1911,7 @@ func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
 // member of an open landing set all dispatch nothing, each recorded
 // in the decision log with the sweep as the backstop
 // (§forgejo/decisions/merge-gate, §forgejo/decisions/sync-set). The PR
-// key's own watermark applies before dispatching, the exempt merge row
+// key's own watermark applies before dispatching, the state-governed merge row
 // of an opted-in PR excepted, and that row is paced here by the re-fire
 // bound (§forgejo/decisions/loop-prevention). The leg can be woken by a
 // close in a repository holding no maitred role —
@@ -1856,7 +1919,7 @@ func (e *Engine) dispatchCascade(cd CascadeDispatch, sender string) error {
 // admitted and judged by the roles of the PR's own repository and
 // re-fetches the PR, so such a close can repeat a dispatch the bound
 // already covers, never a merge the gate would refuse
-// (§forgejo/reconciliation/watermark-exemptions); the set's own
+// (§forgejo/reconciliation/the-state-is-the-watermark); the set's own
 // decision is not emitted from here — the walk follows the closed
 // node's edges only — and stays the sweep's row to make.
 func (e *Engine) dispatchCascadePR(k Key, sender string) error {
@@ -1943,7 +2006,7 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 
 // dispatchSyncSet dispatches the sync-set candidate the cascade walk
 // or the approval path emitted: the grouping issue's own watermark
-// applies at the set revision, and the re-fetched set state is
+// applies at the set's declared digest, and the re-fetched set state is
 // decided through the same pure row the sweep takes — an unready set
 // stays silent, its hold-off at home only in the decision log and
 // nothing enqueued (§forgejo/decisions/sync-set). Admissibility is
@@ -2005,7 +2068,8 @@ func (e *Engine) dispatchSyncSet(cd CascadeDispatch, sender string) error {
 	if d.Action != ActionSync {
 		// The candidate decided a different row — a mislabelled
 		// grouping issue (sync alongside outcome or ideation) takes
-		// the exempt branches first. The sibling cascade guard holds
+		// the rows that dispatch at a recorded digest first. The
+		// sibling cascade guard holds
 		// the same line: record the fork and enqueue nothing, so the
 		// queue and the decision log cannot disagree — the grouping
 		// issue's own sweep row decides its non-sync label
@@ -2028,34 +2092,45 @@ func (e *Engine) dispatchSyncSet(cd CascadeDispatch, sender string) error {
 // s-git/maitred#259). A dispatch records that digest in its watermark,
 // in its task's dedup key and in the re-fire stamp alike, so the guard,
 // the pacing and the queue answer on one derivation
-// (§forgejo/decisions/actions, §forgejo/webhook/the-pipeline).
+// (§forgejo/decisions/actions, §forgejo/webhook/the-pipeline). The
+// fan-out's dispatch is no exception: its slots hold per-subject
+// digests, so its line names each dispatched subject's own digest
+// beside its identity — not a fold over the whole chain, which no slot,
+// key or stamp would carry (§forgejo/observability/the-decision-log,
+// §forgejo/decisions/review-lenses).
 func loggedRevision(d Decision, ev Event, st State) string {
 	if d.Dispatched && d.Action != "" {
+		if len(d.Lenses) > 0 {
+			refs := make([]string, 0, len(d.Lenses))
+			for _, ld := range d.Lenses {
+				refs = append(refs, fmt.Sprintf("%s %s", ld.Lens, ld.Revision))
+			}
+			return strings.Join(refs, ", ")
+		}
 		return digestFor(d.Action, ev, st)
 	}
 	return revisionFor(ev, st)
 }
 
 // revisionFor is the object revision itself: the PR head sha for a pull
-// request, the issue's updated_at for an issue, and the revision
-// derived from the whole set for a landing set — the state of that set,
-// not of the grouping issue alone (§forgejo/webhook/the-pipeline,
-// §forgejo/state/watermark, §forgejo/decisions/sync-set). The
-// pull-request and landing-set actions declare these as their digest, so
-// for their rows this derivation and the declared digest state one
-// value; the issue-path actions fold their declaration's input set
-// instead, and reach this only where no action was chosen
-// (s-git/maitred#259).
+// request, the issue's updated_at for an issue, and the landing set's
+// declared digest for a grouping issue whose members were read — the
+// state of that set, not of the grouping issue alone
+// (§forgejo/webhook/the-pipeline, §forgejo/state/watermark,
+// §forgejo/decisions/sync-set). No dispatched row reaches it: every
+// action records the digest of its own declaration's inputs in its
+// watermark, its task's dedup key and the re-fire stamp alike, whichever
+// side of the engine it was decided on (s-git/maitred#260).
 func revisionFor(ev Event, st State) string {
-	// The set revision describes a landing set, so it takes
-	// precedence only on the path that attached members to the
+	// The landing set's declared digest belongs to a landing set, so it
+	// takes precedence only on the path that attached members to the
 	// object under consideration: the sweep's row for an open issue
 	// carrying the sync label. Tying the precedence to that label —
 	// not merely to members having been attached — keeps a future
 	// re-fetch that shares the field from silently re-typing a PR
 	// row's watermark (§forgejo/decisions/sync-set).
 	if ev.Kind == KindIssue && st.Issue != nil && hasLabel(st.Issue, LabelSync) && len(st.SyncMembers) > 0 {
-		return syncSetRevision(st.Issue, st.SyncMembers, st.ReviewLenses)
+		return digestFor(ActionSync, ev, st)
 	}
 	if ev.Kind == KindPR && st.PR != nil {
 		return st.PR.HeadSHA
