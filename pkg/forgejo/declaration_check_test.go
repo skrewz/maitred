@@ -36,14 +36,13 @@ package forgejo
 //     therefore leaves everything shared out, of whatever shape. Each
 //     call is walked on its own path, so a helper one walk reaches
 //     twice answers to each call's bindings, not the first call's
-//     alone. A state field handed across the call —
-//     `openBlockers(s.Blockers)` — or across a method's receiver —
-//     `s.Issue.touched()` — is recorded where it is written either
-//     way. The calls the walk cannot name are those on a value it never
-//     bound: a method on a value a call returned — `gate.fixFires` — or
-//     a closure held in a field, whose bodies it therefore never
-//     enters. Whether a call names a package function at all is the
-//     caller-set rule's decision, not a limit of the walk.
+//     alone. A state field handed across a call is recorded where it is
+//     written, so the reads behind the call answer to the declaration
+//     that reached it. The calls the walk cannot name are those on a
+//     value it never bound: a method on a value a call returned —
+//     `gate.fixFires` — or a closure held in a field, whose bodies it
+//     therefore never enters. Whether a call names a package function at
+//     all is the caller-set rule's decision, not a limit of the walk.
 //   - A predicate never reads an activity timestamp. The fold states the
 //     timestamp so the digest a row dispatches on moves; a predicate that
 //     turned on the cursor itself would decide on the clock rather than on the
@@ -383,8 +382,8 @@ func (s *sourceTree) actionEnum() ([]Action, error) {
 				if !ok || !stringValued(vs) {
 					continue
 				}
-				// A constant declaring a type of its own states what it is,
-				// and an `ActionKind Kind` is no action the enum missed.
+				// A constant declaring a type of its own states what it
+				// is, and is no action the read missed.
 				if vs.Type != nil && s.text(vs.Type) != "Action" {
 					continue
 				}
@@ -410,9 +409,8 @@ type binding struct {
 	tracked bool
 }
 
-// callAt is one written call, named as the walk names it — a plain function by
-// its name, a method by the row it hangs off — with the receiver, when the call
-// has one, and each argument resolved to the binding it stands on.
+// callAt is one written call, named as the walk names it, with the receiver and
+// each argument resolved to the binding it stands on.
 type callAt struct {
 	name string
 	args []binding
@@ -539,9 +537,8 @@ func (r read) String() string { return r.owner + "." + r.field }
 // different from a package-level helper's. Names bound to a walk carry that
 // walk with them, which is what tells the row under decision apart from the
 // same issue read as a blocker; a callee's parameter carries the walk its
-// argument was read out of, a method's receiver the walk its receiver was read
-// out of, and each call is walked on its own path, which is what keeps every
-// call's reads answerable to the declaration being walked.
+// argument was read out of, and each call is walked on its own path, which is
+// what keeps every call's reads answerable to the declaration being walked.
 func (s *sourceTree) readsOf(fn *ast.FuncDecl, args []binding, mine, visited map[string]bool) []read {
 	out, calls := s.walkBody(fn, args)
 	for _, c := range calls {
@@ -1260,9 +1257,9 @@ func anyTouched(rows []Issue) bool {
 }
 
 // TestDeclarationCheck_AttributesAReadInAHelperThatCallsItself is the same rule
-// over the shape walking these graphs reaches for: a helper a predicate calls and
-// which calls itself, whose reads the least fixpoint would drop because its own
-// name stands in its caller set before it could enter it (§forgejo/decisions/inputs,
+// over the shape walking these graphs reaches for: a helper a predicate calls
+// and which calls itself stays in the set that one caller reaches, so the reads
+// of every iteration it walks are attributed (§forgejo/decisions/inputs,
 // s-git/maitred#263).
 func TestDeclarationCheck_AttributesAReadInAHelperThatCallsItself(t *testing.T) {
 	src := sourceUnderTest(t, writeSource(t, map[string]string{"probe.go": probeSource(`	if anyTouched(s.Blockers) {
