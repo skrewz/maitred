@@ -26,10 +26,13 @@ package forgejo
 //     — answers to no one of them alone. Neither is excused by a list
 //     of call sites: the walk follows a predicate's calls into a
 //     package-level function only when every caller of that function
-//     already answers to the same declaration, so a single-caller
-//     helper's reads join its one caller's and everything shared stays
-//     out by the same rule. A state field handed across the call —
-//     `openBlockers(s.Blockers)` — is recorded where it is written
+//     already answers to the same declaration — a rule taken to a
+//     fixpoint, so no call order decides membership — which joins a
+//     single-caller helper's reads to its one caller's and leaves
+//     everything shared out. Each call is walked on its own path, so a
+//     helper one walk reaches twice answers to each call's bindings,
+//     not the first call's alone. A state field handed across the call
+//     — `openBlockers(s.Blockers)` — is recorded where it is written
 //     either way.
 //   - A predicate never reads an activity timestamp. The fold states the
 //     timestamp so the digest a row dispatches on moves; a predicate that
@@ -221,14 +224,27 @@ func (s *sourceTree) text(e ast.Expr) string {
 	return b.String()
 }
 
+// stringValued reports whether a constant is written as a string literal — the
+// shape an Action's name takes, and so the shape a missed one would take.
+func stringValued(vs *ast.ValueSpec) bool {
+	for _, v := range vs.Values {
+		if lit, ok := v.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+			return true
+		}
+	}
+	return false
+}
+
 // actionEnum is the set the `Action` type names, read from the source that
 // declares it (§forgejo/decisions/actions). An enum that names nothing is an
 // error: the guard would otherwise pass on the strength of having read nothing.
-// A constant that shares a block with the typed Action constants without its
-// own type is likewise an error rather than a skip: the decision code can name
-// such a constant, and an enum that missed it would be a silent hole.
+// And because the decision code can name any constant the package declares, a
+// constant named like an Action the read did not name is an error by name — in
+// the typed block without its own type or written beside it — so a missed
+// action is never a silent hole waiting to surface as a runtime refusal.
 func (s *sourceTree) actionEnum() ([]Action, error) {
 	found := map[string]bool{}
+	named := map[string]bool{}
 	var actions []Action
 	for _, file := range s.files {
 		for _, d := range file.Decls {
@@ -260,6 +276,9 @@ func (s *sourceTree) actionEnum() ([]Action, error) {
 				if s.text(vs.Type) != "Action" {
 					continue
 				}
+				for _, n := range vs.Names {
+					named[n.Name] = true
+				}
 				for _, v := range vs.Values {
 					lit, ok := v.(*ast.BasicLit)
 					if !ok {
@@ -277,6 +296,25 @@ func (s *sourceTree) actionEnum() ([]Action, error) {
 	}
 	if len(actions) == 0 {
 		return nil, fmt.Errorf("declaration check: the Action enum names no action, so the guard read nothing")
+	}
+	for _, file := range s.files {
+		for _, d := range file.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok || !stringValued(vs) {
+					continue
+				}
+				for _, n := range vs.Names {
+					if strings.HasPrefix(n.Name, "Action") && !named[n.Name] {
+						return nil, fmt.Errorf("declaration check: %s is named like an Action but is not one of the typed Action constants, so the enum cannot be read in full", n.Name)
+					}
+				}
+			}
+		}
 	}
 	sort.Slice(actions, func(i, j int) bool { return actions[i] < actions[j] })
 	return actions, nil
@@ -333,22 +371,49 @@ func (s *sourceTree) callGraph() map[string]map[string]bool {
 	return callers
 }
 
-// servesOnly reports whether every caller of the named function already
-// answers to the declaration being walked. That is the rule that keeps the
-// digest machinery and shared helpers out of a declaration's reads: they
-// serve code the walk has not come from. A function no body calls by name —
-// a derivation bound in the declaration table — is none's to follow.
-func servesOnly(callers map[string]map[string]bool, name string, walked map[string]bool) bool {
-	cs, ok := callers[name]
-	if !ok || len(cs) == 0 {
-		return false
-	}
-	for caller := range cs {
-		if !walked[caller] {
-			return false
+// answersTo is the set of functions whose reads answer to one declaration: the
+// predicate itself, and every plain function every caller of which already
+// answers to it. That is the rule that keeps the digest machinery and shared
+// helpers out of a declaration's reads — they serve code the walk has not come
+// from — taken to a fixpoint so no call order decides membership. A function no
+// body calls by name, a derivation bound in the declaration table, is none's to
+// follow.
+func (s *sourceTree) answersTo(predicate string, callers map[string]map[string]bool, forbidden map[string]bool) map[string]bool {
+	mine := map[string]bool{predicate: true}
+	for changed := true; changed; {
+		changed = false
+		for name, cs := range callers {
+			if mine[name] || forbidden[name] || len(cs) == 0 || s.funcs[name] == nil {
+				continue
+			}
+			own := true
+			for caller := range cs {
+				if !mine[caller] {
+					own = false
+					break
+				}
+			}
+			if own {
+				mine[name] = true
+				changed = true
+			}
 		}
 	}
-	return true
+	return mine
+}
+
+// extend is one call path's visited set with one more function walked on it.
+// Each call is walked with the path that reached it, so a helper one walk
+// reaches twice attributes its reads to each call's own bindings rather than to
+// the first call's alone; a function already on the path is not walked again,
+// which is what ends the walk at a cycle.
+func extend(visited map[string]bool, name string) map[string]bool {
+	next := make(map[string]bool, len(visited)+1)
+	for fn := range visited {
+		next[fn] = true
+	}
+	next[name] = true
+	return next
 }
 
 // read is one field read, in the order its hops are written.
@@ -364,12 +429,13 @@ type read struct {
 func (r read) String() string { return r.owner + "." + r.field }
 
 // readsOf is every read of an input carrier a function writes: its own, in
-// source order, then the reads of the package-level helpers that serve this
-// walk alone. Names bound to a walk carry that walk with them, which is what
-// tells the row under decision apart from the same issue read as a blocker; a
-// callee's parameter carries the walk its argument was read out of, which is
-// what keeps a helper's reads answerable to the declaration being walked.
-func (s *sourceTree) readsOf(fn *ast.FuncDecl, args []binding, callers map[string]map[string]bool, forbidden, walked map[string]bool) []read {
+// source order, then the reads of the functions in `mine` — the helpers whose
+// every caller answers to the declaration being walked. Names bound to a walk
+// carry that walk with them, which is what tells the row under decision apart
+// from the same issue read as a blocker; a callee's parameter carries the walk
+// its argument was read out of, and each call is walked on its own path, which
+// is what keeps every call's reads answerable to the declaration being walked.
+func (s *sourceTree) readsOf(fn *ast.FuncDecl, args []binding, mine, visited map[string]bool) []read {
 	env := map[string]binding{}
 	if fn.Type.Params != nil {
 		i := 0
@@ -401,16 +467,21 @@ func (s *sourceTree) readsOf(fn *ast.FuncDecl, args []binding, callers map[strin
 				}
 			}
 		case *ast.RangeStmt:
-			elem := s.resolve(at.X, env)
-			bind := func(e ast.Expr) {
+			container := s.resolve(at.X, env)
+			key, elem := keyType(container.typ), elemType(container.typ)
+			bind := func(e ast.Expr, typ string) {
 				if id, ok := e.(*ast.Ident); ok && id.Name != "_" {
-					env[id.Name] = binding{typ: elem.typ, hops: elem.hops, tracked: elem.tracked}
+					env[id.Name] = binding{typ: typ, hops: container.hops, tracked: container.tracked}
 				}
 			}
+			// Each iteration variable holds its own type, not the container's:
+			// the element for the value, the index or key for the first, which
+			// is all a lone variable holds. Binding either to the container's
+			// own type would make a read through it invisible, a slice carrying
+			// no fields of any row to match against the vocabulary.
+			bind(at.Key, key)
 			if at.Value != nil {
-				bind(at.Value)
-			} else {
-				bind(at.Key)
+				bind(at.Value, elem)
 			}
 		case *ast.CallExpr:
 			if id, ok := at.Fun.(*ast.Ident); ok {
@@ -435,11 +506,10 @@ func (s *sourceTree) readsOf(fn *ast.FuncDecl, args []binding, callers map[strin
 	})
 	for _, c := range calls {
 		callee, ok := s.funcs[c.name]
-		if !ok || forbidden[c.name] || walked[c.name] || !servesOnly(callers, c.name, walked) {
+		if !ok || !mine[c.name] || visited[c.name] {
 			continue
 		}
-		walked[c.name] = true
-		out = append(out, s.readsOf(callee, c.args, callers, forbidden, walked)...)
+		out = append(out, s.readsOf(callee, c.args, mine, extend(visited, c.name))...)
 	}
 	return out
 }
@@ -531,6 +601,22 @@ func elemType(t string) string {
 	return t
 }
 
+// keyType is what a range statement's first iteration variable holds: the index
+// for a slice, the key for a map, and the ranged value itself for anything the
+// source does not state as a collection. A lone variable holds just that; and a
+// type no row is written as carries no field any read could answer to.
+func keyType(t string) string {
+	switch {
+	case strings.HasPrefix(t, "[]"):
+		return "int"
+	case strings.HasPrefix(t, "map["):
+		if i := strings.Index(t, "]"); i >= 0 {
+			return t[4:i]
+		}
+	}
+	return t
+}
+
 // declaredInput is one action's declaration as the guards read it.
 type declaredInput struct {
 	action    Action
@@ -584,10 +670,10 @@ func checkActionEnum(src *sourceTree, decls []declaredInput) ([]string, error) {
 // checkDeclaredReads refuses a read an action's declaration does not name, and
 // any activity timestamp read by a predicate at all; each finding names its
 // file, its field and its action (§forgejo/decisions/inputs,
-// s-git/maitred#263). A predicate's walk follows its calls into the helpers
-// that serve it alone; the predicates and digest derivations the table binds
-// are each their declaration's own implementation, never a helper to follow
-// into from another.
+// s-git/maitred#263). A predicate's walk follows its calls into the functions
+// every caller of which answers to that declaration, each call with its own
+// bindings; the predicates and digest derivations the table binds are each
+// their declaration's own implementation, never a helper to follow into.
 func checkDeclaredReads(src *sourceTree, decls []declaredInput) ([]string, error) {
 	callers := src.callGraph()
 	forbidden := map[string]bool{}
@@ -601,6 +687,7 @@ func checkDeclaredReads(src *sourceTree, decls []declaredInput) ([]string, error
 			}
 		}
 	}
+	seen := map[string]bool{}
 	var problems []string
 	for _, d := range decls {
 		fn, ok := src.funcs[d.predicate]
@@ -611,8 +698,14 @@ func checkDeclaredReads(src *sourceTree, decls []declaredInput) ([]string, error
 		for _, in := range d.inputs {
 			declared[in] = true
 		}
-		for _, r := range src.readsOf(fn, nil, callers, forbidden, map[string]bool{d.predicate: true}) {
-			if problem := r.refusal(d.action, declared); problem != "" {
+		mine := src.answersTo(d.predicate, callers, forbidden)
+		for _, r := range src.readsOf(fn, nil, mine, map[string]bool{d.predicate: true}) {
+			problem := r.refusal(d.action, declared)
+			// A function one walk reaches through two calls states its reads
+			// twice, once for each call's bindings; the same refusal written
+			// twice is one finding, not two.
+			if problem != "" && !seen[problem] {
+				seen[problem] = true
 				problems = append(problems, problem)
 			}
 		}
@@ -746,13 +839,13 @@ const (
 }
 
 // TestDeclarationCheck_RefusesAnEnumItCannotFullyRead keeps the first guard
-// honest about its reading: a constant that shares the typed Action block
-// without declaring its own type is one the decision code can name and the
-// enum read would miss, so it is an error, not a silent skip — the miss must
-// not wait for the runtime refusal to surface.
+// honest about its reading: a constant the decision code can name and the enum
+// read would miss is an error, not a silent skip — whether it shares the typed
+// block without a type of its own or sits beside it in a declaration of its
+// own. The miss must not wait for the runtime refusal to surface.
 func TestDeclarationCheck_RefusesAnEnumItCannotFullyRead(t *testing.T) {
-	src := sourceUnderTest(t, writeSource(t, map[string]string{
-		"enum.go": `package probe
+	for seat, source := range map[string]string{
+		"in the typed block": `package probe
 
 type Action string
 
@@ -761,9 +854,19 @@ const (
 	ActionStray = "stray"
 )
 `,
-	}))
-	if _, err := checkActionEnum(src, []declaredInput{{action: "known", predicate: "knownReady"}}); err == nil {
-		t.Fatal("an untyped constant beside the typed Action constants read as no action at all")
+		"beside it": `package probe
+
+type Action string
+
+const ActionKnown Action = "known"
+
+const ActionStray = "stray"
+`,
+	} {
+		src := sourceUnderTest(t, writeSource(t, map[string]string{"enum.go": source}))
+		if _, err := checkActionEnum(src, []declaredInput{{action: "known", predicate: "knownReady"}}); err == nil {
+			t.Errorf("an untyped Action-named constant %s read as no action at all", seat)
+		}
 	}
 }
 
@@ -869,6 +972,29 @@ func touchedRecently(s State) bool {
 	}
 }
 
+// TestDeclarationCheck_AttributesAReadThroughARangeVariable is the same rule
+// over the form every Go programmer writes: the iteration variable holds the
+// element, not the slice, so a timestamp read through it decides the row on the
+// clock and is refused (§forgejo/decisions/inputs, s-git/maitred#263).
+func TestDeclarationCheck_AttributesAReadThroughARangeVariable(t *testing.T) {
+	src := sourceUnderTest(t, writeSource(t, map[string]string{"probe.go": probeSource(`	for _, b := range s.Blockers {
+		if !b.UpdatedAt.IsZero() {
+			return dispatch(Action("probe"), "deciding on the clock through a range")
+		}
+	}`)}))
+	problems, err := checkDeclaredReads(src, []declaredInput{{
+		action:    "probe",
+		predicate: "probeReady",
+		inputs:    []string{"issue.state", "blockers.states"},
+	}})
+	if err != nil {
+		t.Fatalf("the declared-inputs guard: %v", err)
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0], "timestamp") || !strings.Contains(problems[0], "Issue.UpdatedAt") {
+		t.Fatalf("problems = %v, want one refusal naming the timestamp read through the range variable", problems)
+	}
+}
+
 // TestDeclarationCheck_SilentAboutAHelperSharedByTwoPredicates is the other
 // half of the same rule: a helper that serves more than one walked predicate
 // answers to no one of them alone, and the walk stays out of it — by rule,
@@ -898,6 +1024,32 @@ func touchedRecently(s State) bool {
 	}
 	if len(problems) != 0 {
 		t.Fatalf("problems = %v, want a shared helper left out of both declarations", problems)
+	}
+}
+
+// TestDeclarationCheck_AttributesEachCallToItsOwnBindings is the shared-caller
+// rule one level down: a helper one walk reaches from two calls answers to each
+// call's bindings, not the first call's alone, so the read the second call
+// stands for is refused rather than lost (§forgejo/decisions/inputs,
+// s-git/maitred#263).
+func TestDeclarationCheck_AttributesEachCallToItsOwnBindings(t *testing.T) {
+	src := sourceUnderTest(t, writeSource(t, map[string]string{"probe.go": probeSource(`	for _, b := range s.Blockers {
+		if touched(s.Issue) || touched(&b) {
+			return dispatch(Action("probe"), "one helper, reached twice")
+		}
+	}`) + `
+func touched(i *Issue) bool { return i != nil && i.Body != "" }
+`}))
+	problems, err := checkDeclaredReads(src, []declaredInput{{
+		action:    "probe",
+		predicate: "probeReady",
+		inputs:    []string{"issue.state", "issue.body", "blockers.states"},
+	}})
+	if err != nil {
+		t.Fatalf("the declared-inputs guard: %v", err)
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0], "Issue.Body") {
+		t.Fatalf("problems = %v, want one refusal for the read the second call stands for", problems)
 	}
 }
 
