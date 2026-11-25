@@ -24,16 +24,24 @@ package forgejo
 //     reads, and a helper that also serves code outside the walked
 //     declarations — another predicate, the fold, the rows themselves
 //     — answers to no one of them alone. Neither is excused by a list
-//     of call sites: the walk follows a predicate's calls into a
-//     package-level function only when every caller of that function
-//     already answers to the same declaration — a rule taken to a
-//     fixpoint, so no call order decides membership — which joins a
-//     single-caller helper's reads to its one caller's and leaves
-//     everything shared out. Each call is walked on its own path, so a
-//     helper one walk reaches twice answers to each call's bindings,
-//     not the first call's alone. A state field handed across the call
-//     — `openBlockers(s.Blockers)` — is recorded where it is written
-//     either way.
+//     of call sites, nor by the shape of the call: the walk follows a
+//     predicate's calls into a package-level function and into a
+//     method's body alike, entering a callable only when every caller
+//     of it — a method counted under the row it hangs off — already
+//     answers to the same declaration. That rule is taken to its
+//     greatest fixpoint, so a helper a predicate calls and which calls
+//     itself, or two helpers calling one another, stays in the set the
+//     predicate reaches, and no call order decides membership. What
+//     joins a single-caller helper's reads to its one caller's
+//     therefore leaves everything shared out, of whatever shape. Each
+//     call is walked on its own path, so a helper one walk reaches
+//     twice answers to each call's bindings, not the first call's
+//     alone. A state field handed across the call —
+//     `openBlockers(s.Blockers)` — or across a method's receiver —
+//     `s.Issue.touched()` — is recorded where it is written either
+//     way. The one call the walk cannot name is a call on a value no
+//     walk reaches — a package function, a field holding a closure —
+//     and the reads behind it stay unattributed.
 //   - A predicate never reads an activity timestamp. The fold states the
 //     timestamp so the digest a row dispatches on moves; a predicate that
 //     turned on the cursor itself would decide on the clock rather than on the
@@ -54,6 +62,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 )
 
 // inputPaths states the vocabulary of §forgejo/decisions/inputs as the walks
@@ -135,12 +145,31 @@ var rowIdentity = map[string][]string{
 }
 
 // sourceTree is the package the two guards read: its files, the fields each of
-// its structs carries, and the functions it declares.
+// its structs carries, and the callables it declares — plain functions by their
+// names, methods under the row they hang off.
 type sourceTree struct {
 	fset    *token.FileSet
 	files   []*ast.File
 	structs map[string]map[string]string
 	funcs   map[string]*ast.FuncDecl
+	methods map[string]*ast.FuncDecl
+}
+
+// methodKey is a method as the walk names it: the row it hangs off, and its
+// name. A plain function's key is its name alone, so a method can never be
+// mistaken for a function sharing its name — nor take that function's place in
+// the table the walk reads.
+func methodKey(recv, name string) string {
+	return strings.TrimPrefix(recv, "*") + "." + name
+}
+
+// callable is the body the walk enters under one key: a plain function, or the
+// method of a row.
+func (s *sourceTree) callable(key string) *ast.FuncDecl {
+	if strings.Contains(key, ".") {
+		return s.methods[key]
+	}
+	return s.funcs[key]
 }
 
 // loadSourceTree parses the package in dir. A directory holding no Go source,
@@ -152,7 +181,12 @@ func loadSourceTree(dir string) (*sourceTree, error) {
 	if err != nil {
 		return nil, fmt.Errorf("declaration check: listing the source of %s: %w", dir, err)
 	}
-	src := &sourceTree{fset: token.NewFileSet(), structs: map[string]map[string]string{}, funcs: map[string]*ast.FuncDecl{}}
+	src := &sourceTree{
+		fset:    token.NewFileSet(),
+		structs: map[string]map[string]string{},
+		funcs:   map[string]*ast.FuncDecl{},
+		methods: map[string]*ast.FuncDecl{},
+	}
 	for _, p := range paths {
 		if strings.HasSuffix(p, "_test.go") {
 			continue
@@ -188,13 +222,15 @@ func loadSourceTree(dir string) (*sourceTree, error) {
 					src.structs[ts.Name.Name] = fields
 				}
 			case *ast.FuncDecl:
-				// Declarations bind plain functions, never methods: a
-				// method sharing a predicate's name must not take its
-				// place in the table the walk reads. Methods still count
-				// as callers in the call graph, under their
-				// receiver-qualified names.
+				// Plain functions and methods are indexed apart, so a
+				// method sharing a predicate's name cannot take its place
+				// in the table the walk reads — and so that a method's own
+				// body is a callable the caller-set rule can enter, under
+				// the row it hangs off, rather than a body no call names.
 				if decl.Recv == nil {
 					src.funcs[decl.Name.Name] = decl
+				} else if len(decl.Recv.List) > 0 {
+					src.methods[methodKey(src.text(decl.Recv.List[0].Type), decl.Name.Name)] = decl
 				}
 			}
 		}
@@ -222,6 +258,19 @@ func (s *sourceTree) text(e ast.Expr) string {
 		return ""
 	}
 	return b.String()
+}
+
+// namesAnAction reports whether a constant's name is the shape an action's
+// takes: `Action`, and an upper-case rune after it. A name merely beginning
+// with those six letters — `ActionableLabel` — states no action, and refusing
+// one would send its reader hunting for a hole in the enum that is not there.
+func namesAnAction(name string) bool {
+	rest, ok := strings.CutPrefix(name, "Action")
+	if !ok || rest == "" {
+		return false
+	}
+	first, size := utf8.DecodeRuneInString(rest)
+	return size > 0 && unicode.IsUpper(first)
 }
 
 // stringValued reports whether a constant is written as a string literal — the
@@ -308,8 +357,13 @@ func (s *sourceTree) actionEnum() ([]Action, error) {
 				if !ok || !stringValued(vs) {
 					continue
 				}
+				// A constant declaring a type of its own states what it is,
+				// and an `ActionKind Kind` is no action the enum missed.
+				if vs.Type != nil && s.text(vs.Type) != "Action" {
+					continue
+				}
 				for _, n := range vs.Names {
-					if strings.HasPrefix(n.Name, "Action") && !named[n.Name] {
+					if namesAnAction(n.Name) && !named[n.Name] {
 						return nil, fmt.Errorf("declaration check: %s is named like an Action but is not one of the typed Action constants, so the enum cannot be read in full", n.Name)
 					}
 				}
@@ -330,17 +384,18 @@ type binding struct {
 	tracked bool
 }
 
-// callAt is one written call of a package-level function by name, with each
-// argument resolved to its binding where the call stands.
+// callAt is one written call, named as the walk names it — a plain function by
+// its name, a method by the row it hangs off — with the receiver, when the call
+// has one, and each argument resolved to the binding it stands on.
 type callAt struct {
 	name string
 	args []binding
 }
 
-// callGraph maps each package-level function name to the names of the
-// functions whose bodies call it directly by name. Methods record themselves
-// under receiver-qualified names, so they can never be mistaken for the plain
-// functions the declarations bind.
+// callGraph maps each callable the walk can enter to the names of the callables
+// whose bodies call it. A callable no body calls by name has no entry at all,
+// which is what keeps a derivation bound in the declaration table from being
+// followed into.
 func (s *sourceTree) callGraph() map[string]map[string]bool {
 	callers := map[string]map[string]bool{}
 	for _, file := range s.files {
@@ -350,56 +405,80 @@ func (s *sourceTree) callGraph() map[string]map[string]bool {
 				continue
 			}
 			caller := fn.Name.Name
-			if fn.Recv != nil {
-				caller = s.text(fn.Recv.List[0].Type) + "." + caller
+			if fn.Recv != nil && len(fn.Recv.List) > 0 {
+				caller = methodKey(s.text(fn.Recv.List[0].Type), caller)
 			}
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
+			_, calls := s.walkBody(fn, nil)
+			for _, call := range calls {
+				if callers[call.name] == nil {
+					callers[call.name] = map[string]bool{}
 				}
-				if id, ok := call.Fun.(*ast.Ident); ok {
-					if callers[id.Name] == nil {
-						callers[id.Name] = map[string]bool{}
-					}
-					callers[id.Name][caller] = true
-				}
-				return true
-			})
+				callers[call.name][caller] = true
+			}
 		}
 	}
 	return callers
 }
 
-// answersTo is the set of functions whose reads answer to one declaration: the
-// predicate itself, and every plain function every caller of which already
-// answers to it. That is the rule that keeps the digest machinery and shared
-// helpers out of a declaration's reads — they serve code the walk has not come
-// from — taken to a fixpoint so no call order decides membership. A function no
-// body calls by name, a derivation bound in the declaration table, is none's to
-// follow.
+// answersTo is the set of callables whose reads answer to one declaration: the
+// predicate, and every callable every caller of which already answers to it.
+// That is the rule that keeps the digest machinery and shared helpers out of a
+// declaration's reads — they serve code the walk has not come from — taken to
+// its greatest fixpoint: every callable the predicate reaches by name starts in
+// the set, and one is shed only when a caller outside the set reaches it, or
+// when the declarations forbid it. A cycle therefore stays in, so a helper a
+// predicate calls and which calls itself — or two helpers calling one another —
+// has its reads attributed rather than silently lost; and no call order decides
+// membership. A callable no body calls by name, a derivation bound in the
+// declaration table, is reached by nothing and so is none's to follow.
 func (s *sourceTree) answersTo(predicate string, callers map[string]map[string]bool, forbidden map[string]bool) map[string]bool {
-	mine := map[string]bool{predicate: true}
+	callees := calleesOf(callers)
+	mine := map[string]bool{}
+	for reach := []string{predicate}; len(reach) > 0; {
+		name := reach[len(reach)-1]
+		reach = reach[:len(reach)-1]
+		if mine[name] {
+			continue
+		}
+		mine[name] = true
+		reach = append(reach, callees[name]...)
+	}
 	for changed := true; changed; {
 		changed = false
-		for name, cs := range callers {
-			if mine[name] || forbidden[name] || len(cs) == 0 || s.funcs[name] == nil {
+		for name := range mine {
+			if name == predicate {
 				continue
 			}
-			own := true
-			for caller := range cs {
-				if !mine[caller] {
-					own = false
-					break
-				}
-			}
-			if own {
-				mine[name] = true
+			if forbidden[name] || s.callable(name) == nil || !everyCallerIn(callers[name], mine) {
+				delete(mine, name)
 				changed = true
 			}
 		}
 	}
 	return mine
+}
+
+// calleesOf is a call graph read the other way: each callable and the callables
+// whose bodies call it, as the fixpoint's reach.
+func calleesOf(callers map[string]map[string]bool) map[string][]string {
+	callees := map[string][]string{}
+	for callee, cs := range callers {
+		for caller := range cs {
+			callees[caller] = append(callees[caller], callee)
+		}
+	}
+	return callees
+}
+
+// everyCallerIn reports whether each name calling one callable is itself in the
+// set answering to the declaration being walked.
+func everyCallerIn(callers, mine map[string]bool) bool {
+	for caller := range callers {
+		if !mine[caller] {
+			return false
+		}
+	}
+	return true
 }
 
 // extend is one call path's visited set with one more function walked on it.
@@ -428,30 +507,35 @@ type read struct {
 
 func (r read) String() string { return r.owner + "." + r.field }
 
-// readsOf is every read of an input carrier a function writes: its own, in
-// source order, then the reads of the functions in `mine` — the helpers whose
-// every caller answers to the declaration being walked. Names bound to a walk
-// carry that walk with them, which is what tells the row under decision apart
-// from the same issue read as a blocker; a callee's parameter carries the walk
-// its argument was read out of, and each call is walked on its own path, which
-// is what keeps every call's reads answerable to the declaration being walked.
+// readsOf is every read of an input carrier a callable writes: its own, in
+// source order, then the reads of the callables in `mine` — the helpers whose
+// every caller answers to the declaration being walked, a method's body no
+// different from a package-level helper's. Names bound to a walk carry that
+// walk with them, which is what tells the row under decision apart from the
+// same issue read as a blocker; a callee's parameter carries the walk its
+// argument was read out of, a method's receiver the walk its receiver was read
+// out of, and each call is walked on its own path, which is what keeps every
+// call's reads answerable to the declaration being walked.
 func (s *sourceTree) readsOf(fn *ast.FuncDecl, args []binding, mine, visited map[string]bool) []read {
-	env := map[string]binding{}
-	if fn.Type.Params != nil {
-		i := 0
-		for _, f := range fn.Type.Params.List {
-			if f.Names == nil {
-				i++
-				continue
-			}
-			for _, n := range f.Names {
-				if n.Name != "_" {
-					env[n.Name] = s.paramBinding(s.text(f.Type), args, i)
-				}
-				i++
-			}
+	out, calls := s.walkBody(fn, args)
+	for _, c := range calls {
+		callee := s.callable(c.name)
+		if callee == nil || !mine[c.name] || visited[c.name] {
+			continue
 		}
+		out = append(out, s.readsOf(callee, c.args, mine, extend(visited, c.name))...)
 	}
+	return out
+}
+
+// walkBody is one body's reads and calls: every read of an input carrier it
+// writes, in the order it writes them, and every call it makes with the
+// bindings its arguments — and, for a method, its receiver — stand on. env
+// begins from what the callee's own parameters and receiver hold and is
+// maintained as the body's definitions and range statements bind more, which is
+// why reads and calls are gathered in one walk rather than two.
+func (s *sourceTree) walkBody(fn *ast.FuncDecl, args []binding) ([]read, []callAt) {
+	env := s.paramsOf(fn, args)
 	var out []read
 	var calls []callAt
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -484,11 +568,7 @@ func (s *sourceTree) readsOf(fn *ast.FuncDecl, args []binding, mine, visited map
 				bind(at.Value, elem)
 			}
 		case *ast.CallExpr:
-			if id, ok := at.Fun.(*ast.Ident); ok {
-				call := callAt{name: id.Name}
-				for _, a := range at.Args {
-					call.args = append(call.args, s.resolve(a, env))
-				}
+			if call, ok := s.callTo(at, env); ok {
 				calls = append(calls, call)
 			}
 			// A call hides nothing: its arguments are walked on, so the
@@ -504,14 +584,73 @@ func (s *sourceTree) readsOf(fn *ast.FuncDecl, args []binding, mine, visited map
 		}
 		return true
 	})
-	for _, c := range calls {
-		callee, ok := s.funcs[c.name]
-		if !ok || !mine[c.name] || visited[c.name] {
+	return out, calls
+}
+
+// callTo is one written call as the walk names it: a plain function by its name,
+// a method by the row it hangs off with its receiver standing as the callee's
+// first argument, so a body behind the call attributes its reads the same way a
+// helper does. A call the walk cannot name — one on a value no walk reaches, a
+// package function, a closure in a field — answers with none, and the reads
+// behind it stay unattributed; the reads its arguments write are recorded here
+// either way.
+func (s *sourceTree) callTo(at *ast.CallExpr, env map[string]binding) (callAt, bool) {
+	call := callAt{}
+	switch fun := at.Fun.(type) {
+	case *ast.Ident:
+		call.name = fun.Name
+	case *ast.SelectorExpr:
+		recv := s.resolve(fun.X, env)
+		if !recv.tracked || recv.typ == "" {
+			return callAt{}, false
+		}
+		key := methodKey(recv.typ, fun.Sel.Name)
+		if s.methods[key] == nil {
+			return callAt{}, false
+		}
+		call.name = key
+		call.args = append(call.args, recv)
+	default:
+		return callAt{}, false
+	}
+	for _, a := range at.Args {
+		call.args = append(call.args, s.resolve(a, env))
+	}
+	return call, true
+}
+
+// paramsOf is one callable's own names as the walk reads them: its receiver,
+// then its parameters, each bound to the binding standing in the argument
+// position it fills.
+func (s *sourceTree) paramsOf(fn *ast.FuncDecl, args []binding) map[string]binding {
+	env := map[string]binding{}
+	next := 0
+	if fn.Recv != nil {
+		next = s.bindParams(fn.Recv.List, args, next, env)
+	}
+	if fn.Type.Params != nil {
+		s.bindParams(fn.Type.Params.List, args, next, env)
+	}
+	return env
+}
+
+// bindParams binds one parameter list's names and answers the argument position
+// the next list starts at. A list writing no name — a bare receiver, an unnamed
+// parameter — binds nothing and fills one position.
+func (s *sourceTree) bindParams(list []*ast.Field, args []binding, i int, env map[string]binding) int {
+	for _, f := range list {
+		if f.Names == nil {
+			i++
 			continue
 		}
-		out = append(out, s.readsOf(callee, c.args, mine, extend(visited, c.name))...)
+		for _, n := range f.Names {
+			if n.Name != "_" {
+				env[n.Name] = s.paramBinding(s.text(f.Type), args, i)
+			}
+		}
+		i++
 	}
-	return out
+	return i
 }
 
 // paramBinding is one walked function's parameter as the walk reads it.
@@ -992,6 +1131,117 @@ func TestDeclarationCheck_AttributesAReadThroughARangeVariable(t *testing.T) {
 	}
 	if len(problems) != 1 || !strings.Contains(problems[0], "timestamp") || !strings.Contains(problems[0], "Issue.UpdatedAt") {
 		t.Fatalf("problems = %v, want one refusal naming the timestamp read through the range variable", problems)
+	}
+}
+
+// TestDeclarationCheck_AttributesAReadReachedThroughAMethod is the same rule
+// over the shape a predicate takes the moment it needs a second opinion of the
+// row it is already holding: a call on that row, whose body the walk enters
+// under the row it hangs off, so a timestamp read behind the call answers to the
+// declaration rather than to no one (§forgejo/decisions/inputs,
+// s-git/maitred#263).
+func TestDeclarationCheck_AttributesAReadReachedThroughAMethod(t *testing.T) {
+	src := sourceUnderTest(t, writeSource(t, map[string]string{"probe.go": probeSource(`	if s.Issue.probeTouched() {
+		return dispatch(Action("probe"), "deciding through a method on the row")
+	}`) + `
+func (i *Issue) probeTouched() bool { return !i.UpdatedAt.IsZero() }
+`}))
+	problems, err := checkDeclaredReads(src, []declaredInput{{
+		action:    "probe",
+		predicate: "probeReady",
+		inputs:    []string{"issue.state"},
+	}})
+	if err != nil {
+		t.Fatalf("the declared-inputs guard: %v", err)
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0], "timestamp") || !strings.Contains(problems[0], "Issue.UpdatedAt") {
+		t.Fatalf("problems = %v, want one refusal naming the timestamp read a method's body writes", problems)
+	}
+}
+
+// TestDeclarationCheck_SilentAboutAMethodSharedWithAnotherPredicate keeps that
+// entry a rule and not a licence: a method one predicate reaches and another
+// calls as well serves no one of them alone, and the walk stays out of it — as
+// it stays out of a helper shared the same way.
+func TestDeclarationCheck_SilentAboutAMethodSharedWithAnotherPredicate(t *testing.T) {
+	src := sourceUnderTest(t, writeSource(t, map[string]string{"probe.go": probeSource(`	if s.Issue.probeTouched() {
+		return dispatch(Action("probe"), "a method the two predicates share")
+	}`) + `
+func otherReady(e Event, s State) Decision {
+	if s.Issue.probeTouched() {
+		return dispatch(Action("other"), "the method's other caller")
+	}
+	return dispatch(Action("other"), "nothing read")
+}
+
+func (i *Issue) probeTouched() bool { return !i.UpdatedAt.IsZero() }
+`}))
+	problems, err := checkDeclaredReads(src, []declaredInput{
+		{action: "probe", predicate: "probeReady", inputs: []string{"issue.state"}},
+		{action: "other", predicate: "otherReady", inputs: []string{"issue.state"}},
+	})
+	if err != nil {
+		t.Fatalf("the declared-inputs guard: %v", err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("problems = %v, want a method shared by two predicates left out of both declarations", problems)
+	}
+}
+
+// TestDeclarationCheck_AttributesAReadInAHelperThatCallsItself is the same rule
+// over the shape walking these graphs reaches for: a helper a predicate calls and
+// which calls itself, whose reads the least fixpoint would drop because its own
+// name stands in its caller set before it could enter it (§forgejo/decisions/inputs,
+// s-git/maitred#263).
+func TestDeclarationCheck_AttributesAReadInAHelperThatCallsItself(t *testing.T) {
+	src := sourceUnderTest(t, writeSource(t, map[string]string{"probe.go": probeSource(`	if anyTouched(s.Blockers) {
+		return dispatch(Action("probe"), "deciding through a helper that recurses")
+	}`) + `
+func anyTouched(rows []Issue) bool {
+	for _, r := range rows {
+		if !r.UpdatedAt.IsZero() {
+			return true
+		}
+	}
+	return len(rows) > 0 && anyTouched(rows[1:])
+}
+`}))
+	problems, err := checkDeclaredReads(src, []declaredInput{{
+		action:    "probe",
+		predicate: "probeReady",
+		inputs:    []string{"issue.state", "blockers.states"},
+	}})
+	if err != nil {
+		t.Fatalf("the declared-inputs guard: %v", err)
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0], "timestamp") || !strings.Contains(problems[0], "Issue.UpdatedAt") {
+		t.Fatalf("problems = %v, want one refusal naming the timestamp read a recursive helper writes", problems)
+	}
+}
+
+// TestDeclarationCheck_SilentAboutAConstantNamedLikeNoAction keeps the by-name
+// sweep about the enum it reads: a label whose name merely begins with those six
+// letters, and a constant stating a type of its own, are no action the read
+// missed, and refusing them sends the reader hunting for a hole that is not
+// there.
+func TestDeclarationCheck_SilentAboutAConstantNamedLikeNoAction(t *testing.T) {
+	src := sourceUnderTest(t, writeSource(t, map[string]string{"enum.go": `package probe
+
+type Action string
+
+type Kind string
+
+const (
+	ActionKnown Action = "known"
+)
+
+const (
+	ActionableLabel = "actionable"
+	ActionKind      Kind   = "kind"
+)
+`}))
+	if _, err := checkActionEnum(src, []declaredInput{{action: "known", predicate: "knownReady"}}); err != nil {
+		t.Errorf("an unrelated constant read as an action the enum missed: %v", err)
 	}
 }
 
