@@ -81,12 +81,16 @@ var inputPaths = map[string][]string{
 	// where the issue does (§forgejo/webhook/re-fetch).
 	"State.ConnectedPRs": {"connected PRs"},
 	"State.Reviews":      {"reviews"},
-	// The thread is read for its own sake now a comment is one of reassess's
-	// inputs (§forgejo/decisions/actions, s-git/maitred#262).
+	// The thread is read for its own sake (§forgejo/decisions/actions).
 	"State.Comments": {"issue.comments"},
-	// The lenses and the three identities are configuration the engine passes
-	// verbatim, not fetched state (§forgejo/decisions/inputs,
+	// The lenses and the three identities are configuration the engine
+	// passes verbatim, not fetched state (§forgejo/decisions/inputs,
 	// §forgejo/config/engine-account, §forgejo/config/decomposer-identity).
+	// A row reads one the same way it reads any fact — by declaring it —
+	// and the fold states it nowhere, like an event fact. The vocabulary
+	// names these fields of the carriers and nothing inside them, so a
+	// read within a configuration carrier answers under the carrier's
+	// name.
 	"State.ReviewLenses":                            {"config.review lenses"},
 	"State.ImplementerIdentity":                     {"config.implementer identity"},
 	"State.DecomposerIdentity":                      {"config.decomposer identity"},
@@ -149,24 +153,6 @@ var inputFields = map[string]map[string][]string{
 var rowIdentity = map[string][]string{
 	"Issue":       {"Number", "Repository", "HTMLURL", "IsPull"},
 	"PullRequest": {"Number", "HTMLURL"},
-}
-
-// configurationInputs is the part of the vocabulary a digest folds nowhere:
-// the configuration the engine passes verbatim on the state
-// (§forgejo/decisions/inputs, §forgejo/config/review-lenses,
-// §forgejo/config/implementer-identity, §forgejo/config/decomposer-identity,
-// §forgejo/config/engine-account). A row reads one to name whose comments are
-// no input, whose work to fix or which lens to ask — the operator's choice
-// rather than a fact of the work item — and a fold that stated it would move
-// every row the day an operator edited a file, as §inputs excuses an event
-// fact from the fold for the same reason. A declaration's silence about such a
-// read therefore refuses nothing; the vocabulary must still name the field, so
-// a State field no section states is still a refusal.
-var configurationInputs = map[string]bool{
-	"config.review lenses":        true,
-	"config.implementer identity": true,
-	"config.decomposer identity":  true,
-	"config.engine account":       true,
 }
 
 // sourceTree is the package the two guards read: its files, the fields each of
@@ -915,10 +901,10 @@ func (r read) refusal(a Action, declared map[string]bool) string {
 		return r.finding(a, ", which nothing in the vocabulary of §forgejo/decisions/inputs states")
 	}
 	for _, name := range reached {
-		// A read the declaration names is refused by nothing; so is one the
-		// fold states nowhere, a row being free to read the operator's
-		// configuration without declaring it.
-		if declared[name] || configurationInputs[name] {
+		// A read the declaration names is refused by nothing — a
+		// configuration fact included, though the fold states it
+		// nowhere.
+		if declared[name] {
 			return ""
 		}
 	}
@@ -1435,11 +1421,36 @@ func TestDeclarationCheck_RefusesAReadBesideTheVocabulary(t *testing.T) {
 	}
 }
 
-// TestDeclarationCheck_SilentAboutAConfigurationRead keeps the vocabulary's
-// one exemption live: the configuration the engine passes verbatim is no fact
-// a digest folds, so a row may read a lens or an identity its declaration does
-// not name (§forgejo/decisions/inputs, s-git/maitred#263).
+// TestDeclarationCheck_SilentAboutAConfigurationRead is one rule unchanged:
+// a read the declaration names is refused by nothing, a configuration fact
+// included — and a read inside a configuration carrier answers under the
+// carrier's name, which is where the vocabulary ends (§forgejo/decisions/inputs,
+// s-git/maitred#263).
 func TestDeclarationCheck_SilentAboutAConfigurationRead(t *testing.T) {
+	src := sourceUnderTest(t, writeSource(t, map[string]string{"probe.go": probeSource(`	for _, lens := range s.ReviewLenses {
+		if lens.Identity != "" {
+			return dispatch(Action("probe"), "asking which lenses to review with")
+		}
+	}`)}))
+	problems, err := checkDeclaredReads(src, []declaredInput{{
+		action:    "probe",
+		predicate: "probeReady",
+		inputs:    []string{"issue.state", "config.review lenses"},
+	}})
+	if err != nil {
+		t.Fatalf("the declared-inputs guard: %v", err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("problems = %v, want a configuration read the declaration names left alone", problems)
+	}
+}
+
+// TestDeclarationCheck_RefusesAnUndeclaredConfigurationRead is the other half:
+// a configuration fact is declared like any other, and the row that reads one
+// its declaration does not name is refused — the fold states it nowhere, but
+// the declaration must still name it (§forgejo/decisions/inputs,
+// s-git/maitred#263).
+func TestDeclarationCheck_RefusesAnUndeclaredConfigurationRead(t *testing.T) {
 	src := sourceUnderTest(t, writeSource(t, map[string]string{"probe.go": probeSource(`	if len(s.ReviewLenses) > 0 {
 		return dispatch(Action("probe"), "asking which lenses to review with")
 	}`)}))
@@ -1451,8 +1462,29 @@ func TestDeclarationCheck_SilentAboutAConfigurationRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the declared-inputs guard: %v", err)
 	}
-	if len(problems) != 0 {
-		t.Fatalf("problems = %v, want a configuration read the fold states nowhere left alone", problems)
+	if len(problems) != 1 || !strings.Contains(problems[0], "config.review lenses") {
+		t.Fatalf("problems = %v, want one refusal naming the undeclared configuration read", problems)
+	}
+}
+
+// TestDeclarationCheck_RefusesAStateFieldTheVocabularyDoesNotState draws the
+// boundary the other way: a field of a carrier the vocabulary says nothing
+// about reaches no name, and is refused whatever the row declares — naming a
+// configuration carrier states nothing about fields it later gains.
+func TestDeclarationCheck_RefusesAStateFieldTheVocabularyDoesNotState(t *testing.T) {
+	src := sourceUnderTest(t, writeSource(t, map[string]string{"probe.go": probeSource(`	if s.Note != "" {
+		return dispatch(Action("probe"), "reading a field no section states")
+	}`)}))
+	problems, err := checkDeclaredReads(src, []declaredInput{{
+		action:    "probe",
+		predicate: "probeReady",
+		inputs:    []string{"issue.state", "config.review lenses"},
+	}})
+	if err != nil {
+		t.Fatalf("the declared-inputs guard: %v", err)
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0], "vocabulary") {
+		t.Fatalf("problems = %v, want one refusal that the vocabulary states no such input", problems)
 	}
 }
 
@@ -1504,9 +1536,9 @@ func TestDeclarationCheck_VocabularyAndDeclarationsAgree(t *testing.T) {
 		}
 		for _, name := range names {
 			stated[name] = true
-			// A name no action declares is drift unless the fold states it
-			// nowhere: configuration a row reads without declaring it.
-			if !declared[name] && !configurationInputs[name] {
+			// A name no action declares is drift: the vocabulary states
+			// only facts a declaration names, configuration included.
+			if !declared[name] {
 				t.Errorf("inputPath %q states input %q, which no action declares", path, name)
 			}
 		}
@@ -1518,15 +1550,10 @@ func TestDeclarationCheck_VocabularyAndDeclarationsAgree(t *testing.T) {
 			}
 			for _, name := range names {
 				stated[name] = true
-				if !declared[name] && !configurationInputs[name] {
+				if !declared[name] {
 					t.Errorf("inputFields names %s.%s for input %q, which no action declares", owner, field, name)
 				}
 			}
-		}
-	}
-	for name := range configurationInputs {
-		if !stated[name] {
-			t.Errorf("configurationInputs excuses input %q, which no read of the vocabulary states", name)
 		}
 	}
 	for name := range declared {
@@ -1605,6 +1632,7 @@ type State struct {
 	Issue        *Issue
 	Blockers     []Issue
 	ReviewLenses []ReviewLens
+	Note         string
 }
 
 func dispatch(a Action, reason string) Decision { return Decision{} }

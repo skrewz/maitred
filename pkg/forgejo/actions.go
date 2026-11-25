@@ -108,11 +108,16 @@ func init() {
 		// §forgejo/decisions/inputs, s-git/maitred#262). The digest of
 		// these facts is what fires the row, the description among them so
 		// an edit that rewords what the engine is asked to do moves it
-		// (s-git/maitred#262).
+		// (s-git/maitred#262). The two identities the count answers to are
+		// declared like any other input and fold nowhere, as an event fact
+		// does: a fold that stated the operator's file would move every
+		// row the day it was edited (§forgejo/decisions/inputs).
 		ActionReassess: {
 			inputs: []string{
 				"issue.state", "issue.labels", "issue.body", "issue.comments",
-				"blockers.states", "event.type", "event.sender",
+				"blockers.states",
+				"config.decomposer identity", "config.engine account",
+				"event.type", "event.sender",
 			},
 			ready:  reassessReady,
 			digest: declaredDigestFor(ActionReassess),
@@ -372,6 +377,16 @@ func declaredInputFacts(a Action, subject string, s State) []string {
 			// rows still read them — reassess names the event type in
 			// its reason, the root's comment row names the sender — they
 			// simply cannot enter a digest both paths answer with.
+			continue
+		}
+		if strings.HasPrefix(name, "config.") {
+			// A configuration fact states the operator's choice, never
+			// a fact of the work item, so it folds nowhere for the same
+			// reason an event fact does: a fold that stated the
+			// operator's file would move every row the day it was
+			// edited (§forgejo/decisions/inputs). The rows still read
+			// them and declare them like any other fact; only the fold
+			// passes them by.
 			continue
 		}
 		foldFact, ok := declaredInputFolds[name]

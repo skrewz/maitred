@@ -1188,9 +1188,12 @@ facts it names into the digest its dispatch is watermarked on
 (s-git/maitred#260). An event fact is the exception and folds nothing:
 which row fired is not
 part of the state, and a digest both the sweep and an event must answer
-with cannot contain it. The refusal of undeclared reads checks each
-predicate's reads against the set its action declares, refusing by
-file, field and action a read that set does not name
+with cannot contain it. A declared configuration input folds nothing
+for the same reason in turn: it states the operator's choice, not a
+fact of the work item, and a fold that stated the operator's file would
+move every row the day it was edited. The refusal of undeclared reads
+checks each predicate's reads against the set its action declares,
+refusing by file, field and action a read that set does not name
 (s-git/maitred#263).
 
 ## Actionable-state digest
