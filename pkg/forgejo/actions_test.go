@@ -151,6 +151,61 @@ func TestDeclaredDigests_FoldEveryDeclaredFact(t *testing.T) {
 	}
 }
 
+// TestDeclaredDigests_FoldConfigurationNowhere pins as behaviour what
+// §forgejo/decisions/inputs claims: a row reads configuration and
+// declares it like any other fact, and the fold states it nowhere —
+// an operator editing engine_account, decomposer_identity,
+// implementer_identity or the lens list leaves every folding digest
+// where it was, that day as any other (s-git/maitred#277). The other
+// digest tests run one configuration throughout, so none of them can
+// tell a fold that skips these names from one that folds them.
+func TestDeclaredDigests_FoldConfigurationNowhere(t *testing.T) {
+	// No comments: the thread's fold counts a comment by asking whose it
+	// is, and that answer legitimately reads the identities; this test's
+	// claim is the fold's own skip, alone (§forgejo/decisions/inputs).
+	// Every row's digest is now the fold of its declaration (the
+	// pull-request rows among them), so one state whose declared facts
+	// stand paces every action this sweep weighs. The member carries no
+	// reviews for the same right the thread stands empty: whether a set
+	// is approved at head asks the lens list, so a review by one name
+	// would answer the edited list differently — this test's claim is
+	// the fold's own skip, alone (§forgejo/decisions/sync-set).
+	member := syncMemberFixture(4, 40)
+	member.Reviews = nil
+	st := State{
+		ReviewLenses:        testLenses,
+		Issue:               openIssue(),
+		PR:                  openPR("sha-head"),
+		SyncMembers:         []SyncMember{member},
+		EngineAccount:       "maitred",
+		ImplementerIdentity: "implementer",
+		DecomposerIdentity:  "decomposer",
+	}
+	edited := st
+	edited.ReviewLenses = []ReviewLens{{Identity: "someone"}, {Identity: "somewhere"}}
+	edited.EngineAccount = "another-engine"
+	edited.ImplementerIdentity = "another-implementer"
+	edited.DecomposerIdentity = "another-decomposer"
+	for _, a := range everyAction {
+		unchanged := digestFor(a, Event{}, st)
+		if unchanged == "" {
+			t.Errorf("digestFor(%s) over a state whose declared facts stand = %q, want a digest these lines can weigh", a, unchanged)
+			continue
+		}
+		if moved := digestFor(a, Event{}, edited); moved != unchanged {
+			t.Errorf("digestFor(%s) moved with the operator's configuration to %q, want the unchanged %q: a configuration fact entered a digest", a, moved, unchanged)
+		}
+	}
+	// One probe that these digests do move with the work item, so the
+	// equality above is not one constant answer to everything.
+	labelled := st
+	labelled.Issue = openIssue()
+	labelled.Issue.Labels = []string{"bug"}
+	if digestFor(ActionReassess, Event{}, labelled) == digestFor(ActionReassess, Event{}, st) {
+		t.Error("digestFor(reassess) does not move with a label; the configuration claim above weighs nothing")
+	}
+}
+
 // TestDeclaredDigests_MoveWithTheFactsThePredicatesRead checks the
 // digest answers a state relation the forge delivers no event for — a
 // blocker edge attached or removed — and answers the listings' order
