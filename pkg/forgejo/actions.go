@@ -579,11 +579,17 @@ var declaredInputFolds = map[string]func(subject string, s State) []string{
 		if s.PR == nil {
 			return nil
 		}
-		facts := make([]string, 0, len(s.PR.Labels))
-		for _, label := range s.PR.Labels {
-			facts = append(facts, "pr label "+label)
-		}
-		return facts
+		// The one pull-request label any predicate reads is the
+		// fan-out's `trigger-review` request
+		// (§forgejo/decisions/label-triggered-review). Folding the
+		// set whole would let a toggle of a label no predicate reads
+		// move the digest, and the re-fire bound — which remembers one
+		// digest per (action, subject) — would pace nothing: an
+		// alternating label would be an alternating digest, evading
+		// the bound entirely (§forgejo/decisions/loop-prevention).
+		// The label's presence is the fact the row asks
+		// (§forgejo/decisions/inputs).
+		return []string{fmt.Sprintf("pr label %s %t", LabelTriggerReview, carriesLabel(s.PR.Labels, LabelTriggerReview))}
 	},
 	"PR.author": func(_ string, s State) []string {
 		if s.PR == nil {
@@ -653,10 +659,18 @@ var declaredInputFolds = map[string]func(subject string, s State) []string{
 		return facts
 	},
 	"sync members": func(_ string, s State) []string {
+		// The landing-set predicate reads two facts of a member: its
+		// state, and whether it carries the membership opt-in
+		// (§forgejo/decisions/sync-set). Folding the member's whole
+		// label set would let a toggle that moves no readiness re-run
+		// the landing prompt: the same noise §forgejo/decisions/sync-set
+		// argued updated_at out of the fold for (s-git/maitred#260).
 		var facts []string
 		for i := range s.SyncMembers {
 			m := &s.SyncMembers[i]
-			facts = append(facts, issueFacts(&m.Issue)...)
+			facts = append(facts, fmt.Sprintf("member %s %s %s %t",
+				forestRef(m.Issue.Repository, m.Issue.Number), m.Issue.State,
+				LabelAgenticSyncMerge, carriesLabel(m.Issue.Labels, LabelAgenticSyncMerge)))
 		}
 		return facts
 	},
@@ -692,10 +706,12 @@ var declaredInputFolds = map[string]func(subject string, s State) []string{
 }
 
 // issueFacts states an issue as a digest's fact: its identity and state,
-// and each label it carries. The merge gate and the landing set both
-// read a work item's labels for the opt-ins, so a label move is a fact
-// for the digest too (§forgejo/decisions/merge-gate,
-// §forgejo/decisions/sync-set).
+// and each label it carries. The merge gate reads a connected work
+// item's labels for the opt-ins, so a label move is a fact for that
+// digest (§forgejo/decisions/merge-gate). The landing set's own fold
+// states a member's opt-in rather than its whole label set, because
+// the landing predicate reads just that one label
+// (§forgejo/decisions/sync-set).
 func issueFacts(issue *Issue) []string {
 	ref := forestRef(issue.Repository, issue.Number)
 	facts := []string{"issue " + ref + " " + issue.State}

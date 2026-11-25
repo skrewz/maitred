@@ -525,7 +525,7 @@ member the cascade's read could not see.
 
 The sweep's `sync` row is the pull-request path's one row a digest
 suppresses. Its declaration names the set: the grouping issue's number,
-state, title and body, and per member its number, state, the member
+state, labels and body, and per member its number, state, the member
 label's presence and its delivering pull request's head sha, open and
 mergeable state and approval at that head — plus the event's own issue,
 so the event that declares the row is in the pair like every other
