@@ -2345,7 +2345,11 @@ func TestHandler_CrossRepoCascade(t *testing.T) {
 // the object's revision — and where they part the log describes a
 // dispatch at a revision the store never recorded
 // (§forgejo/state/watermark, §forgejo/webhook/the-pipeline,
-// §forgejo/decisions/actions).
+// §forgejo/decisions/actions). A fan-out records its revisions per
+// subject slot, so its line names each dispatched subject's own digest
+// beside its identity: every slot digest the dispatch wrote is a value
+// the reader finds in the line (§forgejo/observability/the-decision-log,
+// s-git/maitred#260).
 func TestDispatch_WatermarkNamesTheLoggedRevision(t *testing.T) {
 	t.Run("the pipeline's issue and PR legs", func(t *testing.T) {
 		cases := []struct {
@@ -2358,7 +2362,13 @@ func TestDispatch_WatermarkNamesTheLoggedRevision(t *testing.T) {
 			// in the watermark's main slot
 			// (§forgejo/state/watermark).
 			fanOut bool
-			setup  func(api *fakeAPI)
+			// lenses overrides the configured lens list where the case
+			// needs one beside the default.
+			lenses []ReviewLens
+			// wantTasks is the dispatches the case lands; one unless the
+			// row fans out over more than one lens.
+			wantTasks int
+			setup     func(api *fakeAPI)
 		}{
 			{
 				name: "implement on an opened issue", eventType: "issues", action: "opened",
@@ -2383,7 +2393,15 @@ func TestDispatch_WatermarkNamesTheLoggedRevision(t *testing.T) {
 				payload: prPayload("o/r", 9, "opened"),
 				key:     Key{Repo: "o/r", Kind: KindPR, Number: 9},
 				fanOut:  true,
-				setup:   func(api *fakeAPI) { api.pulls[9] = testPR(9, "open", true) },
+				// Two lenses, so the line must name two subjects' digests:
+				// a single-lens case cannot tell the per-subject fold from
+				// the whole-chain one.
+				lenses: []ReviewLens{
+					{Identity: "bob", Prompt: "/review-bob {{.PRURL}}", Timeout: 30 * time.Minute},
+					{Identity: "lens-b", Prompt: "/review-lens-b {{.PRURL}}", Timeout: 30 * time.Minute},
+				},
+				wantTasks: 2,
+				setup:     func(api *fakeAPI) { api.pulls[9] = testPR(9, "open", true) },
 			},
 			{
 				name: "merge-or-wait on an approved opted-in PR", eventType: "pull_request_review_approved", action: "approved",
@@ -2398,14 +2416,21 @@ func TestDispatch_WatermarkNamesTheLoggedRevision(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				eng, api, q, store := newTestEngine(t)
+				if tc.lenses != nil {
+					eng.cfg.Reviews = tc.lenses
+				}
 				h := NewHandler(eng, "s3cret", nil)
 				tc.setup(api)
 				rec := serve(t, h, signedRequest(t, "s3cret", tc.eventType, tc.action, tc.payload))
 				if rec.Code != http.StatusNoContent {
 					t.Fatalf("status = %d, want 204", rec.Code)
 				}
-				if len(q.all()) != 1 {
-					t.Fatalf("got %d tasks, want 1", len(q.all()))
+				want := tc.wantTasks
+				if want == 0 {
+					want = 1
+				}
+				if len(q.all()) != want {
+					t.Fatalf("got %d tasks, want %d", len(q.all()), want)
 				}
 				w, err := store.Load(tc.key)
 				if err != nil {
@@ -2420,8 +2445,8 @@ func TestDispatch_WatermarkNamesTheLoggedRevision(t *testing.T) {
 						t.Fatal("the fan-out recorded no subject slots")
 					}
 					for lens, slot := range w.Subjects {
-						if slot.Revision != logged.Revision {
-							t.Errorf("the %s slot records revision %q, the decision log names %q", lens, slot.Revision, logged.Revision)
+						if !strings.Contains(logged.Revision, slot.Revision) || !strings.Contains(logged.Revision, lens) {
+							t.Errorf("the %s slot records revision %q, the decision log names %q — want each dispatched subject's digest beside its identity", lens, slot.Revision, logged.Revision)
 						}
 					}
 					return
@@ -6620,8 +6645,11 @@ func TestReconcile_MergeRowAtAFrozenHeadRefiresAtTheNextSweep(t *testing.T) {
 // one whose never did is re-fired however little else moved. A sibling's
 // report therefore does not re-ask a lens that already reported, and a
 // lens whose identity no review on the PR carries is re-asked every
-// sweep at the bound's pace (§forgejo/decisions/review-lenses,
-// §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#260).
+// sweep at the bound's pace — including across a restart, where it is
+// the durable instant in the lens's own slot that keeps the bound's
+// pace (§forgejo/decisions/review-lenses,
+// §forgejo/reconciliation/the-state-is-the-watermark,
+// §forgejo/state/watermark, s-git/maitred#260).
 func TestReconcile_FanOutRefiresOnlyTheLensThatNeverReported(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
 	eng.cfg.Reviews = []ReviewLens{
@@ -6639,19 +6667,31 @@ func TestReconcile_FanOutRefiresOnlyTheLensThatNeverReported(t *testing.T) {
 		t.Fatalf("watermark = %+v, %v, want a slot per lens", w, err)
 	}
 
-	// lens-a reports at head; lens-b never does.
+	// lens-a reports at head; lens-b never does. The report moves
+	// lens-a's digest, not the slots: the fan-out's two slots stand as
+	// the dispatch left them.
 	api.reviews[9] = []Review{{Author: "lens-a", Event: ReviewApproved, CommitID: "sha-9"}}
-	w, err = store.Load(key)
-	if err != nil || w == nil || len(w.Subjects) != 2 {
-		t.Fatalf("watermark = %+v, %v, want a slot per lens", w, err)
-	}
 
 	// lens-a's report arrives. The sweep that follows owes only lens-b,
 	// even though the digest lens-b was dispatched at has not moved.
 	serve(t, NewHandler(eng, "s3cret", nil), signedRequest(t, "s3cret", "pull_request_review_submitted", "", prPayload("o/r", 9, "submitted")))
 
-	// One interval on, with no stamp of its own to read first: the sweep
-	// asks the lens that never reported and no other.
+	// A restart inside the interval — a fresh engine over the store the
+	// fan-out wrote, with no stamp of its own to read — buys no re-fire
+	// the interval has not paid for: lens-b is still owed, but its
+	// slot's fire instant is unspent, and the durable instant in the
+	// subject's own slot is what spaces it
+	// (§forgejo/state/watermark, §forgejo/decisions/loop-prevention).
+	restarted := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	restarted.cfg.Reviews = eng.cfg.Reviews
+	before := len(q.all())
+	restarted.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
+	if tasks := q.all()[before:]; len(tasks) != 0 {
+		t.Fatalf("got %d tasks on the first sweep after a restart inside the interval, want the owed lens spaced by its slot's durable instant; all = %+v", len(tasks), tasks)
+	}
+
+	// One interval on: the sweep asks the lens that never reported and
+	// no other.
 	w, err = store.Load(key)
 	if err != nil || w == nil {
 		t.Fatalf("Load: %v", err)
@@ -6666,9 +6706,7 @@ func TestReconcile_FanOutRefiresOnlyTheLensThatNeverReported(t *testing.T) {
 	if err := store.Save(key, *w); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	restarted := NewEngine(api, store, testConfig(), q, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	restarted.cfg.Reviews = eng.cfg.Reviews
-	before := len(q.all())
+	before = len(q.all())
 	restarted.HandleEvent(Event{Type: EventReconcile, Repo: "o/r", Kind: KindPR, Number: 9, Sender: "maitred"})
 	tasks := q.all()[before:]
 	if len(tasks) != 1 {

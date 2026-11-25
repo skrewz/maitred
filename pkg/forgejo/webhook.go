@@ -1499,7 +1499,12 @@ func (e *Engine) boundReFire(key Key, ev Event, st State, w *Watermark, d Decisi
 		if len(kept) == 0 {
 			refs := make([]string, 0, len(d.Lenses))
 			for _, ld := range d.Lenses {
-				refs = append(refs, fmt.Sprintf("%s at revision %s", ld.Lens, ld.Revision))
+				// The bound's hold-off names the facts behind each spaced
+				// lens's digest, as the guard's hold-off and the
+				// singleton's do — bare hex is not a value an operator
+				// can read off the forge (§forgejo/observability/the-decision-log).
+				refs = append(refs, fmt.Sprintf("%s at %s", ld.Lens,
+					quotedFacts(declaredInputFacts(ActionReview, ld.Lens, st), ld.Revision)))
 			}
 			return holdOffReFireBound(ActionReview, strings.Join(refs, ", "), e.cfg.ReconcileInterval)
 		}
@@ -1526,10 +1531,11 @@ func (e *Engine) boundReFire(key Key, ev Event, st State, w *Watermark, d Decisi
 // not made (§forgejo/decisions/loop-prevention). The engine's in-memory
 // stamp answers whenever it holds one, being the freshest record of the
 // dispatch. Where memory is empty — the first arrival after a restart —
-// the durable fire instant the watermark records for that same
-// `(action, revision)` answers instead, so a deploy, a crash-loop or an
-// OOM kill buys no fan-out the interval had not already bought
-// (§forgejo/state/watermark). An instant that has not arrived yet counts as
+// the durable fire instant the watermark records beside the pair the row
+// wrote answers instead: the subject's own slot for a fan-out, the main
+// slot for a singleton, so a deploy, a crash-loop or an OOM kill buys no
+// fan-out the interval had not already bought (§forgejo/state/watermark).
+// An instant that has not arrived yet counts as
 // spent: the bound may pace a re-fire, never silence a row.
 func (e *Engine) reFiredRecently(key Key, action Action, subject, revision string, w *Watermark) bool {
 	e.reFireMu.Lock()
@@ -1537,18 +1543,27 @@ func (e *Engine) reFiredRecently(key Key, action Action, subject, revision strin
 	if last, ok := e.reFires[reFireSlot{key: key, action: action, subject: subject}]; ok {
 		return last.revision == revision && time.Since(last.at) < e.cfg.ReconcileInterval
 	}
-	if w == nil || w.FiredAt == nil || w.Action != string(action) || w.Revision != revision {
+	if w == nil {
 		return false
 	}
 	if subject != "" {
 		// A fan-out's durable instant stands in its subject's slot, the
-		// same place its guard does (§forgejo/state/watermark).
+		// same place its guard does (§forgejo/state/watermark). The
+		// main-slot test below is a singleton's question: a fan-out
+		// deliberately keeps the main slot whole, so asking it of a
+		// fan-out would answer false whatever the subject's slot holds
+		// and the durable half of the fan-out's bound would be written
+		// and never read. The subject's slot therefore answers before
+		// the main slot, never behind it.
 		slot, ok := w.subjectSlot(subject)
 		if !ok || slot.Action != string(action) || slot.Revision != revision || slot.FiredAt == nil {
 			return false
 		}
 		spent := time.Since(*slot.FiredAt)
 		return spent >= 0 && spent < e.cfg.ReconcileInterval
+	}
+	if w.FiredAt == nil || w.Action != string(action) || w.Revision != revision {
+		return false
 	}
 	// The durable instant is a wall clock, the monotonic reading being lost
 	// when the slot was marshalled, so a boot-time correction — or a store
@@ -2077,9 +2092,21 @@ func (e *Engine) dispatchSyncSet(cd CascadeDispatch, sender string) error {
 // s-git/maitred#259). A dispatch records that digest in its watermark,
 // in its task's dedup key and in the re-fire stamp alike, so the guard,
 // the pacing and the queue answer on one derivation
-// (§forgejo/decisions/actions, §forgejo/webhook/the-pipeline).
+// (§forgejo/decisions/actions, §forgejo/webhook/the-pipeline). The
+// fan-out's dispatch is no exception: its slots hold per-subject
+// digests, so its line names each dispatched subject's own digest
+// beside its identity — not a fold over the whole chain, which no slot,
+// key or stamp would carry (§forgejo/observability/the-decision-log,
+// §forgejo/decisions/review-lenses).
 func loggedRevision(d Decision, ev Event, st State) string {
 	if d.Dispatched && d.Action != "" {
+		if len(d.Lenses) > 0 {
+			refs := make([]string, 0, len(d.Lenses))
+			for _, ld := range d.Lenses {
+				refs = append(refs, fmt.Sprintf("%s %s", ld.Lens, ld.Revision))
+			}
+			return strings.Join(refs, ", ")
+		}
 		return digestFor(d.Action, ev, st)
 	}
 	return revisionFor(ev, st)

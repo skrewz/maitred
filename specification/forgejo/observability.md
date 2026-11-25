@@ -29,7 +29,10 @@ the landing set's — names the readiness it already recorded
 readable against the forge's history whatever the guard keyed itself on
 (§forgejo/state/watermark, §forgejo/decisions/sync-set, s-git/maitred#259,
 s-git/maitred#260). The field holds the dispatched action's declared digest, so
-the line and the watermark file state one value; a hold-off names no action to
+the line and the watermark file state one value — a fan-out's dispatch line
+names each dispatched subject's own digest beside its identity, each the value
+that subject's slot holds, since no fold over the whole chain stands in any
+slot, key or stamp of that dispatch; a hold-off names no action to
 derive a digest from and names the object's own revision, which is what a reader
 can place in that history.
 
