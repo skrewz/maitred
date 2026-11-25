@@ -3082,37 +3082,37 @@ func TestSyncSetRevision(t *testing.T) {
 	members := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	reversed := []SyncMember{closedSyncMemberFixture(5), syncMemberFixture(4, 40)}
 	if setDigest(setIssue, members...) != setDigest(setIssue, reversed...) {
-		t.Error("set revision must not depend on member order")
+		t.Error("the set's declared digest must not depend on member order")
 	}
 
 	pushed := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	pushed[0].PR.HeadSHA = "sha-new"
 	if setDigest(setIssue, members...) == setDigest(setIssue, pushed...) {
-		t.Error("a member PR head moving must change the set revision")
+		t.Error("a member PR head moving must change the set's declared digest")
 	}
 
 	edited := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	edited[1].Issue.UpdatedAt = testTime2
 	if setDigest(setIssue, members...) != setDigest(setIssue, edited...) {
-		t.Error("an edit that cannot move readiness must not change the set revision: the digest records what the predicate reads, not the members' activity")
+		t.Error("an edit that cannot move readiness must not change the set's declared digest: the digest records what the predicate reads, not the members' activity")
 	}
 
 	unlabelled := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	unlabelled[0].Issue.Labels = nil
 	if setDigest(setIssue, members...) == setDigest(setIssue, unlabelled...) {
-		t.Error("a member losing the member label must change the set revision")
+		t.Error("a member losing the member label must change the set's declared digest")
 	}
 
 	staleApproval := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	staleApproval[0].Reviews = []Review{{Event: ReviewApproved, Author: "carol", CommitID: "sha-before-the-push", SubmittedAt: testTime}}
 	if setDigest(setIssue, members...) == setDigest(setIssue, staleApproval...) {
-		t.Error("a member PR no longer approved at head must change the set revision")
+		t.Error("a member PR no longer approved at head must change the set's declared digest")
 	}
 
 	conflicted := []SyncMember{syncMemberFixture(4, 40), closedSyncMemberFixture(5)}
 	conflicted[0].PR.Mergeable = false
 	if setDigest(setIssue, members...) == setDigest(setIssue, conflicted...) {
-		t.Error("a member PR that stopped being mergeable must change the set revision")
+		t.Error("a member PR that stopped being mergeable must change the set's declared digest")
 	}
 
 	if setDigest(setIssue, nil...) == setDigest(setIssue, members...) {
@@ -3127,7 +3127,7 @@ func TestSyncSetRevision(t *testing.T) {
 	restated := syncIssueFixture(7)
 	restated.Body = "Land 4, then 5."
 	if setDigest(setIssue, members...) == setDigest(restated, members...) {
-		t.Error("restating the grouping issue's body must change the set revision: a ready set that never landed must not be a fixed point")
+		t.Error("restating the grouping issue's body must change the set's declared digest: a ready set that never landed must not be a fixed point")
 	}
 	// The grouping issue's activity is not: its updated_at moves on a
 	// comment, a title fix, or an unrelated label toggle, and the
@@ -3136,7 +3136,7 @@ func TestSyncSetRevision(t *testing.T) {
 	touched := syncIssueFixture(7)
 	touched.UpdatedAt = testTime2
 	if setDigest(setIssue, members...) != setDigest(touched, members...) {
-		t.Error("a touch of the grouping issue that restates nothing must not change the set revision: the landing prompt would re-run on activity")
+		t.Error("a touch of the grouping issue that restates nothing must not change the set's declared digest: the landing prompt would re-run on activity")
 	}
 }
 

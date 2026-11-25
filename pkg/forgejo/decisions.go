@@ -504,7 +504,6 @@ func Decide(e Event, s State, w *Watermark) Decision {
 // digest of the declaration's input set, so the sweep and an event
 // cannot answer one state two ways
 // (§forgejo/reconciliation/the-state-is-the-watermark,
-// §forgejo/reconciliation/the-state-is-the-watermark,
 // s-git/maitred#259). What differs is only how a re-fire at a digest
 // the watermark already records is paced, and that is the re-fire
 // bound's to decide, not this function's. The `decompose` rows are the

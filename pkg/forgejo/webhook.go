@@ -2006,7 +2006,7 @@ func (e *Engine) dispatchCascadePR(k Key, sender string) error {
 
 // dispatchSyncSet dispatches the sync-set candidate the cascade walk
 // or the approval path emitted: the grouping issue's own watermark
-// applies at the set revision, and the re-fetched set state is
+// applies at the set's declared digest, and the re-fetched set state is
 // decided through the same pure row the sweep takes — an unready set
 // stays silent, its hold-off at home only in the decision log and
 // nothing enqueued (§forgejo/decisions/sync-set). Admissibility is
@@ -2122,8 +2122,8 @@ func loggedRevision(d Decision, ev Event, st State) string {
 // watermark, its task's dedup key and the re-fire stamp alike, whichever
 // side of the engine it was decided on (s-git/maitred#260).
 func revisionFor(ev Event, st State) string {
-	// The set revision describes a landing set, so it takes
-	// precedence only on the path that attached members to the
+	// The landing set's declared digest belongs to a landing set, so it
+	// takes precedence only on the path that attached members to the
 	// object under consideration: the sweep's row for an open issue
 	// carrying the sync label. Tying the precedence to that label —
 	// not merely to members having been attached — keeps a future

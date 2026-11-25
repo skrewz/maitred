@@ -1178,10 +1178,11 @@ declaration **folds** that set into the digest its dispatch is
 watermarked on, so an input a predicate reads cannot move without the
 row that asks it noticing (§forgejo/state/watermark, s-git/maitred#259):
 the fold states each fact the predicate reads and no fact it does not,
-and it answers identically whatever order the listings arrive in. The
-pull-request and landing-set declarations name the object revision their
-rows key on until the next member re-keys them (s-git/maitred#260). An
-event fact is the exception and folds nothing: which row fired is not
+and it answers identically whatever order the listings arrive in. Every
+declaration, the pull-request and landing-set ones included, folds the
+facts it names into the digest its dispatch is watermarked on
+(s-git/maitred#260). An event fact is the exception and folds nothing:
+which row fired is not
 part of the state, and a digest both the sweep and an event must answer
 with cannot contain it. The refusal of undeclared reads that will one
 day check a predicate against the set is a later member of this chain.

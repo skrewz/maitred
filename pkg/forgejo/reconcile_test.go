@@ -137,8 +137,7 @@ func TestReconcile_FreshWatermarkImplementRefiresOnce(t *testing.T) {
 // and dropping the skip costs no dispatch: an issue the engine
 // already watermarked while a blocker stood open dispatches the sweep
 // after that edge is removed, at a timestamp nothing moved
-// (§forgejo/reconciliation/the-state-is-the-watermark,
-// §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#259).
+// (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#259).
 func TestReconcile_EdgeMoveWithoutDeliveryDispatches(t *testing.T) {
 	eng, api, q, store := newTestEngine(t)
 	api.repos = []Repository{testRepo("o/r")}

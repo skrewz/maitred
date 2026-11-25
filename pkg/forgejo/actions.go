@@ -28,14 +28,12 @@ import (
 // belongs to the row, not the predicate (§forgejo/decisions/loop-prevention,
 // §forgejo/reconciliation/the-state-is-the-watermark). The digest is
 // the revision the watermark records under the action's name
-// (§forgejo/state/watermark); which fact each action keys on today is
-// what the declarations state. An issue-path action's digest is now
-// derived from its own declared input set, so re-keying one edits this
-// table and nothing beside it; the pull-request actions still name the
-// object revision their rows already keyed on, and re-keying them is
-// the next member of this chain (s-git/maitred#260). The digest is also
-// what the re-fire bound is a rate on and what the task's dedup key
-// carries, so the guard, the pacing and the queue answer on one value
+// (§forgejo/state/watermark), and every declaration's is derived from
+// the input set it names — the issue-path actions took that first
+// (s-git/maitred#259), the pull-request actions at s-git/maitred#260 —
+// so re-keying an action edits this table and nothing beside it. The
+// digest is also what the re-fire bound is a rate on and what the task's
+// dedup key carries, so the guard, the pacing and the queue answer on one value
 // (§forgejo/decisions/loop-prevention,
 // §forgejo/webhook/the-pipeline,
 // §forgejo/decisions/transition-table).
@@ -1145,6 +1143,6 @@ func syncReady(_ Event, s State) (Decision, readyAnswer) {
 	if len(notReady) > 0 {
 		return holdOff(fmt.Sprintf("sync issue %d held off: %s", issue.Number, strings.Join(notReady, "; "))), readyNo
 	}
-	return dispatch(ActionSync, fmt.Sprintf("issue %d is an open %s issue: all %d member(s) closed or approved, mergeable, and opted in; the state calls for sync at set revision %s",
+	return dispatch(ActionSync, fmt.Sprintf("issue %d is an open %s issue: all %d member(s) closed or approved, mergeable, and opted in; the state calls for sync at the set's declared digest %s",
 		issue.Number, LabelSync, len(members), digestFor(ActionSync, Event{}, s))), readyYes
 }
