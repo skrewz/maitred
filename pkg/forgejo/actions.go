@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -358,6 +359,19 @@ func digestFacts(facts []string) string {
 // (§forgejo/observability/the-decision-log). A fact an earlier input
 // already stated is collected once, so two folds that name the same
 // fact move one digest and quote it once.
+
+// foldsNowhere names the prefixes of declared names no digest fold
+// states, each for its own reason. An event fact names which row
+// fired, never part of the state whose digest both paths must answer
+// with (§forgejo/reconciliation/the-state-is-the-watermark), and a
+// configuration fact states the operator's choice, so a fold that
+// stated it would move every row the day it was edited
+// (§forgejo/decisions/inputs). The rows still read both kinds —
+// reassess names the event type in its reason and the identities whose
+// comments count — and declare them like any other fact; the fold
+// simply passes them by.
+var foldsNowhere = []string{"event.", "config."}
+
 func declaredInputFacts(a Action, subject string, s State) []string {
 	var facts []string
 	seen := map[string]bool{}
@@ -369,24 +383,9 @@ func declaredInputFacts(a Action, subject string, s State) []string {
 		facts = append(facts, fact)
 	}
 	for _, name := range declarationFor(a).inputs {
-		if strings.HasPrefix(name, "event.") {
-			// An event fact names which row fired, never part of the
-			// state whose digest both paths must answer with, so it
-			// folds nowhere (§forgejo/decisions/inputs,
-			// §forgejo/reconciliation/the-state-is-the-watermark). The
-			// rows still read them — reassess names the event type in
-			// its reason, the root's comment row names the sender — they
-			// simply cannot enter a digest both paths answer with.
-			continue
-		}
-		if strings.HasPrefix(name, "config.") {
-			// A configuration fact states the operator's choice, never
-			// a fact of the work item, so it folds nowhere for the same
-			// reason an event fact does: a fold that stated the
-			// operator's file would move every row the day it was
-			// edited (§forgejo/decisions/inputs). The rows still read
-			// them and declare them like any other fact; only the fold
-			// passes them by.
+		if slices.ContainsFunc(foldsNowhere, func(prefix string) bool {
+			return strings.HasPrefix(name, prefix)
+		}) {
 			continue
 		}
 		foldFact, ok := declaredInputFolds[name]
