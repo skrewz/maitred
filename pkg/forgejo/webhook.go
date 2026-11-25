@@ -322,7 +322,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		if err != nil {
 			return ev, State{}, err
 		}
-		st := State{Issue: issue, DecomposerIdentity: e.cfg.DecomposerIdentity, ReviewLenses: e.cfg.Reviews}
+		st := State{Issue: issue, DecomposerIdentity: e.cfg.DecomposerIdentity, EngineAccount: e.cfg.EngineAccount, ReviewLenses: e.cfg.Reviews}
 		switch ev.Type {
 		case EventIssueOpened, EventIssueEdited, EventIssueLabelsChanged,
 			EventIssueCommented, EventReconcile:
@@ -335,6 +335,21 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 				return ev, State{}, err
 			}
 			projectPRBlockers(&st, blockers)
+			// Comments stand among reassess's declared inputs and a digest is
+			// never derived over a state whose declared input went unread, so
+			// whichever of these paths reads them is asked of the event type
+			// (§forgejo/webhook/re-fetch). An `ideation` root arriving here
+			// reads the thread twice, once for this digest and once for the
+			// gate below, and that is what the read costs. The listing is
+			// carried whole: which comments count belongs to the
+			// declaration's fold, not to the read (s-git/maitred#262).
+			if readsComments(ev.Type) {
+				comments, err := e.api.ListIssueComments(owner, name, ev.Number)
+				if err != nil {
+					return ev, State{}, err
+				}
+				st.Comments = comments
+			}
 			// A root under a teardown order is the one issue whose
 			// *downstream* edges are read, because the order is only
 			// actionable while the forest stands: whether the root blocks
@@ -438,6 +453,17 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 		return ev, st, nil
 	}
 	return ev, State{}, fmt.Errorf("unknown kind %q", ev.Kind)
+}
+
+// readsComments reports whether one re-fetch's path has a row that
+// derives reassess's digest — the three activity paths, the opened row
+// dispatching implement and the sweep carrying no reassess row at all
+// (§forgejo/decisions/transition-table). It is the only reason to read a
+// thread the decision itself never quotes, so the question is asked of
+// the event type once rather than of two lists that must agree
+// (§forgejo/webhook/re-fetch, s-git/maitred#262).
+func readsComments(t EventType) bool {
+	return t == EventIssueEdited || t == EventIssueLabelsChanged || t == EventIssueCommented
 }
 
 // forestGate assembles the digest gate's observation for one issue

@@ -1,6 +1,7 @@
 package forgejo
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -228,6 +229,76 @@ func TestDeclaredDigests_LeaveTheTrackersWrittenRegionOut(t *testing.T) {
 	}
 }
 
+// TestDeclaredDigests_CommentsAreReassessInputs pins the acceptance that
+// comments stand among `reassess`'s declared inputs, that whose comments
+// count is stated once — in the fold of that input — and that the digest
+// is a fold of declared facts, a timestamp being none of them
+// (§forgejo/decisions/actions, §forgejo/decisions/inputs,
+// s-git/maitred#262).
+func TestDeclaredDigests_CommentsAreReassessInputs(t *testing.T) {
+	quiet := State{
+		ReviewLenses:       testLenses,
+		Issue:              openIssue(),
+		EngineAccount:      "maitred",
+		DecomposerIdentity: "decomposer",
+	}
+	counted := quiet
+	counted.Comments = []Comment{{Author: "alice", Body: "and add this too"}}
+	if digestFor(ActionReassess, Event{}, quiet) == digestFor(ActionReassess, Event{}, counted) {
+		t.Error("a comment authored outside the engine leaves reassess's digest where it was")
+	}
+	for _, author := range []string{"maitred", "decomposer"} {
+		excluded := quiet
+		excluded.Comments = []Comment{{Author: author, Body: "my own report"}}
+		if digestFor(ActionReassess, Event{}, quiet) != digestFor(ActionReassess, Event{}, excluded) {
+			t.Errorf("a comment authored by %q moved reassess's digest, which the declaration excludes", author)
+		}
+	}
+	// Both halves of the rule read together: an excluded author adds no
+	// fact of its own beside one the fold counts.
+	beside := quiet
+	beside.Comments = []Comment{{Author: "alice", Body: "and add this too"}, {Author: "maitred", Body: "my own report"}}
+	if digestFor(ActionReassess, Event{}, counted) != digestFor(ActionReassess, Event{}, beside) {
+		t.Error("an excluded author's comment folded a fact beside a counted one")
+	}
+	// Order-insensitive, as every other fold.
+	two := quiet
+	two.Comments = []Comment{{Author: "alice", Body: "and add this too"}, {Author: "bob", Body: "not that"}}
+	reversed := quiet
+	reversed.Comments = []Comment{two.Comments[1], two.Comments[0]}
+	if digestFor(ActionReassess, Event{}, two) != digestFor(ActionReassess, Event{}, reversed) {
+		t.Error("reassess's digest answers one listing of comments with two digests")
+	}
+	// A thread is append-only, so how many comments it holds is itself a
+	// fact: one repeating an earlier comment's text word for word moves
+	// the digest rather than folding as the fact it repeats
+	// (§forgejo/decisions/actions, s-git/maitred#262).
+	repeat := quiet
+	repeat.Comments = []Comment{{Author: "alice", Body: "and add this too"}, {Author: "alice", Body: "and add this too"}}
+	if digestFor(ActionReassess, Event{}, counted) == digestFor(ActionReassess, Event{}, repeat) {
+		t.Error("a comment repeating an earlier one's text folded no fact, though a thread's length is information")
+	}
+	// A comment the forge lists with no author at all — the shape of a
+	// response without a user object — belongs to no excluded identity,
+	// so it counts, as the forest fold's exclusion already treats it
+	// (§forgejo/decisions/actionable-state-digest).
+	authorless := quiet
+	authorless.Comments = []Comment{{Body: "relayed from somewhere else"}}
+	if digestFor(ActionReassess, Event{}, quiet) == digestFor(ActionReassess, Event{}, authorless) {
+		t.Error("a comment with no author folded no fact, though no identity claims it")
+	}
+	// The moment an issue was last touched moves with a comment, a label,
+	// an edit — anything at all — so it stands in no digest a dispatch is
+	// keyed on.
+	stamped := quiet
+	late := *openIssue()
+	late.UpdatedAt = testTime.Add(72 * time.Hour)
+	stamped.Issue = &late
+	if digestFor(ActionReassess, Event{}, quiet) != digestFor(ActionReassess, Event{}, stamped) {
+		t.Error("reassess's digest moves with the issue's updated_at")
+	}
+}
+
 // TestQuotedRevision_NamesTheFactsBehindTheDigest checks the digest a
 // reason quotes is stated in the words an operator can line up against
 // the forge's history, the rule every other revision quote already
@@ -256,6 +327,43 @@ func TestQuotedRevision_NamesTheFactsBehindTheDigest(t *testing.T) {
 	// quoted by the row that keys on it — is quoted as what it is.
 	if got := quotedRevision(ActionReview, prEvent(EventPRReviewed, "carol"), State{PR: openPR("abc")}, "abc"); got != "revision abc" {
 		t.Errorf("quoted revision = %q, want the head sha quoted as a revision", got)
+	}
+}
+
+// TestQuotedRevision_BoundsTheQuotedComments pins that a long thread is
+// quoted as its newest counted comment beside the count the fold states,
+// rather than one fact per comment as the work item ages — and that the
+// bound is the quote's alone, the digest still folding every counted
+// comment (§forgejo/observability/the-decision-log, s-git/maitred#262).
+func TestQuotedRevision_BoundsTheQuotedComments(t *testing.T) {
+	var thread []Comment
+	for i := range 20 {
+		thread = append(thread, Comment{Author: "alice", Body: "feedback " + strconv.Itoa(i)})
+	}
+	thread = append(thread, Comment{Author: "maitred", Body: "my own report"})
+	threaded := State{
+		ReviewLenses:  testLenses,
+		Issue:         openIssue(),
+		EngineAccount: "maitred",
+		Comments:      thread,
+	}
+	ev := issueEventBy(EventIssueCommented, "alice")
+	got := quotedRevision(ActionReassess, ev, threaded, digestFor(ActionReassess, ev, threaded))
+	if want := "comment alice " + digestRevision("feedback 19"); !strings.Contains(got, want) {
+		t.Errorf("quoted revision %q names no %q", got, want)
+	}
+	if !strings.Contains(got, "counted comments 20") {
+		t.Errorf("quoted revision %q names no count of the comments folded", got)
+	}
+	if n := strings.Count(got, "comment alice "); n != 1 {
+		t.Errorf("quoted revision %q carries %d comment facts, want the one the delivery was about", got, n)
+	}
+	// The fold answers for the digest: take one counted comment away and
+	// the digest moves, however the quote reads.
+	shorter := threaded
+	shorter.Comments = thread[:len(thread)-2]
+	if digestFor(ActionReassess, ev, threaded) == digestFor(ActionReassess, ev, shorter) {
+		t.Error("a counted comment the thread lost moved no digest, though the fold quotes only the newest")
 	}
 }
 

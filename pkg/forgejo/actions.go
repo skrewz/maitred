@@ -100,10 +100,19 @@ func init() {
 			digest:            declaredDigestFor(ActionImplement),
 			digestFoldsInputs: true,
 		},
+		// Comments stand among reassess's inputs, and this declaration is
+		// the one place whose comments count is stated: a comment authored
+		// by neither the account engine_account names nor the configured
+		// decomposer identity, the test commentCountsAsInput applies
+		// (§forgejo/config/engine-account, §forgejo/config/decomposer-identity,
+		// §forgejo/decisions/inputs, s-git/maitred#262). The digest of
+		// these facts is what fires the row, the description among them so
+		// an edit that rewords what the engine is asked to do moves it
+		// (s-git/maitred#262).
 		ActionReassess: {
 			inputs: []string{
-				"issue.state", "issue.labels", "issue.updated_at",
-				"blockers.states", "event.type",
+				"issue.state", "issue.labels", "issue.body", "issue.comments",
+				"blockers.states", "event.type", "event.sender",
 			},
 			ready:             reassessReady,
 			digest:            declaredDigestFor(ActionReassess),
@@ -312,17 +321,13 @@ func declaredDigestFor(a Action) func(Event, State) string {
 // reason line quotes them: the facts the action's declaration names,
 // each stated so a human can line the quote up against the forge's
 // history (§forgejo/observability/the-decision-log,
-// §forgejo/state/watermark).
+// §forgejo/state/watermark). The digest folds every fact; a quote of
+// them bounds the thread (§forgejo/observability/the-decision-log). A
+// fact an earlier input already stated is collected once, so two folds
+// that name the same fact move one digest and quote it once.
 func declaredInputFacts(a Action, s State) []string {
 	var facts []string
 	seen := map[string]bool{}
-	add := func(fact string) {
-		if seen[fact] {
-			return
-		}
-		seen[fact] = true
-		facts = append(facts, fact)
-	}
 	for _, name := range declarationFor(a).inputs {
 		if strings.HasPrefix(name, "event.") {
 			// An event fact names which row fired, never part of the
@@ -338,11 +343,49 @@ func declaredInputFacts(a Action, s State) []string {
 		if !ok {
 			panic(fmt.Sprintf("forgejo: %s declares %s, which no digest fold states", a, name))
 		}
+		var folded []string
 		for _, fact := range foldFact(s) {
-			add(fact)
+			if seen[fact] {
+				continue
+			}
+			seen[fact] = true
+			folded = append(folded, fact)
 		}
+		facts = append(facts, folded...)
 	}
 	return facts
+}
+
+// commentFactPrefix opens every fact the issue.comments fold states, so
+// the one place that bounds the thread for a reason line recognises it.
+const commentFactPrefix = "comment "
+
+// quoteThread bounds a thread's facts for the reason line that quotes
+// them. Comments are the only input whose facts grow with a work item's
+// age — labels, blockers and connected pull requests are trimmed to the
+// taxonomy the forge enforces, a description folds to one hex — so a
+// quote carries the newest counted comment, the one the delivery was
+// about, and lets the count the fold states say how many there were
+// (§forgejo/observability/the-decision-log, s-git/maitred#262). The
+// newest is the last fact the fold produced, the listing being in the
+// order the forge answers with; were that order other, the line would
+// name another comment of the same thread rather than the one asked for,
+// the decision itself being folded from every one. The bound is the
+// quote's alone: a comment the thread lost still moves the digest.
+func quoteThread(facts []string) []string {
+	kept := make([]string, 0, len(facts))
+	newest := ""
+	for _, fact := range facts {
+		if strings.HasPrefix(fact, commentFactPrefix) {
+			newest = fact
+			continue
+		}
+		kept = append(kept, fact)
+	}
+	if newest != "" {
+		kept = append(kept, newest)
+	}
+	return kept
 }
 
 // validateFoldingDeclarations refuses a declaration whose digest is the
@@ -414,6 +457,34 @@ var declaredInputFolds = map[string]func(State) []string{
 			return trackerFacts(s.Issue)
 		}
 		return []string{"updated " + s.Issue.UpdatedAt.UTC().Format(time.RFC3339)}
+	},
+	"issue.comments": func(s State) []string {
+		// One comment, one fact: the login that authored it and the hex
+		// its body digests to, the way an issue's own description is
+		// stated. Whose comments reach the fold is commentCountsAsInput's
+		// to say, and the declaration above it (s-git/maitred#262).
+		//
+		// A thread is append-only, and its information is multiplicity:
+		// every other input is a set of current facts, where stating one
+		// twice says no more, while a comment repeating an earlier one's
+		// text word for word is still a delivery that asked for this row.
+		// So the fold states how many it counted beside what it counted,
+		// and the deduplication that keeps two inputs from stating one
+		// fact twice cannot swallow the repeat
+		// (§forgejo/decisions/actions, s-git/maitred#262).
+		var facts []string
+		counted := 0
+		for _, c := range s.Comments {
+			if !commentCountsAsInput(c.Author, s.EngineAccount, s.DecomposerIdentity) {
+				continue
+			}
+			counted++
+			facts = append(facts, commentFactPrefix+c.Author+" "+digestRevision(c.Body))
+		}
+		if counted > 0 {
+			facts = append(facts, fmt.Sprintf("counted comments %d", counted))
+		}
+		return facts
 	},
 	"blockers.states": func(s State) []string {
 		facts := make([]string, 0, len(s.Blockers))
@@ -540,8 +611,12 @@ func implementReady(_ Event, s State) (Decision, readyAnswer) {
 
 // reassessReady is reassess's predicate: an open issue with no open
 // blocker carried activity — the event row it is reached from is the
-// edited/labelled/commented row; the firing rule itself is unchanged
-// (§forgejo/decisions/actions, s-git/maitred#262 stands).
+// edited/labelled/commented row, and what moves it is a fact the
+// declaration names. commentCountsAsInput says whose comments reach that
+// row: the engine's own report, or the decomposer's own question, on an
+// ordinary work item holds off naming the authorship it read rather than
+// re-firing at the re-fire bound's pace for as long as the issue stands
+// (§forgejo/decisions/loop-prevention, s-git/maitred#262).
 func reassessReady(e Event, s State) (Decision, readyAnswer) {
 	issue := s.Issue
 	if issue == nil {
@@ -561,6 +636,12 @@ func reassessReady(e Event, s State) (Decision, readyAnswer) {
 	}
 	if open := openBlockers(s.Blockers); len(open) > 0 {
 		return holdOff(fmt.Sprintf("issue %d is blocked by %s; not reassessing", issue.Number, issueRefs(open))), readyNo
+	}
+	// The authorship is asked last: every hold-off above it already
+	// names a state the row has nothing to do with, and this one names
+	// the delivery.
+	if e.Type == EventIssueCommented && !commentCountsAsInput(e.Sender, s.EngineAccount, s.DecomposerIdentity) {
+		return holdOff(fmt.Sprintf("issue %d: comment authored by %s, whose comments are no input; nothing reassessed", issue.Number, e.Sender)), readyNo
 	}
 	return dispatch(ActionReassess, fmt.Sprintf("issue %d: %s", issue.Number, e.Type)), readyYes
 }

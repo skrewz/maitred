@@ -1161,6 +1161,186 @@ func TestHandler_IssueActivity_BlockersFetchFailureHoldsOff(t *testing.T) {
 	}
 }
 
+// TestHandler_IssueActivity_FetchesComments pins which paths of one
+// issue re-fetch read the comments: the three whose row can derive
+// reassess's digest — an edit, a label change, a comment — read them
+// exactly once, the opened path reads none, and the sweep's silence is
+// pinned where the sweep itself runs, in
+// TestReconcile_CatchesMissedIssueOpened (§forgejo/webhook/re-fetch,
+// §forgejo/decisions/actions, s-git/maitred#262).
+func TestHandler_IssueActivity_FetchesComments(t *testing.T) {
+	for _, tc := range []struct {
+		eventType string
+		action    string
+		wantReads int
+	}{
+		{"issues", "edited", 1},
+		{"issue_label", "label_updated", 1},
+		{"issue_comment", "created", 1},
+		{"issues", "opened", 0},
+	} {
+		eng, api, q, _ := newTestEngine(t)
+		h := NewHandler(eng, "s3cret", nil)
+		api.issues[7] = testIssue(7, "open")
+		api.comments[7] = []Comment{{Author: "alice", Body: "and add this too"}}
+
+		serve(t, h, signedRequest(t, "s3cret", tc.eventType, tc.action, issuePayload("o/r", 7, tc.action)))
+		if n := api.callCount("Comments:r/7"); n != tc.wantReads {
+			t.Errorf("%s/%s: ListIssueComments called %d times, want %d", tc.eventType, tc.action, n, tc.wantReads)
+		}
+		if len(q.all()) != 1 {
+			t.Errorf("%s/%s: dispatched %d tasks, want 1", tc.eventType, tc.action, len(q.all()))
+		}
+	}
+}
+
+// TestHandler_IssueActivity_CommentsFetchFailureHoldsOff pins that a
+// failing comment read never reaches the decision as "no comments":
+// the re-fetch fails, so nothing dispatches and no watermark is
+// recorded, exactly as for the blockers beside it
+// (§forgejo/webhook/re-fetch, §forgejo/decisions/actions,
+// s-git/maitred#262).
+func TestHandler_IssueActivity_CommentsFetchFailureHoldsOff(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.issues[7] = testIssue(7, "open")
+	api.commentsErr = errors.New("comments endpoint down")
+
+	serve(t, h, signedRequest(t, "s3cret", "issue_comment", "created", issuePayload("o/r", 7, "created")))
+	if n := api.callCount("Comments:r/7"); n == 0 {
+		t.Error("the failing comment read was never reached")
+	}
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Errorf("dispatched %d tasks after the comment read failed: %+v", len(tasks), tasks)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 7})
+	if err != nil || w != nil {
+		t.Errorf("watermark recorded after the hold-off: %v, %v", w, err)
+	}
+}
+
+// TestHandler_Reassess_ExcludedAuthorDispatchesNothing pins the
+// acceptance that a comment authored by the account `engine_account`
+// names dispatches nothing and records no dispatch — the comment folds
+// no fact, and a row that paced it instead would re-fire for as long as
+// the issue stands (§forgejo/decisions/actions,
+// s-git/maitred#262).
+func TestHandler_Reassess_ExcludedAuthorDispatchesNothing(t *testing.T) {
+	eng, api, q, store := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.issues[7] = testIssue(7, "open")
+	api.comments[7] = []Comment{{Author: "maitred-engine", Body: "my own report"}}
+	payload := issuePayload("o/r", 7, "created")
+	payload["sender"] = map[string]any{"login": "maitred-engine"}
+
+	serve(t, h, signedRequest(t, "s3cret", "issue_comment", "created", payload))
+	if tasks := q.all(); len(tasks) != 0 {
+		t.Errorf("dispatched %d tasks for a comment the declaration excludes: %+v", len(tasks), tasks)
+	}
+	w, err := store.Load(Key{Repo: "o/r", Kind: KindIssue, Number: 7})
+	if err != nil || w != nil {
+		t.Errorf("watermark recorded after the hold-off: %v, %v", w, err)
+	}
+}
+
+// TestHandler_Reassess_CommentWithAnotherInputDispatchesOnce pins the
+// acceptance that a comment landing in the same moment as an edit
+// dispatches one task, not two: both deliveries answer with one digest,
+// and the re-fire bound spaces the second
+// (§forgejo/decisions/actions, §forgejo/reconciliation/the-state-is-the-watermark,
+// s-git/maitred#262).
+func TestHandler_Reassess_CommentWithAnotherInputDispatchesOnce(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.issues[7] = testIssue(7, "open")
+	api.comments[7] = []Comment{{Author: "alice", Body: "and add this too"}}
+
+	serve(t, h, signedRequest(t, "s3cret", "issues", "edited", issuePayload("o/r", 7, "edited")))
+	serve(t, h, signedRequest(t, "s3cret", "issue_comment", "created", issuePayload("o/r", 7, "created")))
+	if tasks := q.all(); len(tasks) != 1 {
+		t.Errorf("dispatched %d tasks for one moved state, want 1: %+v", len(tasks), tasks)
+	}
+}
+
+// TestHandler_Reassess_CommentMovesTheStateAlone pins that the comment
+// is what fires the row: at a digest a prior dispatch already records,
+// the comment alone moves it, so the row fires inside the interval the
+// re-fire bound would otherwise hold it to
+// (§forgejo/decisions/actions, s-git/maitred#262).
+func TestHandler_Reassess_CommentMovesTheStateAlone(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.issues[7] = testIssue(7, "open")
+
+	serve(t, h, signedRequest(t, "s3cret", "issues", "edited", issuePayload("o/r", 7, "edited")))
+	api.comments[7] = []Comment{{Author: "alice", Body: "and add this too"}}
+	serve(t, h, signedRequest(t, "s3cret", "issue_comment", "created", issuePayload("o/r", 7, "created")))
+	if tasks := q.all(); len(tasks) != 2 {
+		t.Errorf("dispatched %d tasks for two states, want 2: %+v", len(tasks), tasks)
+	}
+}
+
+// TestHandler_Reassess_RepeatedCommentMovesTheDigest pins that a comment
+// repeating an earlier one’s text word for word still dispatches: a
+// thread is append-only, so how many comments it holds is a fact the fold
+// states, and a row the sweep never re-reaches must not fall quiet on the
+// delivery that asked for it (§forgejo/decisions/actions,
+// s-git/maitred#262).
+func TestHandler_Reassess_RepeatedCommentMovesTheDigest(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.issues[7] = testIssue(7, "open")
+	api.comments[7] = []Comment{{Author: "alice", Body: "any update?"}}
+
+	serve(t, h, signedRequest(t, "s3cret", "issue_comment", "created", issuePayload("o/r", 7, "created")))
+	api.comments[7] = []Comment{{Author: "alice", Body: "any update?"}, {Author: "alice", Body: "any update?"}}
+	serve(t, h, signedRequest(t, "s3cret", "issue_comment", "created", issuePayload("o/r", 7, "created")))
+	if tasks := q.all(); len(tasks) != 2 {
+		t.Errorf("dispatched %d tasks for a thread of two counted comments, want 2: %+v", len(tasks), tasks)
+	}
+}
+
+// TestHandler_Reassess_DescriptionEditMovesTheDigest pins that an edit
+// whose only change is the issue's description dispatches: the
+// description stands among reassess's declared inputs, so a reworded ask
+// moves the digest the row is keyed on instead of going quiet until some
+// other input happens to move (s-git/maitred#262).
+func TestHandler_Reassess_DescriptionEditMovesTheDigest(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.issues[7] = testIssue(7, "open")
+
+	serve(t, h, signedRequest(t, "s3cret", "issues", "edited", issuePayload("o/r", 7, "edited")))
+	reworded := *api.issues[7]
+	reworded.Body = "do something else entirely"
+	api.issues[7] = &reworded
+	serve(t, h, signedRequest(t, "s3cret", "issues", "edited", issuePayload("o/r", 7, "edited")))
+	if tasks := q.all(); len(tasks) != 2 {
+		t.Errorf("dispatched %d tasks for two descriptions, want 2: %+v", len(tasks), tasks)
+	}
+}
+
+// TestHandler_PRComment_FiresNoIssuePathAction pins that a comment on a
+// connected pull request is decided by the pull-request rows: the issue
+// path reads no issue's comments and dispatches no `reassess` for it
+// (§forgejo/decisions/transition-table, s-git/maitred#262).
+func TestHandler_PRComment_FiresNoIssuePathAction(t *testing.T) {
+	eng, api, q, _ := newTestEngine(t)
+	h := NewHandler(eng, "s3cret", nil)
+	api.pulls[9] = testPR(9, "open", true)
+	api.issues[7] = testIssue(7, "open")
+
+	serve(t, h, signedRequest(t, "s3cret", "pull_request_comment", "created", prPayload("o/r", 9, "created")))
+	if n := api.callCount("Comments:r/7"); n != 0 {
+		t.Errorf("the pull-request path read an issue's comments %d time(s), want none", n)
+	}
+	for _, task := range q.all() {
+		if strings.Contains(task.Prompt, "action=reassess") {
+			t.Errorf("a pull request's comment dispatched reassess: %+v", task)
+		}
+	}
+}
+
 // TestHandler_PROpened_BlockedConnectedIssueDispatchesReview pins the
 // retired rejection's absence end to end: a PR opened against a work
 // item that is blocked by an open ideation issue is not closed by the

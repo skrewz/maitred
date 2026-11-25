@@ -279,6 +279,15 @@ func issueEvent(typ EventType) Event {
 	return Event{Type: typ, Repo: "o/r", Kind: KindIssue, Number: 7, Sender: "alice"}
 }
 
+// issueEventBy is an issue event whose sender is the login given — the
+// author of a comment, which is the relation the comment rows test
+// (§forgejo/decisions/actions, s-git/maitred#262).
+func issueEventBy(typ EventType, sender string) Event {
+	e := issueEvent(typ)
+	e.Sender = sender
+	return e
+}
+
 func prEvent(typ EventType, sender string) Event {
 	return Event{Type: typ, Repo: "o/r", Kind: KindPR, Number: 9, Sender: sender}
 }
@@ -346,6 +355,9 @@ func TestActionNames(t *testing.T) {
 // TestDecide covers every transition in the table, the idempotency
 // (watermark) guard, and the sender guard
 // (§forgejo/decisions/transition-table, §forgejo/decisions/loop-prevention).
+// A row may name the phrase its hold-off reason must carry, so a decision
+// an acceptance criterion pins in its words is pinned here rather than in
+// a function of its own.
 func TestDecide(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -353,6 +365,7 @@ func TestDecide(t *testing.T) {
 		state       State
 		watermark   *Watermark
 		wantAction  Action
+		wantReason  string
 		wantCascade []CascadeDispatch
 		wantHolds   []CascadeHoldOff
 	}{
@@ -469,10 +482,51 @@ func TestDecide(t *testing.T) {
 			wantAction: ActionReassess,
 		},
 		{
+			// Neither identity the declaration excludes is configured,
+			// so the guard is inert and any author's comment is an input.
 			name:       "issue feedback comment dispatches reassess",
 			event:      issueEvent(EventIssueCommented),
 			state:      State{ReviewLenses: testLenses, Issue: openIssue()},
 			wantAction: ActionReassess,
+		},
+		{
+			// Comments count as an input only when their author stands
+			// outside the engine's own identities: the row holds off and
+			// names whose authorship it is (§forgejo/decisions/actions,
+			// §forgejo/decisions/loop-prevention, s-git/maitred#262).
+			name:       "issue comment authored by the engine account holds off, naming the authorship",
+			event:      issueEventBy(EventIssueCommented, "maitred"),
+			state:      State{ReviewLenses: testLenses, Issue: openIssue(), EngineAccount: "maitred"},
+			wantReason: "comment authored by maitred, whose comments are no input",
+		},
+		{
+			name:       "issue comment authored by the configured decomposer holds off, naming the authorship",
+			event:      issueEventBy(EventIssueCommented, "decomposer"),
+			state:      State{ReviewLenses: testLenses, Issue: openIssue(), DecomposerIdentity: "decomposer"},
+			wantReason: "comment authored by decomposer, whose comments are no input",
+		},
+		{
+			// An empty sender names no identity, so the guard is inert on
+			// it — the shape a delivery with no user object arrives as.
+			name:       "issue comment delivered with no sender dispatches reassess",
+			event:      issueEventBy(EventIssueCommented, ""),
+			state:      State{ReviewLenses: testLenses, Issue: openIssue(), EngineAccount: "maitred"},
+			wantAction: ActionReassess,
+		},
+		{
+			// The exclusion is a comment rule alone: an edit delivered by
+			// the same account decides on the state, as any edit does.
+			name:       "issue edited whose delivery came from the engine account dispatches reassess",
+			event:      issueEventBy(EventIssueEdited, "maitred"),
+			state:      State{ReviewLenses: testLenses, Issue: openIssue(), EngineAccount: "maitred"},
+			wantAction: ActionReassess,
+		},
+		{
+			// A comment the fold excludes is no input even beside a
+			// watermark that records nothing: nothing dispatches.
+			name:  "issue comment authored by the engine account dispatches nothing at an empty watermark",
+			event: issueEventBy(EventIssueCommented, "maitred"),
+			state: State{ReviewLenses: testLenses, Issue: openIssue(), EngineAccount: "maitred", Comments: []Comment{{Author: "maitred", Body: "my own report"}}},
 		},
 		{
 			name:  "issue edited with an open blocker holds off",
@@ -1730,6 +1784,9 @@ func TestDecide(t *testing.T) {
 			} else if !d.HoldOff() {
 				t.Fatalf("HoldOff() = false with action %q, want hold-off (reason: %s)", d.Action, d.Reason)
 			}
+			if tt.wantReason != "" && !strings.Contains(d.Reason, tt.wantReason) {
+				t.Errorf("reason %q names no %q", d.Reason, tt.wantReason)
+			}
 			if !reflect.DeepEqual(d.Cascade, tt.wantCascade) {
 				t.Errorf("Cascade = %v, want %v", d.Cascade, tt.wantCascade)
 			}
@@ -1740,6 +1797,28 @@ func TestDecide(t *testing.T) {
 				t.Error("Reason is empty; every decision carries a reason")
 			}
 		})
+	}
+}
+
+// TestDecide_ReassessHoldOffNamesTheInputs checks the reason a
+// `reassess` row leaves at a digest the watermark already records
+// quotes the inputs themselves — including the comment that moved
+// them — rather than a revision no reader can place in the forge's
+// history (§forgejo/observability/the-decision-log,
+// §forgejo/state/watermark, s-git/maitred#262).
+func TestDecide_ReassessHoldOffNamesTheInputs(t *testing.T) {
+	st := State{
+		ReviewLenses: testLenses,
+		Issue:        openIssue(),
+		Comments:     []Comment{{Author: "alice", Body: "and add this too"}},
+	}
+	ev := issueEventBy(EventIssueCommented, "alice")
+	d := Decide(ev, st, &Watermark{Action: "reassess", Revision: digestFor(ActionReassess, ev, st)})
+	if !strings.Contains(d.Reason, "comment alice "+digestRevision("and add this too")) {
+		t.Errorf("reason %q does not name the comment among the unchanged inputs", d.Reason)
+	}
+	if strings.Contains(d.Reason, "revision ") {
+		t.Errorf("reason %q names a revision where the inputs can be quoted", d.Reason)
 	}
 }
 
@@ -4503,7 +4582,10 @@ func TestDecide_PRSyncedRebaseStaysRevisionGated(t *testing.T) {
 // TestDecide_ReassessGainsNoSweepRow: reassess stays an event-path
 // action — the sweep's unlabelled-issue row is implement, whether or not
 // the watermark records a reassess at this revision
-// (§forgejo/decisions/actions).
+// (§forgejo/decisions/actions). It is why the sweep's re-fetch reads no
+// comments: no row on that path derives reassess's digest, and the sweep
+// test that counts the call is TestReconcile_CatchesMissedIssueOpened
+// (s-git/maitred#262).
 func TestDecide_ReassessGainsNoSweepRow(t *testing.T) {
 	w := &Watermark{Action: string(ActionReassess), Revision: testRev}
 	d := Decide(issueEvent(EventReconcile), State{ReviewLenses: testLenses, Issue: openIssue()}, w)

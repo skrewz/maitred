@@ -445,6 +445,21 @@ For each decision event, the re-fetch assembles the state
   the re-fetch fails — a hold-off naming the failure, never
   "no blockers".
 
+  The three activity events — edited, labels changed, commented — read
+  the issue's **comments** as well, because comments stand among
+  `reassess`'s declared inputs and a digest must never be derived over a
+  state whose declared input was not read (§forgejo/decisions/actions,
+  s-git/maitred#262). The opened row and the sweep derive no `reassess`
+  digest — the sweep has no `reassess` row at all
+  (§forgejo/decisions/transition-table) — so neither reads them, the
+  sweep's own test counting the call. An open `ideation` root arriving
+  on one of the three activity paths reads the thread twice: once for
+  this digest and once for the digest gate's fold, which the decompose
+  row consults (§forgejo/reconciliation/watermark-exemptions). The fold
+  excludes the authors the declaration excludes rather than the read
+  carrying a filtered listing, and a failed comment read fails the
+  re-fetch, as the blockers' does.
+
   An issue carrying both the `ideation` and the `teardown-forest` label
   has its **downstream** edges read too — the issues it blocks — because
   the teardown order is actionable only while a member it would delete

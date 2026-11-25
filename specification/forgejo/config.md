@@ -306,7 +306,7 @@ the identity its reads and direct writes are authored as:
 
 | Key | Required | Value |
 |---|---|---|
-| `engine_account` | yes | the login of the engine's own account; the forest's actionable-state digest excludes its comments, so the digest gate needs it to tell the engine's own reports from a human's words (§forgejo/decisions/actionable-state-digest, s-git/maitred#209) |
+| `engine_account` | yes | the login of the engine's own account; the forest's actionable-state digest excludes its comments, so the digest gate needs it to tell the engine's own reports from a human's words, and the same login is half of the exclusion that names which comments are an input to `reassess` (§forgejo/decisions/actionable-state-digest, §forgejo/decisions/actions, s-git/maitred#209, s-git/maitred#262) |
 
 The key is **required**: an unset one is a load error
 (§forgejo/config/validation), never a silently inert gate. Without it

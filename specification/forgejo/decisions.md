@@ -203,7 +203,7 @@ declaration that records it (§forgejo/decisions/inputs).
 | Action | Dispatched when | Inputs |
 |---|---|---|
 | `implement` | the issue is open, unblocked (all its blockers closed), has no connected open PR, carries no reserved label and does not carry `forest-seeding`, and is not an `outcome` tracker (one that becomes unblocked is a `wrap-up` candidate) — the issue was opened, became unblocked, or was reconciled into that state; **the row is state-governed on every path, dispatching on the digest of these inputs rather than on any timestamp, and a digest the watermark already records re-fires at the re-fire bound's pace**, so an attempt that died before opening a connected pull request recovers within one interval (§forgejo/reconciliation/the-state-is-the-watermark, §forgejo/decisions/loop-prevention, §forgejo/decisions/commissioning, s-git/maitred#259) | `issue.state`, `issue.labels`, `issue.updated_at`, `blockers.states`, `connected PRs` |
-| `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a feedback comment (the prompt decides whether to implement), and it carries no reserved label | `issue.state`, `issue.labels`, `issue.updated_at`, `blockers.states`, `event.type` |
+| `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a comment authored by anyone other than the account `engine_account` names or the configured decomposer identity (the prompt decides whether to implement), and it carries no reserved label — **the row is state-governed on every path, dispatching on the digest of these inputs, so a comment the fold excludes fires nothing, a comment it counts fires at once, and a comment that arrives in the same moment as another input fires once, the re-fire bound spacing the second arrival. An edit moves the row through the description it rewords; an edit that moves no declared fact — a title reworded alone, which no fold states — dispatches nothing until another input moves** (§forgejo/decisions/loop-prevention, §forgejo/config/engine-account, §forgejo/config/decomposer-identity, §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#262) | `issue.state`, `issue.labels`, `issue.body`, `issue.comments` (authored by neither the account `engine_account` names nor the configured decomposer identity), `blockers.states`, `event.type`, `event.sender` |
 | `review` | the **fan-out over the configured lenses**: a mergeable PR opened, or synced, dispatches each lens with no undismissed approval at the head (§forgejo/decisions/review-lenses); so does an open mergeable PR carrying the `trigger-review` label, at the current revision (§forgejo/decisions/label-triggered-review); watermark-exempt per lens on the sweep while that lens has reported nothing at the head (§forgejo/reconciliation/watermark-exemptions) | `PR.state`, `PR.mergeable`, `PR.head sha`, `PR.labels`, `reviews`, `config.review lenses`, `event.type`, `event.sender` |
 | `fix-feedback` | every configured review lens has reported at the PR's current head and the reports are not all approvals (§forgejo/decisions/review-lenses) — **and** the PR's author is the configured implementer identity; a PR authored by anyone else holds off, its feedback theirs to fix (§forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention, s-git/maitred#143); while any lens has not reported at head the action holds off naming the outstanding lenses, whose dispatches the fan-out row advances; watermark-exempt on the sweep while the chain reports feedback at the current head (§forgejo/reconciliation/watermark-exemptions) | `PR.state`, `PR.mergeable`, `PR.head sha`, `PR.author`, `reviews`, `config.review lenses`, `config.implementer identity`, `event.type` |
 | `merge-or-wait` | **every configured lens holds an undismissed approval at the PR's current head**, no reviewer's latest undismissed review at head is a non-approval (§forgejo/decisions/review-lenses), **the issue its body closes carries the `agentic-auto-merge` opt-in** — the label is a precondition of the dispatch on every path, so an approved PR whose delivered issue carries no merge opt-in holds off, its reason naming the missing label and the connected issues (§forgejo/decisions/merge-gate, s-git/maitred#179, s-git/maitred#228) — **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's; never for a PR whose connected issue is a member of an open sync set — landing is the set's decision (§forgejo/decisions/sync-set); a labelled member of no open set — its set retired — reads as stale authoring, not a gate, and the merge gate decides on (§forgejo/decisions/sync-set); watermark-exempt on every path when the issue its body closes carries `agentic-auto-merge`, its approved head being frozen (§forgejo/reconciliation/watermark-exemptions) | `PR.state`, `PR.mergeable`, `PR.head sha`, `reviews`, `connected issues`, `connected issues' blockers`, `connected issues' sync sets`, `sync sets`, `config.review lenses`, `event.kind`, `event.repo`, `event.number` |
@@ -298,7 +298,8 @@ re-firing (§forgejo/decisions/label-triggered-review).
 | issue opened / edited / labels changed / comment (issue carries the `outcome` or `human-task` label) | hold off, naming the label — the sweep is where `wrap-up` fires (§forgejo/reconciliation/watermark-exemptions) |
 | issue opened / edited / labels changed / comment (issue open, carries the `forest-seeding` label) | hold off, naming the seeding window — a newborn forest member is dispatchable neither for `implement` nor for `reassess` until its blocking edges are wired and the decomposer removes the label (§forgejo/decisions/transition-table, §forgejo/decisions/commissioning) |
 | issue opened / edited / labels changed / comment (issue carries the `sync` label) | hold off, naming the label — the sweep is where a landing set's `sync` fires (§forgejo/reconciliation/watermark-exemptions, §forgejo/decisions/sync-set) |
-| issue edited / labels changed / feedback comment (issue open, all blockers closed) | `reassess` |
+| issue edited / labels changed / comment authored by an identity whose comments count (issue open, all blockers closed) | `reassess` — on every path the dispatch is the digest of the declaration's inputs: a comment that folded no fact never reaches this row, and one that folded one moves the digest and fires at once (§forgejo/decisions/actions, s-git/maitred#262) |
+| issue comment authored by the account `engine_account` names or by the configured decomposer identity (issue open, no open blockers, no reserved label) | hold off, naming the authorship — the comment folds no fact, and a row that dispatched it anyway would re-fire at the re-fire bound's pace for as long as the issue stands (§forgejo/decisions/actions, §forgejo/decisions/loop-prevention, s-git/maitred#262) |
 | issue edited / labels changed / feedback comment (issue open, an open blocker) | hold off — the reason names the open blockers |
 | issue edited / labels changed / feedback comment (issue not open) | hold off |
 | issue closed | unblock cascade |
@@ -1031,7 +1032,11 @@ Six mechanisms, in this order:
    decomposer identity must not re-dispatch `decompose` — every other
    author's comment re-cures the forest, which is what makes answering
    the decomposer's clarifying questions work event-driven
-   (s-git/maitred#147). The guards that read a *declared* identity —
+   (s-git/maitred#147); a comment on an ordinary work item authored by
+   the account `engine_account` names or by the configured decomposer
+   identity must not re-dispatch `reassess`, whose comment input folds
+   neither of them (§forgejo/decisions/actions, s-git/maitred#262). The
+   guards that read a *declared* identity —
    the root-comment author guard, the fix-feedback ownership gate of
    mechanism 5, and the per-lens sender guard, which compares the
    payload's login to each lens's configured `identity` — match by
@@ -1103,8 +1108,14 @@ decides as reconcile (§forgejo/decisions/transition-table).
 PR itself (an issue or pull request carrying its **author**, the login
 of whoever opened it, §forgejo/client/operations); the issue's blockers (with their states)
 and its connected open PRs, for the `implement` and `reassess`
-conditions; the PR's reviews, for the review transitions; the PR's labels,
-for the label-triggered review override
+conditions; **the issue's comments**, read on the paths whose row can
+dispatch `reassess` — an edit, a label change or a comment — for the
+`reassess` condition, whose declaration counts the comments authored
+outside the excluded identities and folds their number beside them, a
+thread being append-only so that a comment repeating an earlier one's
+text is one fact more, not the same fact twice
+(§forgejo/decisions/actions, s-git/maitred#262); the PR's reviews,
+for the review transitions; the PR's labels, for the label-triggered review override
 (§forgejo/decisions/label-triggered-review); for PR reviewed, PR
 commented, the sweep's PR path and the unblock cascade's PR leg, the
 **connected issues** — the union of the issues the PR's body
@@ -1126,17 +1137,21 @@ stored one, each with its per-component sub-digests
 (§forgejo/decisions/actionable-state-digest,
 s-git/maitred#209).
 
-The function consults **two declared configuration inputs**: the
+The function consults **three declared configuration inputs**: the
 configured **implementer identity**
 (§forgejo/config/implementer-identity), which the engine passes
 verbatim on the state and the `fix-feedback` rows alone read
-(§forgejo/decisions/loop-prevention, s-git/maitred#143), and the
-configured **decomposer identity**
+(§forgejo/decisions/loop-prevention, s-git/maitred#143), the configured
+**decomposer identity**
 (§forgejo/config/decomposer-identity), passed verbatim on the state as
-well and read by one row alone: the comment on an open `ideation` root,
+well and read by two rows alone: the comment on an open `ideation` root,
 where the author *is* the relation being tested — a human answering the
 decomposer re-cures; the decomposer's own comment holds off
-(§forgejo/decisions/loop-prevention, s-git/maitred#147). Issue
+(§forgejo/decisions/loop-prevention, s-git/maitred#147) — and the account
+`engine_account` names (§forgejo/config/engine-account), which the state
+carries for one purpose alone: naming whose comments are no input to
+`reassess`, alongside the decomposer identity
+(§forgejo/decisions/actions, s-git/maitred#262). Issue
 authorship still gates nothing — #135 stands for work items; a root
 comment is a different relation. Every other row decides on state
 alone. Both guards are inert when the identity is unset.

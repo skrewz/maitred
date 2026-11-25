@@ -234,6 +234,16 @@ type State struct {
 	// merge-or-wait, the sync-set member test) are decided per lens
 	// (§forgejo/decisions/review-lenses).
 	ReviewLenses []ReviewLens
+	// Comments are the issue's comments as the re-fetch found them, read
+	// wherever a row derives reassess's digest — the three activity paths
+	// (§forgejo/webhook/re-fetch, s-git/maitred#262). Every author is
+	// carried; commentCountsAsInput is whose comments count.
+	Comments []Comment
+	// EngineAccount is the login `engine_account` names
+	// (§forgejo/config/engine-account), passed verbatim on the state like
+	// the identities beside it, for readers that apply the exclusion
+	// commentCountsAsInput states (s-git/maitred#262).
+	EngineAccount string
 	// CascadeRoot is the closed issue the unblock cascade walks from,
 	// for close events.
 	CascadeRoot *IssueNode
@@ -2034,7 +2044,7 @@ func digestRevision(fact string) string {
 // re-keyed declaration (§forgejo/reconciliation/the-tracker-block).
 func quotedRevision(a Action, e Event, s State, rev string) string {
 	if digestFoldsInputs(a) && rev == digestFor(a, e, s) {
-		facts := declaredInputFacts(a, s)
+		facts := quoteThread(declaredInputFacts(a, s))
 		if len(facts) > 0 {
 			sort.Strings(facts)
 			return "digest " + strings.Join(facts, ", ")
