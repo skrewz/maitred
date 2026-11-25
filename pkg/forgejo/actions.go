@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -17,9 +18,10 @@ import (
 // decision path reaches an action's predicate and digest through this
 // table — the rows in decisions.go neither restate the digest beside a
 // dispatch nor carry a private readiness rule the declaration does not
-// name. The input set is recorded rather than consulted: the refusal
-// of undeclared reads that will one day check a predicate against it
-// is a later member of this chain (§forgejo/decisions/inputs).
+// name. The input set is consulted as well as recorded: an action the
+// enum names without a declaration cannot dispatch, and a predicate
+// reading a fact its own declaration does not name is refused
+// (§forgejo/decisions/inputs, §forgejo/decisions/actions).
 //
 // The predicate answers the question "does this state call for this
 // action", one answer whichever path asks it; how a ready row is
@@ -57,9 +59,9 @@ type actionDecl struct {
 	// inputs names every input fact the predicate reads, in the
 	// vocabulary of §forgejo/decisions/inputs (state fields, event
 	// fields, and the declared configuration inputs the engine passes
-	// verbatim). It is the set the refusal of undeclared reads will
-	// one day check against; today it is the action's declaration of
-	// what it looks at, in one place.
+	// verbatim). It is the set the refusal of undeclared reads checks
+	// the predicate against, and so the action's declaration of what it
+	// looks at, in one place.
 	inputs []string
 	// ready is the action's predicate. The returned Decision carries
 	// the dispatch reason (readyYes) or the hold-off reason
@@ -107,11 +109,16 @@ func init() {
 		// §forgejo/decisions/inputs, s-git/maitred#262). The digest of
 		// these facts is what fires the row, the description among them so
 		// an edit that rewords what the engine is asked to do moves it
-		// (s-git/maitred#262).
+		// (s-git/maitred#262). The two identities the count answers to are
+		// declared like any other input and fold nowhere, as an event fact
+		// does: a fold that stated the operator's file would move every
+		// row the day it was edited (§forgejo/decisions/inputs).
 		ActionReassess: {
 			inputs: []string{
 				"issue.state", "issue.labels", "issue.body", "issue.comments",
-				"blockers.states", "event.type", "event.sender",
+				"blockers.states",
+				"config.decomposer identity", "config.engine account",
+				"event.type", "event.sender",
 			},
 			ready:  reassessReady,
 			digest: declaredDigestFor(ActionReassess),
@@ -352,6 +359,19 @@ func digestFacts(facts []string) string {
 // (§forgejo/observability/the-decision-log). A fact an earlier input
 // already stated is collected once, so two folds that name the same
 // fact move one digest and quote it once.
+
+// foldsNowhere names the prefixes of declared names no digest fold
+// states, each for its own reason. An event fact names which row
+// fired, never part of the state whose digest both paths must answer
+// with (§forgejo/reconciliation/the-state-is-the-watermark), and a
+// configuration fact states the operator's choice, so a fold that
+// stated it would move every row the day it was edited
+// (§forgejo/decisions/inputs). The rows still read both kinds —
+// reassess names the event type in its reason and the identities whose
+// comments count — and declare them like any other fact; the fold
+// simply passes them by.
+var foldsNowhere = []string{"event.", "config."}
+
 func declaredInputFacts(a Action, subject string, s State) []string {
 	var facts []string
 	seen := map[string]bool{}
@@ -363,14 +383,9 @@ func declaredInputFacts(a Action, subject string, s State) []string {
 		facts = append(facts, fact)
 	}
 	for _, name := range declarationFor(a).inputs {
-		if strings.HasPrefix(name, "event.") {
-			// An event fact names which row fired, never part of the
-			// state whose digest both paths must answer with, so it
-			// folds nowhere (§forgejo/decisions/inputs,
-			// §forgejo/reconciliation/the-state-is-the-watermark). The
-			// rows still read them — reassess names the event type in
-			// its reason, the root's comment row names the sender — they
-			// simply cannot enter a digest both paths answer with.
+		if slices.ContainsFunc(foldsNowhere, func(prefix string) bool {
+			return strings.HasPrefix(name, prefix)
+		}) {
 			continue
 		}
 		foldFact, ok := declaredInputFolds[name]

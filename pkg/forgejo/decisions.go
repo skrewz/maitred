@@ -2074,7 +2074,13 @@ func reservedLabel(issue *Issue) string {
 	}
 }
 
+// dispatch is the one seat a dispatching Decision is written from, so it is
+// where the declaration is asked: an action the table does not declare cannot
+// dispatch, and the refusal names it. The rows reach a predicate through the
+// declaration already; this closes the seat a new row could otherwise take
+// beside it (§forgejo/decisions/actions, s-git/maitred#263).
 func dispatch(action Action, reason string) Decision {
+	declarationFor(action)
 	return Decision{Dispatched: true, Action: action, Reason: reason}
 }
 
