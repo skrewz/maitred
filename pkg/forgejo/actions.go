@@ -322,15 +322,10 @@ func declaredDigestFor(a Action) func(Event, State) string {
 // each stated so a human can line the quote up against the forge's
 // history (§forgejo/observability/the-decision-log,
 // §forgejo/state/watermark). The digest folds every fact; a quote of
-// them bounds the thread (§forgejo/observability/the-decision-log).
+// them bounds the thread (§forgejo/observability/the-decision-log). A
+// fact an earlier input already stated is collected once, so two folds
+// that name the same fact move one digest and quote it once.
 func declaredInputFacts(a Action, s State) []string {
-	return inputFacts(a, s)
-}
-
-// inputFacts collects one declaration's folded facts. A fact an earlier
-// input already stated is collected once, so two folds that name the
-// same fact move one digest and quote it once.
-func inputFacts(a Action, s State) []string {
 	var facts []string
 	seen := map[string]bool{}
 	for _, name := range declarationFor(a).inputs {
