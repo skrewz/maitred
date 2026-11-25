@@ -405,7 +405,7 @@ the same decision and the same re-fire bound the event path runs
 | `fix-feedback` | the PR is open, mergeable, every lens has reported at head, and the chain at head holds no approval — a comment report counts here, as feedback the sweep hands to the implementer (§forgejo/decisions/review-lenses) | a push moves the head, a report changes the chain, and the row's own success is a fix push; a run that died left the chain exactly as it was |
 | `merge-or-wait` | the PR is open, **every configured lens holds an undismissed approval at head**, no connected issue has an open blocker (the merge gate, §forgejo/decisions/merge-gate), and the issue its body closes carries `agentic-auto-merge` (§forgejo/decisions/merge-gate, s-git/maitred#179, s-git/maitred#228) | an approved opted-in PR sits at a **frozen head** — nothing more is pushed to it — so the chain, the labels and the head are all fixed until the merge lands, and a merge run that died would otherwise never be retried on an event |
 | `rebase` | the pull request is open and not mergeable | a rebase that landed moved the head, which is in the digest; a head a dead rebase left unmoved is the same state that asked for it |
-| `implement`, `reassess` | the issue is open, unblocked and awaiting its delivery, or edited since (§forgejo/decisions/actions) | an attempt that died before opening a pull request left every fact the fold states as it found it (§forgejo/reconciliation/the-state-is-the-watermark) |
+| `implement`, `reassess` | the issue is open, unblocked and awaiting its delivery, or edited or commented on since (§forgejo/decisions/actions) | an attempt that died before opening a pull request left every fact the fold states as it found it (§forgejo/reconciliation/the-state-is-the-watermark) |
 | `decompose`, `wrap-up`, `teardown-forest` | the forest's or the tracker's state the row names — for `decompose`, with its **digest gate** asked first (§forgejo/decisions/actionable-state-digest) | a run that died left those facts as it found them, and the gate is a suppression of its own, asked before the watermark and stated among these inputs when armed (§forgejo/state/forest-digest) |
 
 The `merge-or-wait` row and the fan-out re-fire for the reason a
@@ -524,18 +524,22 @@ member the cascade's read could not see.
 ## The landing set's row
 
 The sweep's `sync` row is the pull-request path's one row a digest
-suppresses. Its declaration names the set: the grouping issue's number,
-state, labels and body, and per member its number, state, the member
-label's presence and its delivering pull request's head sha, open and
-mergeable state and approval at that head — plus the event's own issue,
-so the event that declares the row is in the pair like every other
-row's (§forgejo/decisions/inputs, §forgejo/decisions/sync-set). The
-members' and the grouping issue's `updated_at` fold nowhere, so a comment
-or a label toggle that moves no readiness does not re-run the landing
-prompt; what the fold does carry is the grouping issue's **body** — the
-merge order the landing run was told to honour — because a ready set
-whose run reported an error is otherwise a fixed point the backstop
-cannot fire on. The row is the backstop for set changes that carry no
+suppresses. Its declaration names the set: the grouping issue's state,
+body and `sync` label's presence, and per member its number, state, the
+member label's presence and its delivering pull request's head sha, open
+and mergeable state and approval at that head
+(§forgejo/decisions/inputs, §forgejo/decisions/sync-set). The grouping
+issue's own number folds nowhere — the watermark keys the row by the
+object — and no event fact joins the fold, so the sweep and an event
+answer one digest for one state like every other row
+(§forgejo/reconciliation/the-state-is-the-watermark). The members' and
+the grouping issue's `updated_at` fold nowhere, and no label of the set
+or its members folds beyond the two presences the row reads, so a
+comment or a label toggle that moves no readiness does not re-run the
+landing prompt; what the fold does carry is the grouping issue's
+**body** — the merge order the landing run was told to honour — because
+a ready set whose run reported an error is otherwise a fixed point the
+backstop cannot fire on. The row is the backstop for set changes that carry no
 delivery — an edge edit, a human closing a member, a human restating the
 order: the candidate no event fired is caught within one reconcile
 interval, and a set whose state has genuinely moved re-fires at once.

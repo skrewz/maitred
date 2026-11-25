@@ -179,7 +179,7 @@ func init() {
 		},
 		ActionSync: {
 			inputs: []string{
-				"issue.state", "issue.labels", "issue.body", "sync members",
+				"issue.state", "issue.sync label", "issue.body", "sync members",
 				"members' PRs", "members' PR reviews", "config.review lenses",
 			},
 			ready:  syncReady,
@@ -281,14 +281,13 @@ func foldComponents() []digestComponent {
 	return declarationFor(ActionDecompose).components
 }
 
-// The digest derivations the declarations bind to. declaredDigestFor is
-// the digest of an action's declared input set, which every declaration
-// binds to now: the issue-path actions had it first (s-git/maitred#259),
-// and the pull-request actions — whose rows once keyed themselves on the
-// head sha they name among their inputs — took it here
-// (s-git/maitred#260). The sync leg of the unblock cascade reads the set
-// before it dispatches (dispatchSyncSet), so no declared digest is ever
-// derived over a state whose members are absent.
+// The digest derivations the declarations bind to: declaredDigestFor
+// is the digest of an action's declared input set, which every
+// declaration binds to — the issue-path actions took it first
+// (s-git/maitred#259), the pull-request actions here
+// (s-git/maitred#260). The sync leg of the unblock cascade reads the
+// set before it dispatches (dispatchSyncSet), so no declared digest is
+// ever derived over a state whose members are absent.
 
 // declaredDigestFor is the digest derivation a declaration binds to: the
 // digest of that action's declared input set, the hex SHA-256 over
@@ -468,6 +467,19 @@ var declaredInputFolds = map[string]func(subject string, s State) []string{
 		// nowhere (§forgejo/reconciliation/the-tracker-block).
 		return []string{"body " + digestRevision(outsideFence(s.Issue.Body))}
 	},
+	"issue.sync label": func(_ string, s State) []string {
+		if s.Issue == nil {
+			return nil
+		}
+		// The landing row exists only while the grouping issue carries
+		// the `sync` label, and every path asks that presence before
+		// the predicate is reached — the sweep's scan, the cascade's
+		// candidate and the approval path's re-check
+		// (§forgejo/decisions/sync-set). No other label of a grouping
+		// issue decides anything the row reads, so the presence is the
+		// whole of the label fact (§forgejo/decisions/inputs).
+		return []string{fmt.Sprintf("sync label %t", hasLabel(s.Issue, LabelSync))}
+	},
 	"issue.updated_at": func(_ string, s State) []string {
 		if s.Issue == nil {
 			return nil
@@ -554,9 +566,8 @@ var declaredInputFolds = map[string]func(subject string, s State) []string{
 		return []string{"forest " + forestRef(s.ForestGate.RootRepo, s.ForestGate.RootNumber) + " " + s.ForestGate.Current}
 	},
 	// The pull-request folds: the facts the pull-request rows read, each
-	// stated as the row reads it. The head sha is here as an input the
-	// declaration names, which is what the rows used to key themselves on
-	// beside any declaration (s-git/maitred#260).
+	// stated as the row reads it, the head sha among them as the
+	// declaration names it (s-git/maitred#260).
 	"PR.state": func(_ string, s State) []string {
 		if s.PR == nil {
 			return nil
@@ -625,10 +636,26 @@ var declaredInputFolds = map[string]func(subject string, s State) []string{
 		return []string{"implementer " + s.ImplementerIdentity}
 	},
 	"connected issues": func(_ string, s State) []string {
+		// The merge gate reads two labels of a connected work item
+		// beside its identity and state: the merging opt-in on the
+		// issue its body closes (§forgejo/decisions/merge-gate,
+		// s-git/maitred#228) and the membership opt-in whose set holds
+		// an approved PR off the merge
+		// (§forgejo/decisions/sync-set). Folding the whole label set
+		// would let a toggle of a label no predicate reads alternate
+		// the digest between two values, and the re-fire bound — which
+		// remembers one digest per `(action, subject)` — would pace
+		// nothing (§forgejo/decisions/loop-prevention). The two
+		// presences are the facts the row asks
+		// (§forgejo/decisions/inputs).
 		var facts []string
 		for i := range s.ConnectedIssues {
 			c := &s.ConnectedIssues[i]
-			facts = append(facts, issueFacts(&c.Issue)...)
+			ref := forestRef(c.Issue.Repository, c.Issue.Number)
+			facts = append(facts,
+				"issue "+ref+" "+c.Issue.State,
+				fmt.Sprintf("issue %s label %s %t", ref, LabelAgenticAutoMerge, hasLabel(&c.Issue, LabelAgenticAutoMerge)),
+				fmt.Sprintf("issue %s label %s %t", ref, LabelAgenticSyncMerge, hasLabel(&c.Issue, LabelAgenticSyncMerge)))
 		}
 		return facts
 	},
@@ -703,22 +730,6 @@ var declaredInputFolds = map[string]func(subject string, s State) []string{
 		}
 		return facts
 	},
-}
-
-// issueFacts states an issue as a digest's fact: its identity and state,
-// and each label it carries. The merge gate reads a connected work
-// item's labels for the opt-ins, so a label move is a fact for that
-// digest (§forgejo/decisions/merge-gate). The landing set's own fold
-// states a member's opt-in rather than its whole label set, because
-// the landing predicate reads just that one label
-// (§forgejo/decisions/sync-set).
-func issueFacts(issue *Issue) []string {
-	ref := forestRef(issue.Repository, issue.Number)
-	facts := []string{"issue " + ref + " " + issue.State}
-	for _, label := range issue.Labels {
-		facts = append(facts, "issue "+ref+" label "+label)
-	}
-	return facts
 }
 
 // syncSetFact states a grouping issue as a landing-set fact: the set

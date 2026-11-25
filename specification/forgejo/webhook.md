@@ -458,7 +458,7 @@ For each decision event, the re-fetch assembles the state
   sweep's own test counting the call. An open `ideation` root arriving
   on one of the three activity paths reads the thread twice: once for
   this digest and once for the digest gate's fold, which the decompose
-  row consults (§forgejo/reconciliation/watermark-exemptions). The fold
+  row consults (§forgejo/decisions/actionable-state-digest). The fold
   excludes the authors the declaration excludes rather than the read
   carrying a filtered listing, and a failed comment read fails the
   re-fetch, as the blockers' does.

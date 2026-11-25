@@ -212,6 +212,57 @@ func TestDeclaredDigests_MoveWithTheFactsThePredicatesRead(t *testing.T) {
 	}
 }
 
+// TestDeclaredDigests_PRLabelFoldsStateOnlyPresences pins the three
+// pull-request-side label folds to the presences their rows read: the
+// re-fire bound remembers one digest per `(action, subject)`, so a fold
+// wider than the predicate lets an account with label-edit rights
+// alternate the digest between two values and outrun the bound — the
+// shape s-git/maitred#278's reviews found on the fan-out's fold, the
+// merge row's connected-issue fold and the landing set's grouping-issue
+// fold (§forgejo/decisions/loop-prevention, §forgejo/decisions/inputs).
+func TestDeclaredDigests_PRLabelFoldsStateOnlyPresences(t *testing.T) {
+	withPRLabels := func(labels ...string) State {
+		pr := openPR("abc")
+		pr.Labels = labels
+		return State{ReviewLenses: testLenses, PR: pr}
+	}
+	fan := digestFor(ActionReview, Event{}, withPRLabels())
+	if got := digestFor(ActionReview, Event{}, withPRLabels("bug")); got != fan {
+		t.Error("digestFor(review) moved on a PR label no predicate reads, arming the re-fire bound's one-digest memory against a toggle")
+	}
+	if got := digestFor(ActionReview, Event{}, withPRLabels(LabelTriggerReview)); got == fan {
+		t.Error("digestFor(review) held still while the fan-out's own request appeared — the presence is the fact the row asks")
+	}
+
+	withConnectedLabels := func(labels ...string) State {
+		connected := connectedIssueOf(4)
+		connected.Issue.Labels = labels
+		return State{ReviewLenses: testLenses, PR: openPR("abc"), ConnectedIssues: []ConnectedIssue{connected}}
+	}
+	merge := digestFor(ActionMergeOrWait, Event{}, withConnectedLabels())
+	if got := digestFor(ActionMergeOrWait, Event{}, withConnectedLabels("bug")); got != merge {
+		t.Error("digestFor(merge-or-wait) moved on a connected issue's label the merge gate never reads — a toggle past the bound's memory on the row that attempts a merge")
+	}
+	for _, optIn := range []string{LabelAgenticAutoMerge, LabelAgenticSyncMerge} {
+		if got := digestFor(ActionMergeOrWait, Event{}, withConnectedLabels(optIn)); got == merge {
+			t.Errorf("digestFor(merge-or-wait) held still while a connected issue acquired %s, which the merge gate reads", optIn)
+		}
+	}
+
+	withGroupingLabels := func(labels ...string) State {
+		set := syncIssueFixture(7)
+		set.Labels = labels
+		return State{ReviewLenses: testLenses, Issue: set, SyncMembers: []SyncMember{syncMemberFixture(5, 11)}}
+	}
+	land := digestFor(ActionSync, Event{}, withGroupingLabels(LabelSync))
+	if got := digestFor(ActionSync, Event{}, withGroupingLabels(LabelSync, "bug")); got != land {
+		t.Error("digestFor(sync) moved on a grouping issue's label no row reads, re-running the landing prompt on a toggle that moved no readiness")
+	}
+	if got := digestFor(ActionSync, Event{}, withGroupingLabels()); got == land {
+		t.Error("digestFor(sync) held still while the grouping issue lost the label every path asks before the row exists")
+	}
+}
+
 // TestDeclaredDigests_LeaveTheTrackersWrittenRegionOut checks the one
 // fact the engine moves by writing it is absent from the digest: a
 // tracker's current-state block, rewritten by every wrap-up's draw,
@@ -332,8 +383,8 @@ func TestQuotedRevision_NamesTheFactsBehindTheDigest(t *testing.T) {
 			t.Errorf("a tracker's quoted revision %q names no %q", got, want)
 		}
 	}
-	// A revision the action does not fold — a pull request's head sha,
-	// quoted by the row that keys on it — is quoted as what it is.
+	// A revision beside the declared digest — an object value named
+	// where no fold derived it — is quoted as what it is.
 	if got := quotedRevision(ActionReview, prEvent(EventPRReviewed, "carol"), State{PR: openPR("abc")}, "abc"); got != "revision abc" {
 		t.Errorf("quoted revision = %q, want the head sha quoted as a revision", got)
 	}
