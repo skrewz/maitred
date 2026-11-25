@@ -189,7 +189,14 @@ func (e *Engine) HandleEvent(ev Event) {
 	e.store.WithKeyLock(key, func() {
 		ev, st, err := e.refetch(ev)
 		if err != nil {
+			// A read the engine could not pay for is an input that
+			// could not be proven, never an input answered: the hold-off
+			// reaches the decision log naming which input went unread, so
+			// the engine's own blindness is as readable as a state that
+			// says no, and the sweep is named as what asks again
+			// (§forgejo/webhook/the-pipeline, s-git/maitred#261).
 			e.log.Error("re-fetch failed, holding off", "key", key.String(), "error", err)
+			e.recordDecision(key, ev, st, holdOffUnreadRead(err))
 			return
 		}
 		w, err := e.store.loadLocked(key)
@@ -320,7 +327,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 	case KindIssue:
 		issue, err := e.api.GetIssue(owner, name, ev.Number)
 		if err != nil {
-			return ev, State{}, err
+			return ev, State{}, unreadInput("issue.state", err)
 		}
 		st := State{Issue: issue, DecomposerIdentity: e.cfg.DecomposerIdentity, EngineAccount: e.cfg.EngineAccount, ReviewLenses: e.cfg.Reviews}
 		switch ev.Type {
@@ -332,7 +339,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 			// (§forgejo/decisions/transition-table, §forgejo/webhook/re-fetch).
 			blockers, err := e.api.IssueDependencies(owner, name, ev.Number)
 			if err != nil {
-				return ev, State{}, err
+				return ev, State{}, unreadInput("blockers.states", err)
 			}
 			projectPRBlockers(&st, blockers)
 			// Comments stand among reassess's declared inputs and a digest is
@@ -346,7 +353,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 			if readsComments(ev.Type) {
 				comments, err := e.api.ListIssueComments(owner, name, ev.Number)
 				if err != nil {
-					return ev, State{}, err
+					return ev, State{}, unreadInput("issue.comments", err)
 				}
 				st.Comments = comments
 			}
@@ -359,7 +366,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 			if hasLabel(issue, LabelIdeation) && hasLabel(issue, LabelTeardownForest) {
 				downstream, err := e.api.IssueBlocks(owner, name, ev.Number)
 				if err != nil {
-					return ev, State{}, err
+					return ev, State{}, unreadInput("blocked downstream edges", err)
 				}
 				st.Blocked = downstream
 			}
@@ -371,7 +378,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 				// (§forgejo/decisions/sync-set).
 				members, err := e.syncMembers(blockers)
 				if err != nil {
-					return ev, State{}, err
+					return ev, State{}, unreadInput("sync members", err)
 				}
 				st.SyncMembers = members
 			}
@@ -382,10 +389,15 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 			// s-git/maitred#209).
 			gate, err := e.forestGate(ev, issue, blockers)
 			if err != nil {
-				return ev, State{}, err
+				return ev, State{}, unreadInput("forest digest gate", err)
 			}
 			st.ForestGate = gate
 		case EventIssueClosed:
+			// The cascade's graph walk is no action's declared input — the
+			// rows it wakes decide on `issue.state` — so its failure is
+			// stated as the re-fetch's own rather than under an input name
+			// no declaration declares
+			// (§forgejo/decisions/inputs, §forgejo/webhook/re-fetch).
 			root, err := e.graphNode(issue)
 			if err != nil {
 				return ev, State{}, err
@@ -396,7 +408,7 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 	case KindPR:
 		pr, err := e.api.GetPullRequest(owner, name, ev.Number)
 		if err != nil {
-			return ev, State{}, err
+			return ev, State{}, unreadInput("PR.state", err)
 		}
 		// The implementer identity rides on the state verbatim from the
 		// config: the fix-feedback ownership gate reads it alongside
@@ -422,13 +434,13 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 			// (§forgejo/webhook/re-fetch,
 			// §forgejo/decisions/merge-gate).
 			if err := e.fetchPRSetState(owner, name, ev.Number, &st, nil); err != nil {
-				return ev, State{}, err
+				return ev, State{}, unreadInput("connected issues", err)
 			}
 			fallthrough
 		case EventPROpened, EventPRSynced:
 			reviews, err := e.api.ListPullRequestReviews(owner, name, ev.Number)
 			if err != nil {
-				return ev, State{}, err
+				return ev, State{}, unreadInput("reviews", err)
 			}
 			st.Reviews = reviews
 		case EventPRClosed:
@@ -436,6 +448,9 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 				ev.Type = EventPRMerged
 				blocks, err := e.api.IssueBlocks(owner, name, ev.Number)
 				if err != nil {
+					// Unnamed like the closed issue's walk above: the graph
+					// the cascade walks is not a declared input
+					// (§forgejo/decisions/inputs).
 					return ev, State{}, err
 				}
 				for i := range blocks {
@@ -525,11 +540,19 @@ func (e *Engine) forestGate(ev Event, issue *Issue, blockers []Issue) (*ForestDi
 		if !admits {
 			// Debug, the level every other cross-repository hop uses for
 			// this sentence: the gate stays off, as it does for every issue
-			// whose decompose row never consults it
-			// (§forgejo/webhook/repository-roles, §forgejo/observability/the-decision-log).
+			// whose decompose row never consults it. The row that did
+			// consult it is handed why, so its hold-off reads as the
+			// standing exclusion §forgejo/webhook/repository-roles
+			// specifies rather than as a read the sweep will one day pay
+			// for (§forgejo/webhook/repository-roles,
+			// §forgejo/observability/the-decision-log, s-git/maitred#261).
 			e.log.Debug("digest gate skips a root in a repository no maitred role names",
 				"root", forestRef(repo, gate.Number), "tracker", forestRef(ev.Repo, issue.Number))
-			return nil, nil
+			return &ForestDigestGate{
+				RootRepo:   repo,
+				RootNumber: gate.Number,
+				Declined:   fmt.Sprintf("no maitred role names %s", forestRef(repo, gate.Number)),
+			}, nil
 		}
 		owner, name := splitRepo(repo)
 		fetched, err := e.api.GetIssue(owner, name, gate.Number)

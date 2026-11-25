@@ -1,6 +1,7 @@
 package forgejo
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -713,7 +714,7 @@ func TestDecomposeReady_TeardownOrderIsAskedOfTheRoot(t *testing.T) {
 		if ans != readyNo {
 			t.Fatalf("predicate answered %v (reason %q), want a hold-off", ans, d.Reason)
 		}
-		want := "issue 7 is an open ideation root carrying teardown-forest: the teardown order stands above the root's row"
+		want := "decompose holds off: issue.labels — issue 7 is an open ideation root carrying teardown-forest: the teardown order stands above the root's row"
 		if d.Reason != want {
 			t.Errorf("hold-off = %q, want %q", d.Reason, want)
 		}
@@ -787,5 +788,254 @@ func TestDeclarations_InputsNameTheVocabularyOfInputs(t *testing.T) {
 		if all := declarationFor(a).inputs; len(all) == 0 || strings.TrimSpace(strings.Join(all, " ")) == "" {
 			t.Errorf("action %q declares an empty input set", a)
 		}
+	}
+}
+
+// TestPredicates_AnswerIsThreeValued pins the three answers a declared
+// input can give: the state satisfies the predicate, it does not, or
+// the engine could not read the input at all. The third is never the
+// first: a row holds off naming which input could not be proven, and
+// says the engine could not tell rather than that the state said no
+// (§forgejo/decisions/actions, §forgejo/decisions/inputs,
+// s-git/maitred#261).
+func TestPredicates_AnswerIsThreeValued(t *testing.T) {
+	t.Run("satisfied", func(t *testing.T) {
+		d, ans := readyTo(ActionImplement, issueEvent(EventIssueOpened), State{Issue: openIssue()})
+		if ans != readyYes || !d.Dispatched {
+			t.Errorf("predicate answered %v (reason %q), want satisfied", ans, d.Reason)
+		}
+	})
+	t.Run("unsatisfied names the declared input", func(t *testing.T) {
+		st := State{Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}}
+		d, ans := readyTo(ActionImplement, issueEvent(EventIssueOpened), st)
+		if ans != readyNo {
+			t.Fatalf("predicate answered %v, want unsatisfied", ans)
+		}
+		if !strings.Contains(d.Reason, "blockers.states") {
+			t.Errorf("hold-off %q does not name the declared input it turned on", d.Reason)
+		}
+	})
+	for _, tc := range []struct {
+		name   string
+		action Action
+		event  Event
+		state  State
+		input  string
+	}{
+		{
+			name: "the issue was never re-fetched", action: ActionImplement,
+			event: issueEvent(EventIssueOpened), state: State{}, input: "issue.state",
+		},
+		{
+			name: "the pull request was never re-fetched", action: ActionReview,
+			event: prEvent(EventPROpened, "bob"), state: State{ReviewLenses: testLenses}, input: "PR.state",
+		},
+		{
+			name: "the digest gate observed no forest", action: ActionDecompose,
+			event: issueEvent(EventReconcile),
+			state: State{Issue: labelledIssue(LabelIdeation)}, input: "forest digest gate",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, ans := readyTo(tc.action, tc.event, tc.state)
+			if ans != readyUnproven {
+				t.Fatalf("predicate answered %v (reason %q), want unproven", ans, d.Reason)
+			}
+			if d.Dispatched {
+				t.Errorf("an unproven input dispatched %q", d.Action)
+			}
+			if !strings.Contains(d.Reason, tc.input) || !strings.Contains(d.Reason, "could not be proven") {
+				t.Errorf("hold-off %q does not name %q as unprovable", d.Reason, tc.input)
+			}
+			if !strings.Contains(d.Reason, "sweep") {
+				t.Errorf("hold-off %q does not say the next sweep asks again", d.Reason)
+			}
+			if _, ready := readyAtRow(tc.action, tc.event, tc.state); ready {
+				t.Errorf("readyAtRow dispatched %s on an unproven input", tc.action)
+			}
+		})
+	}
+}
+
+// TestPredicates_HoldOffsNameTheDeclaredInput checks that no row any
+// longer states a hold-off in words of its own: every unsatisfied
+// answer names the input its action's declaration declares, so the
+// declaration is the one place the question is asked and a row cannot
+// forget a guard without the log losing the input's name
+// (§forgejo/decisions/actions, s-git/maitred#261).
+func TestPredicates_HoldOffsNameTheDeclaredInput(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		action Action
+		event  Event
+		state  State
+		input  string
+	}{
+		{
+			name: "a reserved label retires the work item", action: ActionImplement,
+			event: issueEvent(EventIssueOpened), state: State{Issue: trackerIssue()}, input: "issue.labels",
+		},
+		{
+			name: "a blocked issue has nothing to reassess", action: ActionReassess,
+			event: issueEvent(EventIssueEdited),
+			state: State{Issue: openIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
+			input: "blockers.states",
+		},
+		{
+			name: "every lens has reported at head", action: ActionReview,
+			event: prEvent(EventPRSynced, "bob"),
+			state: State{
+				PR: openPR("abc"), ReviewLenses: testLenses,
+				Reviews: []Review{{Author: "carol", Event: ReviewApproved, CommitID: "abc"}},
+			},
+			input: "reviews",
+		},
+		{
+			name: "the PR is not the implementer's", action: ActionFixFeedback,
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR: openPRBy("human", "abc"), ReviewLenses: testLenses, ImplementerIdentity: "maitred",
+				Reviews: []Review{{Author: "carol", Event: ReviewChangesRequested, CommitID: "abc"}},
+			},
+			input: "PR.author",
+		},
+		{
+			name: "no connected issue opts the merge in", action: ActionMergeOrWait,
+			event: prEvent(EventPRReviewed, "carol"),
+			state: State{
+				PR: openPR("abc"), ReviewLenses: testLenses,
+				Reviews:         []Review{{Author: "carol", Event: ReviewApproved, CommitID: "abc"}},
+				ConnectedIssues: []ConnectedIssue{{Issue: Issue{Number: 7, State: "open", Repository: "o/r"}}},
+			},
+			input: "connected issues",
+		},
+		{
+			name: "the pull request is closed", action: ActionRebase,
+			event: prEvent(EventPRSynced, "bob"),
+			state: State{PR: &PullRequest{Number: 9, State: "closed", HeadSHA: "abc"}},
+			input: "PR.state",
+		},
+		{
+			name: "the tracker is gated by no root", action: ActionDecompose,
+			event: issueEvent(EventReconcile),
+			state: State{Issue: trackerIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
+			input: "blockers.states",
+		},
+		{
+			name: "the tracker is still blocked", action: ActionWrapUp,
+			event: issueEvent(EventReconcile),
+			state: State{Issue: trackerIssue(), Blockers: []Issue{{Number: 3, State: "open", Repository: "o/r"}}},
+			input: "blockers.states",
+		},
+		{
+			name: "the forest has nothing left to delete", action: ActionTeardownForest,
+			event: issueEvent(EventReconcile),
+			state: State{Issue: labelledIssue(LabelIdeation, LabelTeardownForest), Blocked: []Issue{*trackerIssue()}},
+			input: "blocked downstream edges",
+		},
+		{
+			name: "the set stalled on a member awaiting a human", action: ActionSync,
+			event: issueEvent(EventReconcile),
+			state: State{
+				ReviewLenses: testLenses,
+				Issue:        syncIssueFixture(7),
+				SyncMembers:  []SyncMember{{Issue: Issue{Number: 4, State: "open", Repository: "o/r", UpdatedAt: testTime}}},
+			},
+			input: "sync members",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, ans := readyTo(tc.action, tc.event, tc.state)
+			if ans == readyYes {
+				t.Fatalf("predicate dispatched %q; want a hold-off (%q)", d.Action, d.Reason)
+			}
+			if !strings.Contains(d.Reason, tc.input) {
+				t.Errorf("hold-off %q names no %q from the declaration %v",
+					d.Reason, tc.input, declarationFor(tc.action).inputs)
+			}
+		})
+	}
+}
+
+// TestHoldOffUnreadRead_NamesTheFailedRead checks the pipeline's
+// hold-off for a read that failed: it names the input the read was
+// buying, and where no input was named it says so rather than naming one
+// it cannot vouch for (§forgejo/webhook/the-pipeline,
+// §forgejo/decisions/inputs, s-git/maitred#261).
+func TestHoldOffUnreadRead_NamesTheFailedRead(t *testing.T) {
+	if got := holdOffUnreadRead(unreadInput("reviews", errors.New("reviews endpoint down"))).Reason; !strings.Contains(got, "reviews could not be proven — reviews endpoint down") {
+		t.Errorf("hold-off = %q, want the input the failed read was buying", got)
+	}
+	if got := holdOffUnreadRead(errors.New("unknown kind \"nonsense\"")).Reason; !strings.Contains(got, "the re-fetched state could not be proven") {
+		t.Errorf("hold-off = %q, want it to name the re-fetch it cannot resolve", got)
+	}
+}
+
+// TestPredicates_NeverDispatchOnAnUnreadState pins the claim the whole
+// three-valued answer rests on: with nothing re-fetched, no declaration
+// finds its state satisfying. An absent input is unproven, never the
+// guard being satisfied, so a state assembled from no reads dispatches
+// nothing whatever the action (§forgejo/decisions/inputs,
+// s-git/maitred#261).
+func TestPredicates_NeverDispatchOnAnUnreadState(t *testing.T) {
+	for _, a := range everyAction {
+		d, ans := readyTo(a, issueEvent(EventReconcile), State{ReviewLenses: testLenses})
+		if ans != readyUnproven {
+			t.Errorf("%s answered %v on a state no read populated (reason %q), want unproven", a, ans, d.Reason)
+		}
+		if d.Dispatched {
+			t.Errorf("%s dispatched on a state no read populated", a)
+		}
+		if !strings.Contains(d.Reason, "could not be proven") {
+			t.Errorf("%s hold-off %q does not name the input that went unread", a, d.Reason)
+		}
+	}
+}
+
+// TestDigestGateAnswer_DeclinedGateSpeaksTheExclusion pins the sentence
+// for a gate the engine armed and then left off on purpose: a forest
+// whose gating root stands in a repository no maitred role names is the
+// exclusion §forgejo/webhook/repository-roles specifies, so the row
+// holds off naming that root and promises no retry the next sweep could
+// only decline identically — a promise this change exists to keep the
+// log free of (§forgejo/webhook/repository-roles,
+// §forgejo/decisions/actionable-state-digest, s-git/maitred#261).
+func TestDigestGateAnswer_DeclinedGateSpeaksTheExclusion(t *testing.T) {
+	g := declinedGate("o/other", 3)
+	st := State{
+		Issue:      trackerIssue(),
+		Blockers:   []Issue{{Number: 3, State: "closed", Repository: "o/other", Labels: []string{LabelIdeation}}},
+		ForestGate: g,
+	}
+	d, ans := readyTo(ActionDecompose, issueEvent(EventReconcile), st)
+	if ans != readyNo {
+		t.Fatalf("predicate answered %v (reason %q), want a hold-off", ans, d.Reason)
+	}
+	if d.Dispatched {
+		t.Errorf("a declined gate dispatched %q", d.Action)
+	}
+	if !strings.Contains(d.Reason, "the digest gate is off") || !strings.Contains(d.Reason, "o/other#3") {
+		t.Errorf("hold-off = %q, want the exclusion's own sentence naming the root", d.Reason)
+	}
+	if strings.Contains(d.Reason, "could not be proven") || strings.Contains(d.Reason, "asks again") {
+		t.Errorf("hold-off = %q, want no failed-read wording and no retry promised", d.Reason)
+	}
+}
+
+// TestDigestGateAnswer_UnarmedGateIsStillUnproven keeps the other half of
+// the unarmed gate: where no read of the forest was ever paid for — the
+// pipeline handed the row no observation at all — the answer is unproven,
+// which the sweep is named as asking again
+// (§forgejo/decisions/actionable-state-digest, s-git/maitred#261).
+func TestDigestGateAnswer_UnarmedGateIsStillUnproven(t *testing.T) {
+	d, ans := readyTo(ActionDecompose, issueEvent(EventReconcile), State{
+		Issue:    trackerIssue(),
+		Blockers: []Issue{{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}}},
+	})
+	if ans != readyUnproven {
+		t.Fatalf("predicate answered %v (reason %q), want unproven", ans, d.Reason)
+	}
+	if !strings.Contains(d.Reason, "forest digest gate could not be proven") || !strings.Contains(d.Reason, "sweep") {
+		t.Errorf("hold-off = %q, want the unproven sentence naming the gate and the sweep", d.Reason)
 	}
 }

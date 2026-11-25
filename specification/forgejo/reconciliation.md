@@ -446,14 +446,17 @@ whatever is left (§forgejo/decisions/loop-prevention). An operator
 weighing that cost should read the re-firing as the mechanism working,
 not as a fault.
 
-A hold-off the state causes always names the state fact that calls for no
-action (`blocked by N open issue(s)`, `no configured lens approves PR 9 at
-abc`, `set #4 has 1 member(s) not ready`); the `already dispatched at
-digest` reason belongs to the one row a digest suppresses — the landing
-set's — and states the facts behind that digest rather than a bare hex; a
-row the re-fire bound caught says so, naming the bound that spaced it
+A hold-off the state causes always names the declared input, and the
+state fact beside it, that calls for no action (`blockers.states —
+blocked by N open issue(s)`, `reviews — no configured lens approves PR 9
+at abc`, `sync members — set #4 has 1 member(s) not ready`); an
+unchanged digest is reported by every row that meets it as **inputs
+unchanged** at the facts behind that digest, the landing set's
+suppression included, so no row claims a state relation has already been
+dispatched when the engine has merely never seen it move; a row the
+re-fire bound caught says so, naming the bound that spaced it
 (§forgejo/observability/the-decision-log, s-git/maitred#259,
-s-git/maitred#260).
+s-git/maitred#260, s-git/maitred#261).
 
 The digest gate is the exception that stays, and it is a suppression of
 its own rather than a pacing rule. `decompose`'s rows ask first whether
