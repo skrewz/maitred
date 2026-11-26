@@ -219,19 +219,16 @@ never as the action having already been dispatched
 beside its declaration in words of its own, and none dispatches while
 its predicate is unsatisfied or its answer unproven.
 
-Three checks keep this table and the code from drifting apart, each run
+Two checks keep this table and the code from drifting apart, each run
 from the repository's ordinary test targets, each failing loudly rather
-than passing when the source, the enum or the table it reads cannot be
-read:
-
-- an action the enum names that carries no declaration cannot dispatch,
-  and the refusal names the action;
-- a predicate that reads a fact its declaration does not name — or that
-  reads an activity timestamp, which only the fold states — is refused
-  by file, field and action (§forgejo/decisions/inputs,
-  s-git/maitred#263);
-- the Inputs column below states, for every row, exactly the names that
-  row's declaration names (s-git/maitred#264).
+than passing when the source or the enum it reads cannot be read: an
+action the enum names that carries no declaration cannot dispatch, and
+the refusal names the action; and a predicate that reads a fact its
+declaration does not name — an activity timestamp, which only the fold
+states, above all — is refused by file, field and action
+(§forgejo/decisions/inputs, s-git/maitred#263). The Inputs column below
+names each action's declared set, in lockstep with the declaration that
+records it (§forgejo/decisions/inputs, s-git/maitred#264).
 
 | Action | Dispatched when | Inputs |
 |---|---|---|
