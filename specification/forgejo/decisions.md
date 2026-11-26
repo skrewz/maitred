@@ -203,9 +203,7 @@ names and nothing beside it, except the event facts and configuration
 inputs §forgejo/decisions/inputs says fold nothing; the pull-request
 rows fold the head, the chain at head and the set's readiness rather
 than naming a forge revision as a shortcut, so one state answers one
-digest whichever path asked (s-git/maitred#260). The `decompose` fold's
-component set is drawn from that action's declaration rather than from a
-list beside the fold (§forgejo/decisions/actionable-state-digest).
+digest whichever path asked (s-git/maitred#260).
 
 The predicate is the only seat a hold-off's or a dispatch's reason is
 written from, and it answers **three ways** over the declared inputs:
@@ -226,10 +224,10 @@ Two checks keep this table and the code from drifting apart, each run
 from the repository's ordinary test targets, each failing loudly rather
 than passing when the source or the enum it reads cannot be read: an
 action the enum names that carries no declaration cannot dispatch, and
-the refusal names the action; and a predicate that reads a fact its
-declaration does not name is refused by file, field and action; and a
-predicate that reads an activity timestamp is refused whatever the
-declaration says, since the fold states it and no predicate reads it
+the refusal names the action; and the check over a predicate's reads
+refuses, by file, field and action, a read of a fact its declaration does
+not name — and an activity-timestamp read whatever the declaration says,
+since the fold states it and no predicate reads it
 (§forgejo/decisions/inputs, s-git/maitred#263). The Inputs column below
 names each action's declared set, in lockstep with the declaration that
 records it (§forgejo/decisions/inputs, s-git/maitred#264).
@@ -1008,13 +1006,15 @@ still calls for one.
    What that record can stop is settled once per row, and the row
    answers the same way on both paths
    (§forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move):
-   the landing set's row and the cascade's own legs suppress at a
-   digest the store holds, because dispatching moves the fact their
-   declarations name; every other row — `implement`, `reassess`,
-   `decompose`, `wrap-up`, `teardown-forest` and every pull-request row
-   — dispatches at a digest the store holds, because a digest the row
-   itself cannot move would otherwise be a fixed point no path could
-   ever fire on again (s-git/maitred#259, s-git/maitred#260). What
+   the landing set's row suppresses at a digest the store holds, because
+   dispatching moves the readiness its own fold states, and the cascade's
+   own legs suppress because a leg states that a relation moved rather
+   than re-reading the state, so the sweep stays their backstop
+   (§forgejo/decisions/unblock-cascade); every other row — `implement`,
+   `reassess`, `decompose`, `wrap-up`, `teardown-forest` and every
+   pull-request row — dispatches at a digest the store holds, because a
+   digest the row itself cannot move would otherwise be a fixed point no
+   path could ever fire on again (s-git/maitred#259, s-git/maitred#260).
    limits `decompose` further, on every path, is the forest's
    **actionable-state digest gate**: an unchanged fold holds the row
    off, so the forest's state bounds it rather than any revision

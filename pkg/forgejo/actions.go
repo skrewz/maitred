@@ -428,7 +428,9 @@ func digestFacts(facts []string) string {
 // (§forgejo/decisions/inputs). The rows still read both kinds —
 // reassess names the event type in its reason and the identities whose
 // comments count — and declare them like any other fact; the fold
-// simply passes them by.
+// simply passes them by. A name matching a prefix here is passed by before
+// declaredInputFolds is consulted, so an entry in that map naming one is dead
+// code (§forgejo/decisions/inputs).
 var foldsNowhere = []string{"event.", "config."}
 
 func declaredInputFacts(a Action, subject string, s State) []string {
