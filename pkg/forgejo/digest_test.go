@@ -446,6 +446,92 @@ func TestForestDigestPaysTheAdmissionTest(t *testing.T) {
 	})
 }
 
+// TestForestGate_ArmsOnTheCommentPath: the gate's arming rule serves every
+// row that dispatches `decompose`, so the tracker's carrier row arms it on
+// the event path exactly as the sweep's does — and an issue that reaches no
+// such row still pays no forest read. A tracker's edited row and a member's
+// thread are both of those: the first asks no gate at all, the second folds
+// its fact for the next sweep
+// (§forgejo/decisions/actionable-state-digest,
+// §forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move,
+// s-git/maitred#280).
+func TestForestGate_ArmsOnTheCommentPath(t *testing.T) {
+	eng, api, _, _ := newTestEngine(t)
+	root := Issue{Number: 1, State: "closed", Repository: "o/r", UpdatedAt: testTime, Labels: []string{LabelIdeation}}
+	tracker := Issue{Number: 2, State: "open", Repository: "o/r", UpdatedAt: testTime, Labels: []string{LabelOutcome}}
+	member := Issue{Number: 3, State: "open", Repository: "o/r", UpdatedAt: testTime}
+	api.issues[1], api.issues[2], api.issues[3] = &root, &tracker, &member
+	api.blocks[1] = []Issue{tracker, member}
+	api.deps[2] = []Issue{root}
+	api.deps[3] = []Issue{root}
+	eng.refreshScopeCache(api.repos)
+
+	t.Run("a comment on a commissioned tracker arms it keyed to the root", func(t *testing.T) {
+		g, err := eng.forestGate(Event{Kind: KindIssue, Type: EventIssueCommented, Repo: "o/r", Number: tracker.Number, Sender: "alice"}, &tracker, api.deps[2])
+		if err != nil {
+			t.Fatalf("forestGate on a commented tracker: %v", err)
+		}
+		if g == nil {
+			t.Fatal("the gate stayed off for the tracker's own comment row")
+		}
+		if g.RootRepo != "o/r" || g.RootNumber != 1 {
+			t.Errorf("gate observed %s %d, want the forest's own root o/r 1", g.RootRepo, g.RootNumber)
+		}
+		if g.Current == "" {
+			t.Error("the gate armed with no observation of the forest")
+		}
+	})
+
+	t.Run("the tracker's edited row asks no gate", func(t *testing.T) {
+		g, err := eng.forestGate(Event{Kind: KindIssue, Type: EventIssueEdited, Repo: "o/r", Number: tracker.Number, Sender: "alice"}, &tracker, api.deps[2])
+		if err != nil {
+			t.Fatalf("forestGate on a tracker edit: %v", err)
+		}
+		if g != nil {
+			t.Errorf("the gate armed for a row that never consults it: %+v, want no observation read", g)
+		}
+	})
+
+	t.Run("a member's comment asks no gate", func(t *testing.T) {
+		g, err := eng.forestGate(Event{Kind: KindIssue, Type: EventIssueCommented, Repo: "o/r", Number: member.Number, Sender: "alice"}, &member, api.deps[3])
+		if err != nil {
+			t.Fatalf("forestGate on a member's comment: %v", err)
+		}
+		if g != nil {
+			t.Errorf("the gate armed for a member's thread: %+v, want the engine's noisiest path to read no forest", g)
+		}
+	})
+
+	t.Run("a tracker claiming the sync kind asks no gate", func(t *testing.T) {
+		// The routing clause's sync carve-out has the arming leg too:
+		// the sweep holds a kind-conflicted tracker off before any
+		// decompose row, so arming for its comment would read a forest
+		// no row on this event consults (§forgejo/decisions/sync-set,
+		// s-git/maitred#280).
+		conflicted := tracker
+		conflicted.Labels = []string{LabelOutcome, LabelSync}
+		g, err := eng.forestGate(Event{Kind: KindIssue, Type: EventIssueCommented, Repo: "o/r", Number: conflicted.Number, Sender: "alice"}, &conflicted, api.deps[2])
+		if err != nil {
+			t.Fatalf("forestGate on a kind-conflicted tracker's comment: %v", err)
+		}
+		if g != nil {
+			t.Errorf("the gate armed for a row the sweep holds off as a conflict: %+v", g)
+		}
+	})
+
+	t.Run("a tracker whose root still stands asks no gate", func(t *testing.T) {
+		standing := root
+		standing.State = "open"
+		g, err := eng.forestGate(Event{Kind: KindIssue, Type: EventIssueCommented, Repo: "o/r", Number: tracker.Number, Sender: "alice"}, &tracker, []Issue{standing})
+		if err != nil {
+			t.Fatalf("forestGate on a tracker under a standing root: %v", err)
+		}
+		if g != nil {
+			t.Errorf("the gate armed where the root's own row carries the curation: %+v", g)
+		}
+	})
+}
+
 // TestForestGate_CommissionedTrackerWithNoOpenBlockers: the arming rule
 // reads the tracker's state, not its blocker count. Every member of a
 // commissioned forest may have closed while its tracker stays open, and

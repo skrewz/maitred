@@ -382,11 +382,12 @@ func (e *Engine) refetch(ev Event) (Event, State, error) {
 				}
 				st.SyncMembers = members
 			}
-			// The digest gate's observation, assembled where the
-			// gated decompose rows can reach it — the root's own rows
-			// on every path, the sweep's commissioned-tracker row
+			// The digest gate's observation, assembled wherever the
+			// arming rule arms it — the root's own rows on every path,
+			// and a commissioned tracker's sweep row and comment row.
+			// forestGate's doc comment is that rule's one statement
 			// (§forgejo/reconciliation/the-state-is-the-watermark,
-			// s-git/maitred#209).
+			// s-git/maitred#209, s-git/maitred#280).
 			gate, err := e.forestGate(ev, issue, blockers)
 			if err != nil {
 				return ev, State{}, unreadInput("forest digest gate", err)
@@ -488,12 +489,18 @@ func readsComments(t EventType) bool {
 //   - an open `ideation` issue not under a teardown order and not
 //     claiming the sync kind, whose root row consults the gate on every
 //     path — the forest is the issue itself;
-//   - the sweep's view of an open tracker whose ideation gate is closed —
-//     the forest is that closed root, fetched whole because the digest
-//     folds the root's body and labels and the dependency row is not
-//     trusted to carry them. A forest is under curation while its tracker
-//     is open, so how many of its members still stand is no part of the
-//     arming rule (s-git/maitred#279).
+//   - an open tracker whose ideation gate is closed, on the sweep and on
+//     a comment's arrival — the forest is that closed root, fetched whole
+//     because the digest folds the root's body and labels and the
+//     dependency row is not trusted to carry them. A forest is under
+//     curation while one of its carriers is open, so how many of its
+//     members still stand is no part of the arming rule
+//     (§forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move,
+//     s-git/maitred#279, s-git/maitred#280). A tracker's edited and
+//     relabelled rows ask no gate, so arming it for them would read a
+//     forest no row consults, and a member's thread asks none either:
+//     immediacy belongs to a forest's carriers, not to every node in it
+//     (s-git/maitred#280).
 //
 // A root under a teardown order, a kind-conflicting issue and every
 // other issue leave the gate unarmed: on the sweep those rows are
@@ -515,7 +522,7 @@ func (e *Engine) forestGate(ev Event, issue *Issue, blockers []Issue) (*ForestDi
 	switch {
 	case hasLabel(issue, LabelIdeation) && !hasLabel(issue, LabelTeardownForest) && !hasLabel(issue, LabelSync):
 		root = issue
-	case ev.Type == EventReconcile && isTracker(issue) && !hasLabel(issue, LabelSync):
+	case (ev.Type == EventReconcile || ev.Type == EventIssueCommented) && isTracker(issue) && !hasLabel(issue, LabelSync):
 		gate := ideationGate(blockers)
 		if gate == nil || gate.State != "closed" {
 			return nil, nil
@@ -1462,6 +1469,15 @@ func (e *Engine) dispatch(ev Event, st State, action Action) error {
 	// (§forgejo/decisions/loop-prevention,
 	// §forgejo/reconciliation/the-state-is-the-watermark).
 	e.stampReFire(ev.KeyOf(), action, "", rev)
+	// A gated decompose is the forest's own dispatch as much as the
+	// object's: its stamp rides on the forest's key, so the run the
+	// sweep landed spaces a comment's arrival and the run a comment
+	// landed spaces the next one — whichever carrier landed it, the
+	// stamp is read by the tracker's comment row alone
+	// (§forgejo/decisions/loop-prevention, s-git/maitred#280).
+	if action == ActionDecompose && !unarmedDigestGate(st.ForestGate) {
+		e.stampReFire(ForestKey(st.ForestGate.RootRepo, st.ForestGate.RootNumber), action, "", rev)
+	}
 	return nil
 }
 
@@ -1542,6 +1558,22 @@ func (e *Engine) boundReFire(key Key, ev Event, st State, w *Watermark, d Decisi
 	if !d.StateGoverned {
 		return d
 	}
+	// The tracker's comment row is the bound's one per-forest leg:
+	// every counted comment is a new digest, so the (action,
+	// revision) pair below is never twice the same here and would
+	// bound nothing — the forest's own stamp of its last landed
+	// gated run is what spaces a comment's arrival, whichever row
+	// or path left it. The leg is scoped to the carrier this change
+	// added and never reaches the root's comment row, whose per-comment
+	// immediacy is a shipped behaviour of its own: a root dispatch
+	// still stamps the forest slot, so it paces the tracker's next
+	// arrival and not its own (§forgejo/decisions/loop-prevention,
+	// s-git/maitred#147, s-git/maitred#280).
+	if ev.Type == EventIssueCommented && d.Action == ActionDecompose &&
+		st.Issue != nil && isTracker(st.Issue) && !unarmedDigestGate(st.ForestGate) &&
+		e.forestCommentSpaced(st.ForestGate) {
+		return holdOffForestReFireBound(d.Action, st.ForestGate, e.cfg.ReconcileInterval)
+	}
 	rev := digestFor(d.Action, ev, st)
 	if e.reFiredRecently(key, d.Action, "", rev, w) {
 		return holdOffReFireBound(d.Action, quotedRevision(d.Action, ev, st, rev), e.cfg.ReconcileInterval)
@@ -1603,6 +1635,32 @@ func (e *Engine) reFiredRecently(key Key, action Action, subject, revision strin
 	// §forgejo/decisions/loop-prevention).
 	spent := time.Since(*w.FiredAt)
 	return spent >= 0 && spent < e.cfg.ReconcileInterval
+}
+
+// forestCommentSpaced answers the forest's own re-fire question: has
+// this forest's gated decompose landed inside one reconcile interval,
+// at any revision? The tracker's comment row is bounded on the
+// forest's stamp rather than the (action, revision) pair's because a
+// comment's every arrival is a new digest — the pair would never
+// repeat, and a bound that never matches bounds nothing. The stamp
+// lives in memory, as the singleton bound's does; a restart buys one
+// comment-path dispatch per forest with no interval spent, and the
+// sweep stays what recovers (§forgejo/decisions/loop-prevention,
+// s-git/maitred#280).
+//
+// The pace is a rate, not a lock. HandleEvent serialises a decide-and-
+// dispatch span under the event's own object key, so this check and the
+// stamp dispatch writes for the forest share no lock across carriers:
+// two comments arriving on a forest's root and tracker at the same
+// moment can both read an unspent slot, and the forest can be cured
+// twice for that interval. The same holds of the digest gate's own
+// comparison, which this repository has always absorbed; the bound
+// stays a constant bound per interval, and the sweep the backstop.
+func (e *Engine) forestCommentSpaced(g *ForestDigestGate) bool {
+	e.reFireMu.Lock()
+	defer e.reFireMu.Unlock()
+	last, ok := e.reFires[reFireSlot{key: ForestKey(g.RootRepo, g.RootNumber), action: ActionDecompose}]
+	return ok && time.Since(last.at) < e.cfg.ReconcileInterval
 }
 
 // stampReFire records a landed singleton dispatch for the bound. A

@@ -2686,9 +2686,12 @@ func TestDecide_ReservedLabelHoldOffsNameTheLabel(t *testing.T) {
 			wantReason: "never an implement candidate",
 		},
 		{
+			// An `outcome` issue is a forest's carrier, so a comment on it
+			// asks that forest's row — the label insurance below it is what
+			// the other reserved labels still answer (s-git/maitred#280).
 			name:       "activity: reassess denied by the label",
 			event:      issueEvent(EventIssueCommented),
-			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelOutcome)},
+			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelSync)},
 			wantReason: "never a reassess candidate",
 		},
 	}
@@ -2747,11 +2750,15 @@ func TestDecide_ForestSeedingHoldOff(t *testing.T) {
 		},
 		{
 			// A transient hold-off does not outrank what an issue *is*:
-			// the kind or claim label is named first.
+			// the kind or claim label is named first. The row is the
+			// opened one because a comment on a tracker is the forest's
+			// carrier row — the row the sweep already asks of it, seeding
+			// window or no (§forgejo/decisions/transition-table,
+			// s-git/maitred#280).
 			name:       "outcome carried alongside forest-seeding is named first",
-			event:      issueEvent(EventIssueCommented),
+			event:      issueEvent(EventIssueOpened),
 			state:      State{ReviewLenses: testLenses, Issue: labelledIssue(LabelForestSeeding, LabelOutcome)},
-			wantReason: "reassess holds off: issue.labels — issue 7 carries the outcome label; never a reassess candidate",
+			wantReason: "implement holds off: issue.labels — issue 7 carries the outcome label; never an implement candidate",
 		},
 		{
 			name:       "human-task carried alongside forest-seeding is named first",
@@ -5024,6 +5031,196 @@ func TestDecide_DecomposeDigestGate_EventPath(t *testing.T) {
 		}
 		if !strings.Contains(d.Reason, "re-fire bound") {
 			t.Errorf("reason = %q, want it to name the bound that paces the re-fire", d.Reason)
+		}
+	})
+}
+
+// TestDecide_DecomposeDigestGate_TrackerComment: a comment on a forest's
+// other carrier asks that forest's gate on the event path. The tracker is
+// where curation reports, wraps up and takes the operator's instructions,
+// so what is said there is considered on arrival rather than one reconcile
+// interval later — and the row is the sweep's tracker row read the same
+// way, keyed to the forest's root, so one forest gets one answer whichever
+// row asks (§forgejo/decisions/transition-table,
+// §forgejo/decisions/actionable-state-digest,
+// §forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move,
+// s-git/maitred#280).
+func TestDecide_DecomposeDigestGate_TrackerComment(t *testing.T) {
+	commented := func(issue *Issue, gate *ForestDigestGate) State {
+		st := State{
+			ReviewLenses:       testLenses,
+			Issue:              issue,
+			DecomposerIdentity: "decomposer",
+			Blockers: []Issue{
+				{Number: 3, State: "closed", Repository: "o/r", Labels: []string{LabelIdeation}},
+				{Number: 4, State: "open", Repository: "o/r"},
+			},
+		}
+		st.ForestGate = gate
+		return st
+	}
+
+	t.Run("a comment whose digest moved dispatches naming the component", func(t *testing.T) {
+		d := Decide(issueEventBy(EventIssueCommented, "alice"), commented(trackerIssue(), digestGateObservation("comment")), nil)
+		if d.Action != ActionDecompose {
+			t.Fatalf("decision = %+v, want decompose: a comment on the tracker moved the forest", d)
+		}
+		if !strings.Contains(d.Reason, "comment") {
+			t.Errorf("reason = %q, want it to name the component that moved", d.Reason)
+		}
+		if !strings.Contains(d.Reason, "tracker") {
+			t.Errorf("reason = %q, want it to name the tracker whose row asked", d.Reason)
+		}
+	})
+
+	t.Run("a comment whose digest is unchanged holds off naming the digest", func(t *testing.T) {
+		d := Decide(issueEventBy(EventIssueCommented, "alice"), commented(trackerIssue(), digestGateObservation()), nil)
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want the hold-off the quiet forest earns", d)
+		}
+		if !strings.Contains(d.Reason, "digest is unchanged") {
+			t.Errorf("reason = %q, want it to name the unchanged digest", d.Reason)
+		}
+		if strings.Contains(d.Reason, "already dispatched") {
+			t.Errorf("reason = %q, want the digest's answer, not the watermark's", d.Reason)
+		}
+	})
+
+	t.Run("the decomposer's own comment dispatches nothing", func(t *testing.T) {
+		// The author guard is the carriers' shared loop prevention: the
+		// decomposition's own words fold no fact, and a row that fired on
+		// them would re-ask the forest for as long as the thread stands
+		// (§forgejo/decisions/loop-prevention, s-git/maitred#280).
+		d := Decide(issueEventBy(EventIssueCommented, "decomposer"), commented(trackerIssue(), digestGateObservation("comment")), nil)
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want the authorship hold-off ahead of the gate", d)
+		}
+		if !strings.Contains(d.Reason, "the decomposer identity decomposer") {
+			t.Errorf("reason = %q, want it to name the authorship it read", d.Reason)
+		}
+	})
+
+	t.Run("a comment with no composer declared fails closed", func(t *testing.T) {
+		// The root's row keeps the inert reading an unset identity has
+		// always carried; the tracker's row does not, because the tracker
+		// is the carrier the decomposition reports on and an unset
+		// declaration leaves the fold counting its own report — the loop
+		// the guard exists to break, closing in one hop
+		// (§forgejo/config/decomposer-identity,
+		// §forgejo/decisions/loop-prevention, s-git/maitred#280).
+		st := commented(trackerIssue(), digestGateObservation("comment"))
+		st.DecomposerIdentity = ""
+		d := Decide(issueEventBy(EventIssueCommented, "alice"), st, nil)
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want the hold-off of an unguarded authorship on the reporting carrier", d)
+		}
+		if !strings.Contains(d.Reason, "no decomposer identity is declared") {
+			t.Errorf("reason = %q, want it to name the undeclared identity behind the fail-closed", d.Reason)
+		}
+		root := commented(ideationIssue(), digestGateObservation("comment"))
+		root.DecomposerIdentity = ""
+		if got := Decide(issueEventBy(EventIssueCommented, "alice"), root, nil); got.HoldOff() || got.Action != ActionDecompose {
+			t.Errorf("root decision = %+v, want the root's row to keep its documented inert reading of an unset identity", got)
+		}
+	})
+
+	t.Run("a tracker claiming the sync kind is no carrier's row", func(t *testing.T) {
+		// The routing clause's sync carve-out is load-bearing: a tracker
+		// claiming both kinds would otherwise reach the forest's row from
+		// a comment while the sweep holds the same issue off as a kind
+		// conflict before any decompose row — one state, two answers
+		// (§forgejo/decisions/sync-set, §forgejo/decisions/transition-table,
+		// s-git/maitred#280).
+		st := commented(labelledIssue(LabelOutcome, LabelSync), digestGateObservation("comment"))
+		d := Decide(issueEventBy(EventIssueCommented, "alice"), st, nil)
+		if d.Action == ActionDecompose || !d.HoldOff() {
+			t.Fatalf("decision = %+v, want the kind conflict's hold-off, not the forest's row", d)
+		}
+		if !strings.Contains(d.Reason, "never a reassess candidate") {
+			t.Errorf("reason = %q, want the label hold-off the sweep's conflict reads the same way", d.Reason)
+		}
+	})
+
+	t.Run("a tracker carrying forest-seeding is the forest's row", func(t *testing.T) {
+		// The seeding gate holds `implement` and `reassess` off and says
+		// nothing of `decompose`; the carrier's comment row the seeding
+		// label never gated stays the forest's own
+		// (§forgejo/decisions/commissioning, s-git/maitred#125,
+		// s-git/maitred#280 — the claim this case pins).
+		st := commented(labelledIssue(LabelOutcome, LabelForestSeeding), digestGateObservation("comment"))
+		d := Decide(issueEventBy(EventIssueCommented, "alice"), st, nil)
+		if d.Action != ActionDecompose {
+			t.Fatalf("decision = %+v, want the forest's row, not the seeding hold-off", d)
+		}
+	})
+
+	t.Run("a tracker whose root still stands names the root's row", func(t *testing.T) {
+		st := commented(trackerIssue(), digestGateObservation("comment"))
+		st.Blockers = []Issue{{Number: 3, State: "open", Repository: "o/r", Labels: []string{LabelIdeation}}}
+		d := Decide(issueEventBy(EventIssueCommented, "alice"), st, nil)
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want the hold-off the forest's root row earns", d)
+		}
+		if !strings.Contains(d.Reason, "its own row carries the curation") {
+			t.Errorf("reason = %q, want it to name the root's row as where the curation stands", d.Reason)
+		}
+	})
+
+	t.Run("a tracker gated by no root names that absence", func(t *testing.T) {
+		st := commented(trackerIssue(), digestGateObservation("comment"))
+		st.Blockers = nil
+		d := Decide(issueEventBy(EventIssueCommented, "alice"), st, nil)
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want the hold-off naming no forest to fold", d)
+		}
+		if !strings.Contains(d.Reason, "gated by no") {
+			t.Errorf("reason = %q, want it to name the absent ideation gate", d.Reason)
+		}
+	})
+
+	t.Run("a comment on a closed carrier holds off as it does today", func(t *testing.T) {
+		issue := trackerIssue()
+		issue.State = "closed"
+		d := Decide(issueEventBy(EventIssueCommented, "alice"), commented(issue, nil), nil)
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want a closed carrier to ask nothing of the forest", d)
+		}
+		if !strings.Contains(d.Reason, "not open") {
+			t.Errorf("reason = %q, want the state hold-off the closed carrier earns", d.Reason)
+		}
+	})
+
+	t.Run("a tracker under a teardown order is decided as any other tracker", func(t *testing.T) {
+		// The order modifies the root's row, so it retires nothing here and
+		// takes no row of its own either (§forgejo/decisions/forest-teardown).
+		issue := labelledIssue(LabelOutcome, LabelTeardownForest)
+		d := Decide(issueEventBy(EventIssueCommented, "alice"), commented(issue, digestGateObservation("comment")), nil)
+		if d.Action != ActionDecompose {
+			t.Fatalf("decision = %+v, want the tracker's own row, not the teardown's", d)
+		}
+	})
+
+	t.Run("an edit on a tracker is no carrier's row", func(t *testing.T) {
+		// Immediacy belongs to the comment: the forest's carriers answer
+		// the gate, and every other tracker row holds the label's
+		// hold-off it has always held (§forgejo/decisions/transition-table).
+		d := Decide(issueEvent(EventIssueEdited), commented(trackerIssue(), digestGateObservation("comment")), nil)
+		if !d.HoldOff() {
+			t.Fatalf("decision = %+v, want the outcome label's hold-off an edit still earns", d)
+		}
+		if !strings.Contains(d.Reason, "never a reassess candidate") {
+			t.Errorf("reason = %q, want the label hold-off the edit has always left", d.Reason)
+		}
+	})
+
+	t.Run("a comment on a member stays reassess alone", func(t *testing.T) {
+		// The member's thread is the engine's noisiest path: it folds as a
+		// fact the next sweep collects and asks no gate of its own
+		// (§forgejo/decisions/transition-table, s-git/maitred#280).
+		st := State{ReviewLenses: testLenses, Issue: openIssue()}
+		d := Decide(issueEventBy(EventIssueCommented, "alice"), st, nil)
+		if d.HoldOff() || d.Action != ActionReassess {
+			t.Fatalf("decision = %+v, want reassess alone for a member's thread", d)
 		}
 	})
 }

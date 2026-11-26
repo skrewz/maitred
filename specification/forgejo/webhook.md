@@ -470,7 +470,14 @@ For each decision event, the re-fetch assembles the state
   sweep's own test counting the call. An open `ideation` root arriving
   on one of the three activity paths reads the thread twice: once for
   this digest and once for the digest gate's fold, which the decompose
-  row consults (§forgejo/decisions/actionable-state-digest). The fold
+  row consults (§forgejo/decisions/actionable-state-digest). A comment
+  on an open `outcome` tracker whose `ideation` root has closed pays
+  that fold as well — the tracker is the forest's other carrier — and no
+  other issue on these paths reads the forest at all (s-git/maitred#280).
+  When the forest's comment-row bound spaces such a comment, the fold
+  is still paid and the run is not: the bound is the pipeline's pacing,
+  not part of the arming rule (§forgejo/decisions/loop-prevention). The
+  fold
   excludes the authors the declaration excludes rather than the read
   carrying a filtered listing, and a failed comment read fails the
   re-fetch, as the blockers' does.

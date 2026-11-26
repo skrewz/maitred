@@ -678,38 +678,81 @@ func decideIssueOpened(e Event, s State, w *Watermark) Decision {
 }
 
 // decideIssueActivity handles an edited issue, a label change, or a
-// feedback comment: on an open issue carrying the ideation label the
-// decomposer re-cures — attaching the label is the first trigger — and
-// so is a comment (s-git/maitred#147). decideDecompose answers the
-// dispatch from the forest's digest wherever the gate is armed; where
-// it is unarmed — an event on a root whose kind labels conflict, an
-// issue the sweep holds off as a conflict before any decompose row —
-// the row is paced by its declared digest and the re-fire bound. The row
-// is author-scoped, not blanket: a comment
-// authored by the configured decomposer identity holds off naming the
-// authorship, so the decomposer's own question never re-triggers it
-// (§forgejo/decisions/loop-prevention); otherwise dispatch reassess if
-// the re-fetched issue is open and has no open blocker; activity on a
-// blocked issue has nothing to reassess — the work is held by the
-// blocker, so the decision holds off naming the open blockers.
+// feedback comment: on a forest's carrier the decomposer re-cures —
+// attaching the label is the first trigger — and so is a comment
+// (s-git/maitred#147, s-git/maitred#280). A forest has two carriers: the
+// open `ideation` root, which asks this row whatever the activity was,
+// and the open `outcome` tracker, which asks it of a comment alone — the
+// tracker is where curation reports and where wrap-up and the operator's
+// instructions land, so what is said there is weighed on arrival rather
+// than one reconcile interval later. decideDecompose answers the dispatch from
+// the forest's digest wherever the gate is armed; where it is unarmed — an
+// event on a root whose kind labels conflict, an issue the sweep holds off
+// as a conflict before any decompose row — the row is paced by its declared
+// digest and the re-fire bound; the tracker's comment row is bounded per
+// forest by the pipeline's pacing of the forest's own stamp, the root's
+// comment row keeping its own per-comment pace
+// (§forgejo/decisions/loop-prevention, s-git/maitred#280). The comment row
+// is author-scoped, not blanket: a comment authored by the configured
+// decomposer identity holds off naming the authorship, so the
+// decomposer's own question never re-triggers the forest, and the
+// tracker's row fails closed when no identity is declared
+// (§forgejo/decisions/loop-prevention).
+// Otherwise dispatch reassess if the re-fetched issue is open and has no
+// open blocker; activity on a blocked issue has nothing to reassess — the
+// work is held by the blocker, so the decision holds off naming the open
+// blockers. A forest member's comment is that reassess row and nothing
+// more: immediacy is a property of a forest's carriers, not of every node
+// in it, so the engine's noisiest thread folds as a fact the next sweep
+// collects and asks no gate of its own (s-git/maitred#280).
 func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	issue := s.Issue
-	if issue != nil && issue.State == "open" && hasLabel(issue, LabelIdeation) {
+	// A tracker asks this row of a comment alone: of a tracker's own facts
+	// the forest's fold carries its state and the comments its counted
+	// authors wrote, so an edit or a relabel there moves no folded fact and
+	// asking the gate there would read a forest that cannot have moved
+	// (§forgejo/decisions/actionable-state-digest). A tracker claiming the
+	// sync kind belongs to the sweep's sync row, which holds it off before
+	// any decompose row and leaves the gate unarmed for it
+	// (§forgejo/decisions/sync-set).
+	if issue != nil && issue.State == "open" && (hasLabel(issue, LabelIdeation) ||
+		(isTracker(issue) && !hasLabel(issue, LabelSync) && e.Type == EventIssueCommented)) {
 		// The comment row is guarded by authorship, not blanket: the
-		// decomposer's own comment on its root holds off silently,
-		// every other author's comment reaches the root row, where the
-		// digest gate answers in place of the revision guard whenever
+		// decomposer's own comment on either carrier holds off silently,
+		// every other author's comment reaches that carrier's row, where
+		// the digest gate answers in place of the revision guard whenever
 		// it is armed (§forgejo/decisions/actionable-state-digest,
-		// s-git/maitred#147). The fall-through is the root row in full:
-		// a root that also carries a teardown order takes the teardown
-		// row, exactly as an edit does — the order is the label, not
-		// the event (§forgejo/decisions/forest-teardown).
+		// s-git/maitred#147). One guard serves both carriers, because one
+		// loop — the decomposition answering its own words — is the same
+		// loop whoever wrote the thread, and the tracker's row asks that
+		// guard fail-closed, so an undeclared composer holds the carrier
+		// a run reports on off rather than dispatching the loop blind
+		// (s-git/maitred#280). The fall-through is the carrier's row in
+		// full: a root that also carries a teardown order takes the
+		// teardown row, exactly as an edit does — the order is the label,
+		// not the event (§forgejo/decisions/forest-teardown).
+		if e.Type == EventIssueCommented && isTracker(issue) && s.DecomposerIdentity == "" {
+			// The tracker is the carrier a decomposition reports on, so
+			// with no composer declared the engine cannot tell its own
+			// report from a human's fact and the fold would count it:
+			// the row that could hear the loop fails closed on the
+			// forest, and the sweep stays the recovery — the root's row
+			// keeps the inert reading an unset identity has always had
+			// (§forgejo/config/decomposer-identity,
+			// §forgejo/decisions/loop-prevention, s-git/maitred#280).
+			return holdOffUnsatisfiedInput(fmt.Sprintf("issue %d is an open %s tracker; no decomposer identity is declared: not asking the forest's gate of an unguarded authorship", issue.Number, LabelOutcome),
+				"event.sender", "config.decomposer identity")
+		}
 		if e.Type == EventIssueCommented && s.DecomposerIdentity != "" && e.Sender == s.DecomposerIdentity {
 			// The match is exact — no case folding, no substring —
 			// the same rule the fix-feedback ownership gate applies
 			// to the implementer identity
-			// (§forgejo/config/decomposer-identity).
-			return holdOffUnsatisfiedInput(fmt.Sprintf("issue %d is an open %s root; comment authored by the decomposer identity %s: not re-curing on the decomposer's own words", issue.Number, LabelIdeation, e.Sender),
+			// (§forgejo/config/decomposer-identity). One sentence
+			// serves both carriers: among a forest's carriers there is
+			// one guard, and naming which carrier asked would be a
+			// second noun to keep in sync, not a second answer
+			// (s-git/maitred#280).
+			return holdOffUnsatisfiedInput(fmt.Sprintf("issue %d is an open carrier of a forest; comment authored by the decomposer identity %s: not re-curing on the decomposer's own words", issue.Number, e.Sender),
 				"issue.comments", "event.sender")
 		}
 		return decideDecompose(e, issue, s, w)
@@ -739,7 +782,11 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 // cascade dispatches the forest members
 // (§forgejo/decisions/transition-table).
 func decideDecompose(e Event, issue *Issue, s State, w *Watermark) Decision {
-	if hasLabel(issue, LabelTeardownForest) {
+	// The order modifies the root's row, so only a root's row it stands
+	// above: a tracker carrying it is decided as any other tracker would
+	// be, exactly as the sweep's tracker row decides it
+	// (§forgejo/decisions/forest-teardown, s-git/maitred#280).
+	if hasLabel(issue, LabelIdeation) && hasLabel(issue, LabelTeardownForest) {
 		return decideTeardown(e, issue, s, w)
 	}
 	d, ready := readyAtRow(ActionDecompose, e, s)
@@ -2273,6 +2320,22 @@ func holdOffActionInadmissible(a Action, repo string) Decision {
 // §forgejo/reconciliation/the-state-is-the-watermark).
 func holdOffReFireBound(action Action, revision string, interval time.Duration) Decision {
 	return holdOff(fmt.Sprintf("%s re-fired at %s within the last %s: the re-fire is bounded to one per reconcile interval", action, revision, interval))
+}
+
+// holdOffForestReFireBound is the forest bound's hold-off: the tracker's
+// comment row — the gated `decompose` row a comment asks on the carrier
+// a run reports on — re-fires at one dispatch per forest per reconcile
+// interval, because a comment's arrival rate is not a fact about the
+// forest and every counted comment is by construction a new digest, so
+// the `(action, revision)` bound has nothing to space there. The root's
+// comment row is not this hold-off's: it keeps the per-comment pace it
+// shipped with. The reason names the forest, not a revision, because the
+// dispatch that spaced this one landed at a digest the thread has since
+// moved (§forgejo/decisions/loop-prevention, §forgejo/observability/the-decision-log,
+// s-git/maitred#147, s-git/maitred#280).
+func holdOffForestReFireBound(a Action, g *ForestDigestGate, interval time.Duration) Decision {
+	return holdOff(fmt.Sprintf("%s: forest %s re-fired within the last %s: the forest's tracker comment row is bounded to one dispatch per reconcile interval",
+		a, forestRef(g.RootRepo, g.RootNumber), interval))
 }
 
 // holdOffNeverImplement and holdOffNeverReassess are the reserved-label

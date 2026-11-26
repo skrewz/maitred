@@ -6589,6 +6589,124 @@ func TestHandleEvent_DecomposeDigestGate_ArmsOnTheEventPath(t *testing.T) {
 	}
 }
 
+// TestHandleEvent_TrackerCommentAsksTheGate: a comment on a commissioned
+// forest's tracker asks that forest's digest gate on the event path, so a
+// person answering the decomposer on the carrier where the forest reports
+// is considered on arrival rather than one reconcile interval later. The
+// first such observation commissions the run and refreshes the forest's
+// slot; the same thread again at an unchanged digest dispatches nothing —
+// the gate, not the watermark, is what paces this row on both paths. A
+// comment on a member of that forest is deliberately the noisier path's
+// own: `reassess` alone, and not one read of the forest paid for
+// (§forgejo/decisions/transition-table, §forgejo/decisions/actionable-state-digest,
+// §forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move,
+// s-git/maitred#280).
+func TestHandleEvent_TrackerCommentAsksTheGate(t *testing.T) {
+	eng, api, q, store := quietForest(t)
+	api.mu.Lock()
+	api.issues[1].State = "closed" // the commissioning gesture
+	api.deps[2] = []Issue{*api.issues[1], *api.issues[4]}
+	member := &Issue{Number: 5, State: "open", UpdatedAt: testUpdatedAt, Repository: "o/r"}
+	api.issues[5] = member
+	api.deps[5] = []Issue{*api.issues[1]}
+	api.mu.Unlock()
+
+	eng.HandleEvent(Event{Type: EventIssueCommented, Repo: "o/r", Kind: KindIssue, Number: 2, Sender: "alice"})
+	tasks := q.all()
+	if len(tasks) != 1 || !strings.Contains(tasks[0].Prompt, "action=decompose") {
+		t.Fatalf("got %+v, want the one decompose a comment on the tracker's forest earns", tasks)
+	}
+	slot, err := store.Load(ForestKey("o/r", 1))
+	if err != nil {
+		t.Fatalf("load forest slot: %v", err)
+	}
+	if slot == nil || slot.Digest == "" {
+		t.Fatalf("forest slot = %+v, want the observation the dispatch refreshed", slot)
+	}
+
+	// Nothing else in the forest moved, so the gate answers for the
+	// second arrival as the sweep's row would: unchanged, and silent.
+	eng.HandleEvent(Event{Type: EventIssueCommented, Repo: "o/r", Kind: KindIssue, Number: 2, Sender: "alice"})
+	if got := len(q.all()); got != 1 {
+		t.Fatalf("dispatched %d tasks at an unchanged digest, want the gate to hold the second run back", got)
+	}
+
+	// A comment that does move the digest arrives inside the forest's
+	// interval: every counted comment is a new digest, so it is the
+	// forest's own bound, not the (action, digest) pair's, that spaces
+	// this row — a thread's arrival rate is not what commissions runs.
+	// Nothing is lost but latency: the run the bound permits re-reads
+	// every comment the spaced ones folded
+	// (§forgejo/decisions/loop-prevention, s-git/maitred#280).
+	api.mu.Lock()
+	api.comments[2] = append(api.comments[2], Comment{Author: "alice", Body: "a second comment"})
+	api.mu.Unlock()
+	eng.HandleEvent(Event{Type: EventIssueCommented, Repo: "o/r", Kind: KindIssue, Number: 2, Sender: "alice"})
+	if got := len(q.all()); got != 1 {
+		t.Fatalf("dispatched %d tasks at a moved digest inside the forest's interval, want the forest bound to space the run", got)
+	}
+
+	// The bound's interval spent, the same row asks again.
+	eng.stampReFireAt(ForestKey("o/r", 1), ActionDecompose, "", "a-landed-digest", time.Now().Add(-2*eng.cfg.ReconcileInterval))
+	api.mu.Lock()
+	api.comments[2] = append(api.comments[2], Comment{Author: "bob", Body: "a later comment"})
+	api.mu.Unlock()
+	eng.HandleEvent(Event{Type: EventIssueCommented, Repo: "o/r", Kind: KindIssue, Number: 2, Sender: "bob"})
+	tasks = q.all()
+	if len(tasks) != 2 || !strings.Contains(tasks[1].Prompt, "action=decompose") {
+		t.Fatalf("got %+v, want the forest's comment row to ask again once the bound's interval is spent", tasks)
+	}
+
+	// The member's thread is the contrast: `reassess` alone, and the
+	// forest is read no further than the tracker's row already read it
+	// (s-git/maitred#280).
+	readBefore := api.callCount("GetIssue:o/r/1")
+	eng.HandleEvent(Event{Type: EventIssueCommented, Repo: "o/r", Kind: KindIssue, Number: 5, Sender: "alice"})
+	tasks = q.all()
+	if len(tasks) != 3 || !strings.Contains(tasks[2].Prompt, "action=reassess") {
+		t.Fatalf("got %+v, want the member's comment to dispatch reassess alone", tasks)
+	}
+	if got := api.callCount("GetIssue:o/r/1"); got != readBefore {
+		t.Errorf("the member's comment read the forest's root %d times, want no forest read on that path at all", got-readBefore)
+	}
+}
+
+// TestHandleEvent_RootCommentIgnoresTheForestBound: the forest's own bound
+// paces the tracker's comment row and no wider. A comment on an open
+// `ideation` root is the immediate channel that carrier shipped with, so
+// the stamp its own dispatch leaves on the forest's slot does not space the
+// root's next comment: two digest-moving comments on the root within one
+// reconcile interval buy two runs, the forest's slot notwithstanding
+// (§forgejo/decisions/loop-prevention, s-git/maitred#147, s-git/maitred#280).
+func TestHandleEvent_RootCommentIgnoresTheForestBound(t *testing.T) {
+	eng, api, q, store := quietForest(t)
+
+	eng.HandleEvent(Event{Type: EventIssueCommented, Repo: "o/r", Kind: KindIssue, Number: 1, Sender: "alice"})
+	tasks := q.all()
+	if len(tasks) != 1 || !strings.Contains(tasks[0].Prompt, "action=decompose") {
+		t.Fatalf("got %+v, want the one decompose a comment on the standing root earns", tasks)
+	}
+	slot, err := store.Load(ForestKey("o/r", 1))
+	if err != nil {
+		t.Fatalf("load forest slot: %v", err)
+	}
+	if slot == nil || slot.Digest == "" {
+		t.Fatalf("forest slot = %+v, want the observation the root's dispatch refreshed", slot)
+	}
+
+	// The root's dispatch landed inside this very interval, so it left the
+	// forest's re-fire stamp unspent; the root's own row reads that stamp
+	// not, and the next comment, moving the digest, is cured at once.
+	api.mu.Lock()
+	api.comments[1] = append(api.comments[1], Comment{Author: "bob", Body: "a second word on the root"})
+	api.mu.Unlock()
+	eng.HandleEvent(Event{Type: EventIssueCommented, Repo: "o/r", Kind: KindIssue, Number: 1, Sender: "bob"})
+	tasks = q.all()
+	if len(tasks) != 2 || !strings.Contains(tasks[1].Prompt, "action=decompose") {
+		t.Fatalf("got %+v, want the root's comment row to keep its own per-comment pace inside the forest's interval", tasks)
+	}
+}
+
 // TestReconcile_MergeRowAtAFrozenHeadRefiresAtTheNextSweep: a merge run
 // that died leaves the state that asked for it untouched — every lens
 // still approving, the head unchanged because nothing merged — so the
