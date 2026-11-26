@@ -194,15 +194,18 @@ gives is the one value its dispatch is watermarked on, the decision log
 names, the task's dedup key carries and the re-fire bound is a rate on,
 so re-keying an action edits this declaration and nothing beside it —
 the tests keep those four answering with the value the declaration
-derives (§forgejo/state/watermark, s-git/maitred#259). Every declaration
-folds the facts its predicate reads and no fact it does not — the
-pull-request rows fold the head, the chain at head and the set's
-readiness rather than naming a forge revision as a shortcut, and no
-fold states an event fact, so one state answers one digest whichever
-path asked (§forgejo/decisions/inputs, s-git/maitred#260). The
-`decompose` fold's component set is drawn from that action's
-declaration rather than from a list beside the fold
-(§forgejo/decisions/actionable-state-digest).
+derives (§forgejo/state/watermark, s-git/maitred#259). A declaration
+names the facts its predicate reads — state facts, event facts and
+configuration inputs alike — plus, on the issue rows that carry one, the
+activity timestamp the fold states and no predicate reads
+(§forgejo/decisions/inputs). The fold states each fact a declaration
+names and nothing beside it, except the event facts and configuration
+inputs §forgejo/decisions/inputs says fold nothing; the pull-request
+rows fold the head, the chain at head and the set's readiness rather
+than naming a forge revision as a shortcut, so one state answers one
+digest whichever path asked (s-git/maitred#260). The `decompose` fold's
+component set is drawn from that action's declaration rather than from a
+list beside the fold (§forgejo/decisions/actionable-state-digest).
 
 The predicate is the only seat a hold-off's or a dispatch's reason is
 written from, and it answers **three ways** over the declared inputs:
@@ -1077,11 +1080,18 @@ still calls for one.
    (§forgejo/config/decomposer-identity,
    §forgejo/config/implementer-identity, §forgejo/config/review-lenses);
    the guard fires only where the lens has actually reviewed, as the
-   retired reviewing-author guard did. Each of these guards reads a
-   declared input and answers the way every guard does — satisfied,
-   unsatisfied, or unproven — so an identity or a sender the engine
-   could not read holds the row off rather than letting the guard pass
-   (§forgejo/decisions/actions, s-git/maitred#261).
+   retired reviewing-author guard did. Each of these guards answers the
+   way every guard does over the identities and senders it can read —
+   satisfied, unsatisfied, or unproven — so a read that failed holds the
+   row off rather than letting the guard pass
+   (§forgejo/decisions/actions, s-git/maitred#261). What the operator
+   has left unconfigured is not a failed read: an unset identity, or a
+   delivery carrying no sender, leaves that guard inert rather than
+   holding — the cost of leaving `engine_account`,
+   `decomposer_identity` or `implementer_identity` unset is the guard,
+   not a hold-off (§forgejo/config/engine-account,
+   §forgejo/config/decomposer-identity,
+   §forgejo/config/implementer-identity).
    The guard yields to an explicit request: a PR carrying the
    `trigger-review` label is reviewed whatever a lens pushed
    (§forgejo/decisions/label-triggered-review).
@@ -1174,10 +1184,11 @@ stored one, each with its per-component sub-digests
 (§forgejo/decisions/actionable-state-digest,
 s-git/maitred#209).
 
-**Activity timestamp** — an issue's `updated_at`. The fold states it so
-the digest a row dispatches on moves when the object was touched; no
-predicate reads it, and the check over a predicate's reads refuses a row
-that turned on the cursor itself
+**Activity timestamp** — an issue's `updated_at`, one of the facts a
+declaration may name and the only one no predicate reads: the fold
+states it so the digest a row dispatches on moves when the object was
+touched, and the check over a predicate's reads refuses a row that
+turned on the cursor itself
 (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#263).
 An `outcome` tracker states no timestamp at all, because the engine's
 own drawing moves it (§forgejo/reconciliation/the-tracker-block).
@@ -1207,12 +1218,11 @@ alone. Both guards are inert when the identity is unset.
 **Watermark** — the last dispatch for the object's key
 (§forgejo/state/watermark), or none.
 
-The enumeration above is the vocabulary the declarations name: each
-action carries one declaration (§forgejo/decisions/actions) naming the
-subset of these facts its predicate reads. That declaration's shape is
-stated there once; this section states two things about the facts it
-names: what one the engine could not read answers with, and which of
-them the fold carries.
+The enumeration above is the vocabulary the declarations name. The
+shape one declaration takes is §forgejo/decisions/actions' to state,
+once; this section says two things about the facts it names: what an
+input the engine could not read answers with, and which of them the fold
+carries.
 
 An input the engine **could not read** — an object that was never
 re-fetched, a dependency, comment, review or membership listing that
@@ -1229,14 +1239,15 @@ in a repository no maitred role names is the exclusion
 that exclusion, naming the root's repository, and promising no retry the
 next sweep could only decline identically (s-git/maitred#261).
 
-Of the facts enumerated, the fold carries each one a declaration names
-and no fact its predicate does not read; of the rest, two fold nothing,
-for one reason each. An **event fact** folds nothing: which row fired is
-not part of the state, and a digest both the sweep and an event must
-answer with cannot contain it. A declared **configuration input** folds
-nothing for the same reason in turn: it states the operator's choice,
-not a fact of the work item, and a fold that stated the operator's file
-would move every row the day it was edited. The issue-path fold is a
+The fold carries every fact a declaration names
+(§forgejo/decisions/actions); of the kinds enumerated here, two fold
+nothing, for one reason each. An **event fact** folds nothing: which row
+fired is not part of the state, and a digest both the sweep and an event
+must answer with cannot contain it. A declared **configuration input**
+folds nothing for the same reason in turn: it states the operator's
+choice, not a fact of the work item, and a fold that stated the
+operator's file would move every row the day it was edited. The
+issue-path fold is a
 **set**, so an input a predicate reads cannot move without the row that
 asks it noticing, whatever order the listings arrived in
 (§forgejo/state/watermark, s-git/maitred#259). The refusal of undeclared

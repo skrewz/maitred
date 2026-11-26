@@ -333,12 +333,10 @@ declaration, so the sweep and an event holding one state reach one answer
 afterwards is the digest that declaration derives — never the instant the
 object was last touched, never an object revision, and one value on both
 paths because no fold states an event fact (§forgejo/decisions/inputs).
-The pull-request rows and the landing set's row fold the facts they name
-— the head, the chain at head, the set's members and their readiness —
-into a digest of their own rather than naming a forge revision as a
-shortcut (§forgejo/decisions/inputs, s-git/maitred#260), and what a
-digest the watermark already records means to a given row — dispatch
-spaced by the **re-fire bound**, or a hold-off — is
+Which facts each row folds — the pull-request rows' and the landing
+set's included — §forgejo/decisions/actions lists (s-git/maitred#260),
+and what a digest the watermark already records means to a given row —
+dispatch spaced by the **re-fire bound**, or a hold-off — is
 §forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move's
 to settle. A comment on a pull request joins that fold on no row: it is
 no action's declared input, on any path, and a comment there is addressed

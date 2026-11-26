@@ -35,13 +35,11 @@ A watermark records, for one issue or pull request:
   no guard can pace, so a tracker folds the facts its masked revision folds
   instead (§forgejo/reconciliation/the-tracker-block,
   §forgejo/decisions/loop-prevention). A pull-request row folds the facts
-  its row reads — the head sha, the PR's state and mergeability, the chain
-  at head, the labels that gate it, and, for the landing set, each
-  member's readiness — and no row's revision is a forge revision any
-  longer (s-git/maitred#260). No comment on a pull request folds into any
-  digest, on either path — it is no action's declared input — so no
-  comment there moves the sweep's or an event's decision
-  (§forgejo/decisions/loop-prevention).
+  its row reads, as §forgejo/decisions/actions lists them, and no row's
+  revision is a forge revision any longer (s-git/maitred#260). No comment
+  on a pull request folds into any digest, on either path — it is no
+  action's declared input — so no comment there moves the sweep's or an
+  event's decision (§forgejo/decisions/loop-prevention).
 
 The digest is the one value the idempotency guard compares, the re-fire
 bound is a rate on, and the task's dedup key carries; the decision log
