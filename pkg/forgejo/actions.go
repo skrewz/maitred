@@ -698,19 +698,6 @@ var declaredInputFolds = map[string]func(subject string, s State) []string{
 		}
 		return facts
 	},
-	"config.review lenses": func(_ string, s State) []string {
-		facts := make([]string, 0, len(s.ReviewLenses))
-		for _, lens := range s.ReviewLenses {
-			facts = append(facts, "lens "+lens.Identity)
-		}
-		return facts
-	},
-	"config.implementer identity": func(_ string, s State) []string {
-		if s.ImplementerIdentity == "" {
-			return []string{"implementer identity unset"}
-		}
-		return []string{"implementer " + s.ImplementerIdentity}
-	},
 	"connected issues": func(_ string, s State) []string {
 		// The merge gate reads two labels of a connected work item
 		// beside its identity and state: the merging opt-in on the
