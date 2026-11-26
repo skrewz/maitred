@@ -428,7 +428,9 @@ func digestFacts(facts []string) string {
 // (§forgejo/decisions/inputs). The rows still read both kinds —
 // reassess names the event type in its reason and the identities whose
 // comments count — and declare them like any other fact; the fold
-// simply passes them by.
+// simply passes them by. A name matching a prefix here is passed by before
+// declaredInputFolds is consulted, so an entry in that map naming one is dead
+// code (§forgejo/decisions/inputs).
 var foldsNowhere = []string{"event.", "config."}
 
 func declaredInputFacts(a Action, subject string, s State) []string {
@@ -697,19 +699,6 @@ var declaredInputFolds = map[string]func(subject string, s State) []string{
 			facts = append(facts, fmt.Sprintf("review %s %s at %s", r.Author, r.Event, r.CommitID))
 		}
 		return facts
-	},
-	"config.review lenses": func(_ string, s State) []string {
-		facts := make([]string, 0, len(s.ReviewLenses))
-		for _, lens := range s.ReviewLenses {
-			facts = append(facts, "lens "+lens.Identity)
-		}
-		return facts
-	},
-	"config.implementer identity": func(_ string, s State) []string {
-		if s.ImplementerIdentity == "" {
-			return []string{"implementer identity unset"}
-		}
-		return []string{"implementer " + s.ImplementerIdentity}
 	},
 	"connected issues": func(_ string, s State) []string {
 		// The merge gate reads two labels of a connected work item

@@ -320,6 +320,9 @@ interval is spent.
 
 ## The state is the watermark
 
+The shape a row has is §forgejo/decisions/actions' to say; what this
+section settles is what that rules out.
+
 The time an object was last updated is never an eligibility criterion and,
 on the issue path, never a suppression key either. Whether an object is
 actionable is a predicate over its re-fetched state alone — open state,
@@ -327,30 +330,23 @@ labels, blockers, connected pull requests, mergeability, and the review
 chain at head — and that predicate is asked **once**, through the action's
 declaration, so the sweep and an event holding one state reach one answer
 (§forgejo/decisions/actions, s-git/maitred#259). What the row compares
-afterwards is the **digest of the inputs the declaration names**
-(§forgejo/state/watermark), not the instant the object was last touched:
-a digest the watermark does not record is new information and dispatches
-outright, and one it does record dispatches too, because no action may
-fall silent at a digest it cannot move, leaving only the **pace** of that
-re-fire to the re-fire bound — one attempt per `reconcile_interval` per
-`(action, digest)`, whichever path arrived
-(§forgejo/decisions/loop-prevention). Nothing else may differ between the
-paths, and **no row is keyed on an object revision**: the pull-request
-rows and the landing set's row fold the facts they name — the head, the
-chain at head, the set's members and their readiness — into a digest of
-their own, the same quantity every other row compares
-(§forgejo/decisions/inputs, s-git/maitred#260). A comment on a pull
-request joins that fold on no row: it is no action's declared input, on
-any path, and a comment there is addressed to a human
-(§forgejo/decisions/loop-prevention).
+afterwards is the digest that declaration derives — never the instant the
+object was last touched, never an object revision, and one value on both
+paths because no fold states an event fact (§forgejo/decisions/inputs).
+Which facts each row folds — the pull-request rows' and the landing
+set's included — §forgejo/decisions/actions lists (s-git/maitred#260),
+and what a digest the watermark already records means to a given row —
+dispatch spaced by the **re-fire bound**, or a hold-off — is
+§forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move's
+to settle. A comment on a pull request joins that fold on no row: it is
+no action's declared input, on any path, and a comment there is addressed
+to a human (§forgejo/decisions/loop-prevention).
 
 This is the engine's whole rule, not the rule for a favoured few; the
 actions whose state relation emits no delivery — a blocker edge attached
 or removed — are simply the ones the rule was invented for, since a digest
 of the declared inputs moves when such an edge moves and a timestamp does
-not. Event facts — which row fired, who sent it — fold into no digest at
-all, so the sweep and the event answer one value for one state
-(§forgejo/decisions/inputs). Because the sweep enumerates open objects only and each eligibility
+not. Because the sweep enumerates open objects only and each eligibility
 predicate is cleared by the action's own success — a delivered
 implementation opens a connected pull request, a rebase moves the head —
 re-firing on the state is self-limiting wherever the action **can**
@@ -385,8 +381,8 @@ digest its last dispatch derived, and nothing on either side can move it.
 Every row but that one dispatches at a pair the watermark holds and
 leaves the pace to the re-fire bound — the same answer on the sweep and on
 an event, which is the split the pull-request rows used to be on the
-wrong side of (s-git/maitred#260). No row is exempt from the digest and
-none is exempt from the watermark: what differs is only what a true
+wrong side of (s-git/maitred#260). Every row consults the digest and
+every row consults the watermark: what differs is only what a true
 comparison means to the row that made it, and that is settled once in the
 declaration, not on the path that arrived.
 

@@ -128,7 +128,7 @@ that hop names **other than an `outcome` tracker**: a tracker survives the
 order, so its membership edge is a standing edge that says nothing about
 whether a forest remains. A root whose only downstream edge reaches its tracker
 dispatches no agent, naming what it still blocks. This is what ends the
-re-firing: the exemption asks again while a deletable member stands, and a
+re-firing: the row asks again while a deletable member stands, and a
 forest an earlier run tore down, or one never made, stops the asking by itself.
 The spared tracker is why the count excludes trackers at all: it keeps the root
 blocking one issue for the life of that root, so a count that included it would
@@ -179,60 +179,68 @@ has no way to tell a refusal that will pass tomorrow from one that never will.
 
 ## Actions
 
+**An action is a predicate over a declared input set, watermarked on the
+digest of that set.** This section is where that shape is stated once;
+every other section that needs it refers here rather than restating it.
+
 The action names form the enum the engine config maps to canned
 prompts. Each action carries exactly one declaration in the decision
-code: its input set, its ready predicate over that set, and the
-digest a dispatch is watermarked on. The decision path reaches an
+code: its input set — named in the vocabulary of
+§forgejo/decisions/inputs —, its ready predicate over that set, and the
+digest the fold of that set gives. The decision path reaches an
 action's predicate and digest through that declaration, so no row
-states those facts beside it a second time. Two checks keep the table
-and the code from drifting apart: an action the enum names that carries
-no declaration cannot dispatch, and the refusal names the action; and a
-predicate that reads a fact its action's declaration does not name is
-refused, by file, field and action (§forgejo/decisions/inputs). Both
-run from the repository's ordinary test targets, and each fails loudly
-rather than passing when the source or the enum it reads cannot be
-read (s-git/maitred#263).
+states those facts beside it a second time. The digest a declaration
+gives is the one value its dispatch is watermarked on, the decision log
+names, the task's dedup key carries and the re-fire bound is a rate on,
+so re-keying an action edits this declaration and nothing beside it —
+the tests keep those four answering with the value the declaration
+derives (§forgejo/state/watermark, s-git/maitred#259). A declaration
+names the facts its predicate reads — state facts, event facts and
+configuration inputs alike — plus, on the issue rows that carry one, the
+activity timestamp the fold states and no predicate reads
+(§forgejo/decisions/inputs). The fold states each fact a declaration
+names and nothing beside it, except the event facts and configuration
+inputs §forgejo/decisions/inputs says fold nothing; the pull-request
+rows fold the head, the chain at head and the set's readiness rather
+than naming a forge revision as a shortcut, so one state answers one
+digest whichever path asked (s-git/maitred#260).
 
-The predicate is also the only seat a hold-off's or a dispatch's reason
-is written from: it answers **three ways** over the declared inputs —
-satisfied, unsatisfied, or **unproven**, the engine having failed to
-read the input at all — and the reason the log carries is composed from
-that answer. An unsatisfied answer names the declared inputs the state
-did not satisfy; an unproven one names the input that could not be
-proven, says the reconciliation sweep asks again, and never reads as the
-guard being satisfied; an answer the watermark's digest has already
-recorded reads as **inputs unchanged**, never as the action having
-already been dispatched (§forgejo/observability/the-decision-log,
-s-git/maitred#261). No row states a hold-off beside its declaration in
-words of its own, and none dispatches while its predicate is unsatisfied
-or its answer unproven (s-git/maitred#261).
+The predicate is the only seat a hold-off's or a dispatch's reason is
+written from, and it answers **three ways** over the declared inputs:
+**satisfied**, **unsatisfied**, or **unproven** — the engine having
+failed to read the input at all. An unproven answer is never satisfied:
+the row holds off naming the input that could not be proven and the
+read that failed, the next sweep is asked again, and a failed read is
+never the empty listing it would have stood for
+(§forgejo/decisions/inputs, s-git/maitred#261). An unsatisfied answer
+names the declared inputs the state did not satisfy; an answer the
+watermark's digest has already recorded reads as **inputs unchanged**,
+never as the action having already been dispatched
+(§forgejo/observability/the-decision-log). No row states a hold-off
+beside its declaration in words of its own, and none dispatches while
+its predicate is unsatisfied or its answer unproven.
 
-The digest an action declares is the one value its dispatch is
-watermarked on, the decision log names, the task's
-dedup key carries and the re-fire bound is a rate on, so re-keying an
-action edits this declaration and nothing beside it — the tests keep
-those four answering with the value the declaration derives
-(§forgejo/state/watermark, s-git/maitred#259). Every action declares the fold of
-its own input set — the pull-request rows fold the head, the chain at
-head and the set's readiness rather than naming a forge revision as a
-shortcut, and no fold states an event fact, so one state answers one
-digest whichever path asked (§forgejo/decisions/inputs,
-s-git/maitred#260).
-The `decompose` fold's component set is drawn from that action's
-declaration rather than from a list beside
-the fold (§forgejo/decisions/actionable-state-digest). The Inputs
-column names each action's declared set, in lockstep with the
-declaration that records it (§forgejo/decisions/inputs).
+Two checks keep this table and the code from drifting apart, each run
+from the repository's ordinary test targets, each failing loudly rather
+than passing when the source or the enum it reads cannot be read: an
+action the enum names that carries no declaration cannot dispatch, and
+the refusal names the action; and the check over a predicate's reads
+refuses, by file, field and action, a read of a fact its declaration does
+not name — and an activity-timestamp read whatever the declaration says,
+since the fold states it and no predicate reads it
+(§forgejo/decisions/inputs, s-git/maitred#263). The Inputs column below
+names each action's declared set, in lockstep with the declaration that
+records it (§forgejo/decisions/inputs, s-git/maitred#264).
 
 | Action | Dispatched when | Inputs |
 |---|---|---|
 | `implement` | the issue is open, unblocked (all its blockers closed), has no connected open PR, carries no reserved label and does not carry `forest-seeding`, and is not an `outcome` tracker (one that becomes unblocked is a `wrap-up` candidate) — the issue was opened, became unblocked, or was reconciled into that state; **the row is state-governed on every path, dispatching on the digest of these inputs rather than on any timestamp, and a digest the watermark already records re-fires at the re-fire bound's pace**, so an attempt that died before opening a connected pull request recovers within one interval (§forgejo/reconciliation/the-state-is-the-watermark, §forgejo/decisions/loop-prevention, §forgejo/decisions/commissioning, s-git/maitred#259) | `issue.state`, `issue.labels`, `issue.updated_at`, `blockers.states`, `connected PRs` |
-| `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a comment authored by anyone other than the account `engine_account` names or the configured decomposer identity (the prompt decides whether to implement), and it carries no reserved label — **the row is state-governed on every path, dispatching on the digest of these inputs, so a comment the fold excludes fires nothing, a comment it counts fires at once, and a comment that arrives in the same moment as another input fires once, the re-fire bound spacing the second arrival. An edit moves the row through the description it rewords; an edit that moves no declared fact — a title reworded alone, which no fold states — dispatches nothing until another input moves** (§forgejo/decisions/loop-prevention, §forgejo/config/engine-account, §forgejo/config/decomposer-identity, §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#262) | `issue.state`, `issue.labels`, `issue.body`, `issue.comments` (authored by neither the account `engine_account` names nor the configured decomposer identity), `blockers.states`, `event.type`, `event.sender` |
+| `reassess` | an open issue with no open blockers was edited, had its labels changed, or received a comment authored by anyone other than the account `engine_account` names or the configured decomposer identity (the prompt decides whether to implement), and it carries no reserved label — **the row is state-governed on every path, dispatching on the digest of these inputs, so a comment the fold excludes fires nothing, a comment it counts fires at once, and a comment that arrives in the same moment as another input fires once, the re-fire bound spacing the second arrival. An edit moves the row through the description it rewords; an edit that moves no declared fact — a title reworded alone, which no fold states — dispatches nothing until another input moves** (§forgejo/decisions/loop-prevention, §forgejo/config/engine-account, §forgejo/config/decomposer-identity, §forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#262) | `issue.state`, `issue.labels`, `issue.body`, `issue.comments`, `blockers.states`, `config.decomposer identity`, `config.engine account`, `event.type`, `event.sender` |
 | `review` | the **fan-out over the configured lenses**: a mergeable PR opened, or synced, dispatches each lens with no undismissed review at the head (§forgejo/decisions/review-lenses); so does an open mergeable PR carrying the `trigger-review` label, at the current revision (§forgejo/decisions/label-triggered-review)— **the fan-out is owed per lens, on every path**: a lens with no undismissed review at head is owed the dispatch whatever else moved, and one whose report landed is not owed it whatever else moved; the re-fire of a lens still owed is paced by the re-fire bound on that lens's own digest (§forgejo/decisions/review-lenses, §forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move) | `PR.state`, `PR.mergeable`, `PR.head sha`, `PR.labels`, `reviews` **scoped to the lens**, `config.review lenses`, `event.type`, `event.sender` |
 | `fix-feedback` | every configured review lens has reported at the PR's current head and the reports are not all approvals (§forgejo/decisions/review-lenses) — **and** the PR's author is the configured implementer identity; a PR authored by anyone else holds off, its feedback theirs to fix (§forgejo/config/implementer-identity, §forgejo/decisions/loop-prevention, s-git/maitred#143); while any lens has not reported at head the action holds off naming the outstanding lenses, whose dispatches the fan-out row advances; **state-governed on every path**, the chain reporting feedback at the current head being a state no dispatch of this row can move, its re-fire paced by the re-fire bound (§forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move) | `PR.state`, `PR.mergeable`, `PR.head sha`, `PR.author`, `reviews`, `config.review lenses`, `config.implementer identity`, `event.type` |
 | `merge-or-wait` | **every configured lens holds an undismissed approval at the PR's current head**, no reviewer's latest undismissed review at head is a non-approval (§forgejo/decisions/review-lenses), **the issue its body closes carries the `agentic-auto-merge` opt-in** — the label is a precondition of the dispatch on every path, so an approved PR whose delivered issue carries no merge opt-in holds off, its reason naming the missing label and the connected issues (§forgejo/decisions/merge-gate, s-git/maitred#179, s-git/maitred#228) — **and no connected issue has an open blocker** — the merge gate (§forgejo/decisions/merge-gate); the merge policy is the prompt's; never for a PR whose connected issue is a member of an open sync set — landing is the set's decision (§forgejo/decisions/sync-set); a labelled member of no open set — its set retired — reads as stale authoring, not a gate, and the merge gate decides on (§forgejo/decisions/sync-set); **state-governed on every path** when the issue its body closes carries `agentic-auto-merge` — an approved opted-in PR sits at a frozen head, so the row dispatches at the digest the watermark records and the re-fire bound spaces it, which is what keeps a merge run that died recoverable (§forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move, §forgejo/decisions/loop-prevention) | `PR.state`, `PR.mergeable`, `PR.head sha`, `reviews`, `connected issues`, `connected issues' blockers`, `connected issues' sync sets`, `sync sets`, `config.review lenses`, `event.kind`, `event.repo`, `event.number` |
 | `rebase` | an open PR is not mergeable (conflicts); **the row is state-governed on every path**, an unmoved head being a fact the fold carries, so a rebase that died recovers within one interval at the re-fire bound's pace (§forgejo/reconciliation/the-state-is-the-watermark, §forgejo/decisions/loop-prevention) | `PR.state`, `PR.mergeable`, `PR.head sha`, `event.type` |
-| `decompose` | an open issue carrying the `ideation` label was opened, edited, had its labels changed, or received a comment authored by anyone other than the configured decomposer identity (§forgejo/decisions/loop-prevention, s-git/maitred#147); or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker whose `ideation` blocker is closed — a forest is under curation while its tracker is open, and how many of its members still block that tracker is no input to the row (s-git/maitred#279). The `teardown-forest` order is asked of the root's own row: a root carrying it is the teardown row's forest, and a tracker carrying it is decided as any other tracker would be. Every row consults the forest's **actionable-state digest gate**: the dispatch fires only when the digest moved since the store last observed it, naming the component that moved; the gate is a suppression of its own, asked before the watermark, and the event path's row for a kind-conflicting root — where the gate is unarmed — is paced by the digest of these declared inputs alone (§forgejo/decisions/actionable-state-digest, §forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move, s-git/maitred#209) | `issue.state`, `issue.labels`, `issue.body`, `blockers.states`, `forest digest gate`, `event.type`, `event.sender`; the fold's component set (`root`, `member`, `tracker`, `blocker`, `comment`) is declared here and read by the digest |
+| `decompose` | an open issue carrying the `ideation` label was opened, edited, had its labels changed, or received a comment authored by anyone other than the configured decomposer identity (§forgejo/decisions/loop-prevention, s-git/maitred#147); or the reconciliation sweep finds an open issue carrying the `ideation` label, or an open `outcome` tracker whose `ideation` blocker is closed — a forest is under curation while its tracker is open, and how many of its members still block that tracker is no input to the row (s-git/maitred#279). The `teardown-forest` order is asked of the root's own row: a root carrying it is the teardown row's forest, and a tracker carrying it is decided as any other tracker would be. Every row consults the forest's **actionable-state digest gate**: the dispatch fires only when the digest moved since the store last observed it, naming the component that moved; the gate is a suppression of its own, asked before the watermark, and the event path's row for a kind-conflicting root — where the gate is unarmed — is paced by the digest of these declared inputs alone (§forgejo/decisions/actionable-state-digest, §forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move, s-git/maitred#209) | `issue.state`, `issue.labels`, `issue.body`, `blockers.states`, `forest digest gate`, `event.type`, `event.sender` |
 | `wrap-up` | the reconciliation sweep finds an open issue carrying the `outcome` label with no open blockers — and, on a tracker whose forest is commissioned, with that forest's actionable-state digest unchanged, because the curation row asks first and wins where both are ready (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#279) — the row dispatching on the digest these inputs fold and leaving a re-fire at an unchanged digest to the re-fire bound (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#259); or the unblock cascade newly unblocks an open issue carrying the `outcome` label (§forgejo/decisions/unblock-cascade). Neither row's dispatch draws anything of its own: the forest's picture is landed by the pipeline's drawing step — the tick's step 5 for the sweep's row, the event's redraw for the cascade's — from the graph, with the tick's own render function, and a failed draw never gates the dispatch (§forgejo/reconciliation/the-tracker-block, s-git/maitred#232, s-git/maitred#274) | `issue.state`, `issue.labels`, `issue.updated_at`, `blockers.states` |
 | `teardown-forest` | an open issue carrying the `ideation` label **also** carries the `teardown-forest` label, **and blocks at least one issue that is not an `outcome` tracker**: the human has ordered the forest that root commissioned to be deleted, and a member the order would delete remains to delete (§forgejo/decisions/forest-teardown); the downstream edges are among these inputs, so a member that arrived or went quiet with no delivery moves the digest the row dispatches on (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#259) | `issue.state`, `issue.labels`, `issue.updated_at`, `blocked downstream edges` |
 | `sync` | an open issue carrying the `sync` label — a **landing set**: changes that must land together — has every blocking issue either closed or standing with its delivering PR approved at head and mergeable while carrying `agentic-sync-merge`; "approved at head" is the lens gate — every configured lens holds an undismissed approval at that PR's head (§forgejo/decisions/review-lenses) (a blocking issue that is itself a pull request is held to that test through its own state); dispatched from the reconciliation sweep, from the unblock cascade's sync-set candidate, and from the approval path's emission re-checked on re-fetch; **this is the pull-request path's one row a digest suppresses**, the fold of the set's own facts answering what the readiness event cannot carry (§forgejo/decisions/sync-set, §forgejo/reconciliation/the-landing-sets-row) | `issue.state`, `issue.sync label`, `issue.body`, `sync members`, `members' PRs`, `members' PR reviews`, `config.review lenses` |
@@ -240,7 +248,12 @@ declaration that records it (§forgejo/decisions/inputs).
 Reviews are the fan-out over the configured lenses, not a configured
 action entry: `review` names the fan-out's dispatch in the decision
 log, one emission per lens, and `re-review` is retired with the
-single-reviewer model (§forgejo/config/review-lenses).
+single-reviewer model (§forgejo/config/review-lenses). The `decompose`
+row's declaration also carries the fold's component set — `root`,
+`member`, `tracker`, `blocker` and `comment` — which the digest gate
+reads from the declaration rather than from a list beside it
+(§forgejo/decisions/actionable-state-digest), and which states no input
+the predicate reads.
 
 ## Review lenses
 
@@ -968,96 +981,86 @@ staying silent (§forgejo/decisions/sync-set).
 
 ## Loop prevention
 
-Six mechanisms, in this order:
+Six mechanisms, in this order. None of them rests on an agent being told
+to stand down: each makes its loop impossible in the state the engine
+reads, so a dispatch happens only while a fact the predicate declares
+still calls for one.
 
 1. **The machine is terminating.** Each action's side-effect maps to
    the *next* transition, never a re-run of the same one: a review
    does not push commits; a commit push triggers a review; a
-   changes-requested review triggers a fix; a fix pushes commits.
-2. **Idempotency + watermark.** The same `(event, state, digest)` does
-   not re-dispatch the same action: where a row consults the watermark,
-   it does not dispatch ahead of what the record holds — the revision
-   every row keys on being the digest of its declared inputs
-   (§forgejo/state/watermark), the landing set's fold stating that
+   changes-requested review triggers a fix; a fix pushes commits. A
+   loop would need an action whose success left its own predicate
+   standing exactly as it found it.
+2. **Idempotency, the watermark and the re-fire bound.** The same
+   `(event, state, digest)` does not re-dispatch the same action ahead
+   of what the record holds. The revision every row keys on is the
+   digest of its declared inputs (§forgejo/decisions/actions,
+   §forgejo/state/watermark) — the landing set's fold stating that
    set's own facts rather than a revision derived from the whole set
-   (§forgejo/decisions/sync-set). The guard is
-   digest-keyed on every path, and for the review fan-out it is
-   **subject-keyed** as well: each lens is guarded by its own slot at
-   the digest, so three lenses dispatched at one head are three
-   dispatches, and a lens already mid-flight at the head is not
-   duplicated (§forgejo/state/watermark, §forgejo/decisions/review-lenses).
-   Every row but the landing set's and the cascade's own legs —
-   `implement`, `reassess`, `decompose`, `wrap-up`, `teardown-forest`,
-   and every pull-request row — is not held off by that record: a digest the store already holds means only that
-   the state has not moved since the engine last acted on it, and the
-   row dispatches anyway rather than falling silent at a digest it
-   cannot move, the re-fire bound spacing the attempt
-   (§forgejo/reconciliation/the-state-is-the-watermark,
-   §forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move,
-   s-git/maitred#259, s-git/maitred#260). `decompose`'s re-firing is
-   bounded further on every path by the forest's **actionable-state
-   digest gate** — an unchanged fold holds the row off, so the dispatch
-   is limited by the forest's state rather than by any guard keyed on a
-   revision (§forgejo/decisions/actionable-state-digest,
-   s-git/maitred#209). The one row a digest suppresses on the
-   pull-request side is the landing set's: its declaration names the
-   set's own readiness, which the act of landing does move
-   (§forgejo/reconciliation/the-landing-sets-row). For `merge-or-wait`
-   the re-fire is widest: that action's rows on every path — the review
-   event, a PR comment, the unblock cascade's PR leg and the sweep —
-   dispatch an approved, unblocked PR whose work is
-   opted into merging — the issue its body closes carries
-   `agentic-auto-merge` (§forgejo/decisions/merge-gate) — whatever the
-   watermark records, because the PR sits at a frozen head once the
-   chain approves and a guard keyed on that revision would be a fixed
-   point no path could fire on again. The re-firing is bounded, but not
-   by the watermark: the sync-set hold-off and the merge gate are
-   evaluated ahead of the row, the row stops firing the moment the PR
-   closes, and the **re-fire bound** — an engine guard applied after the
-   decision, its hold-off recorded in the decision log like any other —
-   lets one unchanged `(action, digest)` dispatch at most once per
-   `reconcile_interval`, whichever path reached it. The bound reads the
-   engine's own stamp — the fire instant the dispatch records beside the
-   digest, in memory and in the watermark's slot for the same
-   `(action, digest)` — so neither a store the engine cannot read nor a
-   restart that empties its memory admits a re-fire the interval has not
-   already paid for (§forgejo/state/watermark). One slot does bound
-   nothing: a slot holding no instant at all, which only an earlier
-   release can leave behind on a pull-request row, answers as a first
-   dispatch and the row's next write stamps it
-   (§forgejo/state/watermark).
-   The bound is the engine's general guard for state-governed re-fires,
-   not a property of any one action: every landed singleton dispatch
-   stamps its key, action and **declared digest** — the same value its
-   watermark records and its task's dedup key carries — and a re-fire of
-   that unchanged `(action, digest)` by a state-governed row inside one
-   interval becomes a hold-off naming the bound
-   (§forgejo/reconciliation/the-state-is-the-watermark). The action is
-   part of the stamp because the bound is a rate on one
-   unchanged `(action, digest)`: a dispatch may pace the same action's
-   re-fire and never another action's, so an event that landed one action
-   at one digest cannot hold a different action's row there off, and one
-   action's landing erases no sibling's pacing. Only a
-   state-governed row consults a stamp, and a row a digest suppresses —
-   the landing set's — consults none, because a digest it records is a
-   set already landed. The queue's
-   `(action, digest)` dedup key is not that bound: it squelches a
-   submission whose match is still pending, so it bounds the overlap of
-   two tasks at one head and not their spacing
-   (§forgejo/webhook/the-pipeline). Without the bound the pace of a
-   privileged dispatch would be set by whoever comments on the PR, or
-   closes an issue the graph leads back to, rather than by the sweep's
-   cadence. The fan-out's
-   re-fire is per lens — a lens is re-asked only while it has reported
-   nothing at the head, on every path — and a PR waiting to be reviewed,
-   or standing at feedback whose fix has not landed, sits at a **frozen
-   head sha**, the digest it derives being a value neither the row nor
-   the forge can move until the work lands. Each of those states is
-   self-limiting: a lens reporting at head ends its own re-ask, a chain
-   fully reported at head hands the PR to the review-following rows, and
-   a push ends `fix-feedback` — so a dispatch that went nowhere recovers
-   within one interval, and a push or a
-   review never re-fires on its own.
+   (§forgejo/decisions/sync-set) — and for the review fan-out the guard
+   is **subject-keyed** as well: each lens holds its own slot at the
+   digest, so three lenses dispatched at one head are three dispatches
+   and a lens already mid-flight at the head is not duplicated
+   (§forgejo/state/watermark, §forgejo/decisions/review-lenses).
+   What that record can stop is settled once per row, and the row
+   answers the same way on both paths
+   (§forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move):
+   the landing set's row suppresses at a digest the store holds, because
+   dispatching moves the readiness its own fold states, and the cascade's
+   own legs suppress because a leg states that a relation moved rather
+   than re-reading the state, so the sweep stays their backstop
+   (§forgejo/decisions/unblock-cascade); every other row — `implement`,
+   `reassess`, `decompose`, `wrap-up`, `teardown-forest` and every
+   pull-request row — dispatches at a digest the store holds, because a
+   digest the row itself cannot move would otherwise be a fixed point no
+   path could ever fire on again (s-git/maitred#259, s-git/maitred#260).
+   What limits `decompose` further, on every path, is the forest's
+   **actionable-state digest gate**: an unchanged fold holds the row
+   off, so the forest's state bounds it rather than any revision
+   (§forgejo/decisions/actionable-state-digest, s-git/maitred#209).
+   A row that re-fires at an unchanged digest is paced by the **re-fire
+   bound** — an engine guard applied after the decision, its hold-off
+   recorded in the decision log like any other — which admits one
+   dispatch of one unchanged `(action, digest)` per
+   `reconcile_interval`, whichever path arrived. The bound reads the
+   engine's own stamp: the fire instant a dispatch records beside its
+   **declared digest** — the same value its watermark records and its
+   task's dedup key carries — in memory and in the watermark's slot for
+   that `(action, digest)`, so neither a store the engine cannot read
+   nor a restart that empties its memory admits a re-fire the interval
+   has not already paid for (§forgejo/state/watermark). The action
+   belongs to the stamp because the bound is a rate on one unchanged
+   `(action, digest)`: a dispatch may pace its own action's re-fire and
+   never a sibling's, so an event that landed one action at one digest
+   holds no other action's row off and erases no sibling's pacing. A
+   slot holding no instant at all — which only an earlier release can
+   leave behind on a pull-request row — bounds nothing: it answers as a
+   first dispatch, and the row's next write stamps it
+   (§forgejo/state/watermark). Only a state-governed row consults a
+   stamp; a row a digest suppresses — the landing set's — consults
+   none, because the digest it records is a set already landed. The
+   queue's `(action, digest)` dedup key is not that bound: it squelches
+   a submission whose match is still pending, so it bounds the overlap
+   of two tasks at one head and not their spacing
+   (§forgejo/webhook/the-pipeline).
+   Two states look like a loop and are not one. A PR whose chain has
+   approved sits at a **frozen head sha**, and `merge-or-wait` — on the
+   review event, a PR comment, the unblock cascade's PR leg and the
+   sweep alike — dispatches an approved, unblocked PR whose work is
+   opted into merging (the issue its body closes carries
+   `agentic-auto-merge`, §forgejo/decisions/merge-gate) whatever the
+   watermark records; the row stops firing the moment the PR closes,
+   the sync-set hold-off and the merge gate having been decided ahead
+   of it. A PR awaiting review, or standing at feedback whose fix has
+   not landed, is frozen the same way, and each of those states ends
+   itself: a lens reporting at head ends its own re-ask, a chain fully
+   reported at head hands the PR to the review-following rows, and a
+   push ends `fix-feedback`. Without the bound the pace of those
+   dispatches would be set by whoever comments on the PR, or closes an
+   issue the graph leads back to, rather than by the sweep's cadence;
+   with it, a dispatch that went nowhere recovers within one interval
+   and a push or a review never re-fires on its own.
 3. **Targeted per-transition sender guards**, only where an agent's
    *own* action would re-trigger the *same* action: a commit pushed by
    a review lens must not re-fire **that lens** — the fan-out carries
@@ -1078,7 +1081,20 @@ Six mechanisms, in this order:
    (§forgejo/config/decomposer-identity,
    §forgejo/config/implementer-identity, §forgejo/config/review-lenses);
    the guard fires only where the lens has actually reviewed, as the
-   retired reviewing-author guard did.
+   retired reviewing-author guard did. Each of these guards answers the
+   way every guard does over the identities and senders it can read —
+   satisfied, unsatisfied, or unproven — so a read that failed holds the
+   row off rather than letting the guard pass
+   (§forgejo/decisions/actions, s-git/maitred#261). What the operator
+   has left unconfigured is not a failed read: an unset identity, or a
+   delivery carrying no sender, leaves that guard inert rather than
+   holding — the cost of leaving `decomposer_identity` or
+   `implementer_identity` unset is the guard, not a hold-off
+   (§forgejo/config/decomposer-identity,
+   §forgejo/config/implementer-identity). The account
+   `engine_account` names carries no such cost: a required key, refused
+   at load, it leaves its leg of the `reassess` guard never inert
+   (§forgejo/config/engine-account).
    The guard yields to an explicit request: a PR carrying the
    `trigger-review` label is reviewed whatever a lens pushed
    (§forgejo/decisions/label-triggered-review).
@@ -1091,11 +1107,11 @@ Six mechanisms, in this order:
    while the label stands the issue holds off from `implement` and
    `reassess` on every path (§forgejo/decisions/transition-table, and
    s-git/maitred#135, which retired the authorship guard that used to
-   sit here). No authorship guard is needed. An author may not be the
-   subject of the action the author's own creation would trigger, but
-   cross-persona triggering (a reviewer's changes-requested leading to
-   the implementer's fix, a decomposer's member reaching the
-   implementer once gated) is intended and unguarded.
+   sit here). What holds the row off is a label in the state, not who
+   opened the issue: authorship guards nothing, and cross-persona
+   triggering (a reviewer's changes-requested leading to the
+   implementer's fix, a decomposer's member reaching the implementer
+   once gated) is intended and unguarded.
 5. **The fix-feedback ownership gate**, where the implementer would
    otherwise be dispatched onto a pull request it does not own: with
    the implementer identity configured
@@ -1171,6 +1187,18 @@ stored one, each with its per-component sub-digests
 (§forgejo/decisions/actionable-state-digest,
 s-git/maitred#209).
 
+**Activity timestamp** — an issue's `updated_at`, one of the facts a
+declaration may name, the one §forgejo/decisions/actions says the fold
+states and no predicate reads: the fold states it so the digest a row
+dispatches on moves when the object was touched, and the check over a
+predicate's reads refuses a row that turned on the cursor itself
+(§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#263).
+An `outcome` tracker states no timestamp at all, because the engine's
+own drawing moves it (§forgejo/reconciliation/the-tracker-block).
+Elsewhere in the specification `updated_at` is a cursor over deliveries
+or a timestamp a human reads: never a criterion an object is actionable
+by, never a key a row suppresses on.
+
 The function consults **three declared configuration inputs**: the
 configured **implementer identity**
 (§forgejo/config/implementer-identity), which the engine passes
@@ -1193,38 +1221,40 @@ alone. Both guards are inert when the identity is unset.
 **Watermark** — the last dispatch for the object's key
 (§forgejo/state/watermark), or none.
 
-The enumeration above is the vocabulary the action declarations name:
-each action carries one declaration (§forgejo/decisions/actions)
-naming the subset of these facts its predicate reads. An input the
-engine **could not read** — an object that was never re-fetched, a
-dependency, comment, review or membership listing that failed, a forest
-whose digest gate assembled no observation, a repository whose scope
-the failed repository listing left unknown — evaluates to **unproven**,
-which is never satisfied: the row holds off naming which input could not
-be proven and leaves the next sweep to ask again. A failed read is
-therefore not the empty listing it would have stood for, and no guard's
+The enumeration above is the vocabulary the declarations name. The
+shape one declaration takes is §forgejo/decisions/actions' to state,
+once; this section says two things about the facts it names: what an
+input the engine could not read answers with, and which of them the fold
+carries.
+
+An input the engine **could not read** — an object that was never
+re-fetched, a dependency, comment, review or membership listing that
+failed, a forest whose digest gate assembled no observation, a
+repository whose scope the failed repository listing left unknown — is
+**unproven**, and unproven is never satisfied
+(§forgejo/decisions/actions). What that comes to in code: a failed read
+is never the empty listing it would have stood for, and no guard's
 absence is read anywhere in the decision code as that guard being
 satisfied (s-git/maitred#261). A digest gate the engine armed and then
-left off on purpose is not among these: a forest whose root stands in a
-repository no maitred role names is the exclusion
+left off on purpose is not an unproven input: a forest whose root stands
+in a repository no maitred role names is the exclusion
 §forgejo/webhook/repository-roles specifies, so the row holds off naming
 that exclusion, naming the root's repository, and promising no retry the
-next sweep could only decline identically (s-git/maitred#261). An issue-path
-declaration **folds** that set into the digest its dispatch is
-watermarked on, so an input a predicate reads cannot move without the
-row that asks it noticing (§forgejo/state/watermark, s-git/maitred#259):
-the fold states each fact the predicate reads and no fact it does not,
-and it answers identically whatever order the listings arrive in. Every
-declaration, the pull-request and landing-set ones included, folds the
-facts it names into the digest its dispatch is watermarked on
-(s-git/maitred#260). An event fact is the exception and folds nothing:
-which row fired is not
-part of the state, and a digest both the sweep and an event must answer
-with cannot contain it. A declared configuration input folds nothing
-for the same reason in turn: it states the operator's choice, not a
-fact of the work item, and a fold that stated the operator's file would
-move every row the day it was edited. The refusal of undeclared reads
-checks each predicate's reads against the set its action declares,
+next sweep could only decline identically (s-git/maitred#261).
+
+The fold carries every fact a declaration names
+(§forgejo/decisions/actions); of the kinds enumerated here, two fold
+nothing, for one reason each. An **event fact** folds nothing: which row
+fired is not part of the state, and a digest both the sweep and an event
+must answer with cannot contain it. A declared **configuration input**
+folds nothing for the same reason in turn: it states the operator's
+choice, not a fact of the work item, and a fold that stated the
+operator's file would move every row the day it was edited. The
+issue-path fold is a
+**set**, so an input a predicate reads cannot move without the row that
+asks it noticing, whatever order the listings arrived in
+(§forgejo/state/watermark, s-git/maitred#259). The refusal of undeclared
+reads checks each predicate's reads against the set its action declares,
 refusing by file, field and action a read that set does not name
 (s-git/maitred#263).
 

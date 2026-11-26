@@ -11,29 +11,33 @@ reason, or the hold-off plus its reason — keyed by repo/issue/PR (the
 watermark key, §forgejo/state/storage). Reasons are **generated from
 the action's predicate**, never composed beside the row that hit it: an
 unsatisfied answer names the declared inputs the state did not satisfy,
-an answer the watermark's digest already recorded says **inputs
-unchanged** rather than that the action was already dispatched, and a
-dispatch names the digest its inputs moved to. An input the engine
+and a dispatch names the digest its inputs moved to
+(§forgejo/decisions/actions). An input the engine
 could not read holds the row off in the same sentence whatever asked —
 `<input> could not be proven — <why>; the reconciliation sweep asks
 again` — so the engine's own failed reads are as readable as a state
 that says no, and are never mistaken for one
-(§forgejo/decisions/actions, §forgejo/decisions/inputs,
-s-git/maitred#261). The log entry is
+(§forgejo/decisions/inputs, s-git/maitred#261). The one vocabulary of a
+declaration's digest that remains outside a predicate's own words is
+**inputs unchanged**, said where a row compares the digest the
+watermark records rather than where its predicate answers
+(§forgejo/decisions/actions, s-git/maitred#259); the re-fire bound's
+hold-off stands outside a predicate too, an engine guard composed after
+the decision rather than a digest's word
+(§forgejo/decisions/loop-prevention).
+
+The log entry is
 **structured**: the key, the event that produced the decision, the
 decision (dispatch or hold-off), the dispatched action, the reason, and
 the revision the decision was made at are discrete fields, so a human
 or a tool can filter the log per object and follow the engine's
-reasoning. Where a reason quotes a revision, it names the facts behind it: the
-facts the declaration's digest folds — state, labels, each blocker's state, the
-connected pull requests, the description and the newest of the comments
-`reassess` counts beside the count of them folded (the thread being the one
-input whose facts grow with a work item's age), the edges a teardown order
-reads, a pull request's head and mergeability, the review chain at head, and,
-for a landing set, each member's readiness. A fan-out quotes the digest of the
-one subject it paces, folded from that subject's side, so a lens's own standing
-reads as the state it is rather than as the whole chain's
-(§forgejo/decisions/review-lenses). A row the re-fire
+reasoning. Where a reason quotes a revision, it names the facts the
+declaration's digest folds (§forgejo/decisions/actions), the newest of the
+comments `reassess` counts spelled out beside the count of them folded (the
+thread being the one input whose facts grow with a work item's age). A fan-out
+quotes the digest of the one subject it paces, folded from that subject's side,
+so a lens's own standing reads as the state it is rather than as the whole
+chain's (§forgejo/decisions/review-lenses). A row the re-fire
 bound caught says so and names the bound, and the one row a digest
 suppresses — the landing set's — names the set's facts as inputs
 unchanged (§forgejo/reconciliation/the-landing-sets-row,
