@@ -114,15 +114,15 @@ On each `POST`:
    was dispatched at — always the digest its declaration derives, the
    fold of the inputs that declaration names (§forgejo/decisions/actions,
    s-git/maitred#260) — so a queue system with de-duplication (hotelier's
-   `dedup_key`) squelches a
-   re-dispatch of the same `(action, subject, revision)` while the first
-   task is still pending. The subject is what keeps one lens's review task
-   from squelching another's at the same revision; singletons carry no
-   subject slot. A different revision (a new commit, an edited issue, a
-   blocker edge an event never announced) is a different key and dispatches
-   freely (§forgejo/state/watermark). The key carries the repo verbatim
-   (slash retained — it is opaque to the queue system), so two distinct repos
-   never produce the same key. A prompt that references a
+   `dedup_key`) squelches a re-dispatch of the same `(action, subject,
+   revision)` while the first task is still pending. The subject is what
+   keeps one lens's review task from squelching another's at the same
+   revision; singletons carry no subject slot. A different revision (a new
+   commit, an edited issue, a blocker edge an event never announced) is a
+   different key and dispatches freely (§forgejo/state/watermark).
+   The key carries the repo verbatim (slash retained — it is opaque to the
+   queue system), so two distinct repos never produce the same key.
+   A prompt that references a
    URL the re-fetched state cannot fill fails the dispatch instead of
    enqueueing an invocation that names no object
    (§forgejo/config/canned-prompts); the failure is logged and nothing is
@@ -152,9 +152,10 @@ On each `POST`:
    of key the dispatch carries — in the store
    (§forgejo/state/watermark); a hold-off records nothing, and the log
    names an already-recorded state as a re-fire the re-fire bound
-   spaces rather than a duplicate. Each key of the unblock cascade (§forgejo/decisions/unblock-cascade) has its own
-   watermark applied before its dispatch, so an already-dispatched
-   `(action, digest)` is not re-dispatched.
+   spaces rather than a duplicate. Each key of the unblock cascade
+   (§forgejo/decisions/unblock-cascade) has its own watermark applied
+   before its dispatch, so an already-dispatched `(action, digest)` is
+   not re-dispatched.
 8. **Draw the forests the event touched.** An event whose object is a forest, or
    a row of one by the membership relation (§forgejo/decisions/commissioning),
    has that forest's drawing redrawn — the tracker's current-state block and the

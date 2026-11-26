@@ -1015,7 +1015,7 @@ still calls for one.
    pull-request row — dispatches at a digest the store holds, because a
    digest the row itself cannot move would otherwise be a fixed point no
    path could ever fire on again (s-git/maitred#259, s-git/maitred#260).
-   limits `decompose` further, on every path, is the forest's
+   What limits `decompose` further, on every path, is the forest's
    **actionable-state digest gate**: an unchanged fold holds the row
    off, so the forest's state bounds it rather than any revision
    (§forgejo/decisions/actionable-state-digest, s-git/maitred#209).
