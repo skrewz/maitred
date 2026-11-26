@@ -6,6 +6,10 @@ issue/PR, and one digest slot per forest in the same store
 
 ## Watermark
 
+The record described here is the one an action's declaration calls for
+(§forgejo/decisions/actions); this section states what the record holds
+and what it is compared against.
+
 A watermark records, for one issue or pull request:
 
 - the last dispatched **action** (the named action from the decision
@@ -34,13 +38,10 @@ A watermark records, for one issue or pull request:
   its row reads — the head sha, the PR's state and mergeability, the chain
   at head, the labels that gate it, and, for the landing set, each
   member's readiness — and no row's revision is a forge revision any
-  longer (s-git/maitred#260). No event fact folds into any digest, on
-  either side of the engine: which row fired is the event's business, and
-  a digest the sweep and an event must answer with one value cannot
-  contain a fact only one of them carries. A comment on a pull request
-  folds into no digest on no row — it is no action's declared input on
-  either path — so no comment there moves the sweep's or an event's
-  decision (§forgejo/decisions/loop-prevention).
+  longer (s-git/maitred#260). No comment on a pull request folds into any
+  digest, on either path — it is no action's declared input — so no
+  comment there moves the sweep's or an event's decision
+  (§forgejo/decisions/loop-prevention).
 
 The digest is the one value the idempotency guard compares, the re-fire
 bound is a rate on, and the task's dedup key carries; the decision log

@@ -11,15 +11,17 @@ reason, or the hold-off plus its reason — keyed by repo/issue/PR (the
 watermark key, §forgejo/state/storage). Reasons are **generated from
 the action's predicate**, never composed beside the row that hit it: an
 unsatisfied answer names the declared inputs the state did not satisfy,
-an answer the watermark's digest already recorded says **inputs
-unchanged** rather than that the action was already dispatched, and a
-dispatch names the digest its inputs moved to. An input the engine
+and a dispatch names the digest its inputs moved to
+(§forgejo/decisions/actions). An input the engine
 could not read holds the row off in the same sentence whatever asked —
 `<input> could not be proven — <why>; the reconciliation sweep asks
 again` — so the engine's own failed reads are as readable as a state
 that says no, and are never mistaken for one
-(§forgejo/decisions/actions, §forgejo/decisions/inputs,
-s-git/maitred#261). The log entry is
+(§forgejo/decisions/inputs, s-git/maitred#261). The one vocabulary that
+remains outside a predicate's own words is **inputs unchanged**, said
+where a row compares the digest the watermark records rather than where
+its predicate answers (§forgejo/decisions/actions, s-git/maitred#259).
+The log entry is
 **structured**: the key, the event that produced the decision, the
 decision (dispatch or hold-off), the dispatched action, the reason, and
 the revision the decision was made at are discrete fields, so a human
