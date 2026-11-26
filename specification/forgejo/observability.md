@@ -17,10 +17,15 @@ could not read holds the row off in the same sentence whatever asked —
 `<input> could not be proven — <why>; the reconciliation sweep asks
 again` — so the engine's own failed reads are as readable as a state
 that says no, and are never mistaken for one
-(§forgejo/decisions/inputs, s-git/maitred#261). The one vocabulary that
-remains outside a predicate's own words is **inputs unchanged**, said
-where a row compares the digest the watermark records rather than where
-its predicate answers (§forgejo/decisions/actions, s-git/maitred#259).
+(§forgejo/decisions/inputs, s-git/maitred#261). The one vocabulary of a
+declaration's digest that remains outside a predicate's own words is
+**inputs unchanged**, said where a row compares the digest the
+watermark records rather than where its predicate answers
+(§forgejo/decisions/actions, s-git/maitred#259); the re-fire bound's
+hold-off stands outside a predicate too, an engine guard composed after
+the decision rather than a digest's word
+(§forgejo/decisions/loop-prevention).
+
 The log entry is
 **structured**: the key, the event that produced the decision, the
 decision (dispatch or hold-off), the dispatched action, the reason, and

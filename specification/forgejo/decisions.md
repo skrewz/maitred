@@ -227,8 +227,9 @@ from the repository's ordinary test targets, each failing loudly rather
 than passing when the source or the enum it reads cannot be read: an
 action the enum names that carries no declaration cannot dispatch, and
 the refusal names the action; and a predicate that reads a fact its
-declaration does not name — an activity timestamp, which only the fold
-states, above all — is refused by file, field and action
+declaration does not name is refused by file, field and action; and a
+predicate that reads an activity timestamp is refused whatever the
+declaration says, since the fold states it and no predicate reads it
 (§forgejo/decisions/inputs, s-git/maitred#263). The Inputs column below
 names each action's declared set, in lockstep with the declaration that
 records it (§forgejo/decisions/inputs, s-git/maitred#264).
@@ -1004,8 +1005,8 @@ still calls for one.
    digest, so three lenses dispatched at one head are three dispatches
    and a lens already mid-flight at the head is not duplicated
    (§forgejo/state/watermark, §forgejo/decisions/review-lenses).
-   What that record can stop is settled once, in the declaration, and
-   it answers the same way on both paths
+   What that record can stop is settled once per row, and the row
+   answers the same way on both paths
    (§forgejo/reconciliation/rows-that-re-fire-at-a-digest-they-cannot-move):
    the landing set's row and the cascade's own legs suppress at a
    digest the store holds, because dispatching moves the fact their
@@ -1087,11 +1088,13 @@ still calls for one.
    (§forgejo/decisions/actions, s-git/maitred#261). What the operator
    has left unconfigured is not a failed read: an unset identity, or a
    delivery carrying no sender, leaves that guard inert rather than
-   holding — the cost of leaving `engine_account`,
-   `decomposer_identity` or `implementer_identity` unset is the guard,
-   not a hold-off (§forgejo/config/engine-account,
-   §forgejo/config/decomposer-identity,
-   §forgejo/config/implementer-identity).
+   holding — the cost of leaving `decomposer_identity` or
+   `implementer_identity` unset is the guard, not a hold-off
+   (§forgejo/config/decomposer-identity,
+   §forgejo/config/implementer-identity). The account
+   `engine_account` names carries no such cost: a required key, refused
+   at load, it leaves its leg of the `reassess` guard never inert
+   (§forgejo/config/engine-account).
    The guard yields to an explicit request: a PR carrying the
    `trigger-review` label is reviewed whatever a lens pushed
    (§forgejo/decisions/label-triggered-review).
@@ -1185,10 +1188,10 @@ stored one, each with its per-component sub-digests
 s-git/maitred#209).
 
 **Activity timestamp** — an issue's `updated_at`, one of the facts a
-declaration may name and the only one no predicate reads: the fold
-states it so the digest a row dispatches on moves when the object was
-touched, and the check over a predicate's reads refuses a row that
-turned on the cursor itself
+declaration may name, the one §forgejo/decisions/actions says the fold
+states and no predicate reads: the fold states it so the digest a row
+dispatches on moves when the object was touched, and the check over a
+predicate's reads refuses a row that turned on the cursor itself
 (§forgejo/reconciliation/the-state-is-the-watermark, s-git/maitred#263).
 An `outcome` tracker states no timestamp at all, because the engine's
 own drawing moves it (§forgejo/reconciliation/the-tracker-block).
