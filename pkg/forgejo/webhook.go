@@ -18,7 +18,6 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"maitred/pkg/queue"
 )
@@ -1351,28 +1350,6 @@ func urlArguments(prompt string, p Placeholders) (referenced, filled int) {
 	return referenced, filled
 }
 
-// The caps on a dispatched task's title (§forgejo/webhook/the-pipeline):
-// the subject — the issue or PR's own title — is truncated so a long one
-// cannot produce an unreadable row, and the composed line is capped on
-// top of that in case the reference and the verb push it out too.
-const (
-	maxTaskSubjectRunes = 80
-	maxTaskTitleRunes   = 120
-)
-
-// trimRunes caps s at n runes, marking an elision with an ellipsis so a
-// truncated title reads as truncated.
-func trimRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	if n <= 1 {
-		return string(r[:n])
-	}
-	return string(r[:n-1]) + "…"
-}
-
 // taskSubject is the title of the object the state carries — the pull
 // request where one is present, the issue otherwise, so a dispatch that
 // carries both names the object its URL points at
@@ -1409,23 +1386,15 @@ func taskURL(st State) string {
 // object or lens dispatched, e.g. "Review: Make everything awesome
 // and pink (o/r#1337)" (§forgejo/webhook/the-pipeline). The verb
 // names the dispatch: the action's own verb for a singleton, the
-// action with its subject for a fan-out ("Review as lens-a"), so the
-// title budget lives in exactly one function.
+// action with its subject for a fan-out ("Review as lens-a"). The
+// title is never elided: a long one runs to its full length and the
+// queue system's container cuts off the overflow (#252).
 func taskTitle(verb string, ev Event, st State) string {
 	ref := fmt.Sprintf("%s#%d", ev.Repo, ev.Number)
 	if subject := taskSubject(st); subject != "" {
-		// The subject takes what is left of the line's budget once the
-		// verb and the reference are paid for — never more than its own
-		// cap. An elision may eat the subject but never the reference.
-		overhead := utf8.RuneCountInString(verb) + utf8.RuneCountInString(ref) + utf8.RuneCountInString(": ()") + 1
-		// Below six runes a truncated subject would read as an ellipsis
-		// and nothing else, so such a line drops it and keeps the
-		// action-and-reference form.
-		if budget := min(maxTaskSubjectRunes, maxTaskTitleRunes-overhead); budget >= 6 {
-			return fmt.Sprintf("%s: %s (%s)", verb, trimRunes(subject, budget), ref)
-		}
+		return fmt.Sprintf("%s: %s (%s)", verb, subject, ref)
 	}
-	return trimRunes(fmt.Sprintf("%s (%s)", verb, ref), maxTaskTitleRunes)
+	return fmt.Sprintf("%s (%s)", verb, ref)
 }
 
 // dispatchVerb is the title verb of one dispatch: the action's verb,
