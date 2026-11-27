@@ -147,8 +147,9 @@ a forest whose picture an event moved states that instant in both of them
   or leaves out, never on rows it neither draws nor publishes
   (§forgejo/decisions/actionable-state-digest). The fold's root joins its walk
   as the other readers' roots join theirs: admitted by the walk that found it —
-  the event path's role test of the event's repository, and, where the sweep's
-  digest gate starts the walk at a tracker, the gate's own test of the root
+  the event path's role test of the event's repository, and, where the
+  digest gate starts the walk at a tracker — on the sweep or on a
+  comment's arrival — the gate's own test of the root
   before the fold reads anything of it. An unknown scope fails closed, naming
   the failure rather than reading as a repository holding no role — in the fold
   as in the drawing, at the first fact beyond the repository already admitted
@@ -464,7 +465,7 @@ forest pays the fold — graph and comment reads, no task. The fold is
 computed once per gated row, not once per forest: a quiet forest with an
 open root pays one digest computation per sweep, and one whose root has
 closed pays one per open tracker of a commissioned forest whose row the
-sweep reaches;
+sweep reaches or on whose tracker a comment arrived;
 moved, the row dispatches, naming the component that moved (a blocker's
 state, a member's, the root's, a human comment); never observed, the
 first run is commissioned and the observation is stored. The slot is
@@ -472,20 +473,41 @@ refreshed with the digest and its sub-digests once the dispatch lands, so
 the next sweep asks its question of current values; a dispatch that
 failed leaves the stale slot, and the following sweep retries. The gate is
 armed wherever a `decompose` row is reachable — the root's row on every
-path, the sweep's tracker row — and an issue that reaches no such row
-pays no digest reads: a root under a teardown, a kind-conflicting issue
-and everything that is not a root or a commissioned tracker costs nothing
-extra. This trades recall for cost: a digest that misses something a run
-could have acted on is recovered only by a change to a folded fact or by a
-manually triggered sweep (§forgejo/observability/triggering-a-sweep). Where
-the gate is armed it answers before the watermark can, on every path — an
+path, the tracker's row on the sweep and on a comment — and an issue that
+reaches no such row pays no digest reads: a root under a teardown, a
+kind-conflicting issue and everything that is not a root or a commissioned
+tracker costs nothing extra. This trades recall for cost: a digest that
+misses something a run could have acted on is recovered only by a change
+to a folded fact or by a manually triggered sweep
+(§forgejo/observability/triggering-a-sweep). Where the gate is armed it
+answers before the watermark can, on every path — an
 edge move changes the digest and emits no delivery, so a watermark
 comparison beside the gate would suppress the re-curation the gate exists
 to allow (s-git/maitred#209). A comment on an open root takes the root's
 row under the same gate: a human comment is a folded fact and moves the
 digest, while a comment by the configured decomposer identity folds
 nowhere and holds off naming its authorship
-(§forgejo/decisions/loop-prevention, s-git/maitred#147).
+(§forgejo/decisions/loop-prevention, s-git/maitred#147). A comment on an
+open tracker of a commissioned forest takes the tracker's own row under
+that same gate, keyed to the same root: the tracker is where curation
+reports and where wrap-up and the operator's instructions land, so what
+is said there is considered on arrival rather than one interval later
+(s-git/maitred#280). Arrival-time attention is bounded, however:
+because every counted comment is by construction a new digest, the
+tracker's comment row re-fires at the re-fire bound's pace **per
+forest** — one gated dispatch per forest per interval, stamped on the
+forest's own re-fire slot whenever a gated run lands from any carrier or
+path, so a thread's arrival rate is not what commissions runs. The root's
+comment row keeps the per-comment immediacy it shipped with, a root's
+own dispatch leaving the stamp that spaces the tracker's next arrival
+(s-git/maitred#147, s-git/maitred#280), and the pace is a rate rather
+than a lock: it is checked and stamped under the event's own object key,
+so two comments landing on one forest's two carriers at the same instant
+can each land a run, as the digest gate's comparison has always allowed
+(§forgejo/decisions/loop-prevention).
+A comment on a
+**member** is no carrier's row and consults no gate — it dispatches
+`reassess` alone, its fact folded for the next sweep (s-git/maitred#280).
 
 `decompose` has a second row, on the **tracker**, and it is what keeps a
 forest alive after its commissioning (§forgejo/decisions/commissioning).
