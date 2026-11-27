@@ -450,8 +450,11 @@ forests.
 A view the engine answers `500` for says it could not be read, so an
 empty rectangle never passes for a dashboard
 (§forgejo/observability/the-dashboard-view). The header links to the
-route so it is reachable by eye; it carries one link, which reads as
-the way back when the route is where the reader already is. The
+route so it is reachable by eye; the header's navigation carries a
+link to every view but the one the reader is already on — the
+dashboard, the outcomes page and the held-back page each trade places
+with themselves so that the links that show are the links that go
+somewhere (§forgejo/observability/the-held-back-view). The
 header's trigger statistics — numbers this page never reads — stay
 hidden on the route, so they state nothing rather than rendering
 their defaults as facts.
@@ -665,6 +668,80 @@ repositories the view did not previously name. The page that renders a
 forest's warnings inserts them as text and never as markup, so an author
 writing a title cannot write into the document
 (§forgejo/observability/the-dashboard-view).
+
+## The held-back view
+
+Work is held back in exactly two ways, and both are questions the
+warning walk already asks on the sweep tick: a claimed ticket whose
+work orders are all closed waits on the person the `human-task` label
+names, and a delivery the merge gate would fire at stands unmerged
+past the stale-merge threshold waiting on nobody
+(§forgejo/observability/the-warnings-a-forest-carries). The engine
+therefore offers a **held-back view**: those two waits, flattened over
+every forest the last sweep tick enumerated, in one page rather than
+scattered across forest rows — the overview a human reads to answer
+"what is stuck, and who is it stuck on?"
+
+A held-back row is one waited-on object: its reference — repository,
+number, title and HTML URL, the same four fields a warning carries and
+for the same reason — its **kind**, the **age** of the wait in seconds
+(dated exactly as the warning dates it: from the last blocker to close
+for a human task, from the verdict that satisfied the chain for a
+stalled delivery), the **labels** the object carries, and its
+**description** as the walked row carried it. The two questions are
+answered by the same walk that answers the forest warnings and no
+second definition of either wait exists: a wait that warns a forest is
+a held-back row, and the other way round, so a change to the merge
+gate or the human-task reading updates both views from one place. The
+rows are recorded onto the forest snapshot by that walk; a held-back
+object that two forests name is one row, because one object held back
+twice holds the organisation back once. Past forests contribute no
+rows, as they contribute no walked warnings
+(§forgejo/observability/the-outcomes-view).
+
+The dashboard API serves the view at `GET /api/forgejo/held-back`: an
+object carrying **two lists spelled the same way** — the
+**held-by-humans** rows, which are the `human_task_blocking` waits,
+and the **stalled-deliveries** rows beside them, which are the
+`stale_agentic_merge` waits — and **one engine-status field**, the
+same shape discipline as the outcomes view
+(§forgejo/observability/the-dashboard-view). The halves come from one
+acquisition of the same snapshot the outcomes view serves, so one
+response is one picture and a request — however often a later page
+polls it — costs no forge read. The honesty rule is the snapshot's
+own: a set the engine cannot vouch for answers `500` rather than an
+empty list, with a fixed sentence on the wire and the read's detail in
+the log (§forgejo/observability/the-outcomes-view, and the same
+audience note there: the descriptions these rows carry are more author
+written text reaching the unauthenticated port, and the port is still
+the only control on what it discloses). A method other than `GET`
+answers `405`.
+
+The dashboard renders the view as a page at `/held-back` — a route on
+the same SPA fallback as `/outcomes`, polling on the same timer with
+the same compare-then-render discipline so an unchanged poll renders
+no new rows (§forgejo/observability/the-dashboard-view). The page
+states in prose what its two sections mean and renders them under two
+headings — **Held back by a human** for the held-by-humans list and
+**Ready for automatic action** for the stalled-deliveries list — each
+listing one row per held-back object: its link and title under the
+same link test every other reference on this page pays, its labels as
+chips, the age of the wait in the same human-readable form the
+warnings use, and a `<details>`-collapsible body carrying the
+object's description inserted as text and never as markup — the same
+rule the warning titles pay, now covering the whole description
+(§forgejo/observability/the-dashboard-view). A section with no rows
+says it holds nothing; a view whose every section is empty says
+nothing is held back. An engine that is not up and a view the engine
+answers `500` for state themselves in the words the outcomes page
+uses for those states (§forgejo/observability/the-outcomes-view).
+
+The header navigation is the same on every view — a link to each of
+the dashboard, the outcomes page and this page, hiding the one that
+names where the reader already is, so the links on screen always go
+somewhere. On a route that is not the dashboard the trigger
+statistics stay hidden, as they do for the outcomes page, and the
+route states its own document title.
 
 ## Triggering a sweep
 

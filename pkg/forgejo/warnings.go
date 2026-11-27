@@ -12,9 +12,11 @@ import (
 // (§forgejo/observability/the-outcomes-view). A warning is a reference
 // plus a kind plus an age, so the dashboard links to the object holding
 // the forest up rather than constructing the judgement from its own
-// reads. Nothing here dispatches, holds off, or gates: the warning
-// reports what the decision paths already know, and no decision reads it
-// back (§forgejo/decisions/actions).
+// reads. The same walk records the held-back view's rows — the same
+// waits with the waited-on object's labels and description alongside
+// (§forgejo/observability/the-held-back-view). Nothing here dispatches,
+// holds off, or gates: the warning reports what the decision paths
+// already know, and no decision reads it back (§forgejo/decisions/actions).
 
 // The warning kinds the outcomes view publishes
 // (§forgejo/observability/the-outcomes-view). They are the payload's
@@ -59,6 +61,22 @@ type ForestWarning struct {
 	AgeSeconds float64 `json:"age_seconds"`
 }
 
+// HeldBackItem is one row of the held-back view: the reference, kind
+// and age of a forest warning — the same wait stated in the same words
+// (§forgejo/observability/the-warnings-a-forest-carries) — alongside
+// the labels the waited-on object carries and the description the
+// walked row carried, the two fields that turn a ⚠️ into the overview
+// a human can act on without opening the object first
+// (§forgejo/observability/the-held-back-view). The description is
+// whatever the walk's row carried: every endpoint the engine reads an
+// issue or pull request from fills the same model field
+// (§forgejo/client/operations).
+type HeldBackItem struct {
+	ForestWarning
+	Labels      []string `json:"labels"`
+	Description string   `json:"description"`
+}
+
 // forestWarnings walks a forest's members along the root's membership
 // edges — the issues the root blocks, the one hop the forest is
 // (§forgejo/decisions/commissioning) — and returns the warnings the
@@ -86,6 +104,9 @@ type ForestWarning struct {
 //
 // A warning is stated once per reference, since one pull request may
 // deliver two members and two ⚠️ for one wait would read as two waits.
+// The same record feeds the held-back view: each stated wait also
+// becomes a held-back row carrying the walked row's labels and
+// description alongside (§forgejo/observability/the-held-back-view).
 //
 // A failed read fails the walk. A warning that cannot be established is
 // not a warning absent: the forest would present as healthy what the
@@ -102,20 +123,25 @@ type ForestWarning struct {
 // past the read budget — are settled before the read or hold their warning
 // back, so what is left to fail is a read the engine should have been able
 // to pay and could not.
-func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) ([]ForestWarning, error) {
+func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) ([]ForestWarning, []HeldBackItem, error) {
 	warnings := []ForestWarning{}
+	held := []HeldBackItem{}
 	seen := map[string]bool{}
-	// add states one warning, once.
-	add := func(w *ForestWarning) {
-		if w == nil {
+	// add states one warning, once, and records the same wait as a
+	// held-back row: warning and row are one statement in two shapes,
+	// so neither can exist without the other
+	// (§forgejo/observability/the-held-back-view).
+	add := func(item *HeldBackItem) {
+		if item == nil {
 			return
 		}
-		key := w.Kind + " " + warningKey(w.Repository, w.Number)
+		key := item.Kind + " " + warningKey(item.Repository, item.Number)
 		if seen[key] {
 			return // one pull request delivering two members is one wait
 		}
 		seen[key] = true
-		warnings = append(warnings, *w)
+		warnings = append(warnings, item.ForestWarning)
+		held = append(held, *item)
 	}
 	// The forest's own rows are not work orders: the root's
 	// membership edge stands while the forest lives, so reading it
@@ -148,7 +174,7 @@ func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) (
 		repo := rowRepository(member, rootRepo)
 		inRemit, err := e.remitAdmits(repo, rootRepo)
 		if err != nil {
-			return nil, fmt.Errorf("scope of %s: %w", repo, err)
+			return nil, nil, fmt.Errorf("scope of %s: %w", repo, err)
 		}
 		if !inRemit {
 			// Outside the engine's remit: neither read nor warned
@@ -176,20 +202,20 @@ func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) (
 					"member", repo+"#"+strconv.Itoa(member.Number),
 					"error", err)
 			} else if err != nil {
-				return nil, fmt.Errorf("blockers of %s#%d: %w", repo, member.Number, err)
+				return nil, nil, fmt.Errorf("blockers of %s#%d: %w", repo, member.Number, err)
 			} else {
 				add(humanTaskWarning(member, repo, workOrders(rows, repo, gates), now))
 			}
 		}
 		if landing {
-			warn, err := e.staleMergeWarning(member, repo, gates, listings, now)
+			item, err := e.staleMergeWarning(member, repo, gates, listings, now)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			add(warn)
+			add(item)
 		}
 	}
-	return warnings, nil
+	return warnings, held, nil
 }
 
 // repoInRemit reports whether a repository is one the engine may read at
@@ -258,7 +284,7 @@ func (e *Engine) remitAdmits(repo, entered string) (bool, error) {
 // hold the walk sets aside even where the gate counts it, and why the ⚠️
 // may fire while the gate waits on the membership edge is the spec's
 // (§forgejo/observability/the-warnings-a-forest-carries).
-func (e *Engine) staleMergeWarning(member *Issue, repo string, gates map[string]bool, listings map[string][]PullRequest, now time.Time) (*ForestWarning, error) {
+func (e *Engine) staleMergeWarning(member *Issue, repo string, gates map[string]bool, listings map[string][]PullRequest, now time.Time) (*HeldBackItem, error) {
 	pr, reviews, err := e.deliveryPR(member, repo, listings)
 	if err != nil {
 		return nil, err
@@ -292,13 +318,17 @@ func (e *Engine) staleMergeWarning(member *Issue, repo string, gates map[string]
 	if err != nil || holds {
 		return nil, err
 	}
-	return &ForestWarning{
-		Kind:       WarningStaleAgenticMerge,
-		Repository: repo,
-		Number:     pr.Number,
-		Title:      pr.Title,
-		HTMLURL:    pr.HTMLURL,
-		AgeSeconds: age.Seconds(),
+	return &HeldBackItem{
+		ForestWarning: ForestWarning{
+			Kind:       WarningStaleAgenticMerge,
+			Repository: repo,
+			Number:     pr.Number,
+			Title:      pr.Title,
+			HTMLURL:    pr.HTMLURL,
+			AgeSeconds: age.Seconds(),
+		},
+		Labels:      labelsOrEmpty(pr.Labels),
+		Description: pr.Body,
 	}, nil
 }
 
@@ -468,7 +498,7 @@ func (e *Engine) admittedGraph(pr *PullRequest, prRepo string) (rows []Issue, as
 // last blocker to close, since that is the moment the ticket became the
 // person's; a member with no work-order blocker at all is dated from its
 // own last activity, the newest moment the read carries.
-func humanTaskWarning(member *Issue, repo string, work []Issue, now time.Time) *ForestWarning {
+func humanTaskWarning(member *Issue, repo string, work []Issue, now time.Time) *HeldBackItem {
 	var waited time.Time
 	for _, b := range work {
 		if b.State == "open" {
@@ -481,14 +511,27 @@ func humanTaskWarning(member *Issue, repo string, work []Issue, now time.Time) *
 	if waited.IsZero() {
 		waited = member.UpdatedAt
 	}
-	return &ForestWarning{
-		Kind:       WarningHumanTaskBlocking,
-		Repository: repo,
-		Number:     member.Number,
-		Title:      member.Title,
-		HTMLURL:    member.HTMLURL,
-		AgeSeconds: now.Sub(waited).Seconds(),
+	return &HeldBackItem{
+		ForestWarning: ForestWarning{
+			Kind:       WarningHumanTaskBlocking,
+			Repository: repo,
+			Number:     member.Number,
+			Title:      member.Title,
+			HTMLURL:    member.HTMLURL,
+			AgeSeconds: now.Sub(waited).Seconds(),
+		},
+		Labels:      labelsOrEmpty(member.Labels),
+		Description: member.Body,
 	}
+}
+
+// labelsOrEmpty spells a label list as the payload discipline demands:
+// an empty list rather than null (§forgejo/observability/the-held-back-view).
+func labelsOrEmpty(labels []string) []string {
+	if labels == nil {
+		return []string{}
+	}
+	return labels
 }
 
 // workOrders is a member's blockers as the warnings read them. A

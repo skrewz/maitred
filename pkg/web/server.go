@@ -224,6 +224,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleForgejo(w, r)
 	case path == "forgejo/outcomes":
 		s.handleForgejoOutcomes(w, r)
+	case path == "forgejo/held-back":
+		s.handleForgejoHeldBack(w, r)
 	case strings.HasPrefix(path, "forgejo/sweeps/"):
 		s.handleForgejoSweep(w, r, strings.TrimPrefix(path, "forgejo/sweeps/"))
 	case strings.HasPrefix(path, "triggers/"):
@@ -382,6 +384,50 @@ func (s *Server) handleForgejoOutcomes(w http.ResponseWriter, r *http.Request) {
 		EngineStatus: s.forgejoStatus,
 		Forests:      forests,
 		PastForests:  past,
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleForgejoHeldBack serves the held-back view: the two waits the
+// warning walk asks — tickets held back by a human, and deliveries the
+// merge gate would fire at standing unmerged past the threshold —
+// flattened over the forests the last sweep tick recorded
+// (§forgejo/observability/the-held-back-view). Like the outcomes view
+// it answers from memory and a request costs no forge read; the two
+// lists come from one HeldBackSplit read of the one snapshot, so one
+// response is one picture. The response is an object carrying both
+// lists and the one engine-status field, the same shape discipline as
+// handleForgejo (§forgejo/observability/the-dashboard-view). Without
+// the engine, or with nothing held back, both lists are empty — never
+// null. A view the engine cannot vouch for answers 500 with a fixed
+// sentence and the read's detail goes to the log, as the outcomes read
+// does (§forgejo/observability/the-outcomes-view,
+// §forgejo/observability/why-the-engine-is-off). Any method other
+// than GET answers 405.
+func (s *Server) handleForgejoHeldBack(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	humans := []forgejo.HeldBackItem{}
+	stalled := []forgejo.HeldBackItem{}
+	if s.forgejoEng != nil {
+		h, st, err := s.forgejoEng.HeldBackSplit()
+		if err != nil {
+			s.log.Printf("held-back view: forest read failed: %v", err)
+			http.Error(w, "held-back read failed", http.StatusInternalServerError)
+			return
+		}
+		humans, stalled = h, st
+	}
+	response := struct {
+		EngineStatus      string                 `json:"engine_status"`
+		HeldByHumans      []forgejo.HeldBackItem `json:"held_by_humans"`
+		StalledDeliveries []forgejo.HeldBackItem `json:"stalled_deliveries"`
+	}{
+		EngineStatus:      s.forgejoStatus,
+		HeldByHumans:      humans,
+		StalledDeliveries: stalled,
 	}
 	json.NewEncoder(w).Encode(response)
 }
