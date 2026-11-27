@@ -578,11 +578,16 @@ func outcomesStubAPI() *stubForgejoAPI {
 	}
 	// The forest's one member is a human task with no blockers of its
 	// own, so the forest is waiting on a person and carries a warning
-	// naming it (§forgejo/observability/the-outcomes-view).
+	// naming it (§forgejo/observability/the-outcomes-view). This member's
+	// body is prose the engine reads and never serves: the held-back row
+	// for it carries reference, labels and age alone, so the sentence
+	// here is the canary the endpoint test asserts away
+	// (§forgejo/observability/the-held-back-view).
 	member := forgejo.Issue{
 		Number: 90, Title: "hand the keys over", State: "open",
 		Labels: []string{"human-task"}, Repository: "o/r",
 		HTMLURL: "https://forge.example.com/o/r/issues/90",
+		Body:    "The prose the person left for themselves.",
 	}
 	return &stubForgejoAPI{
 		issue:  &forgejo.Issue{Number: 7, State: "open", Repository: "o/r"},
@@ -864,6 +869,141 @@ func TestForgejoOutcomesEndpoint_Method(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rec.Code)
+	}
+}
+
+// heldBackItemJSON mirrors one held-back row: the warning's reference,
+// kind and age alongside the labels the waited-on object carries
+// (§forgejo/observability/the-held-back-view). No description field is
+// mirrored because the row carries none — the test below pins that.
+type heldBackItemJSON struct {
+	Kind       string   `json:"kind"`
+	Repository string   `json:"repository"`
+	Number     int      `json:"number"`
+	Title      string   `json:"title"`
+	HTMLURL    string   `json:"html_url"`
+	AgeSeconds float64  `json:"age_seconds"`
+	Labels     []string `json:"labels"`
+}
+
+// heldBackViewJSON mirrors the /api/forgejo/held-back response shape:
+// the two lists, spelled the same way, and the one engine-status
+// field (§forgejo/observability/the-held-back-view).
+type heldBackViewJSON struct {
+	EngineStatus      string             `json:"engine_status"`
+	HeldByHumans      []heldBackItemJSON `json:"held_by_humans"`
+	StalledDeliveries []heldBackItemJSON `json:"stalled_deliveries"`
+}
+
+func getHeldBack(t *testing.T, srv *Server) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/forgejo/held-back", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+// TestForgejoHeldBackEndpoint: the endpoint serves the waits the sweep
+// tick recorded onto the forest snapshot — the human task the forest
+// waits on, with its labels alongside the reference, kind and age the
+// warning already carries — beside an honest empty stalled list and the
+// engine-status field; serving the request reads no forge and discloses
+// no object body (§forgejo/observability/the-held-back-view).
+func TestForgejoHeldBackEndpoint(t *testing.T) {
+	api := outcomesStubAPI()
+	fjEng := newForgejoEngine(t, api)
+	fjEng.Reconcile() // the sweep tick records the set the view serves
+	srv := New(0, nil, "test", fjEng, forgejo.EngineStateWord(true, nil))
+	rec := getHeldBack(t, srv)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var view heldBackViewJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if view.EngineStatus != forgejo.EngineUpWord {
+		t.Errorf("engine_status = %q, want %q", view.EngineStatus, forgejo.EngineUpWord)
+	}
+	if len(view.HeldByHumans) != 1 {
+		t.Fatalf("held_by_humans = %+v, want the one human task the walk found", view.HeldByHumans)
+	}
+	h := view.HeldByHumans[0]
+	if h.Kind != "human_task_blocking" {
+		t.Errorf("kind = %q, want human_task_blocking", h.Kind)
+	}
+	if h.Repository != "o/r" || h.Number != 90 || h.Title != "hand the keys over" || h.HTMLURL == "" {
+		t.Errorf("row = %+v, want the member o/r#90 with its fields", h)
+	}
+	if len(h.Labels) != 1 || h.Labels[0] != "human-task" {
+		t.Errorf("labels = %v, want the labels the object carries", h.Labels)
+	}
+	if h.AgeSeconds <= 0 {
+		t.Errorf("age_seconds = %v, want the age of the wait", h.AgeSeconds)
+	}
+	// The wire carries no body of anything: the dashboard port asks no
+	// credential, so author prose is not this view's to disclose — the
+	// row's link is how a reader reaches it
+	// (§forgejo/observability/the-held-back-view). The fixture's prose is
+	// the assertion that holds the rule, because it fails whatever field
+	// a later edit invents to carry a body; the key-name check beside it
+	// names the field that must never come back.
+	body := rec.Body.String()
+	const prose = "The prose the person left for themselves."
+	if strings.Contains(body, prose) {
+		t.Errorf("body %s, want the fixture's prose on no field at all", body)
+	}
+	if strings.Contains(body, "description") {
+		t.Errorf("body %s, want no description field anywhere", body)
+	}
+	// The stalled half reads as the empty list it is, never null.
+	if view.StalledDeliveries == nil || len(view.StalledDeliveries) != 0 {
+		t.Errorf("stalled_deliveries = %+v, want the empty list", view.StalledDeliveries)
+	}
+	if !strings.Contains(rec.Body.String(), `"stalled_deliveries":[]`) {
+		t.Errorf("body %s, want the empty stalled list spelled as a list", rec.Body.String())
+	}
+}
+
+// TestForgejoHeldBackEndpoint_States: the held-back view keeps the
+// outcomes view's shape discipline — an engineless port answers two
+// empty lists beside the not-configured word, a view that has not
+// been enumerated yet answers 500 with the fixed sentence rather
+// than an empty list, and a method other than GET answers 405
+// (§forgejo/observability/the-held-back-view,
+// §forgejo/observability/the-outcomes-view).
+func TestForgejoHeldBackEndpoint_States(t *testing.T) {
+	srv := New(0, nil, "test", nil, forgejo.EngineStateWord(false, nil))
+	rec := getHeldBack(t, srv)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disabled: status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"held_by_humans":[]`) || !strings.Contains(rec.Body.String(), `"stalled_deliveries":[]`) {
+		t.Errorf("body %s, want two empty lists, never null", rec.Body.String())
+	}
+	var view heldBackViewJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if view.EngineStatus != forgejo.CategoryNotConfigured.String() {
+		t.Errorf("engine_status = %q, want %q", view.EngineStatus, forgejo.CategoryNotConfigured.String())
+	}
+
+	notYet := New(0, nil, "test", newForgejoEngine(t, outcomesStubAPI()), forgejo.EngineStateWord(true, nil))
+	rec = getHeldBack(t, notYet)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("not yet enumerated: status = %d, want 500", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "held-back read failed") || strings.Contains(body, "o/out") {
+		t.Errorf("body %q, want the fixed sentence and no raw detail", body)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/forgejo/held-back", nil)
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", rec.Code)
 	}

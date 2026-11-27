@@ -1154,10 +1154,18 @@ async function testOutcomesPage(page, results) {
   const dashHidden = await page.evaluate(() =>
     getComputedStyle(document.getElementById('dashboard-view')).display === 'none');
   results.push(assert(dashHidden, 'The trigger dashboard is hidden on /outcomes'));
-  const backHref = await page.locator('#outcomes-link').getAttribute('href');
+  // The navigation shows the links that go somewhere: on /outcomes
+  // the outcomes link hides itself and the way back is the dashboard
+  // link (§forgejo/observability/the-held-back-view).
+  const nav = await page.evaluate(() => ({
+    outcomesHidden: document.getElementById('outcomes-link').hidden,
+    dashboardHref: document.getElementById('dashboard-link').getAttribute('href'),
+    dashboardHidden: document.getElementById('dashboard-link').hidden,
+    heldShown: !document.getElementById('held-back-link').hidden,
+  }));
   results.push(assert(
-    backHref === '/',
-    `The header's one link is the way back on /outcomes (got: "${backHref}")`
+    nav.outcomesHidden && !nav.dashboardHidden && nav.dashboardHref === '/' && nav.heldShown,
+    `On /outcomes the nav links to the dashboard and held-back views, not to itself (got: ${JSON.stringify(nav)})`
   ));
   const statsHidden = await page.evaluate(() =>
     getComputedStyle(document.querySelector('.header .stats')).display === 'none');
@@ -1961,6 +1969,192 @@ async function testOutcomesChart(page, results) {
   await page.waitForLoadState('networkidle').catch(() => {});
 }
 
+// testHeldBackPage covers the /held-back page
+// (§forgejo/observability/the-held-back-view): the header link that
+// makes the route reachable by eye, the SPA fallback serving the page
+// for the route, the two sections and their rows — the reference
+// linked under the page's standing link test, the labels the object
+// carries and the age of the wait, rendered as text and never as
+// markup, with no object body on the page at all — and the states that
+// are not rows: the honest empty, the unreadable view, and a disabled
+// engine stating itself in its own status words.
+async function testHeldBackPage(page, results) {
+  console.log('  Held-back page');
+
+  // The header link is how the route is found by eye.
+  await page.goto(baseUrl);
+  await page.waitForLoadState('networkidle').catch(() => {});
+  const linkHref = await page.locator('#held-back-link').getAttribute('href');
+  results.push(assert(linkHref === '/held-back', `Header links to /held-back (got: "${linkHref}")`));
+
+  // The route is served: the fallback answers the path with the
+  // page, which then renders the held-back view instead of the
+  // trigger dashboard.
+  const routeResp = await page.goto(`${baseUrl}/held-back`);
+  results.push(assert(routeResp.status() === 200, 'GET /held-back returns 200'));
+  results.push(assert(
+    routeResp.headers()['content-type']?.includes('text/html'),
+    'The route answers with the page'
+  ));
+  const view = await page.evaluate(() => ({
+    heldVisible: getComputedStyle(document.getElementById('held-back-view')).display !== 'none',
+    dashHidden: getComputedStyle(document.getElementById('dashboard-view')).display === 'none',
+    statsHidden: getComputedStyle(document.querySelector('.header .stats')).display === 'none',
+    heldLinkHidden: document.getElementById('held-back-link').hidden,
+    outcomesShown: !document.getElementById('outcomes-link').hidden,
+    title: document.title,
+  }));
+  results.push(assert(view.heldVisible, 'The held-back view is visible on /held-back'));
+  results.push(assert(view.dashHidden, 'The trigger dashboard is hidden on /held-back'));
+  results.push(assert(
+    view.statsHidden,
+    'The trigger stats are hidden on /held-back rather than reading as zeros'
+  ));
+  results.push(assert(
+    view.heldLinkHidden && view.outcomesShown,
+    `On /held-back the nav links to the dashboard and outcomes views, not to itself (got: ${JSON.stringify(view)})`
+  ));
+  results.push(assert(
+    view.title.includes('Held back'),
+    `The route names itself in the document title (got: "${view.title}")`
+  ));
+
+  // The compare-then-render discipline the dashboard and outcomes page
+  // follow: an unchanged payload renders no new rows, so a keyboard
+  // operator's focus outlives the poll
+  // (§forgejo/observability/the-dashboard-view). Fetch is pinned for
+  // the held-back endpoint alone so the background tick's other reads
+  // keep answering.
+  const survivesPoll = await page.evaluate(async () => {
+    const payload = { engine_status: 'enabled', held_by_humans: [], stalled_deliveries: [] };
+    const realFetch = window.fetch;
+    window.fetch = (url, opts) => String(url) !== '/api/forgejo/held-back'
+      ? realFetch(url, opts)
+      : Promise.resolve(new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    try {
+      await refreshHeldBack();
+      const before = document.querySelector('#held-back-list > *');
+      await refreshHeldBack();
+      return before !== null && document.querySelector('#held-back-list > *') === before;
+    } finally {
+      window.fetch = realFetch;
+    }
+  });
+  results.push(assert(
+    survivesPoll,
+    'An unchanged payload renders no new held-back rows'
+  ));
+
+  // The sections and their rows, exercised through the page's own
+  // renderer on a synthetic payload: the mock organisation holds no
+  // outcomes repository, so the live instance cannot produce a wait
+  // here (§forgejo/observability/the-held-back-view).
+  const synthetic = await page.evaluate(() => {
+    renderHeldBack({
+      engine_status: 'enabled',
+      held_by_humans: [{
+        kind: 'human_task_blocking', repository: 'o/r', number: 90,
+        title: 'hand the keys over', html_url: 'https://forge.example.com/o/r/issues/90',
+        age_seconds: 5400, labels: ['human-task', 'good thing'],
+      }],
+      stalled_deliveries: [{
+        kind: 'stale_agentic_merge', repository: 'o/r', number: 901,
+        title: 'pr 901', html_url: 'javascript:alert(1)',
+        age_seconds: 7260, labels: [],
+      }],
+    });
+    const rows = [...document.querySelectorAll('#held-back-list .held-back-row')];
+    return {
+      sections: [...document.querySelectorAll('#held-back-list .held-back-section h2')].map(h => h.textContent.trim()),
+      rowCount: rows.length,
+      firstLinks: [...(rows[0]?.querySelectorAll('a') ?? [])].map(a => a.getAttribute('href')),
+      chips: [...(rows[0]?.querySelectorAll('.label-chip') ?? [])].map(c => c.textContent),
+      age: rows[0]?.querySelector('.held-back-age')?.textContent ?? '',
+      firstText: rows[0]?.textContent ?? '',
+      markupLeaked: rows[0]?.querySelector('b') !== null,
+      details: rows.flatMap(r => [...r.querySelectorAll('details')]).length,
+      secondLinks: [...(rows[1]?.querySelectorAll('a') ?? [])].map(a => a.getAttribute('href')),
+    };
+  });
+  results.push(assert(
+    synthetic.sections.includes('Held back by a human')
+      && synthetic.sections.includes('Ready for automatic action'),
+    `The page renders both sections (got: ${JSON.stringify(synthetic.sections)})`
+  ));
+  results.push(assert(synthetic.rowCount === 2, `One row per held-back object (got: ${synthetic.rowCount})`));
+  results.push(assert(
+    synthetic.firstLinks.includes('https://forge.example.com/o/r/issues/90'),
+    `A row links the waited-on object (got: ${synthetic.firstLinks.join(', ')})`
+  ));
+  results.push(assert(
+    synthetic.chips.includes('human-task') && synthetic.chips.includes('good thing'),
+    `A row shows the labels the object carries (got: ${synthetic.chips.join(', ')})`
+  ));
+  results.push(assert(
+    synthetic.age.includes('waiting 1h 30m'),
+    `A row states the age since the wait began (got: "${synthetic.age}")`
+  ));
+  results.push(assert(
+    !synthetic.markupLeaked && synthetic.firstText.includes('hand the keys over')
+      && synthetic.chips.includes('good thing'),
+    `A row's title and labels arrive as text, never as markup (markup leaked: ${synthetic.markupLeaked})`
+  ));
+  results.push(assert(
+    synthetic.details === 0,
+    `A row renders no expander, for the page carries no object body (details: ${synthetic.details})`
+  ));
+  results.push(assert(
+    synthetic.secondLinks.length === 0,
+    `A url a link cannot carry renders as text (got: ${synthetic.secondLinks.join(', ')})`
+  ));
+
+  // A section with no rows says so while the other section still
+  // lists, so an empty half never reads as a view that lost both
+  // (§forgejo/observability/the-held-back-view).
+  const oneEmpty = await page.evaluate(() => {
+    renderHeldBack({
+      engine_status: 'enabled',
+      held_by_humans: [],
+      stalled_deliveries: [{
+        kind: 'stale_agentic_merge', repository: 'o/r', number: 902, title: 'pr 902',
+        html_url: 'https://forge.example.com/o/r/pulls/902', age_seconds: 60, labels: [],
+      }],
+    });
+    return {
+      notes: [...document.querySelectorAll('#held-back-list .held-back-none')].map(p => p.textContent),
+      rows: document.querySelectorAll('#held-back-list .held-back-row').length,
+    };
+  });
+  results.push(assert(
+    oneEmpty.notes.length === 1 && oneEmpty.notes[0].includes('Nothing is held back this way') && oneEmpty.rows === 1,
+    `A section with no rows says so beside the one that has rows (got: ${JSON.stringify(oneEmpty)})`
+  ));
+
+  // The states that are not rows: the honest empty, the unreadable
+  // view, and an engine that is not up naming itself in the enum's
+  // own word (§forgejo/observability/the-outcomes-view).
+  const states = await page.evaluate(() => {
+    const texts = [];
+    renderHeldBack({ engine_status: 'enabled', held_by_humans: [], stalled_deliveries: [] });
+    texts.push(document.querySelector('#held-back-list .empty-state')?.textContent ?? '');
+    renderHeldBack(null);
+    texts.push(document.querySelector('#held-back-list .empty-state')?.textContent ?? '');
+    renderHeldBack({ engine_status: 'not configured' });
+    texts.push(document.querySelector('#held-back-list .empty-state')?.textContent ?? '');
+    return texts;
+  });
+  results.push(assert(states[0]?.includes('Nothing is held back'), 'The honest empty says nothing is held back'));
+  results.push(assert(states[1]?.includes('could not be read'), 'A view the engine answers 500 for says it could not be read'));
+  results.push(assert(
+    states[2]?.includes('not configured'),
+    `An engine that is not up states itself in its own status word (got: "${states[2]}")`
+  ));
+
+  // Back to the dashboard for anything that follows.
+  await page.goto(baseUrl);
+  await page.waitForLoadState('networkidle').catch(() => {});
+}
+
 // ─── Main ────────────────────────────────────────────────────────────
 
 async function main() {
@@ -2008,6 +2202,7 @@ async function main() {
   await testSweepTriggering(page, results);
   await testOutcomesPage(page, results);
   await testOutcomesChart(page, results);
+  await testHeldBackPage(page, results);
   if (faultUrl && unconfiguredUrl) {
     await testForgejoEngineStates(page, results);
   }

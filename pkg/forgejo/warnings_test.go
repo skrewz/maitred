@@ -992,7 +992,7 @@ func TestForestWarnings_WarningsArePerReference(t *testing.T) {
 		SubmittedAt: time.Now().Add(-3 * time.Hour),
 	}}
 
-	warns, err := eng.forestWarnings(&root, "o/out", api.blocks[51])
+	warns, _, err := eng.forestWarnings(&root, "o/out", api.blocks[51])
 	if err != nil {
 		t.Fatalf("forestWarnings: %v", err)
 	}
@@ -1005,7 +1005,7 @@ func TestForestWarnings_WarningsArePerReference(t *testing.T) {
 	if warns[1].Number != first.Number || warns[1].Kind != WarningHumanTaskBlocking {
 		t.Errorf("warnings[1] = %+v, want the human task %d beside it", warns[1], first.Number)
 	}
-	again, err := eng.forestWarnings(&root, "o/out", api.blocks[51])
+	again, _, err := eng.forestWarnings(&root, "o/out", api.blocks[51])
 	if err != nil {
 		t.Fatalf("forestWarnings: %v", err)
 	}

@@ -99,6 +99,14 @@ type Forest struct {
 	// walk that found nothing, and a finished forest's empty was never
 	// read (§forgejo/observability/the-warnings-a-forest-carries).
 	WarningsWalked bool `json:"warnings_walked"`
+	// heldBack is this forest's waits in the shape the held-back view
+	// serves them — the warning fields alongside the walked row's
+	// labels (§forgejo/observability/the-held-back-view).
+	// It is unexported because it is not part of the outcomes payload:
+	// the two views are two shapes over the one walk's record, and the
+	// second shape rides to the outcomes endpoint's readers for no
+	// reason the brief pays for.
+	heldBack []HeldBackItem
 }
 
 // The view draws rather than scrapes: the picture fields are filled by the
@@ -452,13 +460,16 @@ func (e *Engine) enumerateForests() ([]Forest, error) {
 			forest.Tracker = trackerBlockedBy(blocked, root.Repository)
 			// The warning walk is the digest's one hop out of the root
 			// (§forgejo/decisions/commissioning,
-			// §forgejo/observability/the-warnings-a-forest-carries).
+			// §forgejo/observability/the-warnings-a-forest-carries). Its
+			// held-back rows are the same record in the other shape
+			// (§forgejo/observability/the-held-back-view).
 			if forestIsCurrent(forest) {
-				warnings, err := e.forestWarnings(issue, root.Repository, blocked)
+				warnings, held, err := e.forestWarnings(issue, root.Repository, blocked)
 				if err != nil {
 					return nil, fmt.Errorf("forgejo: outcomes: warnings of forest %s#%d: %w", root.Repository, issue.Number, err)
 				}
 				forest.Warnings = warnings
+				forest.heldBack = held
 				forest.WarningsWalked = true
 			} else {
 				forest.Warnings = []ForestWarning{}
@@ -544,6 +555,53 @@ func (e *Engine) ForestSplit() (current, past []Forest, err error) {
 		}
 	}
 	return current, past, nil
+}
+
+// HeldBackSplit answers both halves of the held-back view — the waits
+// on a person and the deliveries stalled past the threshold — from one
+// acquisition of the same snapshot the outcomes view serves
+// (§forgejo/observability/the-held-back-view,
+// §forgejo/observability/the-outcomes-view): one lock, so a response
+// cannot straddle two ticks, and the snapshot's own honesty rules —
+// unavailable before the first enumeration, the last failure while it
+// stands, stale once aged out — decide the answer. A request to the
+// view it serves costs no forge read, however often the page polls.
+// Current forests' rows flatten in the walk's own order, and an object
+// two forests name is stated once: one object held back twice holds
+// the organisation back once. Past forests contribute nothing, as they
+// contribute no walked warnings. A non-nil error means both halves are
+// nil, the same rule as ForestSplit.
+func (e *Engine) HeldBackSplit() (heldByHumans, stalledDeliveries []HeldBackItem, err error) {
+	e.forestsMu.Lock()
+	defer e.forestsMu.Unlock()
+	snap, err := e.forestsSnapshot()
+	if err != nil {
+		return nil, nil, err
+	}
+	heldByHumans, stalledDeliveries = []HeldBackItem{}, []HeldBackItem{}
+	seen := map[string]bool{}
+	for _, forest := range snap {
+		if !forestIsCurrent(forest) {
+			continue
+		}
+		for _, item := range forest.heldBack {
+			key := waitKey(item.Kind, item.Repository, item.Number)
+			if seen[key] {
+				continue // one object held back twice is one wait
+			}
+			seen[key] = true
+			// The two warning kinds are the waiting vocabulary in full
+			// (§forgejo/observability/the-warnings-a-forest-carries), so
+			// anything that is not a stalled delivery is a wait on a
+			// person; there is no third wait to lose a row to.
+			if item.Kind == WarningStaleAgenticMerge {
+				stalledDeliveries = append(stalledDeliveries, item)
+			} else {
+				heldByHumans = append(heldByHumans, item)
+			}
+		}
+	}
+	return heldByHumans, stalledDeliveries, nil
 }
 
 // forestsSnapshot applies the snapshot's one discipline — failure,

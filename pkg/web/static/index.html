@@ -141,6 +141,19 @@
         .modal p { font-size: 0.8rem; color: #cbd5e1; margin-bottom: 0.75rem; line-height: 1.5; }
         .modal-warning { color: #fca5a5; }
         .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem; }
+        /* The held-back view: the two waits the warning walk asks
+           (§forgejo/observability/the-held-back-view), in the
+           dashboard's reading column — the page lists rows, it draws
+           no pictures that need the wide screen. */
+        .held-back-section h2 { font-size: 0.95rem; color: #93c5fd; margin: 1.25rem 0 0.5rem; }
+        .held-back-row { background: #1e293b; border-radius: 0.5rem; padding: 1rem 1.25rem; margin-bottom: 0.75rem; border-left: 3px solid #38bdf8; }
+        .held-back-row a { color: #38bdf8; text-decoration: none; }
+        .held-back-row a:hover { text-decoration: underline; }
+        .held-back-meta { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.25rem; font-size: 0.8rem; }
+        .held-back-age { color: #fde68a; font-size: 0.75rem; }
+        .label-chip { background: #334155; color: #e2e8f0; border-radius: 999px; padding: 0.1rem 0.5rem; font-size: 0.7rem; font-family: 'SF Mono', 'Fira Code', monospace; }
+        .held-back-none { font-size: 0.8rem; color: #64748b; }
+        .held-back-intro { font-size: 0.8rem; color: #94a3b8; line-height: 1.5; }
     </style>
 </head>
 <body>
@@ -149,7 +162,9 @@
             <h1>&#x2615; maitred</h1>
             <span class="version" id="version">loading...</span>
             <nav class="header-nav">
+                <a href="/" id="dashboard-link" hidden>Dashboard</a>
                 <a href="/outcomes" id="outcomes-link">Outcomes</a>
+                <a href="/held-back" id="held-back-link">Held back</a>
             </nav>
         </div>
         <div class="stats">
@@ -184,6 +199,14 @@
             <span class="status" id="outcomes-status-text">Connecting...</span>
         </div>
         <div id="outcomes-list" role="tabpanel"></div>
+    </div>
+
+    <div class="container" id="held-back-view" style="display: none;">
+        <div class="refresh-bar">
+            <span class="status" id="held-back-status-text">Connecting...</span>
+        </div>
+        <p class="held-back-intro">Work the engine has watched waiting: tickets claimed for a human with nothing left standing ahead of them, and deliveries the merge gate would fire at standing unmerged past the stale-merge threshold. Everything here is waiting on someone to act; the age says for how long.</p>
+        <div id="held-back-list"></div>
     </div>
 
     <div id="chart-overlay" class="chart-overlay" style="display: none;">
@@ -769,12 +792,22 @@
             if (btn) openSweepModal(btn.dataset.sweepId, btn.dataset.sweepTitle);
         });
 
-        // The /outcomes route (§forgejo/observability/the-outcomes-view):
-        // the server's SPA fallback already answers the path with this
-        // page, so the route is a rendering choice — the dashboard
-        // container yields to the outcomes container and the timer
-        // polls the outcomes view instead.
-        const route = window.location.pathname.replace(/\/+$/, '') === '/outcomes' ? 'outcomes' : 'dashboard';
+        // The routes this page serves (§forgejo/observability/the-
+        // outcomes-view, §forgejo/observability/the-held-back-view): the
+        // server's SPA fallback already answers each path with this
+        // document, so a route is only a rendering choice — the title it
+        // states, the container it shows, the nav link that would point
+        // where the reader already is, and the refresher the timer
+        // polls. One entry per view, so a third view is a third entry
+        // and not a third branch.
+        const routes = {
+            '/': { title: 'maitred \u2014 Trigger Dashboard', container: 'dashboard-view', link: 'dashboard-link', refresh: refresh },
+            '/outcomes': { title: 'maitred \u2014 Outcomes', container: 'outcomes-view', link: 'outcomes-link', refresh: refreshOutcomes },
+            '/held-back': { title: 'maitred \u2014 Held back', container: 'held-back-view', link: 'held-back-link', refresh: refreshHeldBack },
+        };
+        const routePath = window.location.pathname.replace(/\/+$/, '') || '/';
+        const route = routes[routePath] ?? routes['/'];
+        const onDashboard = route === routes['/'];
 
         // safeUrl keeps a forge-scraped URL linkable only if a link
         // can carry it. The html_url a forest row carries is the
@@ -1114,32 +1147,111 @@
             }
         }
 
-        // Auto-refresh every 5 seconds
-        if (route === 'outcomes') {
-            document.title = 'maitred \u2014 Outcomes';
-            document.getElementById('dashboard-view').style.display = 'none';
-            document.getElementById('outcomes-view').style.display = '';
-            // The header carries one link, as the brief asks; on this
-            // route it states its opposite, so the way in is also the
-            // way back.
-            const navLink = document.getElementById('outcomes-link');
-            navLink.setAttribute('href', '/');
-            navLink.textContent = 'Dashboard';
-            // The header's trigger stats are the dashboard's numbers,
-            // which this route never reads. Left visible they would
-            // state "0 Triggers" — a falsehood, not a blank — so the
-            // honest rendering here is silence
+        // The held-back payload last rendered, in the same
+        // compare-then-render discipline: an unchanged poll renders no
+        // new rows, so a focused link outlives the tick
+        // (§forgejo/observability/the-dashboard-view).
+        let lastHeldBackJson;
+
+        // heldBackRow renders one waited-on object: the reference
+        // through the page's one link discipline (issueLink), the age
+        // of the wait, and the labels the object carries as chips. The
+        // row states where the wait is and how long it has stood, and
+        // no more of the object than the forge serves before
+        // authenticating: the link is how a reader reaches the prose,
+        // so the page carries no description field and renders no
+        // expander (§forgejo/observability/the-held-back-view).
+        function heldBackRow(item) {
+            const age = item.age_seconds == null ? ''
+                : `<span class="held-back-age">\u00b7 waiting ${escapeHtml(formatDuration(Math.round(item.age_seconds * 1000)))}</span>`;
+            const labels = (item.labels ?? []).map(l => `<span class="label-chip">${escapeHtml(String(l))}</span>`).join('');
+            return `
+                <div class="held-back-row">
+                    <div class="outcomes-repo">${escapeHtml(String(item.repository ?? ''))}</div>
+                    <div class="held-back-meta">${issueLink(item)}${age}</div>
+                    <div class="held-back-meta">${labels}</div>
+                </div>
+            `;
+        }
+
+        // renderHeldBack renders the held-back view
+        // (§forgejo/observability/the-held-back-view): two sections —
+        // the waits on a person and the deliveries ready but unlanded —
+        // each naming itself whether or not it has rows. The states
+        // that are not rows speak in the outcomes page's words: an
+        // engine that is not up names its own status word, an
+        // unreadable view says it could not be read, and an honest
+        // empty says nothing is held back.
+        function renderHeldBack(payload) {
+            const list = document.getElementById('held-back-list');
+            const statusEl = document.getElementById('held-back-status-text');
+            if (!payload || !payload.engine_status) {
+                statusEl.textContent = 'Error loading held-back view';
+                list.innerHTML = '<div class="empty-state"><h2>Held-back view could not be read</h2><p>The engine has nothing it can vouch for yet: the last enumeration failed, has not landed, or has aged out.</p></div>';
+                return;
+            }
+            statusEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
+            const status = payload.engine_status;
+            if (status !== 'enabled') {
+                const word = escapeHtml(status);
+                list.innerHTML = `<div class="empty-state"><h2>Forgejo engine \u2014 ${word}</h2><p>The held-back view is what the Forgejo engine knows of the waits it has walked, and the engine is ${word}.</p></div>`;
+                return;
+            }
+            const humans = payload.held_by_humans || [];
+            const stalled = payload.stalled_deliveries || [];
+            if (humans.length === 0 && stalled.length === 0) {
+                list.innerHTML = '<div class="empty-state"><h2>Nothing is held back</h2><p>The engine is enabled, and its last sweep found no ticket waiting on a person and no delivery ready past the stale-merge threshold.</p></div>';
+                return;
+            }
+            const section = (title, rows) => `<div class="held-back-section"><h2>${title}</h2>`
+                + (rows.length === 0 ? '<p class="held-back-none">Nothing is held back this way.</p>' : rows.map(heldBackRow).join(''))
+                + '</div>';
+            list.innerHTML = section('Held back by a human', humans)
+                + section('Ready for automatic action', stalled);
+        }
+
+        async function refreshHeldBack() {
+            let payload = null;
+            try {
+                const res = await fetch('/api/forgejo/held-back');
+                if (res.ok) payload = await res.json();
+            } catch (e) {
+                console.error('held-back refresh failed:', e);
+            }
+            const heldBackJson = JSON.stringify(payload);
+            if (heldBackJson !== lastHeldBackJson) {
+                renderHeldBack(payload);
+                // Recorded only once the render returned, as refresh()
+                // does: a throw leaves the next poll free to retry.
+                lastHeldBackJson = heldBackJson;
+            } else if (payload) {
+                document.getElementById('held-back-status-text').textContent = 'Updated ' + new Date().toLocaleTimeString();
+            }
+        }
+
+        // Auto-refresh every 5 seconds on the route's own refresher. The
+        // header carries one link per view but the route the reader is
+        // already on, so the links on screen always go somewhere
+        // (§forgejo/observability/the-held-back-view).
+        for (const r of Object.values(routes)) {
+            document.getElementById(r.link).hidden = r === route;
+        }
+        document.title = route.title;
+        document.getElementById('dashboard-view').style.display = onDashboard ? '' : 'none';
+        document.getElementById(route.container).style.display = '';
+        if (!onDashboard) {
+            // The header's trigger statistics are the dashboard's
+            // numbers, which neither route reads. Left visible they
+            // would state "0 Triggers" — a falsehood, not a blank — so
+            // the honest rendering here is silence
             // (§forgejo/observability/the-outcomes-view).
             document.querySelector('.header .stats').style.display = 'none';
             fetch('/api/version').then(r => r.ok ? r.text() : 'dev')
                 .then(v => { document.getElementById('version').textContent = v; })
                 .catch(() => {});
-            refreshOutcomes();
-            refreshInterval = setInterval(refreshOutcomes, 5000);
-        } else {
-            refresh();
-            refreshInterval = setInterval(refresh, 5000);
         }
+        route.refresh();
+        refreshInterval = setInterval(route.refresh, 5000);
     </script>
 </body>
 </html>
