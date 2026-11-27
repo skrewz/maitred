@@ -413,8 +413,25 @@ The link is only a
 link when the forge's URL is one a link can carry (http or https);
 anything else renders as text, since the port authenticates nothing.
 The row's shape is the same on both tabs; only the payload's lists
-differ. A forest the payload says is waiting on a person draws its **warnings**
-in the row: one ⚠️ entry per warning, each naming its kind, the issue
+differ. A forest whose ideation root the payload says is **open** is
+**uncommissioned** — commissioning being the root's closure
+(§forgejo/decisions/commissioning) — and its row renders with a
+greyed-out look: one presentation rule on the row mutes links, badges
+and picture alike, and the dim rides on the row alone, so a picture
+enlarged from a dimmed row draws in full colour. The muting says *not
+commissioned*, never *fault*: warnings keep their ⚠️ entries on the
+dimmed row, and the dim never sinks below half opacity, so an entry
+stays readable. A stalled forest whose root has closed wears no dim, so
+the two read apart at a glance (s-git/maitred#285); a forest under
+retirement greys alike, retiring one being the human reopening its root
+(§forgejo/decisions/forest-teardown). A forest never commissioned has no
+tracker, and where there is no tracker the tick writes no block and
+draws no picture (§forgejo/reconciliation/the-tracker-block), so its
+description has nothing to grey; where an open root does carry a
+tracker, the sweep redraws that description every pass and the renderer
+dims closedness alone (§forgejo/renderer/classes-and-strokes). A
+forest the payload says is waiting on a person draws its **warnings** in
+the row: one ⚠️ entry per warning, each naming its kind, the issue
 or pull request holding the forest up, and the age of the condition,
 and linked through the warning's own HTML URL under the same link test
 the row's other links pay

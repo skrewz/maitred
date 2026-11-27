@@ -113,6 +113,14 @@
         .outcomes-row a { color: #38bdf8; text-decoration: none; }
         .outcomes-row a:hover { text-decoration: underline; }
         .outcomes-warning { margin-top: 0.75rem; font-size: 0.8rem; color: #fde68a; }
+        /* An uncommissioned forest — its ideation root still open,
+           commissioning being that root's closure — dims its whole row:
+           one presentation rule greys whatever the row holds, links,
+           badges and picture alike, which is what holds the muting apart
+           from a stalled forest's ⚠️ entries and from the commissioned
+           rows beside it (§forgejo/decisions/commissioning,
+           §forgejo/observability/the-outcomes-view, s-git/maitred#285). */
+        .outcomes-row.uncommissioned { filter: saturate(0) opacity(0.75); }
         .outcomes-chart { margin-top: 1rem; cursor: zoom-in; }
         .outcomes-chart svg { max-width: 100%; height: auto; }
         .outcomes-chart-source { display: none; white-space: pre-wrap; }
@@ -987,6 +995,10 @@
         // row per forest, each linking out to its ideation root and
         // its tracker with their states, drawing the forest's picture
         // underneath those links and the region's stamp beneath it.
+        // A row whose root is open is uncommissioned — commissioning
+        // being the root's closure — and wears the dim the CSS hangs on
+        // `.uncommissioned` (§forgejo/decisions/commissioning,
+        // §forgejo/observability/the-outcomes-view).
         // The row's shape is the same on both tabs; only the payload's
         // lists differ, and a past row states its warnings as not
         // walked. An engine that is not up says so in its own state
@@ -1060,7 +1072,7 @@
                 return;
             }
             list.innerHTML = rows.map(f => `
-                <div class="outcomes-row">
+                <div class="outcomes-row${f.root?.state === 'open' ? ' uncommissioned' : ''}">
                     <div class="outcomes-repo">${escapeHtml(f.repository)}</div>
                     <div class="trigger-meta">
                         ${issueCell('Ideation', f.root, 'no open ideation root')}
