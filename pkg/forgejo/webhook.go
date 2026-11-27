@@ -1643,10 +1643,12 @@ func (e *Engine) reFiredRecently(key Key, action Action, subject, revision strin
 // forest's stamp rather than the (action, revision) pair's because a
 // comment's every arrival is a new digest — the pair would never
 // repeat, and a bound that never matches bounds nothing. The stamp
-// lives in memory, as the singleton bound's does; a restart buys one
-// comment-path dispatch per forest with no interval spent, and the
-// sweep stays what recovers (§forgejo/decisions/loop-prevention,
-// s-git/maitred#280).
+// lives in memory alone: where the object key's bound has a durable
+// half in the watermark's fire instant, the forest's slot carries its
+// digest and no instant at all, so a restart buys one comment-path
+// dispatch per forest with no interval spent, and the sweep stays what
+// recovers (§forgejo/state/watermark,
+// §forgejo/decisions/loop-prevention, s-git/maitred#280).
 //
 // The pace is a rate, not a lock. HandleEvent serialises a decide-and-
 // dispatch span under the event's own object key, so this check and the

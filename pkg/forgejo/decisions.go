@@ -764,23 +764,31 @@ func decideIssueActivity(e Event, s State, w *Watermark) Decision {
 	return dispatchOnDeclaredDigest(ActionReassess, w, e, s, d)
 }
 
-// decideDecompose is the event path's root row. Wherever the gate is
-// armed it answers here, in place of any guard of its own: the gate is
-// the same comparison the sweep's rows make, so both paths give the
-// same answer for this action, and an edge move — which moves the
-// digest and no delivery — cannot be suppressed by a watermark
+// decideDecompose is the event path's carriers' row: a root's row for
+// every event that brings one here, and a tracker's row for the comment
+// that asks this forest's gate (§forgejo/decisions/transition-table,
+// s-git/maitred#280). Wherever the gate is armed it answers here, in
+// place of any guard of its own: the gate is the same comparison the
+// sweep's rows make, so both paths give the same answer for this
+// action, and an edge move — which moves the digest and no delivery —
+// cannot be suppressed by a watermark
 // (§forgejo/reconciliation/the-state-is-the-watermark,
-// §forgejo/decisions/actionable-state-digest, s-git/maitred#209). The
-// gate is unarmed only for a root whose kind labels conflict: the
-// sweep holds that issue off as a conflict before any decompose row,
-// while the event path's row for it is paced by the digest of its
+// §forgejo/decisions/actionable-state-digest, s-git/maitred#209).
+// forestGate's doc comment is the arming rule's one statement; the
+// states that reach this row with the gate unarmed are a root whose kind
+// labels conflict — the sweep holds that issue off as a conflict before
+// any decompose row, while its event row is paced by the digest of its
 // declared inputs and the re-fire bound, one attempt per interval
 // whichever path arrived (§forgejo/decisions/transition-table,
-// s-git/maitred#259). A
-// root is decomposed whatever blocks it; a closed root holds off
-// upstream, because closing it commissions the forest and the unblock
-// cascade dispatches the forest members
-// (§forgejo/decisions/transition-table).
+// s-git/maitred#259) — a tracker whose root still stands, which holds
+// off naming that root's row as where the curation stands, and a tracker
+// gated by no root at all, which holds off naming that absence
+// (§forgejo/decisions/actions, s-git/maitred#279,
+// s-git/maitred#280). A root is decomposed whatever
+// blocks it, and a closed root holds off upstream, because closing it
+// commissions the forest and the unblock cascade dispatches the forest
+// members; a tracker's row, by contrast, asks the standing of the root
+// that gates it (§forgejo/decisions/transition-table).
 func decideDecompose(e Event, issue *Issue, s State, w *Watermark) Decision {
 	// The order modifies the root's row, so only a root's row it stands
 	// above: a tracker carrying it is decided as any other tracker would
