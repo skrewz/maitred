@@ -1330,7 +1330,8 @@ async function testOutcomesPage(page, results) {
         {
           // The state the rule is for: a root that has never closed
           // blocks no outcome issue, so the payload carries no tracker
-          // at all and the tick drew no picture (pkg/forgejo/outcomes.go).
+          // at all and writeTrackerBlocks drew no picture
+          // (pkg/forgejo/tracker_chart.go).
           repository: 'o/never',
           root: { number: 5, repository: 'o/never', title: 'Ideation root', state: 'open', html_url: 'https://forge.example.com/o/never/issues/5' },
           tracker: null,
