@@ -1316,55 +1316,88 @@ async function testOutcomesPage(page, results) {
     'Switching back renders the current list again'
   ));
 
-  // A forest whose ideation root is still open is still-locked — it
-  // has commissioned nothing yet — and its row renders with a
+  // A forest whose ideation root is open is uncommissioned —
+  // commissioning being the root's closure — and its row renders with a
   // greyed-out look, so it reads apart at a glance from a commissioned
   // forest stalled on its edges or its people. The muting says *not
-  // commissioned yet*, never *fault*: a still-locked forest's warnings
-  // keep their ⚠️ entries on the dimmed row
+  // commissioned*, never *fault*: the row keeps its ⚠️ entries, and the
+  // dim never sinks below the half opacity the spec floors it at
   // (§forgejo/observability/the-outcomes-view, s-git/maitred#285).
-  const locked = await page.evaluate(() => {
+  const uncommissioned = await page.evaluate(() => {
     renderOutcomes({
       engine_status: 'enabled',
       forests: [
         {
-          repository: 'o/out',
-          root: { number: 5, repository: 'o/out', title: 'Ideation root', state: 'open', html_url: 'https://forge.example.com/o/out/issues/5' },
-          tracker: { number: 6, repository: 'o/out', title: 'Outcome tracker', state: 'open', html_url: 'https://forge.example.com/o/out/issues/6' },
+          // The state the rule is for: a root that has never closed
+          // blocks no outcome issue, so the payload carries no tracker
+          // at all and the tick drew no picture (pkg/forgejo/outcomes.go).
+          repository: 'o/never',
+          root: { number: 5, repository: 'o/never', title: 'Ideation root', state: 'open', html_url: 'https://forge.example.com/o/never/issues/5' },
+          tracker: null,
           warnings: [
-            { kind: 'human_task_blocking', repository: 'o/out', number: 7, title: 'Claimed by a person', html_url: 'https://forge.example.com/o/out/issues/7', age_seconds: 60 },
+            { kind: 'human_task_blocking', repository: 'o/never', number: 7, title: 'Claimed by a person', html_url: 'https://forge.example.com/o/never/issues/7', age_seconds: 60 },
           ],
+          warnings_walked: true,
+        },
+        {
+          // The other open root: a commissioned forest the human is
+          // retiring, whose root is open again and whose spared tracker
+          // still stands. An open root says *not commissioned* either
+          // way, so it greys the same
+          // (§forgejo/decisions/forest-teardown).
+          repository: 'o/retiring',
+          root: { number: 8, repository: 'o/retiring', title: 'Reopened root', state: 'open', html_url: 'https://forge.example.com/o/retiring/issues/8' },
+          tracker: { number: 9, repository: 'o/retiring', title: 'Spared tracker', state: 'open', html_url: 'https://forge.example.com/o/retiring/issues/9' },
+          warnings: [],
+          warnings_walked: true,
         },
         {
           repository: 'o/out',
           root: { number: 3, repository: 'o/out', title: 'Commissioned forest', state: 'closed', html_url: 'https://forge.example.com/o/out/issues/3' },
           tracker: { number: 4, repository: 'o/out', title: 'Work still in flight', state: 'open', html_url: 'https://forge.example.com/o/out/issues/4' },
           warnings: [],
+          warnings_walked: true,
         },
       ],
     });
     const rows = [...document.querySelectorAll('#outcomes-list .outcomes-row')];
-    const greyed = (row) => {
+    // Read the dim itself rather than a pixel: the row carries one
+    // filter, and the spec floors its opacity at half.
+    const dim = (row) => {
       const s = getComputedStyle(row);
-      return s.filter !== 'none' || parseFloat(s.opacity) < 1;
+      const within = /opacity\((\d*\.?\d+)\)/.exec(s.filter);
+      return {
+        greyed: s.filter !== 'none' || parseFloat(s.opacity) < 1,
+        opacity: within ? parseFloat(within[1]) : parseFloat(s.opacity),
+      };
     };
     return {
-      lockedGreyed: greyed(rows[0]),
-      commissionedGreyed: greyed(rows[1]),
-      lockedWarnings: rows[0]?.querySelectorAll('.outcomes-warning').length ?? 0,
+      never: dim(rows[0]),
+      retiring: dim(rows[1]),
+      commissioned: dim(rows[2]),
+      warning: rows[0]?.querySelector('.outcomes-warning')?.textContent ?? '',
     };
   });
   results.push(assert(
-    locked.lockedGreyed,
-    'A forest whose ideation root is still open renders with a greyed-out feel'
+    uncommissioned.never.greyed,
+    'A forest whose root has never closed — no tracker in the payload at all — renders with a greyed-out feel'
   ));
   results.push(assert(
-    !locked.commissionedGreyed,
+    uncommissioned.retiring.greyed,
+    'A retiring forest — root reopened, spared tracker still standing — greys the same way: an open root says *not commissioned*'
+  ));
+  results.push(assert(
+    !uncommissioned.commissioned.greyed,
     'A commissioned forest — root closed, work still in flight — carries no dim'
   ));
   results.push(assert(
-    locked.lockedWarnings === 1,
-    `The muting does not swallow the warnings: a still-locked forest keeps its \u26a0\ufe0f entries (got: ${locked.lockedWarnings})`
+    uncommissioned.warning.includes('\u26a0\ufe0f')
+      && uncommissioned.warning.includes('human_task_blocking'),
+    `The muting does not swallow the warnings: the dimmed row keeps its \u26a0\ufe0f entry, kind word and all (got: "${uncommissioned.warning.trim().slice(0, 80)}")`
+  ));
+  results.push(assert(
+    uncommissioned.never.opacity >= 0.5 && uncommissioned.retiring.opacity >= 0.5,
+    `The muting is not a hiding: a dimmed row keeps at least half its opacity (got: ${uncommissioned.never.opacity}, ${uncommissioned.retiring.opacity})`
   ));
 
   // A forest the payload says is waiting on a person draws its
