@@ -729,10 +729,13 @@ same link test every other reference on this page pays, its labels as
 chips, the age of the wait in the same human-readable form the
 warnings use, and a `<details>`-collapsible body carrying the
 object's description inserted as text and never as markup — the same
-rule the warning titles pay, now covering the whole description
-(§forgejo/observability/the-dashboard-view). A section with no rows
-says it holds nothing; a view whose every section is empty says
-nothing is held back. An engine that is not up and a view the engine
+rule the warning titles pay, now covering the whole description, and
+no expander at all where the description is empty, since a summary
+that opens onto nothing reads as broken UI rather than as an object
+nothing wrote on (§forgejo/observability/the-dashboard-view). A section
+with no rows says it holds nothing; a view whose every section is empty
+says nothing is held back. An engine that is not up and a view the
+engine
 answers `500` for state themselves in the words the outcomes page
 uses for those states (§forgejo/observability/the-outcomes-view).
 

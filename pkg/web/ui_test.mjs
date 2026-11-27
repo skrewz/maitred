@@ -2123,11 +2123,17 @@ async function testHeldBackPage(page, results) {
     return {
       notes: [...document.querySelectorAll('#held-back-list .held-back-none')].map(p => p.textContent),
       rows: document.querySelectorAll('#held-back-list .held-back-row').length,
+      expander: document.querySelector('#held-back-list .held-back-row details') !== null,
     };
   });
   results.push(assert(
     oneEmpty.notes.length === 1 && oneEmpty.notes[0].includes('Nothing is held back this way') && oneEmpty.rows === 1,
     `A section with no rows says so beside the one that has rows (got: ${JSON.stringify(oneEmpty)})`
+  ));
+  results.push(assert(
+    !oneEmpty.expander,
+    'A row whose object has no description renders no expander (got: '
+      + `${oneEmpty.expander})`
   ));
 
   // The states that are not rows: the honest empty, the unreadable

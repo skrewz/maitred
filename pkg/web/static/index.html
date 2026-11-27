@@ -1161,17 +1161,23 @@
         // of the wait, the labels the object carries as chips, and a
         // <details>-collapsible body carrying the description as text
         // and never as markup — an author's prose cannot write into the
-        // document (§forgejo/observability/the-held-back-view).
+        // document (§forgejo/observability/the-held-back-view). An
+        // object with no prose renders no expander at all: a summary
+        // that opens onto a blank <pre> reads as broken UI rather than
+        // as an object with nothing written on it.
         function heldBackRow(item) {
             const age = item.age_seconds == null ? ''
                 : `<span class="held-back-age">\u00b7 waiting ${escapeHtml(formatDuration(Math.round(item.age_seconds * 1000)))}</span>`;
             const labels = (item.labels ?? []).map(l => `<span class="label-chip">${escapeHtml(String(l))}</span>`).join('');
+            const description = String(item.description ?? '');
+            const details = description === '' ? ''
+                : `<details class="held-back-desc"><summary>description</summary><pre>${escapeHtml(description)}</pre></details>`;
             return `
                 <div class="held-back-row">
                     <div class="outcomes-repo">${escapeHtml(String(item.repository ?? ''))}</div>
                     <div class="held-back-meta">${issueLink(item)}${age}</div>
                     <div class="held-back-meta">${labels}</div>
-                    <details class="held-back-desc"><summary>description</summary><pre>${escapeHtml(String(item.description ?? ''))}</pre></details>
+                    ${details}
                 </div>
             `;
         }
