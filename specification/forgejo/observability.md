@@ -687,8 +687,13 @@ number, title and HTML URL, the same four fields a warning carries and
 for the same reason — its **kind**, the **age** of the wait in seconds
 (dated exactly as the warning dates it: from the last blocker to close
 for a human task, from the verdict that satisfied the chain for a
-stalled delivery), the **labels** the object carries, and its
-**description** as the walked row carried it. The two questions are
+stalled delivery) and the **labels** the object carries. It carries no
+description, and the absence is a trust decision rather than an
+omission: the dashboard port asks no credential of any reader, so a
+body served here would be author prose disclosed to whoever can reach
+that port, while the row's own link serves the same text to a reader
+the forge authenticates, at the trust level it was written at. The
+view therefore stops where the forge's own authentication begins. The two questions are
 answered by the same walk that answers the forest warnings and no
 second definition of either wait exists: a wait that warns a forest is
 a held-back row, and the other way round, so a change to the merge
@@ -712,9 +717,8 @@ polls it — costs no forge read. The honesty rule is the snapshot's
 own: a set the engine cannot vouch for answers `500` rather than an
 empty list, with a fixed sentence on the wire and the read's detail in
 the log (§forgejo/observability/the-outcomes-view, and the same
-audience note there: the descriptions these rows carry are more author
-written text reaching the unauthenticated port, and the port is still
-the only control on what it discloses). A method other than `GET`
+audience note there: what these rows disclose is references, titles,
+label names and ages, and no object body). A method other than `GET`
 answers `405`.
 
 The dashboard renders the view as a page at `/held-back` — a route on
@@ -726,18 +730,16 @@ headings — **Held back by a human** for the held-by-humans list and
 **Ready for automatic action** for the stalled-deliveries list — each
 listing one row per held-back object: its link and title under the
 same link test every other reference on this page pays, its labels as
-chips, the age of the wait in the same human-readable form the
-warnings use, and a `<details>`-collapsible body carrying the
-object's description inserted as text and never as markup — the same
-rule the warning titles pay, now covering the whole description, and
-no expander at all where the description is empty, since a summary
-that opens onto nothing reads as broken UI rather than as an object
-nothing wrote on (§forgejo/observability/the-dashboard-view). A section
-with no rows says it holds nothing; a view whose every section is empty
-says nothing is held back. An engine that is not up and a view the
-engine
-answers `500` for state themselves in the words the outcomes page
-uses for those states (§forgejo/observability/the-outcomes-view).
+chips, and the age of the wait in the same human-readable form the
+warnings use, all of it inserted as text and never as markup, so an
+author who writes a title or a label name cannot write into the
+document (§forgejo/observability/the-dashboard-view). No part of the
+object's prose is rendered, and no expander is offered for it: the
+link is the way to the description. A section with no rows says it
+holds nothing; a view whose every section is empty says nothing is
+held back. An engine that is not up, and a view the engine answers
+`500` for, state themselves in the words the outcomes page uses for
+those states (§forgejo/observability/the-outcomes-view).
 
 The header navigation is the same on every view — a link to each of
 the dashboard, the outcomes page and this page, hiding the one that

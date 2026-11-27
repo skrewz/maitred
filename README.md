@@ -350,18 +350,15 @@ The same walk's record serves one more view: `GET /api/forgejo/held-back`
 flattens the warnings of every current forest into two lists — the
 `human_task_blocking` waits, and the `stale_agentic_merge` deliveries the
 merge gate would fire at standing unmerged past `stale_merge_threshold` —
-where a row is the reference, the labels the object carries, the age of
-the wait and the object's description. Like the outcomes view it answers
-from the last sweep tick's snapshot, so polling it is a freshness choice
-and not a cost one. The dashboard serves it as a page at `/held-back`,
-linked from the header on every view, listing the two halves under
-**Held back by a human** and **Ready for automatic action**, each
-description collapsed behind a `<details>` that is not rendered at all
-when the object has no description. Those descriptions are more
-author-written text reaching the same unauthenticated port the outcomes
-view reads: the control on what that port discloses is still the
-deployment's network, as the specification spells out (see
-`specification/forgejo/observability.md`).
+where a row is the reference, the labels the object carries and the age of
+the wait. Like the outcomes view it answers from the last sweep tick's
+snapshot, so polling it is a freshness choice and not a cost one. The
+dashboard serves it as a page at `/held-back`, linked from the header on
+every view, listing the two halves under **Held back by a human** and
+**Ready for automatic action**. A row states where the wait is and how
+long it has stood, and links to the object rather than quoting it: the
+page carries no issue or pull-request body, so the prose stays in the
+forge, behind its authentication.
 
 The same tick lands each current forest's drawing on its own tracker: the engine
 renders the forest into Mermaid and rewrites only the region of that tracker's

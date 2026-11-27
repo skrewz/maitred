@@ -9,7 +9,7 @@ import (
 
 // Fixtures and tests for the held-back view: the two waits the warning
 // walk already asks, flattened across forests with the waited-on
-// object's labels and description alongside
+// object's labels alongside
 // (§forgejo/observability/the-held-back-view).
 
 // heldBackForest loads api with a current forest of o/out — root 51,
@@ -20,7 +20,7 @@ import (
 func heldBackForest(t *testing.T, api *fakeAPI) (human, delivery Issue, pr PullRequest) {
 	t.Helper()
 	human = warningsMember(80, LabelHumanTask)
-	human.Body = "The prose the person left for themselves."
+	human.Body = "Waiting on the person the label names."
 	landing := warningsMember(81, LabelAgenticAutoMerge)
 	warningsForest(api, human)
 	api.blocks[51] = append(api.blocks[51], landing)
@@ -32,8 +32,7 @@ func heldBackForest(t *testing.T, api *fakeAPI) (human, delivery Issue, pr PullR
 	api.deps[human.Number] = []Issue{closed}
 
 	pr = *testPR(980, "open", true)
-	pr.Body = "Fixes " + landing.Repository + "#" + strconv.Itoa(landing.Number) +
-		"\n\nThe prose the implementer left for the reviewer."
+	pr.Body = "Fixes " + landing.Repository + "#" + strconv.Itoa(landing.Number)
 	pr.Labels = []string{"enhancement"}
 	api.openPulls["r"] = []PullRequest{pr}
 	api.pulls[pr.Number] = &pr
@@ -46,14 +45,14 @@ func heldBackForest(t *testing.T, api *fakeAPI) (human, delivery Issue, pr PullR
 	return human, landing, pr
 }
 
-// TestHeldBack_RowsCarryLabelsAndDescription: each wait the walk
-// records becomes a held-back row carrying the reference, kind and age
-// the warning carries alongside the waited-on object's labels and the
-// description the walked row carried — the human task's own body for a
-// human wait, the delivering pull request's for a stalled one
+// TestHeldBack_RowsCarryLabels: each wait the walk records becomes a
+// held-back row carrying the reference, kind and age the warning
+// carries alongside the waited-on object's labels — and no
+// description, since the dashboard port asks no credential and author
+// prose stays in the forge behind its authentication
 // (§forgejo/observability/the-held-back-view,
 // §forgejo/observability/the-warnings-a-forest-carries).
-func TestHeldBack_RowsCarryLabelsAndDescription(t *testing.T) {
+func TestHeldBack_RowsCarryLabels(t *testing.T) {
 	eng, api, _, _ := newTestEngine(t)
 	human, _, pr := heldBackForest(t, api)
 
@@ -79,9 +78,6 @@ func TestHeldBack_RowsCarryLabelsAndDescription(t *testing.T) {
 	if !containsLabel(h.Labels, LabelHumanTask) {
 		t.Errorf("member row labels = %v, want the labels the object carries", h.Labels)
 	}
-	if h.Description != human.Body {
-		t.Errorf("member row description = %q, want the member's own description", h.Description)
-	}
 	if h.AgeSeconds < 90*60-60 || h.AgeSeconds > 90*60+60 {
 		t.Errorf("member row age_seconds = %v, want the ninety minutes since the last blocker closed", h.AgeSeconds)
 	}
@@ -94,9 +90,6 @@ func TestHeldBack_RowsCarryLabelsAndDescription(t *testing.T) {
 	}
 	if !containsLabel(d.Labels, "enhancement") {
 		t.Errorf("delivery row labels = %v, want the pull request's labels", d.Labels)
-	}
-	if d.Description != pr.Body {
-		t.Errorf("delivery row description = %q, want the pull request's description", d.Description)
 	}
 	// The rows ride alongside the warnings rather than replacing them:
 	// the forest payload's warning list is unchanged

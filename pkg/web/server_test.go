@@ -578,8 +578,9 @@ func outcomesStubAPI() *stubForgejoAPI {
 	}
 	// The forest's one member is a human task with no blockers of its
 	// own, so the forest is waiting on a person and carries a warning
-	// naming it (§forgejo/observability/the-outcomes-view). Its
-	// description is the prose the held-back row carries alongside
+	// naming it (§forgejo/observability/the-outcomes-view). This member's
+	// body is prose the engine reads and never serves: the held-back row
+	// for it carries reference, labels and age alone
 	// (§forgejo/observability/the-held-back-view).
 	member := forgejo.Issue{
 		Number: 90, Title: "hand the keys over", State: "open",
@@ -873,17 +874,17 @@ func TestForgejoOutcomesEndpoint_Method(t *testing.T) {
 }
 
 // heldBackItemJSON mirrors one held-back row: the warning's reference,
-// kind and age alongside the labels the waited-on object carries and
-// its description (§forgejo/observability/the-held-back-view).
+// kind and age alongside the labels the waited-on object carries
+// (§forgejo/observability/the-held-back-view). No description field is
+// mirrored because the row carries none — the test below pins that.
 type heldBackItemJSON struct {
-	Kind        string   `json:"kind"`
-	Repository  string   `json:"repository"`
-	Number      int      `json:"number"`
-	Title       string   `json:"title"`
-	HTMLURL     string   `json:"html_url"`
-	AgeSeconds  float64  `json:"age_seconds"`
-	Labels      []string `json:"labels"`
-	Description string   `json:"description"`
+	Kind       string   `json:"kind"`
+	Repository string   `json:"repository"`
+	Number     int      `json:"number"`
+	Title      string   `json:"title"`
+	HTMLURL    string   `json:"html_url"`
+	AgeSeconds float64  `json:"age_seconds"`
+	Labels     []string `json:"labels"`
 }
 
 // heldBackViewJSON mirrors the /api/forgejo/held-back response shape:
@@ -905,10 +906,10 @@ func getHeldBack(t *testing.T, srv *Server) *httptest.ResponseRecorder {
 
 // TestForgejoHeldBackEndpoint: the endpoint serves the waits the sweep
 // tick recorded onto the forest snapshot — the human task the forest
-// waits on, with its labels and description alongside the reference,
-// kind and age the warning already carries — beside an honest empty
-// stalled list and the engine-status field; serving the request reads
-// no forge (§forgejo/observability/the-held-back-view).
+// waits on, with its labels alongside the reference, kind and age the
+// warning already carries — beside an honest empty stalled list and the
+// engine-status field; serving the request reads no forge and discloses
+// no object body (§forgejo/observability/the-held-back-view).
 func TestForgejoHeldBackEndpoint(t *testing.T) {
 	api := outcomesStubAPI()
 	fjEng := newForgejoEngine(t, api)
@@ -939,11 +940,15 @@ func TestForgejoHeldBackEndpoint(t *testing.T) {
 	if len(h.Labels) != 1 || h.Labels[0] != "human-task" {
 		t.Errorf("labels = %v, want the labels the object carries", h.Labels)
 	}
-	if h.Description != "The prose the person left for themselves." {
-		t.Errorf("description = %q, want the walked row's description", h.Description)
-	}
 	if h.AgeSeconds <= 0 {
 		t.Errorf("age_seconds = %v, want the age of the wait", h.AgeSeconds)
+	}
+	// The wire carries no body of anything: the dashboard port asks no
+	// credential, so author prose is not this view's to disclose — the
+	// row's link is how a reader reaches it
+	// (§forgejo/observability/the-held-back-view).
+	if strings.Contains(rec.Body.String(), "description") {
+		t.Errorf("body %s, want no description field anywhere", rec.Body.String())
 	}
 	// The stalled half reads as the empty list it is, never null.
 	if view.StalledDeliveries == nil || len(view.StalledDeliveries) != 0 {

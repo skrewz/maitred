@@ -153,9 +153,6 @@
         .held-back-age { color: #fde68a; font-size: 0.75rem; }
         .label-chip { background: #334155; color: #e2e8f0; border-radius: 999px; padding: 0.1rem 0.5rem; font-size: 0.7rem; font-family: 'SF Mono', 'Fira Code', monospace; }
         .held-back-none { font-size: 0.8rem; color: #64748b; }
-        .held-back-desc { margin-top: 0.5rem; }
-        .held-back-desc summary { cursor: pointer; font-size: 0.75rem; color: #64748b; }
-        .held-back-desc pre { white-space: pre-wrap; font-size: 0.75rem; color: #cbd5e1; margin-top: 0.5rem; }
         .held-back-intro { font-size: 0.8rem; color: #94a3b8; line-height: 1.5; }
     </style>
 </head>
@@ -1152,32 +1149,27 @@
 
         // The held-back payload last rendered, in the same
         // compare-then-render discipline: an unchanged poll renders no
-        // new rows, so an open <details> or a focused link outlives the
-        // tick (§forgejo/observability/the-dashboard-view).
+        // new rows, so a focused link outlives the tick
+        // (§forgejo/observability/the-dashboard-view).
         let lastHeldBackJson;
 
         // heldBackRow renders one waited-on object: the reference
         // through the page's one link discipline (issueLink), the age
-        // of the wait, the labels the object carries as chips, and a
-        // <details>-collapsible body carrying the description as text
-        // and never as markup — an author's prose cannot write into the
-        // document (§forgejo/observability/the-held-back-view). An
-        // object with no prose renders no expander at all: a summary
-        // that opens onto a blank <pre> reads as broken UI rather than
-        // as an object with nothing written on it.
+        // of the wait, and the labels the object carries as chips. The
+        // row states where the wait is and how long it has stood, and
+        // no more of the object than the forge serves before
+        // authenticating: the link is how a reader reaches the prose,
+        // so the page carries no description field and renders no
+        // expander (§forgejo/observability/the-held-back-view).
         function heldBackRow(item) {
             const age = item.age_seconds == null ? ''
                 : `<span class="held-back-age">\u00b7 waiting ${escapeHtml(formatDuration(Math.round(item.age_seconds * 1000)))}</span>`;
             const labels = (item.labels ?? []).map(l => `<span class="label-chip">${escapeHtml(String(l))}</span>`).join('');
-            const description = String(item.description ?? '');
-            const details = description === '' ? ''
-                : `<details class="held-back-desc"><summary>description</summary><pre>${escapeHtml(description)}</pre></details>`;
             return `
                 <div class="held-back-row">
                     <div class="outcomes-repo">${escapeHtml(String(item.repository ?? ''))}</div>
                     <div class="held-back-meta">${issueLink(item)}${age}</div>
                     <div class="held-back-meta">${labels}</div>
-                    ${details}
                 </div>
             `;
         }

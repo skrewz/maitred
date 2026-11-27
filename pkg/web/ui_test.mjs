@@ -1974,10 +1974,10 @@ async function testOutcomesChart(page, results) {
 // makes the route reachable by eye, the SPA fallback serving the page
 // for the route, the two sections and their rows — the reference
 // linked under the page's standing link test, the labels the object
-// carries, the age of the wait, and the <details>-collapsible
-// description inserted as text and never as markup — and the states
-// that are not rows: the honest empty, the unreadable view, and a
-// disabled engine stating itself in its own status words.
+// carries and the age of the wait, rendered as text and never as
+// markup, with no object body on the page at all — and the states that
+// are not rows: the honest empty, the unreadable view, and a disabled
+// engine stating itself in its own status words.
 async function testHeldBackPage(page, results) {
   console.log('  Held-back page');
 
@@ -2020,8 +2020,8 @@ async function testHeldBackPage(page, results) {
   ));
 
   // The compare-then-render discipline the dashboard and outcomes page
-  // follow: an unchanged payload renders no new rows, so an opened
-  // <details> or a keyboard operator's focus outlives the poll
+  // follow: an unchanged payload renders no new rows, so a keyboard
+  // operator's focus outlives the poll
   // (§forgejo/observability/the-dashboard-view). Fetch is pinned for
   // the held-back endpoint alone so the background tick's other reads
   // keep answering.
@@ -2056,12 +2056,11 @@ async function testHeldBackPage(page, results) {
         kind: 'human_task_blocking', repository: 'o/r', number: 90,
         title: 'hand the keys over', html_url: 'https://forge.example.com/o/r/issues/90',
         age_seconds: 5400, labels: ['human-task', 'good thing'],
-        description: 'The prose <b>a human</b> wrote.',
       }],
       stalled_deliveries: [{
         kind: 'stale_agentic_merge', repository: 'o/r', number: 901,
         title: 'pr 901', html_url: 'javascript:alert(1)',
-        age_seconds: 7260, labels: [], description: 'the implementer wrote this',
+        age_seconds: 7260, labels: [],
       }],
     });
     const rows = [...document.querySelectorAll('#held-back-list .held-back-row')];
@@ -2071,9 +2070,9 @@ async function testHeldBackPage(page, results) {
       firstLinks: [...(rows[0]?.querySelectorAll('a') ?? [])].map(a => a.getAttribute('href')),
       chips: [...(rows[0]?.querySelectorAll('.label-chip') ?? [])].map(c => c.textContent),
       age: rows[0]?.querySelector('.held-back-age')?.textContent ?? '',
-      detailsClosed: rows[0]?.querySelector('details')?.hasAttribute('open') === false,
-      descriptionText: rows[0]?.querySelector('details pre')?.textContent ?? '',
-      markupLeaked: rows[0]?.querySelector('details pre b') !== null,
+      firstText: rows[0]?.textContent ?? '',
+      markupLeaked: rows[0]?.querySelector('b') !== null,
+      details: rows.flatMap(r => [...r.querySelectorAll('details')]).length,
       secondLinks: [...(rows[1]?.querySelectorAll('a') ?? [])].map(a => a.getAttribute('href')),
     };
   });
@@ -2096,12 +2095,13 @@ async function testHeldBackPage(page, results) {
     `A row states the age since the wait began (got: "${synthetic.age}")`
   ));
   results.push(assert(
-    synthetic.detailsClosed && synthetic.descriptionText.includes('The prose <b>a human</b> wrote.'),
-    `The description is <details>-collapsed and shown as text (closed: ${synthetic.detailsClosed}, text: "${synthetic.descriptionText}")`
+    !synthetic.markupLeaked && synthetic.firstText.includes('hand the keys over')
+      && synthetic.chips.includes('good thing'),
+    `A row's title and labels arrive as text, never as markup (markup leaked: ${synthetic.markupLeaked})`
   ));
   results.push(assert(
-    !synthetic.markupLeaked,
-    'A description writes text, never markup, into the document'
+    synthetic.details === 0,
+    `A row renders no expander, for the page carries no object body (details: ${synthetic.details})`
   ));
   results.push(assert(
     synthetic.secondLinks.length === 0,
@@ -2117,23 +2117,17 @@ async function testHeldBackPage(page, results) {
       held_by_humans: [],
       stalled_deliveries: [{
         kind: 'stale_agentic_merge', repository: 'o/r', number: 902, title: 'pr 902',
-        html_url: 'https://forge.example.com/o/r/pulls/902', age_seconds: 60, labels: [], description: '',
+        html_url: 'https://forge.example.com/o/r/pulls/902', age_seconds: 60, labels: [],
       }],
     });
     return {
       notes: [...document.querySelectorAll('#held-back-list .held-back-none')].map(p => p.textContent),
       rows: document.querySelectorAll('#held-back-list .held-back-row').length,
-      expander: document.querySelector('#held-back-list .held-back-row details') !== null,
     };
   });
   results.push(assert(
     oneEmpty.notes.length === 1 && oneEmpty.notes[0].includes('Nothing is held back this way') && oneEmpty.rows === 1,
     `A section with no rows says so beside the one that has rows (got: ${JSON.stringify(oneEmpty)})`
-  ));
-  results.push(assert(
-    !oneEmpty.expander,
-    'A row whose object has no description renders no expander (got: '
-      + `${oneEmpty.expander})`
   ));
 
   // The states that are not rows: the honest empty, the unreadable

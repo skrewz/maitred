@@ -13,7 +13,7 @@ import (
 // plus a kind plus an age, so the dashboard links to the object holding
 // the forest up rather than constructing the judgement from its own
 // reads. The same walk records the held-back view's rows — the same
-// waits with the waited-on object's labels and description alongside
+// waits with the waited-on object's labels alongside
 // (§forgejo/observability/the-held-back-view). Nothing here dispatches,
 // holds off, or gates: the warning reports what the decision paths
 // already know, and no decision reads it back (§forgejo/decisions/actions).
@@ -64,17 +64,21 @@ type ForestWarning struct {
 // HeldBackItem is one row of the held-back view: the reference, kind
 // and age of a forest warning — the same wait stated in the same words
 // (§forgejo/observability/the-warnings-a-forest-carries) — alongside
-// the labels the waited-on object carries and the description the
-// walked row carried, the two fields that turn a ⚠️ into the overview
-// a human can act on without opening the object first
-// (§forgejo/observability/the-held-back-view). The description is
-// whatever the walk's row carried: every endpoint the engine reads an
-// issue or pull request from fills the same model field
-// (§forgejo/client/operations).
+// the labels the waited-on object carries, the field that turns a ⚠️
+// into the overview a human can act on without opening the object
+// first (§forgejo/observability/the-held-back-view).
+//
+// The row carries no description, and that absence is deliberate: the
+// dashboard port asks no credential of any reader, so a body put here
+// would be author prose disclosed to whoever can reach that port,
+// where the row's own link serves the same text to a reader the forge
+// authenticates, at the trust level it was written at
+// (§forgejo/observability/the-held-back-view). Label names stay: they
+// are short, structural, and the kind of metadata the outcomes view
+// already discloses.
 type HeldBackItem struct {
 	ForestWarning
-	Labels      []string `json:"labels"`
-	Description string   `json:"description"`
+	Labels []string `json:"labels"`
 }
 
 // forestWarnings walks a forest's members along the root's membership
@@ -105,8 +109,8 @@ type HeldBackItem struct {
 // A warning is stated once per reference, since one pull request may
 // deliver two members and two ⚠️ for one wait would read as two waits.
 // The same record feeds the held-back view: each stated wait also
-// becomes a held-back row carrying the walked row's labels and
-// description alongside (§forgejo/observability/the-held-back-view).
+// becomes a held-back row carrying the walked row's labels alongside
+// (§forgejo/observability/the-held-back-view).
 //
 // A failed read fails the walk. A warning that cannot be established is
 // not a warning absent: the forest would present as healthy what the
@@ -327,8 +331,7 @@ func (e *Engine) staleMergeWarning(member *Issue, repo string, gates map[string]
 			HTMLURL:    pr.HTMLURL,
 			AgeSeconds: age.Seconds(),
 		},
-		Labels:      labelsOrEmpty(pr.Labels),
-		Description: pr.Body,
+		Labels: labelsOrEmpty(pr.Labels),
 	}, nil
 }
 
@@ -520,8 +523,7 @@ func humanTaskWarning(member *Issue, repo string, work []Issue, now time.Time) *
 			HTMLURL:    member.HTMLURL,
 			AgeSeconds: now.Sub(waited).Seconds(),
 		},
-		Labels:      labelsOrEmpty(member.Labels),
-		Description: member.Body,
+		Labels: labelsOrEmpty(member.Labels),
 	}
 }
 

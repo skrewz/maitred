@@ -101,7 +101,7 @@ type Forest struct {
 	WarningsWalked bool `json:"warnings_walked"`
 	// heldBack is this forest's waits in the shape the held-back view
 	// serves them — the warning fields alongside the walked row's
-	// labels and description (§forgejo/observability/the-held-back-view).
+	// labels (§forgejo/observability/the-held-back-view).
 	// It is unexported because it is not part of the outcomes payload:
 	// the two views are two shapes over the one walk's record, and the
 	// second shape rides to the outcomes endpoint's readers for no
