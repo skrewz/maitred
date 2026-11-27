@@ -687,21 +687,27 @@ number, title and HTML URL, the same four fields a warning carries and
 for the same reason — its **kind**, the **age** of the wait in seconds
 (dated exactly as the warning dates it: from the last blocker to close
 for a human task, from the verdict that satisfied the chain for a
-stalled delivery) and the **labels** the object carries. It carries no
-description, and the absence is a trust decision rather than an
-omission: the dashboard port asks no credential of any reader, so a
-body served here would be author prose disclosed to whoever can reach
-that port, while the row's own link serves the same text to a reader
-the forge authenticates, at the trust level it was written at. The
-view therefore stops where the forge's own authentication begins. The two questions are
-answered by the same walk that answers the forest warnings and no
-second definition of either wait exists: a wait that warns a forest is
-a held-back row, and the other way round, so a change to the merge
-gate or the human-task reading updates both views from one place. The
-rows are recorded onto the forest snapshot by that walk; a held-back
-object that two forests name is one row, because one object held back
-twice holds the organisation back once. Past forests contribute no
-rows, as they contribute no walked warnings
+stalled delivery) and the **labels** the object carries — its whole
+label set, not the engine's reserved vocabulary alone, because the row
+exists to be read without opening the object. A label name is the one
+part of a row the outcomes view does not already publish, and it
+reaches the port as a decision rather than an oversight: minting one
+takes forge write access, which sets it far below an object body in
+both privilege and capacity. It carries no description, and that
+absence is a trust decision rather than an omission: the dashboard
+port asks no credential of any reader, so a body served here would be
+author prose disclosed to whoever can reach that port, while the row's
+own link serves the same text to a reader the forge authenticates, at
+the trust level it was written at. The view therefore stops where the
+forge's own authentication begins.
+The two questions are answered by the same walk that answers the forest
+warnings and no second definition of either wait exists: a wait that
+warns a forest is a held-back row, and the other way round, so a change
+to the merge gate or the human-task reading updates both views from one
+place. The rows are recorded onto the forest snapshot by that walk; a
+held-back object that two forests name is one row, because one object
+held back twice holds the organisation back once. Past forests
+contribute no rows, as they contribute no walked warnings
 (§forgejo/observability/the-outcomes-view).
 
 The dashboard API serves the view at `GET /api/forgejo/held-back`: an

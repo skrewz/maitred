@@ -66,16 +66,9 @@ type ForestWarning struct {
 // (§forgejo/observability/the-warnings-a-forest-carries) — alongside
 // the labels the waited-on object carries, the field that turns a ⚠️
 // into the overview a human can act on without opening the object
-// first (§forgejo/observability/the-held-back-view).
-//
-// The row carries no description, and that absence is deliberate: the
-// dashboard port asks no credential of any reader, so a body put here
-// would be author prose disclosed to whoever can reach that port,
-// where the row's own link serves the same text to a reader the forge
-// authenticates, at the trust level it was written at
-// (§forgejo/observability/the-held-back-view). Label names stay: they
-// are short, structural, and the kind of metadata the outcomes view
-// already discloses.
+// first. A row carries no object body, and its labels are the object's
+// whole set: the spec states that line as one disclosure decision
+// (§forgejo/observability/the-held-back-view).
 type HeldBackItem struct {
 	ForestWarning
 	Labels []string `json:"labels"`
