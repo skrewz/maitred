@@ -113,6 +113,13 @@
         .outcomes-row a { color: #38bdf8; text-decoration: none; }
         .outcomes-row a:hover { text-decoration: underline; }
         .outcomes-warning { margin-top: 0.75rem; font-size: 0.8rem; color: #fde68a; }
+        /* A still-locked forest — its ideation root still open, so it has
+           commissioned nothing yet — dims its whole row: one presentation
+           rule greys links, badges and picture together, which is what
+           holds the muting apart from a stalled forest's ⚠️ entries and
+           from the commissioned rows beside it
+           (§forgejo/observability/the-outcomes-view, s-git/maitred#285). */
+        .outcomes-row.locked { filter: saturate(0) opacity(0.75); }
         .outcomes-chart { margin-top: 1rem; cursor: zoom-in; }
         .outcomes-chart svg { max-width: 100%; height: auto; }
         .outcomes-chart-source { display: none; white-space: pre-wrap; }
@@ -987,6 +994,8 @@
         // row per forest, each linking out to its ideation root and
         // its tracker with their states, drawing the forest's picture
         // underneath those links and the region's stamp beneath it.
+        // A row whose root is open is still-locked and wears the dim
+        // the CSS hangs on `.locked` (§forgejo/observability/the-outcomes-view).
         // The row's shape is the same on both tabs; only the payload's
         // lists differ, and a past row states its warnings as not
         // walked. An engine that is not up says so in its own state
@@ -1060,7 +1069,7 @@
                 return;
             }
             list.innerHTML = rows.map(f => `
-                <div class="outcomes-row">
+                <div class="outcomes-row${f.root?.state === 'open' ? ' locked' : ''}">
                     <div class="outcomes-repo">${escapeHtml(f.repository)}</div>
                     <div class="trigger-meta">
                         ${issueCell('Ideation', f.root, 'no open ideation root')}

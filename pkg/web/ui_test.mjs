@@ -1316,6 +1316,57 @@ async function testOutcomesPage(page, results) {
     'Switching back renders the current list again'
   ));
 
+  // A forest whose ideation root is still open is still-locked — it
+  // has commissioned nothing yet — and its row renders with a
+  // greyed-out look, so it reads apart at a glance from a commissioned
+  // forest stalled on its edges or its people. The muting says *not
+  // commissioned yet*, never *fault*: a still-locked forest's warnings
+  // keep their ⚠️ entries on the dimmed row
+  // (§forgejo/observability/the-outcomes-view, s-git/maitred#285).
+  const locked = await page.evaluate(() => {
+    renderOutcomes({
+      engine_status: 'enabled',
+      forests: [
+        {
+          repository: 'o/out',
+          root: { number: 5, repository: 'o/out', title: 'Ideation root', state: 'open', html_url: 'https://forge.example.com/o/out/issues/5' },
+          tracker: { number: 6, repository: 'o/out', title: 'Outcome tracker', state: 'open', html_url: 'https://forge.example.com/o/out/issues/6' },
+          warnings: [
+            { kind: 'human_task_blocking', repository: 'o/out', number: 7, title: 'Claimed by a person', html_url: 'https://forge.example.com/o/out/issues/7', age_seconds: 60 },
+          ],
+        },
+        {
+          repository: 'o/out',
+          root: { number: 3, repository: 'o/out', title: 'Commissioned forest', state: 'closed', html_url: 'https://forge.example.com/o/out/issues/3' },
+          tracker: { number: 4, repository: 'o/out', title: 'Work still in flight', state: 'open', html_url: 'https://forge.example.com/o/out/issues/4' },
+          warnings: [],
+        },
+      ],
+    });
+    const rows = [...document.querySelectorAll('#outcomes-list .outcomes-row')];
+    const greyed = (row) => {
+      const s = getComputedStyle(row);
+      return s.filter !== 'none' || parseFloat(s.opacity) < 1;
+    };
+    return {
+      lockedGreyed: greyed(rows[0]),
+      commissionedGreyed: greyed(rows[1]),
+      lockedWarnings: rows[0]?.querySelectorAll('.outcomes-warning').length ?? 0,
+    };
+  });
+  results.push(assert(
+    locked.lockedGreyed,
+    'A forest whose ideation root is still open renders with a greyed-out feel'
+  ));
+  results.push(assert(
+    !locked.commissionedGreyed,
+    'A commissioned forest — root closed, work still in flight — carries no dim'
+  ));
+  results.push(assert(
+    locked.lockedWarnings === 1,
+    `The muting does not swallow the warnings: a still-locked forest keeps its \u26a0\ufe0f entries (got: ${locked.lockedWarnings})`
+  ));
+
   // A forest the payload says is waiting on a person draws its
   // warnings in the row: one ⚠️ entry per warning, naming its kind,
   // the object holding the forest up and the age of the condition,

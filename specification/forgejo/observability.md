@@ -413,7 +413,18 @@ The link is only a
 link when the forge's URL is one a link can carry (http or https);
 anything else renders as text, since the port authenticates nothing.
 The row's shape is the same on both tabs; only the payload's lists
-differ. A forest the payload says is waiting on a person draws its **warnings**
+differ. A forest whose ideation root the payload says is **open** is
+**still-locked** — it has commissioned nothing yet, commissioning being the
+root's closure (§forgejo/decisions/actions) — and its row renders with a
+greyed-out look: the page dims the whole row (the links, the badges and the
+picture together, through one presentation rule on the row), and nothing
+else. The muting says *not commissioned yet*, never *fault*: a forest's
+warnings keep their ⚠️ entries, legible on the dimmed row, and a stalled
+forest whose root has closed wears no dim, so the two read apart at a
+glance (s-git/maitred#285). The tracker's description needs no rule of its
+own for this: the block it carries is the same drawing the row shows
+(§forgejo/reconciliation/the-tracker-block), and an uncommissioned forest's
+drawing holds only its root's node. A forest the payload says is waiting on a person draws its **warnings**
 in the row: one ⚠️ entry per warning, each naming its kind, the issue
 or pull request holding the forest up, and the age of the condition,
 and linked through the warning's own HTML URL under the same link test
