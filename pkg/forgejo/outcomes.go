@@ -585,7 +585,7 @@ func (e *Engine) HeldBackSplit() (heldByHumans, stalledDeliveries []HeldBackItem
 			continue
 		}
 		for _, item := range forest.heldBack {
-			key := item.Kind + " " + warningKey(item.Repository, item.Number)
+			key := waitKey(item.Kind, item.Repository, item.Number)
 			if seen[key] {
 				continue // one object held back twice is one wait
 			}

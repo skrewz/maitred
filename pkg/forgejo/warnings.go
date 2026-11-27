@@ -135,7 +135,7 @@ func (e *Engine) forestWarnings(root *Issue, rootRepo string, blocked []Issue) (
 		if item == nil {
 			return
 		}
-		key := item.Kind + " " + warningKey(item.Repository, item.Number)
+		key := waitKey(item.Kind, item.Repository, item.Number)
 		if seen[key] {
 			return // one pull request delivering two members is one wait
 		}
@@ -576,4 +576,14 @@ func rowRepository(row *Issue, entered string) string {
 // (§forgejo/webhook/the-scope-cache).
 func warningKey(repo string, number int) string {
 	return strings.ToLower(repo) + "#" + strconv.Itoa(number)
+}
+
+// waitKey names one wait in the sets the warning walk and the held-back
+// view dedup through: a kind beside a reference, so one pull request
+// delivering two members — or two forests naming one object — is stated
+// once (§forgejo/observability/the-warnings-a-forest-carries,
+// §forgejo/observability/the-held-back-view). Both sites call this, so
+// the rule that a wait is stated once is written down once.
+func waitKey(kind, repo string, number int) string {
+	return kind + " " + warningKey(repo, number)
 }

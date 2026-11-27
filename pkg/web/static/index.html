@@ -795,15 +795,22 @@
             if (btn) openSweepModal(btn.dataset.sweepId, btn.dataset.sweepTitle);
         });
 
-        // The /outcomes and /held-back routes
-        // (§forgejo/observability/the-outcomes-view,
-        // §forgejo/observability/the-held-back-view): the server's SPA
-        // fallback already answers both paths with this page, so the
-        // routes are rendering choices — the dashboard container yields
-        // to the route's container and the timer polls that view instead.
-        const routePath = window.location.pathname.replace(/\/+$/, '');
-        const route = routePath === '/outcomes' ? 'outcomes'
-            : routePath === '/held-back' ? 'held-back' : 'dashboard';
+        // The routes this page serves (§forgejo/observability/the-
+        // outcomes-view, §forgejo/observability/the-held-back-view): the
+        // server's SPA fallback already answers each path with this
+        // document, so a route is only a rendering choice — the title it
+        // states, the container it shows, the nav link that would point
+        // where the reader already is, and the refresher the timer
+        // polls. One entry per view, so a third view is a third entry
+        // and not a third branch.
+        const routes = {
+            '/': { title: 'maitred \u2014 Trigger Dashboard', container: 'dashboard-view', link: 'dashboard-link', refresh: refresh },
+            '/outcomes': { title: 'maitred \u2014 Outcomes', container: 'outcomes-view', link: 'outcomes-link', refresh: refreshOutcomes },
+            '/held-back': { title: 'maitred \u2014 Held back', container: 'held-back-view', link: 'held-back-link', refresh: refreshHeldBack },
+        };
+        const routePath = window.location.pathname.replace(/\/+$/, '') || '/';
+        const route = routes[routePath] ?? routes['/'];
+        const onDashboard = route === routes['/'];
 
         // safeUrl keeps a forge-scraped URL linkable only if a link
         // can carry it. The html_url a forest row carries is the
@@ -1224,16 +1231,17 @@
             }
         }
 
-        // Auto-refresh every 5 seconds. The header's navigation links
-        // to every view but the one the reader is already on, so the
-        // links on screen always go somewhere
+        // Auto-refresh every 5 seconds on the route's own refresher. The
+        // header carries one link per view but the route the reader is
+        // already on, so the links on screen always go somewhere
         // (§forgejo/observability/the-held-back-view).
-        if (route === 'dashboard') {
-            refresh();
-            refreshInterval = setInterval(refresh, 5000);
-        } else {
-            document.getElementById('dashboard-link').hidden = false;
-            document.getElementById(route === 'outcomes' ? 'outcomes-link' : 'held-back-link').hidden = true;
+        for (const r of Object.values(routes)) {
+            document.getElementById(r.link).hidden = r === route;
+        }
+        document.title = route.title;
+        document.getElementById('dashboard-view').style.display = onDashboard ? '' : 'none';
+        document.getElementById(route.container).style.display = '';
+        if (!onDashboard) {
             // The header's trigger statistics are the dashboard's
             // numbers, which neither route reads. Left visible they
             // would state "0 Triggers" — a falsehood, not a blank — so
@@ -1243,19 +1251,9 @@
             fetch('/api/version').then(r => r.ok ? r.text() : 'dev')
                 .then(v => { document.getElementById('version').textContent = v; })
                 .catch(() => {});
-            document.getElementById('dashboard-view').style.display = 'none';
-            if (route === 'outcomes') {
-                document.title = 'maitred \u2014 Outcomes';
-                document.getElementById('outcomes-view').style.display = '';
-                refreshOutcomes();
-                refreshInterval = setInterval(refreshOutcomes, 5000);
-            } else {
-                document.title = 'maitred \u2014 Held back';
-                document.getElementById('held-back-view').style.display = '';
-                refreshHeldBack();
-                refreshInterval = setInterval(refreshHeldBack, 5000);
-            }
         }
+        route.refresh();
+        refreshInterval = setInterval(route.refresh, 5000);
     </script>
 </body>
 </html>
