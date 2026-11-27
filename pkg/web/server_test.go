@@ -580,7 +580,8 @@ func outcomesStubAPI() *stubForgejoAPI {
 	// own, so the forest is waiting on a person and carries a warning
 	// naming it (§forgejo/observability/the-outcomes-view). This member's
 	// body is prose the engine reads and never serves: the held-back row
-	// for it carries reference, labels and age alone
+	// for it carries reference, labels and age alone, so the sentence
+	// here is the canary the endpoint test asserts away
 	// (§forgejo/observability/the-held-back-view).
 	member := forgejo.Issue{
 		Number: 90, Title: "hand the keys over", State: "open",
@@ -946,9 +947,17 @@ func TestForgejoHeldBackEndpoint(t *testing.T) {
 	// The wire carries no body of anything: the dashboard port asks no
 	// credential, so author prose is not this view's to disclose — the
 	// row's link is how a reader reaches it
-	// (§forgejo/observability/the-held-back-view).
-	if strings.Contains(rec.Body.String(), "description") {
-		t.Errorf("body %s, want no description field anywhere", rec.Body.String())
+	// (§forgejo/observability/the-held-back-view). The fixture's prose is
+	// the assertion that holds the rule, because it fails whatever field
+	// a later edit invents to carry a body; the key-name check beside it
+	// names the field that must never come back.
+	body := rec.Body.String()
+	const prose = "The prose the person left for themselves."
+	if strings.Contains(body, prose) {
+		t.Errorf("body %s, want the fixture's prose on no field at all", body)
+	}
+	if strings.Contains(body, "description") {
+		t.Errorf("body %s, want no description field anywhere", body)
 	}
 	// The stalled half reads as the empty list it is, never null.
 	if view.StalledDeliveries == nil || len(view.StalledDeliveries) != 0 {

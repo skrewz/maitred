@@ -1,8 +1,10 @@
 package forgejo
 
 import (
+	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -20,7 +22,9 @@ import (
 func heldBackForest(t *testing.T, api *fakeAPI) (human, delivery Issue, pr PullRequest) {
 	t.Helper()
 	human = warningsMember(80, LabelHumanTask)
-	human.Body = "Waiting on the person the label names."
+	// The body is the canary declared below: prose the engine reads and
+	// never serves (§forgejo/observability/the-held-back-view).
+	human.Body = heldBackCanary
 	landing := warningsMember(81, LabelAgenticAutoMerge)
 	warningsForest(api, human)
 	api.blocks[51] = append(api.blocks[51], landing)
@@ -45,11 +49,17 @@ func heldBackForest(t *testing.T, api *fakeAPI) (human, delivery Issue, pr PullR
 	return human, landing, pr
 }
 
+// heldBackCanary is the sentence the fixtures leave in a walked
+// object's body. Asserting its absence — rather than the absence of a
+// `description` key — is what pins the rule that no row carries an
+// object body: a row serving the prose under any other field name
+// still shows it here (§forgejo/observability/the-held-back-view).
+const heldBackCanary = "Waiting on the person the label names."
+
 // TestHeldBack_RowsCarryLabels: each wait the walk records becomes a
 // held-back row carrying the reference, kind and age the warning
-// carries alongside the waited-on object's labels — and no
-// description, since the dashboard port asks no credential and author
-// prose stays in the forge behind its authentication
+// carries alongside the waited-on object's labels — and no object
+// body, which the canary above names
 // (§forgejo/observability/the-held-back-view,
 // §forgejo/observability/the-warnings-a-forest-carries).
 func TestHeldBack_RowsCarryLabels(t *testing.T) {
@@ -90,6 +100,17 @@ func TestHeldBack_RowsCarryLabels(t *testing.T) {
 	}
 	if !containsLabel(d.Labels, "enhancement") {
 		t.Errorf("delivery row labels = %v, want the pull request's labels", d.Labels)
+	}
+	// No row carries the walked object's prose, under this name or any
+	// other: encoding the rows and naming the canary is what makes a
+	// future field that smuggles a body back fail here rather than only
+	// at the port (§forgejo/observability/the-held-back-view).
+	encoded, err := json.Marshal(held)
+	if err != nil {
+		t.Fatalf("marshal rows: %v", err)
+	}
+	if strings.Contains(string(encoded), heldBackCanary) {
+		t.Errorf("rows %s, want the walked object's prose on no field of any row", encoded)
 	}
 	// The rows ride alongside the warnings rather than replacing them:
 	// the forest payload's warning list is unchanged
